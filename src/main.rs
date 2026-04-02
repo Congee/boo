@@ -17,6 +17,8 @@ struct CallbackState {
     surface: ffi::ghostty_surface_t,
     pending_split: Option<ffi::ghostty_action_split_direction_e>,
     pending_focus: Option<ffi::ghostty_action_goto_split_e>,
+    pending_title: Option<String>,
+    pending_close: bool,
 }
 
 
@@ -89,6 +91,8 @@ impl GhosttyApp {
             surface: ptr::null_mut(),
             pending_split: None,
             pending_focus: None,
+            pending_title: None,
+            pending_close: false,
         });
 
         let runtime_config = ffi::ghostty_runtime_config_s {
@@ -145,6 +149,13 @@ impl GhosttyApp {
         }
 
         // Process pending actions from C callbacks
+        if let Some(title) = self.cb_state.pending_title.take() {
+            self.tabs.set_active_title(title);
+        }
+        if self.cb_state.pending_close {
+            self.cb_state.pending_close = false;
+            self.handle_surface_closed();
+        }
         if let Some(dir) = self.cb_state.pending_split.take() {
             self.create_split(dir);
         }
@@ -587,6 +598,20 @@ impl GhosttyApp {
         }
     }
 
+    fn handle_surface_closed(&mut self) {
+        if self.tabs.len() <= 1 {
+            std::process::exit(0);
+        }
+        let active = self.tabs.active_index();
+        let surfaces = self.tabs.remove_tab(active);
+        for s in surfaces {
+            unsafe { ffi::ghostty_surface_free(s) };
+        }
+        self.cb_state.surface = self.tabs.focused_surface();
+        self.relayout();
+        log::info!("tab closed, {} remaining", self.tabs.len());
+    }
+
     fn new_tab(&mut self) {
         if self.parent_nsview.is_null() {
             return;
@@ -784,6 +809,8 @@ unsafe extern "C" fn cb_action(
                     let title = std::ffi::CStr::from_ptr(payload.title);
                     if let Ok(s) = title.to_str() {
                         appkit::set_window_title(s);
+                        let cb = &mut *(ffi::ghostty_app_userdata(_app) as *mut CallbackState);
+                        cb.pending_title = Some(s.to_owned());
                     }
                 }
                 true
@@ -910,9 +937,8 @@ unsafe extern "C" fn cb_write_clipboard(
     }
 }
 
-unsafe extern "C" fn cb_close_surface(_userdata: *mut c_void, _process_alive: bool) {
+unsafe extern "C" fn cb_close_surface(userdata: *mut c_void, _process_alive: bool) {
     log::info!("close surface");
-    // Can't call NSApplication.terminate here — we're inside winit's event loop.
-    // process::exit is the safest way to exit from a callback.
-    std::process::exit(0);
+    let cb = unsafe { &mut *(userdata as *mut CallbackState) };
+    cb.pending_close = true;
 }

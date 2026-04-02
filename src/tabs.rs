@@ -91,6 +91,32 @@ impl TabManager {
         self.goto_tab(prev)
     }
 
+    /// Remove a tab by index. Returns surfaces for cleanup.
+    pub fn remove_tab(&mut self, index: usize) -> Vec<ffi::ghostty_surface_t> {
+        if index >= self.tabs.len() {
+            return Vec::new();
+        }
+        let tab = self.tabs.remove(index);
+        tab.tree.set_hidden(true);
+        let surfaces = tab.tree.all_surfaces();
+
+        // Adjust active index
+        if self.tabs.is_empty() {
+            self.active = 0;
+        } else if self.active >= self.tabs.len() {
+            self.active = self.tabs.len() - 1;
+        } else if self.active > index {
+            self.active -= 1;
+        }
+
+        // Show new active tab
+        if let Some(tab) = self.tabs.get(self.active) {
+            tab.tree.set_hidden(false);
+        }
+
+        surfaces
+    }
+
     /// Get the active split tree.
     pub fn active_tree(&self) -> Option<&SplitTree> {
         self.tabs.get(self.active).map(|t| &t.tree)
