@@ -294,6 +294,66 @@ pub struct ghostty_action_initial_size_s {
     pub height: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ghostty_action_pwd_s {
+    pub pwd: *const c_char,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ghostty_action_scrollbar_s {
+    pub total: u64,
+    pub offset: u64,
+    pub len: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ghostty_action_search_total_s {
+    pub total: isize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ghostty_action_search_selected_s {
+    pub selected: isize,
+}
+
+// --- Copy mode types ---
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ghostty_point_s {
+    pub tag: u32,  // ghostty_point_tag_e
+    pub coord: u32, // ghostty_point_coord_e
+    pub x: u32,
+    pub y: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ghostty_selection_s {
+    pub top_left: ghostty_point_s,
+    pub bottom_right: ghostty_point_s,
+    pub rectangle: bool,
+}
+
+#[repr(C)]
+pub struct ghostty_text_s {
+    pub tl_px_x: f64,
+    pub tl_px_y: f64,
+    pub offset_start: u32,
+    pub offset_len: u32,
+    pub text: *const c_char,
+    pub text_len: usize,
+}
+
+// Point tag values
+pub const GHOSTTY_POINT_VIEWPORT: u32 = 1;
+// Point coord values
+pub const GHOSTTY_POINT_COORD_EXACT: u32 = 0;
+
 // ghostty_action_s: { tag (4 bytes), pad (4 bytes), union (24 bytes) } = 32 bytes total.
 // The union is 24 bytes with 8-byte alignment (contains pointers).
 #[repr(C)]
@@ -384,6 +444,8 @@ unsafe extern "C" {
     pub fn ghostty_app_set_focus(app: ghostty_app_t, focused: bool);
     pub fn ghostty_app_userdata(app: ghostty_app_t) -> *mut c_void;
     pub fn ghostty_app_set_color_scheme(app: ghostty_app_t, scheme: ghostty_color_scheme_e);
+    pub fn ghostty_app_update_config(app: ghostty_app_t, config: ghostty_config_t);
+    pub fn ghostty_surface_update_config(surface: ghostty_surface_t, config: ghostty_config_t);
 
     // Surface
     pub fn ghostty_surface_config_new() -> ghostty_surface_config_s;
@@ -406,6 +468,27 @@ unsafe extern "C" {
         surface: ghostty_surface_t,
         event: ghostty_input_key_s,
     ) -> bool;
+    pub fn ghostty_surface_binding_action(
+        surface: ghostty_surface_t,
+        action: *const c_char,
+        action_len: usize,
+    ) -> bool;
+    pub fn ghostty_surface_ime_point(
+        surface: ghostty_surface_t,
+        x: *mut f64,
+        y: *mut f64,
+        w: *mut f64,
+        h: *mut f64,
+    );
+    pub fn ghostty_surface_read_text(
+        surface: ghostty_surface_t,
+        sel: ghostty_selection_s,
+        text: *mut ghostty_text_s,
+    ) -> bool;
+    pub fn ghostty_surface_free_text(
+        surface: ghostty_surface_t,
+        text: *mut ghostty_text_s,
+    );
     pub fn ghostty_surface_mouse_button(
         surface: ghostty_surface_t,
         state: ghostty_input_mouse_state_e,

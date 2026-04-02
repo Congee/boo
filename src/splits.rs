@@ -146,6 +146,72 @@ impl SplitTree {
         }
     }
 
+    /// Remove the focused leaf from the tree.
+    /// Returns the removed surface and nsview, or None if not found.
+    /// When a split loses one child, the other child replaces the split node.
+    pub fn remove_focused(&mut self) -> Option<(ffi::ghostty_surface_t, *mut c_void)> {
+        let root = self.root.take()?;
+        match remove_leaf(root, self.focused_id) {
+            RemoveResult::Removed {
+                surface,
+                nsview,
+                remaining,
+            } => {
+                self.root = remaining;
+                // Focus the first available leaf
+                if let Some(ref root) = self.root {
+                    let leaves = collect_leaf_ids(root);
+                    if !leaves.is_empty() {
+                        self.focused_id = leaves[0];
+                    }
+                }
+                Some((surface, nsview))
+            }
+            RemoveResult::NotFound(node) => {
+                self.root = Some(node);
+                None
+            }
+        }
+    }
+
+    /// Resize the nearest matching split ancestor of the focused leaf.
+    /// `axis` is which split direction to resize (Horizontal or Vertical).
+    /// `delta` is the ratio change (positive = grow first child).
+    pub fn resize_focused(&mut self, axis: Direction, delta: f64) {
+        if let Some(ref mut root) = self.root {
+            resize_toward_leaf(root, self.focused_id, axis, delta);
+        }
+    }
+
+    /// Check if a point is on a split divider. Returns the direction if so.
+    pub fn divider_at(&self, frame: NSRect, point: (f64, f64)) -> Option<Direction> {
+        self.root
+            .as_ref()
+            .and_then(|root| divider_at_node(root, frame, point))
+    }
+
+    /// Update the ratio of the split being dragged. Finds the shallowest split
+    /// with matching direction whose frame contains the point.
+    pub fn resize_drag(&mut self, frame: NSRect, dir: Direction, point: (f64, f64)) {
+        if let Some(ref mut root) = self.root {
+            resize_drag_node(root, frame, dir, point);
+        }
+    }
+
+    /// Find the leaf at a given point and set focus to it.
+    /// Returns true if focus changed.
+    pub fn focus_at(&mut self, frame: NSRect, point: (f64, f64)) -> bool {
+        if let Some(ref root) = self.root {
+            if let Some(id) = leaf_at_point(root, frame, point) {
+                if id != self.focused_id {
+                    self.focused_id = id;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Get surface info for control socket.
     pub fn surface_info(&self) -> Vec<(LeafId, bool)> {
         match &self.root {
@@ -247,34 +313,277 @@ fn layout_node(
     }
 }
 
+/// Gap between split panes (points). The iced background shows through.
+const SPLIT_BORDER: f64 = 1.0;
+
 fn split_frame(frame: NSRect, direction: Direction, ratio: f64) -> (NSRect, NSRect) {
     match direction {
         Direction::Horizontal => {
-            let w1 = frame.size.width * ratio;
-            let w2 = frame.size.width - w1;
+            let usable = frame.size.width - SPLIT_BORDER;
+            let w1 = usable * ratio;
+            let w2 = usable - w1;
             (
                 NSRect::new(frame.origin, NSSize::new(w1, frame.size.height)),
                 NSRect::new(
-                    NSPoint::new(frame.origin.x + w1, frame.origin.y),
+                    NSPoint::new(frame.origin.x + w1 + SPLIT_BORDER, frame.origin.y),
                     NSSize::new(w2, frame.size.height),
                 ),
             )
         }
         Direction::Vertical => {
-            // NSView origin is bottom-left; first child at top, second at bottom
-            let h1 = frame.size.height * ratio;
-            let h2 = frame.size.height - h1;
+            // First child at top, second below (flipped coordinates: origin is top-left)
+            let usable = frame.size.height - SPLIT_BORDER;
+            let h1 = usable * ratio;
+            let h2 = usable - h1;
             (
+                NSRect::new(frame.origin, NSSize::new(frame.size.width, h1)),
                 NSRect::new(
-                    NSPoint::new(frame.origin.x, frame.origin.y + h2),
-                    NSSize::new(frame.size.width, h1),
+                    NSPoint::new(frame.origin.x, frame.origin.y + h1 + SPLIT_BORDER),
+                    NSSize::new(frame.size.width, h2),
                 ),
-                NSRect::new(frame.origin, NSSize::new(frame.size.width, h2)),
             )
         }
     }
 }
 
+
+enum RemoveResult {
+    Removed {
+        surface: ffi::ghostty_surface_t,
+        nsview: *mut c_void,
+        remaining: Option<Node>,
+    },
+    NotFound(Node),
+}
+
+fn remove_leaf(node: Node, target_id: LeafId) -> RemoveResult {
+    match node {
+        Node::Leaf { id, surface, nsview } if id == target_id => RemoveResult::Removed {
+            surface,
+            nsview,
+            remaining: None,
+        },
+        Node::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } => {
+            match remove_leaf(*first, target_id) {
+                RemoveResult::Removed {
+                    surface,
+                    nsview,
+                    remaining: Some(remaining_first),
+                } => RemoveResult::Removed {
+                    surface,
+                    nsview,
+                    remaining: Some(Node::Split {
+                        direction,
+                        ratio,
+                        first: Box::new(remaining_first),
+                        second,
+                    }),
+                },
+                RemoveResult::Removed {
+                    surface,
+                    nsview,
+                    remaining: None,
+                } => {
+                    // First child was the target leaf — replace split with second child
+                    RemoveResult::Removed {
+                        surface,
+                        nsview,
+                        remaining: Some(*second),
+                    }
+                }
+                RemoveResult::NotFound(first_node) => {
+                    // Try second child
+                    match remove_leaf(*second, target_id) {
+                        RemoveResult::Removed {
+                            surface,
+                            nsview,
+                            remaining: Some(remaining_second),
+                        } => RemoveResult::Removed {
+                            surface,
+                            nsview,
+                            remaining: Some(Node::Split {
+                                direction,
+                                ratio,
+                                first: Box::new(first_node),
+                                second: Box::new(remaining_second),
+                            }),
+                        },
+                        RemoveResult::Removed {
+                            surface,
+                            nsview,
+                            remaining: None,
+                        } => {
+                            // Second child was target — replace split with first child
+                            RemoveResult::Removed {
+                                surface,
+                                nsview,
+                                remaining: Some(first_node),
+                            }
+                        }
+                        RemoveResult::NotFound(second_node) => {
+                            RemoveResult::NotFound(Node::Split {
+                                direction,
+                                ratio,
+                                first: Box::new(first_node),
+                                second: Box::new(second_node),
+                            })
+                        }
+                    }
+                }
+            }
+        }
+        other => RemoveResult::NotFound(other),
+    }
+}
+
+/// Find the nearest ancestor split matching `axis` that contains the focused leaf,
+/// and adjust its ratio by `delta`. Returns (found_focused, resize_applied).
+fn resize_toward_leaf(node: &mut Node, target: LeafId, axis: Direction, delta: f64) -> (bool, bool) {
+    match node {
+        Node::Leaf { id, .. } => (*id == target, false),
+        Node::Split { direction, ratio, first, second } => {
+            let (found, done) = resize_toward_leaf(first, target, axis, delta);
+            if found && done {
+                return (true, true);
+            }
+
+            let (found, done) = if found {
+                (true, false)
+            } else {
+                resize_toward_leaf(second, target, axis, delta)
+            };
+
+            if !found {
+                return (false, false);
+            }
+            if done {
+                return (true, true);
+            }
+
+            if *direction == axis {
+                *ratio = (*ratio + delta).clamp(0.1, 0.9);
+                (true, true)
+            } else {
+                (true, false)
+            }
+        }
+    }
+}
+
+/// Expand hit area beyond the 1pt border for easier clicking.
+const DIVIDER_HIT_MARGIN: f64 = 3.0;
+
+fn divider_at_node(node: &Node, frame: NSRect, point: (f64, f64)) -> Option<Direction> {
+    match node {
+        Node::Leaf { .. } => None,
+        Node::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } => {
+            let (first_frame, second_frame) = split_frame(frame, *direction, *ratio);
+            let half = SPLIT_BORDER / 2.0 + DIVIDER_HIT_MARGIN;
+
+            let on_divider = match direction {
+                Direction::Horizontal => {
+                    let div_x = first_frame.origin.x + first_frame.size.width + SPLIT_BORDER / 2.0;
+                    (point.0 - div_x).abs() < half
+                        && point.1 >= frame.origin.y
+                        && point.1 <= frame.origin.y + frame.size.height
+                }
+                Direction::Vertical => {
+                    let div_y =
+                        first_frame.origin.y + first_frame.size.height + SPLIT_BORDER / 2.0;
+                    (point.1 - div_y).abs() < half
+                        && point.0 >= frame.origin.x
+                        && point.0 <= frame.origin.x + frame.size.width
+                }
+            };
+
+            if on_divider {
+                return Some(*direction);
+            }
+
+            // Recurse into children (deeper splits take priority)
+            divider_at_node(first, first_frame, point)
+                .or_else(|| divider_at_node(second, second_frame, point))
+        }
+    }
+}
+
+/// During drag: find the shallowest split with matching direction whose frame
+/// contains the point, and set its ratio from the mouse position.
+fn resize_drag_node(
+    node: &mut Node,
+    frame: NSRect,
+    target_dir: Direction,
+    point: (f64, f64),
+) -> bool {
+    match node {
+        Node::Leaf { .. } => false,
+        Node::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } => {
+            if *direction == target_dir {
+                // Update this split's ratio from mouse position
+                let new_ratio = match direction {
+                    Direction::Horizontal => (point.0 - frame.origin.x) / frame.size.width,
+                    Direction::Vertical => (point.1 - frame.origin.y) / frame.size.height,
+                };
+                *ratio = new_ratio.clamp(0.1, 0.9);
+                return true;
+            }
+
+            // Wrong direction — recurse to find a matching child split
+            let (first_frame, second_frame) = split_frame(frame, *direction, *ratio);
+            let in_first = point_in_frame(point, first_frame);
+            if in_first {
+                resize_drag_node(first, first_frame, target_dir, point)
+            } else {
+                resize_drag_node(second, second_frame, target_dir, point)
+            }
+        }
+    }
+}
+
+fn leaf_at_point(node: &Node, frame: NSRect, point: (f64, f64)) -> Option<LeafId> {
+    match node {
+        Node::Leaf { id, .. } => {
+            if point_in_frame(point, frame) {
+                Some(*id)
+            } else {
+                None
+            }
+        }
+        Node::Split {
+            direction,
+            ratio,
+            first,
+            second,
+            ..
+        } => {
+            let (first_frame, second_frame) = split_frame(frame, *direction, *ratio);
+            leaf_at_point(first, first_frame, point)
+                .or_else(|| leaf_at_point(second, second_frame, point))
+        }
+    }
+}
+
+fn point_in_frame(point: (f64, f64), frame: NSRect) -> bool {
+    point.0 >= frame.origin.x
+        && point.0 <= frame.origin.x + frame.size.width
+        && point.1 >= frame.origin.y
+        && point.1 <= frame.origin.y + frame.size.height
+}
 
 fn set_hidden_recursive(node: &Node, hidden: bool) {
     match node {

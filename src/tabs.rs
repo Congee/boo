@@ -7,6 +7,7 @@ use std::ffi::c_void;
 pub struct TabManager {
     tabs: Vec<Tab>,
     active: usize,
+    prev_active: usize,
 }
 
 struct Tab {
@@ -19,6 +20,7 @@ impl TabManager {
         TabManager {
             tabs: Vec::new(),
             active: 0,
+            prev_active: 0,
         }
     }
 
@@ -64,6 +66,7 @@ impl TabManager {
             return false;
         }
         self.tabs[self.active].tree.set_hidden(true);
+        self.prev_active = self.active;
         self.active = index;
         self.tabs[self.active].tree.set_hidden(false);
         true
@@ -141,6 +144,10 @@ impl TabManager {
 
     pub fn is_empty(&self) -> bool {
         self.tabs.is_empty()
+    }
+
+    pub fn previous_active(&self) -> usize {
+        self.prev_active.min(self.tabs.len().saturating_sub(1))
     }
 
     pub fn active_index(&self) -> usize {

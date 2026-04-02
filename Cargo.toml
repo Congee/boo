@@ -18,6 +18,7 @@ serde_json = "1"
 objc2 = "0.6"
 block2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSThread", "NSString", "NSArray", "NSOperation"] }
-objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSResponder", "NSPasteboard", "NSApplication", "NSRunningApplication"] }
-objc2-quartz-core = { version = "0.3", features = ["CALayer"] }
+objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSResponder", "NSPasteboard", "NSApplication", "NSRunningApplication", "NSColor", "NSEvent", "NSGraphics"] }
+objc2-quartz-core = { version = "0.3", features = ["CALayer", "CATransaction"] }
+objc2-core-graphics = { version = "0.3", features = ["CGColor"] }
 

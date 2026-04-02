@@ -50,8 +50,16 @@ impl Default for Config {
     }
 }
 
-fn config_path() -> PathBuf {
-    let config_dir = std::env::var("XDG_CONFIG_HOME")
+pub fn config_dir() -> PathBuf {
+    let dir = std::env::var("XDG_CONFIG_HOME")
         .unwrap_or_else(|_| format!("{}/.config", std::env::var("HOME").unwrap_or_default()));
-    PathBuf::from(config_dir).join("boo/boo.toml")
+    PathBuf::from(dir).join("boo")
+}
+
+fn config_path() -> PathBuf {
+    config_dir().join("boo.toml")
+}
+
+pub fn ghostty_config_path() -> PathBuf {
+    config_dir().join("config.ghostty")
 }
