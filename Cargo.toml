@@ -1,0 +1,22 @@
+[package]
+name = "boo"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iced = { version = "0.14", features = ["wgpu", "tokio"] }
+raw-window-handle = "0.6"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+libc = "0.2"
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSThread", "NSString", "NSArray", "NSOperation"] }
+objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSResponder", "NSPasteboard", "NSApplication", "NSRunningApplication"] }
+objc2-quartz-core = { version = "0.3", features = ["CALayer"] }
+
