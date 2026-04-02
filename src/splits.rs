@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Binary split tree for managing terminal surface layout.
 //!
 //! The tree has two node types:
@@ -113,11 +112,6 @@ impl SplitTree {
         }
     }
 
-    /// Get the focused leaf ID.
-    pub fn focused_id(&self) -> LeafId {
-        self.focused_id
-    }
-
     /// Lay out all surfaces within the given frame. Calls set_frame on each NSView
     /// and returns (surface, pixel_width, pixel_height) for each leaf.
     pub fn layout(&self, frame: NSRect, scale: f64) -> Vec<(ffi::ghostty_surface_t, u32, u32)> {
@@ -143,10 +137,6 @@ impl SplitTree {
     /// Number of leaves.
     pub fn len(&self) -> usize {
         self.root.as_ref().map(count_leaves).unwrap_or(0)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.root.is_none()
     }
 
     /// Show or hide all NSViews in this tree.
