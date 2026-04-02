@@ -433,6 +433,12 @@ unsafe extern "C" {
         config: ghostty_config_t,
         index: u32,
     ) -> ghostty_diagnostic_s;
+    pub fn ghostty_config_get(
+        config: ghostty_config_t,
+        out: *mut c_void,
+        key: *const c_char,
+        key_len: usize,
+    ) -> bool;
 
     // App
     pub fn ghostty_app_new(

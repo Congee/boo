@@ -10,9 +10,9 @@ pub struct TabManager {
     prev_active: usize,
 }
 
-struct Tab {
+pub struct Tab {
     tree: SplitTree,
-    title: String,
+    pub title: String,
 }
 
 impl TabManager {
@@ -159,6 +159,16 @@ impl TabManager {
         if let Some(tab) = self.tabs.get_mut(self.active) {
             tab.title = title;
         }
+    }
+
+    /// Get mutable access to a tab by index.
+    pub fn tab_mut(&mut self, index: usize) -> Option<&mut Tab> {
+        self.tabs.get_mut(index)
+    }
+
+    /// Get the tree for a tab by index.
+    pub fn tab_tree(&self, index: usize) -> Option<&SplitTree> {
+        self.tabs.get(index).map(|t| &t.tree)
     }
 
     /// Get info for control socket.

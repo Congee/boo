@@ -68,12 +68,23 @@ impl SplitTree {
         surface: ffi::ghostty_surface_t,
         nsview: *mut c_void,
     ) -> Option<LeafId> {
+        self.split_focused_with_ratio(direction, surface, nsview, 0.5)
+    }
+
+    /// Split the focused leaf with a specific ratio.
+    pub fn split_focused_with_ratio(
+        &mut self,
+        direction: Direction,
+        surface: ffi::ghostty_surface_t,
+        nsview: *mut c_void,
+        ratio: f64,
+    ) -> Option<LeafId> {
         let focused = self.focused_id;
         let new_id = self.next_id;
         self.next_id += 1;
 
         let root = self.root.take()?;
-        self.root = Some(split_node(root, focused, direction, new_id, surface, nsview));
+        self.root = Some(split_node_with_ratio(root, focused, direction, new_id, surface, nsview, ratio));
         self.focused_id = new_id;
         Some(new_id)
     }
@@ -120,6 +131,15 @@ impl SplitTree {
             layout_node(root, frame, scale, &mut result);
         }
         result
+    }
+
+    /// Export the tree as a flat list of panes with split info.
+    pub fn export_panes(&self) -> Vec<ExportedPane> {
+        let mut panes = Vec::new();
+        if let Some(ref root) = self.root {
+            export_node(root, None, &mut panes);
+        }
+        panes
     }
 
     /// Collect all surfaces for cleanup.
@@ -224,30 +244,31 @@ impl SplitTree {
     }
 }
 
-fn split_node(
+fn split_node_with_ratio(
     node: Node,
     target_id: LeafId,
     direction: Direction,
     new_id: LeafId,
     surface: ffi::ghostty_surface_t,
     nsview: *mut c_void,
+    ratio: f64,
 ) -> Node {
     match node {
         Node::Leaf { id, .. } if id == target_id => {
             let new_leaf = Node::Leaf { id: new_id, surface, nsview };
             Node::Split {
                 direction,
-                ratio: 0.5,
+                ratio: ratio.clamp(0.1, 0.9),
                 first: Box::new(node),
                 second: Box::new(new_leaf),
             }
         }
-        Node::Split { direction: d, ratio, first, second } => {
+        Node::Split { direction: d, ratio: r, first, second } => {
             Node::Split {
                 direction: d,
-                ratio,
-                first: Box::new(split_node(*first, target_id, direction, new_id, surface, nsview)),
-                second: Box::new(split_node(*second, target_id, direction, new_id, surface, nsview)),
+                ratio: r,
+                first: Box::new(split_node_with_ratio(*first, target_id, direction, new_id, surface, nsview, ratio)),
+                second: Box::new(split_node_with_ratio(*second, target_id, direction, new_id, surface, nsview, ratio)),
             }
         }
         other => other,
@@ -591,6 +612,32 @@ fn set_hidden_recursive(node: &Node, hidden: bool) {
         Node::Split { first, second, .. } => {
             set_hidden_recursive(first, hidden);
             set_hidden_recursive(second, hidden);
+        }
+    }
+}
+
+/// A pane exported from the split tree for session saving.
+pub struct ExportedPane {
+    /// The split that created this pane (None for the first pane).
+    pub split: Option<(Direction, f64)>, // (direction, ratio)
+}
+
+/// In-order walk: first child inherits parent's split context, second child
+/// records the split that separated it from first.
+fn export_node(
+    node: &Node,
+    split_info: Option<(Direction, f64)>,
+    out: &mut Vec<ExportedPane>,
+) {
+    match node {
+        Node::Leaf { .. } => {
+            out.push(ExportedPane { split: split_info });
+        }
+        Node::Split { direction, ratio, first, second } => {
+            // First child: inherits whatever split_info was passed to us
+            export_node(first, split_info, out);
+            // Second child: was created by THIS split
+            export_node(second, Some((*direction, *ratio)), out);
         }
     }
 }

@@ -4,6 +4,7 @@ mod config;
 mod control;
 mod ffi;
 mod keymap;
+mod session;
 mod splits;
 mod tabs;
 mod tmux;
@@ -11,7 +12,7 @@ mod tmux;
 use iced::widget::{column, container, row, text};
 use iced::window;
 use iced::{keyboard, mouse, Color, Element, Event, Font, Length, Size, Subscription, Task, Theme};
-use std::ffi::{c_void, CString};
+use std::ffi::{c_void, CStr, CString};
 use std::ptr;
 
 /// Status bar height in points.
@@ -35,8 +36,18 @@ struct CallbackState {
 }
 
 
+static STARTUP_SESSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 fn main() {
     env_logger::init();
+
+    // Parse --session <name> from CLI args
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = args.iter().position(|a| a == "--session") {
+        if let Some(name) = args.get(pos + 1) {
+            STARTUP_SESSION.set(name.clone()).ok();
+        }
+    }
 
     let result = unsafe { ffi::ghostty_init(0, ptr::null_mut()) };
     if result != ffi::GHOSTTY_SUCCESS {
@@ -95,7 +106,7 @@ struct GhosttyApp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum SelectionMode {
+pub enum SelectionMode {
     None,
     Char,
     Line,
@@ -165,6 +176,9 @@ const COMMANDS: &[CommandDef] = &[
     CommandDef { name: "reload-config", description: "reload configuration", args: "" },
     CommandDef { name: "goto-line", description: "jump to line (copy mode)", args: "<n>" },
     CommandDef { name: "set", description: "set ghostty config value", args: "<key> <value>" },
+    CommandDef { name: "load-session", description: "load a session layout", args: "<name>" },
+    CommandDef { name: "save-session", description: "save current layout", args: "<name>" },
+    CommandDef { name: "list-sessions", description: "list available sessions", args: "" },
 ];
 
 struct CommandPrompt {
@@ -2006,6 +2020,20 @@ impl GhosttyApp {
                     log::info!("set: {key} = {val}");
                 }
             }
+            "load-session" => {
+                if let Some(name) = arg1 {
+                    self.load_session(name);
+                }
+            }
+            "save-session" => {
+                if let Some(name) = arg1 {
+                    self.save_current_session(name);
+                }
+            }
+            "list-sessions" => {
+                let sessions = session::list_sessions();
+                log::info!("sessions: {}", sessions.join(", "));
+            }
             _ => {
                 // Try as a bare number for goto-line in copy mode
                 if let Ok(n) = cmd.parse::<i64>() {
@@ -2260,12 +2288,27 @@ impl GhosttyApp {
         self.tabs.add_initial_tab(surface, nsview);
         self.cb_state.surface = surface;
         log::info!("tab 0 created");
+
+        // Load startup session if --session was specified
+        if let Some(name) = STARTUP_SESSION.get() {
+            self.load_session(name);
+        }
     }
 
     fn create_ghostty_surface(
         &self,
         frame: objc2_foundation::NSRect,
         is_first: bool,
+    ) -> (Option<ffi::ghostty_surface_t>, *mut c_void) {
+        self.create_ghostty_surface_with(frame, is_first, None, None)
+    }
+
+    fn create_ghostty_surface_with(
+        &self,
+        frame: objc2_foundation::NSRect,
+        is_first: bool,
+        command: Option<&CStr>,
+        working_directory: Option<&CStr>,
     ) -> (Option<ffi::ghostty_surface_t>, *mut c_void) {
         let Some(parent_view) = appkit::content_view() else {
             return (None, ptr::null_mut());
@@ -2285,6 +2328,12 @@ impl GhosttyApp {
         } else {
             ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_SPLIT
         };
+        if let Some(cmd) = command {
+            config.command = cmd.as_ptr();
+        }
+        if let Some(wd) = working_directory {
+            config.working_directory = wd.as_ptr();
+        }
 
         let surface = unsafe { ffi::ghostty_surface_new(self.app, &config) };
         if surface.is_null() {
@@ -2420,6 +2469,121 @@ impl GhosttyApp {
         self.cb_state.surface = surface;
         self.relayout();
         log::info!("new tab {idx} (total: {})", self.tabs.len());
+    }
+
+    fn load_session(&mut self, name: &str) {
+        let Some(layout) = session::load_session(name) else {
+            log::warn!("session not found: {name}");
+            return;
+        };
+        log::info!("loading session: {} ({} tabs)", layout.name, layout.tabs.len());
+        if self.parent_nsview.is_null() {
+            return;
+        }
+        let frame = appkit::view_bounds(self.parent_nsview);
+
+        for (tab_idx, session_tab) in layout.tabs.iter().enumerate() {
+            // For named layouts, compute the split sequence automatically
+            let auto_splits = if session_tab.layout != session::TabLayout::Manual {
+                session::layout_splits(&session_tab.layout, session_tab.panes.len())
+            } else {
+                vec![]
+            };
+
+            for (pane_idx, pane) in session_tab.panes.iter().enumerate() {
+                let cmd_cstr = pane.command.as_ref().map(|c| CString::new(c.as_str()).unwrap());
+                let wd_cstr = pane.working_directory.as_ref().map(|w| CString::new(w.as_str()).unwrap());
+
+                if pane_idx == 0 {
+                    // First pane → create a new tab
+                    let (surface, nsview) = self.create_ghostty_surface_with(
+                        frame, false,
+                        cmd_cstr.as_deref(),
+                        wd_cstr.as_deref(),
+                    );
+                    let Some(surface) = surface else { continue };
+                    let old = self.tabs.focused_surface();
+                    if !old.is_null() {
+                        unsafe { ffi::ghostty_surface_set_focus(old, false) };
+                    }
+                    self.tabs.new_tab(surface, nsview);
+                    self.cb_state.surface = surface;
+                } else {
+                    // Determine split direction and ratio
+                    let (split_dir, ratio) = if !auto_splits.is_empty() {
+                        // Named layout: use computed splits
+                        let spec = &auto_splits[pane_idx - 1];
+                        let dir = match spec.direction {
+                            session::SplitDir::Right => splits::Direction::Horizontal,
+                            session::SplitDir::Down => splits::Direction::Vertical,
+                        };
+                        (dir, spec.ratio)
+                    } else if let Some(ref spec) = pane.split {
+                        // Manual layout: use explicit split
+                        let dir = match spec.direction {
+                            session::SplitDir::Right => splits::Direction::Horizontal,
+                            session::SplitDir::Down => splits::Direction::Vertical,
+                        };
+                        (dir, spec.ratio)
+                    } else {
+                        (splits::Direction::Vertical, 0.5)
+                    };
+
+                    let (surface, nsview) = self.create_ghostty_surface_with(
+                        frame, false,
+                        cmd_cstr.as_deref(),
+                        wd_cstr.as_deref(),
+                    );
+                    let Some(surface) = surface else { continue };
+                    if let Some(tree) = self.tabs.active_tree_mut() {
+                        tree.split_focused_with_ratio(split_dir, surface, nsview, ratio);
+                    }
+                    self.cb_state.surface = surface;
+                }
+            }
+            // Set tab title
+            if !session_tab.title.is_empty() {
+                if let Some(tab) = self.tabs.tab_mut(tab_idx) {
+                    tab.title = session_tab.title.clone();
+                }
+            }
+        }
+        self.relayout();
+        log::info!("session loaded: {}", layout.name);
+    }
+
+    fn save_current_session(&self, name: &str) {
+        let tab_infos = self.tabs.tab_info();
+        let tabs: Vec<session::SessionTab> = tab_infos.iter().map(|info| {
+            let panes = if let Some(tree) = self.tabs.tab_tree(info.index) {
+                tree.export_panes().into_iter().map(|ep| {
+                    let split = ep.split.map(|(dir, ratio)| session::SplitSpec {
+                        direction: match dir {
+                            splits::Direction::Horizontal => session::SplitDir::Right,
+                            splits::Direction::Vertical => session::SplitDir::Down,
+                        },
+                        ratio,
+                    });
+                    session::SessionPane {
+                        command: None, // can't read running command from ghostty
+                        working_directory: None,
+                        split,
+                    }
+                }).collect()
+            } else {
+                vec![session::SessionPane { command: None, working_directory: None, split: None }]
+            };
+            session::SessionTab {
+                title: info.title.clone(),
+                layout: session::TabLayout::Manual,
+                panes,
+            }
+        }).collect();
+
+        let layout = session::SessionLayout { name: name.to_string(), tabs };
+        if let Err(e) = session::save_session(&layout) {
+            log::error!("failed to save session: {e}");
+        }
     }
 
     fn view(&self) -> Element<'_, Message> {

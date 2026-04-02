@@ -1,15 +1,15 @@
-//! Boo configuration parsed from ~/.config/boo/boo.toml (or $XDG_CONFIG_HOME/boo/boo.toml).
+//! Boo configuration parsed from ~/.config/boo/config.boo.
+//!
+//! Single config file using ghostty's key=value format.
+//! Ghostty-native keys (font-family, background-opacity, etc.) are handled by libghostty.
+//! Boo-specific keys (prefix-key, control-socket, keybind) are parsed here.
 
-use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub prefix_key: Option<String>,
     pub control_socket: Option<String>,
-    #[serde(default)]
     pub keybinds: HashMap<String, String>,
 }
 
@@ -27,16 +27,36 @@ impl Config {
                 return Config::default();
             }
         };
-        match toml::from_str(&content) {
-            Ok(c) => {
-                log::info!("loaded boo config: {}", path.display());
-                c
+        Self::parse(&content)
+    }
+
+    pub fn parse(content: &str) -> Config {
+        let mut config = Config::default();
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
             }
-            Err(e) => {
-                log::error!("failed to parse {}: {e}", path.display());
-                Config::default()
+            let Some((key, value)) = line.split_once('=') else { continue };
+            let key = key.trim();
+            let value = value.trim();
+            match key {
+                "prefix-key" => config.prefix_key = Some(value.to_string()),
+                "control-socket" => config.control_socket = Some(value.to_string()),
+                "keybind" => {
+                    // Format: keybind = <key>=<action>
+                    if let Some((bind_key, action)) = value.split_once('=') {
+                        config.keybinds.insert(
+                            bind_key.trim().to_string(),
+                            action.trim().to_string(),
+                        );
+                    }
+                }
+                _ => {} // ghostty-native keys — ignored here, handled by libghostty
             }
         }
+        log::info!("loaded boo config from {} lines", content.lines().count());
+        config
     }
 }
 
@@ -57,9 +77,63 @@ pub fn config_dir() -> PathBuf {
 }
 
 fn config_path() -> PathBuf {
-    config_dir().join("boo.toml")
+    config_dir().join("config.boo")
 }
 
+/// Path to the config file for loading into ghostty.
+/// Same file as boo's config — ghostty ignores boo- prefixed keys.
 pub fn ghostty_config_path() -> PathBuf {
-    config_dir().join("config.ghostty")
+    config_path()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_config() {
+        let content = r#"
+# ghostty settings (ignored by boo parser)
+font-family = Fira Code
+font-size = 14
+background-opacity = 0.9
+
+# boo settings
+prefix-key = ctrl+s
+control-socket = /tmp/boo.sock
+
+keybind = " = new_split:right
+keybind = % = new_split:down
+keybind = super+1 = goto_tab:1
+"#;
+        let config = Config::parse(content);
+        assert_eq!(config.prefix_key.as_deref(), Some("ctrl+s"));
+        assert_eq!(config.control_socket.as_deref(), Some("/tmp/boo.sock"));
+        assert_eq!(config.keybinds.len(), 3);
+        assert_eq!(config.keybinds.get("\"").map(|s| s.as_str()), Some("new_split:right"));
+        assert_eq!(config.keybinds.get("%").map(|s| s.as_str()), Some("new_split:down"));
+        assert_eq!(config.keybinds.get("super+1").map(|s| s.as_str()), Some("goto_tab:1"));
+    }
+
+    #[test]
+    fn test_ghostty_keys_ignored() {
+        let content = "font-size = 14\nwindow-decoration = none\n";
+        let config = Config::parse(content);
+        assert!(config.prefix_key.is_none());
+        assert!(config.keybinds.is_empty());
+    }
+
+    #[test]
+    fn test_empty_config() {
+        let config = Config::parse("");
+        assert!(config.prefix_key.is_none());
+        assert!(config.keybinds.is_empty());
+    }
+
+    #[test]
+    fn test_comments_and_blanks() {
+        let content = "# comment\n\nprefix-key = ctrl+a\n# another\n";
+        let config = Config::parse(content);
+        assert_eq!(config.prefix_key.as_deref(), Some("ctrl+a"));
+    }
 }
