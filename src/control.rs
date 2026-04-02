@@ -21,7 +21,12 @@ use std::sync::mpsc;
 #[serde(tag = "cmd", rename_all = "kebab-case")]
 pub enum Request {
     ListSurfaces,
+    ListTabs,
     NewSplit { direction: Option<String> },
+    NewTab,
+    GotoTab { index: usize },
+    NextTab,
+    PrevTab,
     FocusSurface { index: usize },
     SendKey { key: String },
     DumpKeys { enabled: bool },
@@ -32,6 +37,7 @@ pub enum Request {
 #[serde(untagged)]
 pub enum Response {
     Surfaces { surfaces: Vec<SurfaceInfo> },
+    Tabs { tabs: Vec<crate::tabs::TabInfo> },
     Ok { ok: bool },
     Error { error: String },
 }
@@ -48,8 +54,13 @@ pub enum ControlCmd {
     DumpKeysOn,
     DumpKeysOff,
     ListSurfaces { reply: mpsc::Sender<Response> },
+    ListTabs { reply: mpsc::Sender<Response> },
     SendKey { keyspec: String },
     NewSplit { direction: String },
+    NewTab,
+    GotoTab { index: usize },
+    NextTab,
+    PrevTab,
     FocusSurface { index: usize },
     Quit,
 }
@@ -150,10 +161,32 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
             let _ = tx.send(ControlCmd::ListSurfaces { reply: reply_tx });
             match reply_rx.recv_timeout(std::time::Duration::from_secs(2)) {
                 Ok(resp) => resp,
-                Err(_) => Response::Error {
-                    error: "timeout".into(),
-                },
+                Err(_) => Response::Error { error: "timeout".into() },
             }
+        }
+        Request::ListTabs => {
+            let (reply_tx, reply_rx) = mpsc::channel();
+            let _ = tx.send(ControlCmd::ListTabs { reply: reply_tx });
+            match reply_rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                Ok(resp) => resp,
+                Err(_) => Response::Error { error: "timeout".into() },
+            }
+        }
+        Request::NewTab => {
+            let _ = tx.send(ControlCmd::NewTab);
+            Response::Ok { ok: true }
+        }
+        Request::GotoTab { index } => {
+            let _ = tx.send(ControlCmd::GotoTab { index });
+            Response::Ok { ok: true }
+        }
+        Request::NextTab => {
+            let _ = tx.send(ControlCmd::NextTab);
+            Response::Ok { ok: true }
+        }
+        Request::PrevTab => {
+            let _ = tx.send(ControlCmd::PrevTab);
+            Response::Ok { ok: true }
         }
     }
 }

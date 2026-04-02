@@ -11,6 +11,9 @@ pub enum Action {
     NewSplit(ffi::ghostty_action_split_direction_e),
     GotoSplit(ffi::ghostty_action_goto_split_e),
     ResizeSplit(Direction, u16),
+    NewTab,
+    NextTab,
+    PrevTab,
     ReloadConfig,
 }
 
@@ -160,6 +163,9 @@ fn parse_action(s: &str) -> Option<Action> {
 
     match s {
         "reload_config" => Some(Action::ReloadConfig),
+        "new_tab" => Some(Action::NewTab),
+        "next_tab" => Some(Action::NextTab),
+        "prev_tab" => Some(Action::PrevTab),
         "goto_split:left" => Some(Action::GotoSplit(GHOSTTY_GOTO_SPLIT_PREVIOUS)),
         "goto_split:right" | "goto_split:bottom" => {
             Some(Action::GotoSplit(GHOSTTY_GOTO_SPLIT_NEXT))

@@ -5,6 +5,7 @@ mod control;
 mod ffi;
 mod keymap;
 mod splits;
+mod tabs;
 
 use iced::window;
 use iced::{keyboard, mouse, Element, Event, Length, Size, Subscription, Task, Theme};
@@ -41,7 +42,7 @@ fn main() {
 struct GhosttyApp {
     app: ffi::ghostty_app_t,
     config: ffi::ghostty_config_t,
-    tree: splits::SplitTree,
+    tabs: tabs::TabManager,
     parent_nsview: *mut c_void,
     cb_state: Box<CallbackState>,
     ctl_rx: std::sync::mpsc::Receiver<control::ControlCmd>,
@@ -113,7 +114,7 @@ impl GhosttyApp {
             Self {
                 app,
                 config,
-                tree: splits::SplitTree::new(),
+                tabs: tabs::TabManager::new(),
                 parent_nsview: ptr::null_mut(),
                 cb_state,
                 ctl_rx,
@@ -127,7 +128,7 @@ impl GhosttyApp {
     }
 
     fn focused_surface(&self) -> ffi::ghostty_surface_t {
-        self.tree.focused_surface()
+        self.tabs.focused_surface()
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -138,7 +139,7 @@ impl GhosttyApp {
             self.handle_control_cmd(cmd);
         }
 
-        if self.tree.is_empty() {
+        if self.tabs.is_empty() {
             self.init_surface();
             return Task::none();
         }
@@ -293,16 +294,15 @@ impl GhosttyApp {
             control::ControlCmd::DumpKeysOff => self.dump_keys = false,
             control::ControlCmd::Quit => std::process::exit(0),
             control::ControlCmd::ListSurfaces { reply } => {
-                let surfaces: Vec<control::SurfaceInfo> = self
-                    .tree
-                    .surface_info()
-                    .into_iter()
-                    .map(|(id, focused)| control::SurfaceInfo {
-                        index: id,
-                        focused,
-                    })
-                    .collect();
-                let _ = reply.send(control::Response::Surfaces { surfaces });
+                let info = if let Some(tree) = self.tabs.active_tree() {
+                    tree.surface_info()
+                        .into_iter()
+                        .map(|(id, focused)| control::SurfaceInfo { index: id, focused })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let _ = reply.send(control::Response::Surfaces { surfaces: info });
             }
             control::ControlCmd::NewSplit { direction } => {
                 use ffi::ghostty_action_split_direction_e::*;
@@ -316,9 +316,11 @@ impl GhosttyApp {
                 self.create_split(dir);
             }
             control::ControlCmd::FocusSurface { index } => {
-                let old = self.tree.focused_surface();
-                self.tree.set_focus(index);
-                let new = self.tree.focused_surface();
+                let old = self.tabs.focused_surface();
+                if let Some(tree) = self.tabs.active_tree_mut() {
+                    tree.set_focus(index);
+                }
+                let new = self.tabs.focused_surface();
                 if old != new {
                     unsafe {
                         if !old.is_null() { ffi::ghostty_surface_set_focus(old, false); }
@@ -326,6 +328,27 @@ impl GhosttyApp {
                     }
                     self.cb_state.surface = new;
                 }
+            }
+            control::ControlCmd::ListTabs { reply } => {
+                let _ = reply.send(control::Response::Tabs {
+                    tabs: self.tabs.tab_info(),
+                });
+            }
+            control::ControlCmd::NewTab => self.new_tab(),
+            control::ControlCmd::GotoTab { index } => {
+                self.tabs.goto_tab(index);
+                self.cb_state.surface = self.tabs.focused_surface();
+                self.relayout();
+            }
+            control::ControlCmd::NextTab => {
+                self.tabs.next_tab();
+                self.cb_state.surface = self.tabs.focused_surface();
+                self.relayout();
+            }
+            control::ControlCmd::PrevTab => {
+                self.tabs.prev_tab();
+                self.cb_state.surface = self.tabs.focused_surface();
+                self.relayout();
             }
             control::ControlCmd::SendKey { keyspec } => {
                 self.inject_key(&keyspec);
@@ -384,6 +407,9 @@ impl GhosttyApp {
                 // TODO: implement split resize
                 log::info!("resize_split: not yet implemented");
             }
+            bindings::Action::NewTab => self.new_tab(),
+            bindings::Action::NextTab => { self.tabs.next_tab(); self.relayout(); }
+            bindings::Action::PrevTab => { self.tabs.prev_tab(); self.relayout(); }
             bindings::Action::ReloadConfig => {
                 log::info!("reload_config triggered");
             }
@@ -444,7 +470,7 @@ impl GhosttyApp {
     }
 
     fn init_surface(&mut self) {
-        if !self.tree.is_empty() {
+        if !self.tabs.is_empty() {
             return;
         }
         let Some(cv) = appkit::content_view() else { return };
@@ -452,9 +478,9 @@ impl GhosttyApp {
         let frame = cv.bounds();
         let (surface, nsview) = self.create_ghostty_surface(frame, true);
         let Some(surface) = surface else { return };
-        self.tree.add_root(surface, nsview);
+        self.tabs.add_initial_tab(surface, nsview);
         self.cb_state.surface = surface;
-        log::info!("surface created (total: {})", self.tree.len());
+        log::info!("tab 0 created");
     }
 
     fn create_ghostty_surface(
@@ -493,7 +519,7 @@ impl GhosttyApp {
     }
 
     fn create_split(&mut self, direction: ffi::ghostty_action_split_direction_e) {
-        if self.parent_nsview.is_null() || self.tree.is_empty() {
+        if self.parent_nsview.is_null() || self.tabs.is_empty() {
             return;
         }
         let parent_bounds = appkit::view_bounds(self.parent_nsview);
@@ -505,30 +531,32 @@ impl GhosttyApp {
             _ => splits::Direction::Vertical,
         };
 
-        // Create with a temporary frame; relayout will fix it
         let (surface, nsview) = self.create_ghostty_surface(parent_bounds, false);
         let Some(surface) = surface else { return };
 
-        let old_focused = self.tree.focused_surface();
-        self.tree.split_focused(split_dir, surface, nsview);
+        let old_focused = self.tabs.focused_surface();
+        if let Some(tree) = self.tabs.active_tree_mut() {
+            tree.split_focused(split_dir, surface, nsview);
+        }
         self.cb_state.surface = surface;
 
-        // Update focus on ghostty side
         if !old_focused.is_null() {
             unsafe { ffi::ghostty_surface_set_focus(old_focused, false) };
         }
 
         self.relayout();
-        log::info!("split created (total: {})", self.tree.len());
+        log::info!("split created");
     }
 
     fn switch_focus(&mut self, dir: ffi::ghostty_action_goto_split_e) {
-        let old = self.tree.focused_surface();
-        match dir {
-            ffi::ghostty_action_goto_split_e::GHOSTTY_GOTO_SPLIT_NEXT => self.tree.focus_next(),
-            ffi::ghostty_action_goto_split_e::GHOSTTY_GOTO_SPLIT_PREVIOUS => self.tree.focus_prev(),
+        let old = self.tabs.focused_surface();
+        if let Some(tree) = self.tabs.active_tree_mut() {
+            match dir {
+                ffi::ghostty_action_goto_split_e::GHOSTTY_GOTO_SPLIT_NEXT => tree.focus_next(),
+                ffi::ghostty_action_goto_split_e::GHOSTTY_GOTO_SPLIT_PREVIOUS => tree.focus_prev(),
+            }
         }
-        let new = self.tree.focused_surface();
+        let new = self.tabs.focused_surface();
         if old != new {
             unsafe {
                 if !old.is_null() { ffi::ghostty_surface_set_focus(old, false); }
@@ -539,7 +567,7 @@ impl GhosttyApp {
     }
 
     fn relayout(&self) {
-        if self.tree.is_empty() || self.last_size.width == 0.0 {
+        if self.tabs.is_empty() || self.last_size.width == 0.0 {
             return;
         }
         let scale = self.scale_factor();
@@ -550,13 +578,32 @@ impl GhosttyApp {
                 self.last_size.height as f64,
             ),
         );
-        let surfaces = self.tree.layout(frame, scale);
+        let surfaces = self.tabs.layout_active(frame, scale);
         for (surface, w, h) in surfaces {
             unsafe {
                 ffi::ghostty_surface_set_content_scale(surface, scale, scale);
                 ffi::ghostty_surface_set_size(surface, w, h);
             }
         }
+    }
+
+    fn new_tab(&mut self) {
+        if self.parent_nsview.is_null() {
+            return;
+        }
+        let frame = appkit::view_bounds(self.parent_nsview);
+        let (surface, nsview) = self.create_ghostty_surface(frame, false);
+        let Some(surface) = surface else { return };
+
+        let old = self.tabs.focused_surface();
+        if !old.is_null() {
+            unsafe { ffi::ghostty_surface_set_focus(old, false) };
+        }
+
+        let idx = self.tabs.new_tab(surface, nsview);
+        self.cb_state.surface = surface;
+        self.relayout();
+        log::info!("new tab {idx} (total: {})", self.tabs.len());
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -580,7 +627,7 @@ impl GhosttyApp {
 
 impl Drop for GhosttyApp {
     fn drop(&mut self) {
-        for surface in self.tree.all_surfaces() {
+        for surface in self.tabs.all_surfaces() {
             unsafe { ffi::ghostty_surface_free(surface) };
         }
         unsafe {

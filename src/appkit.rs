@@ -75,6 +75,14 @@ pub fn set_resize_increments(width: f64, height: f64) {
     }
 }
 
+/// Set hidden state of a raw NSView.
+pub fn set_view_hidden(view: *mut c_void, hidden: bool) {
+    unsafe {
+        let view = &*(view as *const NSView);
+        view.setHidden(hidden);
+    }
+}
+
 /// Request a redraw of the content view (called from wakeup on any thread).
 pub fn request_redraw() {
     unsafe {

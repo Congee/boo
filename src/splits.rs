@@ -148,6 +148,13 @@ impl SplitTree {
         self.root.is_none()
     }
 
+    /// Show or hide all NSViews in this tree.
+    pub fn set_hidden(&self, hidden: bool) {
+        if let Some(ref root) = self.root {
+            set_hidden_recursive(root, hidden);
+        }
+    }
+
     /// Get surface info for control socket.
     pub fn surface_info(&self) -> Vec<(LeafId, bool)> {
         match &self.root {
@@ -273,6 +280,17 @@ fn split_frame(frame: NSRect, direction: Direction, ratio: f64) -> (NSRect, NSRe
                 ),
                 NSRect::new(frame.origin, NSSize::new(frame.size.width, h2)),
             )
+        }
+    }
+}
+
+
+fn set_hidden_recursive(node: &Node, hidden: bool) {
+    match node {
+        Node::Leaf { nsview, .. } => crate::appkit::set_view_hidden(*nsview, hidden),
+        Node::Split { first, second, .. } => {
+            set_hidden_recursive(first, hidden);
+            set_hidden_recursive(second, hidden);
         }
     }
 }
