@@ -9,6 +9,7 @@ use iced::window;
 use iced::{keyboard, mouse, Element, Event, Length, Size, Subscription, Task, Theme};
 use std::ffi::{c_void, CString};
 use std::ptr;
+
 /// Shared state accessible from C callbacks via runtime_config.userdata.
 struct CallbackState {
     surface: ffi::ghostty_surface_t,
@@ -51,6 +52,7 @@ struct GhosttyApp {
     cb_state: Box<CallbackState>,
     ctl_rx: std::sync::mpsc::Receiver<control::ControlCmd>,
     bindings: bindings::Bindings,
+    socket_path: Option<String>,
     dump_keys: bool,
 }
 
@@ -108,8 +110,8 @@ impl GhosttyApp {
         assert!(!app.is_null(), "failed to create ghostty app");
         log::info!("ghostty app created");
 
-        let ctl_rx = control::start();
         let boo_config = config::Config::load();
+        let ctl_rx = control::start(boo_config.control_socket.as_deref());
         let bindings = bindings::Bindings::from_config(&boo_config);
 
         (
@@ -122,6 +124,7 @@ impl GhosttyApp {
                 cb_state,
                 ctl_rx,
                 bindings,
+                socket_path: boo_config.control_socket.clone(),
                 dump_keys: std::env::args().any(|a| a == "--dump-keys"),
             },
             Task::none(),
@@ -135,44 +138,9 @@ impl GhosttyApp {
     fn update(&mut self, message: Message) -> Task<Message> {
         unsafe { ffi::ghostty_app_tick(self.app) };
 
-        // Process one control command per frame (ghostty needs ticks between keys)
+        // Process one control command per frame
         if let Ok(cmd) = self.ctl_rx.try_recv() {
-            match cmd {
-                control::ControlCmd::DumpKeysOn => self.dump_keys = true,
-                control::ControlCmd::DumpKeysOff => self.dump_keys = false,
-                control::ControlCmd::Quit => std::process::exit(0),
-                control::ControlCmd::Key { keycode, mods, .. } => {
-                    let surface = self.focused_surface();
-                    if !surface.is_null() {
-                        // Text = the character this keypress produces (with shift)
-                        let shifted = shifted_codepoint(keycode, mods);
-                        let text_str = if shifted > 0 && mods & ffi::GHOSTTY_MODS_CTRL == 0 {
-                            char::from_u32(shifted).map(|c| c.to_string())
-                        } else {
-                            None
-                        };
-                        let ctext = text_str.as_ref().and_then(|t| CString::new(t.as_str()).ok());
-                        let text_ptr = ctext.as_ref().map(|c| c.as_ptr()).unwrap_or(ptr::null());
-                        let unshifted = shifted_codepoint(keycode, 0);
-                        let consumed_mods = if mods & ffi::GHOSTTY_MODS_SHIFT != 0 {
-                            ffi::GHOSTTY_MODS_SHIFT
-                        } else {
-                            ffi::GHOSTTY_MODS_NONE
-                        };
-                        let ev = ffi::ghostty_input_key_s {
-                            action: ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS,
-                            mods,
-                            consumed_mods,
-                            keycode,
-                            text: text_ptr,
-                            unshifted_codepoint: unshifted,
-                            composing: false,
-                        };
-                        let consumed = unsafe { ffi::ghostty_surface_key(surface, ev) };
-                        log::info!("ctl key: keycode=0x{keycode:02x} mods={mods:#x} cp=0x{unshifted:02x} text={text_str:?} consumed={consumed}");
-                    }
-                }
-            }
+            self.handle_control_cmd(cmd);
         }
 
         if self.surfaces.is_empty() {
@@ -345,6 +313,92 @@ impl GhosttyApp {
                 unsafe { ffi::ghostty_surface_key(self.focused_surface(), key_event) };
             }
             _ => {}
+        }
+    }
+
+    fn handle_control_cmd(&mut self, cmd: control::ControlCmd) {
+        match cmd {
+            control::ControlCmd::DumpKeysOn => self.dump_keys = true,
+            control::ControlCmd::DumpKeysOff => self.dump_keys = false,
+            control::ControlCmd::Quit => std::process::exit(0),
+            control::ControlCmd::ListSurfaces { reply } => {
+                let surfaces: Vec<control::SurfaceInfo> = self
+                    .surfaces
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| control::SurfaceInfo {
+                        index: i,
+                        focused: i == self.focused,
+                    })
+                    .collect();
+                let _ = reply.send(control::Response::Surfaces { surfaces });
+            }
+            control::ControlCmd::NewSplit { direction } => {
+                use ffi::ghostty_action_split_direction_e::*;
+                let dir = match direction.as_str() {
+                    "right" => GHOSTTY_SPLIT_DIRECTION_RIGHT,
+                    "down" => GHOSTTY_SPLIT_DIRECTION_DOWN,
+                    "left" => GHOSTTY_SPLIT_DIRECTION_LEFT,
+                    "up" => GHOSTTY_SPLIT_DIRECTION_UP,
+                    _ => GHOSTTY_SPLIT_DIRECTION_RIGHT,
+                };
+                self.create_split(dir);
+            }
+            control::ControlCmd::FocusSurface { index } => {
+                if index < self.surfaces.len() && index != self.focused {
+                    let old = self.focused;
+                    self.focused = index;
+                    unsafe {
+                        ffi::ghostty_surface_set_focus(self.surfaces[old].surface, false);
+                        ffi::ghostty_surface_set_focus(self.surfaces[index].surface, true);
+                    }
+                    self.cb_state.surface = self.surfaces[index].surface;
+                }
+            }
+            control::ControlCmd::SendKey { keyspec } => {
+                self.inject_key(&keyspec);
+            }
+        }
+    }
+
+    fn inject_key(&self, keyspec: &str) {
+        let surface = self.focused_surface();
+        if surface.is_null() {
+            return;
+        }
+        let (keycode, mods) = match parse_keyspec(keyspec) {
+            Some(v) => v,
+            None => {
+                log::warn!("unknown keyspec: {keyspec}");
+                return;
+            }
+        };
+        let shifted = shifted_codepoint(keycode, mods);
+        let text_str = if shifted > 0 && mods & ffi::GHOSTTY_MODS_CTRL == 0 {
+            char::from_u32(shifted).map(|c| c.to_string())
+        } else {
+            None
+        };
+        let ctext = text_str.as_ref().and_then(|t| CString::new(t.as_str()).ok());
+        let text_ptr = ctext.as_ref().map(|c| c.as_ptr()).unwrap_or(ptr::null());
+        let unshifted = shifted_codepoint(keycode, 0);
+        let consumed_mods = if mods & ffi::GHOSTTY_MODS_SHIFT != 0 {
+            ffi::GHOSTTY_MODS_SHIFT
+        } else {
+            ffi::GHOSTTY_MODS_NONE
+        };
+        let ev = ffi::ghostty_input_key_s {
+            action: ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS,
+            mods,
+            consumed_mods,
+            keycode,
+            text: text_ptr,
+            unshifted_codepoint: unshifted,
+            composing: false,
+        };
+        let consumed = unsafe { ffi::ghostty_surface_key(surface, ev) };
+        if self.dump_keys {
+            log::info!("ctl key: keycode=0x{keycode:02x} mods={mods:#x} cp=0x{unshifted:02x} text={text_str:?} consumed={consumed}");
         }
     }
 
@@ -553,7 +607,6 @@ impl GhosttyApp {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        // Empty view — ghostty renders via its own NSView/IOSurfaceLayer
         iced::widget::Space::new()
             .width(Length::Fill)
             .height(Length::Fill)
@@ -581,7 +634,7 @@ impl Drop for GhosttyApp {
             ffi::ghostty_app_free(self.app);
             ffi::ghostty_config_free(self.config);
         }
-        control::cleanup();
+        control::cleanup(self.socket_path.as_deref());
     }
 }
 
@@ -623,6 +676,46 @@ fn shifted_codepoint(keycode: u32, mods: i32) -> u32 {
     } else {
         base as u32
     }
+}
+
+/// Parse "ctrl+c", "shift+0x27", "a" into (keycode, mods).
+fn parse_keyspec(spec: &str) -> Option<(u32, i32)> {
+    let mut mods: i32 = 0;
+    let mut key_part = spec;
+    loop {
+        if let Some(rest) = key_part.strip_prefix("ctrl+") {
+            mods |= ffi::GHOSTTY_MODS_CTRL;
+            key_part = rest;
+        } else if let Some(rest) = key_part.strip_prefix("shift+") {
+            mods |= ffi::GHOSTTY_MODS_SHIFT;
+            key_part = rest;
+        } else if let Some(rest) = key_part.strip_prefix("alt+") {
+            mods |= ffi::GHOSTTY_MODS_ALT;
+            key_part = rest;
+        } else if let Some(rest) = key_part.strip_prefix("super+") {
+            mods |= ffi::GHOSTTY_MODS_SUPER;
+            key_part = rest;
+        } else {
+            break;
+        }
+    }
+    let keycode = match key_part {
+        "a" => 0x00, "s" => 0x01, "d" => 0x02, "f" => 0x03,
+        "h" => 0x04, "g" => 0x05, "z" => 0x06, "x" => 0x07,
+        "c" => 0x08, "v" => 0x09, "b" => 0x0B, "q" => 0x0C,
+        "w" => 0x0D, "e" => 0x0E, "r" => 0x0F, "y" => 0x10,
+        "t" => 0x11, "u" => 0x20, "i" => 0x22, "o" => 0x1F,
+        "p" => 0x23, "l" => 0x25, "j" => 0x26, "k" => 0x28,
+        "n" => 0x2D, "m" => 0x2E,
+        "enter" | "return" => 0x24,
+        "tab" => 0x30, "space" => 0x31, "escape" | "esc" => 0x35,
+        "backspace" => 0x33,
+        _ if key_part.starts_with("0x") => {
+            u32::from_str_radix(&key_part[2..], 16).ok()?
+        }
+        _ => return None,
+    };
+    Some((keycode, mods))
 }
 
 fn key_to_codepoint(key: &keyboard::Key) -> u32 {

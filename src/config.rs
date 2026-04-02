@@ -8,6 +8,7 @@ use std::path::PathBuf;
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub prefix_key: Option<String>,
+    pub control_socket: Option<String>,
     #[serde(default)]
     pub keybinds: HashMap<String, String>,
 }
@@ -43,6 +44,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             prefix_key: None,
+            control_socket: None,
             keybinds: HashMap::new(),
         }
     }
