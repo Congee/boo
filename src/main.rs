@@ -4,6 +4,7 @@ mod config;
 mod control;
 mod ffi;
 mod keymap;
+mod splits;
 
 use iced::window;
 use iced::{keyboard, mouse, Element, Event, Length, Size, Subscription, Task, Theme};
@@ -37,23 +38,17 @@ fn main() {
         .unwrap();
 }
 
-struct SurfaceEntry {
-    surface: ffi::ghostty_surface_t,
-    nsview: *mut c_void,
-    last_size: (u32, u32),
-}
-
 struct GhosttyApp {
     app: ffi::ghostty_app_t,
     config: ffi::ghostty_config_t,
-    surfaces: Vec<SurfaceEntry>,
-    focused: usize,
+    tree: splits::SplitTree,
     parent_nsview: *mut c_void,
     cb_state: Box<CallbackState>,
     ctl_rx: std::sync::mpsc::Receiver<control::ControlCmd>,
     bindings: bindings::Bindings,
     socket_path: Option<String>,
     dump_keys: bool,
+    last_size: Size,
 }
 
 #[derive(Debug, Clone)]
@@ -118,21 +113,21 @@ impl GhosttyApp {
             Self {
                 app,
                 config,
-                surfaces: Vec::new(),
-                focused: 0,
+                tree: splits::SplitTree::new(),
                 parent_nsview: ptr::null_mut(),
                 cb_state,
                 ctl_rx,
                 bindings,
                 socket_path: boo_config.control_socket.clone(),
                 dump_keys: std::env::args().any(|a| a == "--dump-keys"),
+                last_size: Size::new(0.0, 0.0),
             },
             Task::none(),
         )
     }
 
     fn focused_surface(&self) -> ffi::ghostty_surface_t {
-        self.surfaces.get(self.focused).map(|s| s.surface).unwrap_or(ptr::null_mut())
+        self.tree.focused_surface()
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -143,41 +138,17 @@ impl GhosttyApp {
             self.handle_control_cmd(cmd);
         }
 
-        if self.surfaces.is_empty() {
+        if self.tree.is_empty() {
             self.init_surface();
             return Task::none();
         }
 
         // Process pending actions from C callbacks
         if let Some(dir) = self.cb_state.pending_split.take() {
-            log::info!("update: pending split {:?}", dir);
             self.create_split(dir);
         }
         if let Some(dir) = self.cb_state.pending_focus.take() {
-            match dir {
-                ffi::ghostty_action_goto_split_e::GHOSTTY_GOTO_SPLIT_NEXT => {
-                    let old = self.focused;
-                    self.focused = (self.focused + 1) % self.surfaces.len();
-                    if old != self.focused {
-                        unsafe {
-                            ffi::ghostty_surface_set_focus(self.surfaces[old].surface, false);
-                            ffi::ghostty_surface_set_focus(self.surfaces[self.focused].surface, true);
-                        }
-                        self.cb_state.surface = self.surfaces[self.focused].surface;
-                    }
-                }
-                ffi::ghostty_action_goto_split_e::GHOSTTY_GOTO_SPLIT_PREVIOUS => {
-                    let old = self.focused;
-                    self.focused = if self.focused == 0 { self.surfaces.len() - 1 } else { self.focused - 1 };
-                    if old != self.focused {
-                        unsafe {
-                            ffi::ghostty_surface_set_focus(self.surfaces[old].surface, false);
-                            ffi::ghostty_surface_set_focus(self.surfaces[self.focused].surface, true);
-                        }
-                        self.cb_state.surface = self.surfaces[self.focused].surface;
-                    }
-                }
-            }
+            self.switch_focus(dir);
         }
 
         let event = match message {
@@ -323,12 +294,12 @@ impl GhosttyApp {
             control::ControlCmd::Quit => std::process::exit(0),
             control::ControlCmd::ListSurfaces { reply } => {
                 let surfaces: Vec<control::SurfaceInfo> = self
-                    .surfaces
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| control::SurfaceInfo {
-                        index: i,
-                        focused: i == self.focused,
+                    .tree
+                    .surface_info()
+                    .into_iter()
+                    .map(|(id, focused)| control::SurfaceInfo {
+                        index: id,
+                        focused,
                     })
                     .collect();
                 let _ = reply.send(control::Response::Surfaces { surfaces });
@@ -345,14 +316,15 @@ impl GhosttyApp {
                 self.create_split(dir);
             }
             control::ControlCmd::FocusSurface { index } => {
-                if index < self.surfaces.len() && index != self.focused {
-                    let old = self.focused;
-                    self.focused = index;
+                let old = self.tree.focused_surface();
+                self.tree.set_focus(index);
+                let new = self.tree.focused_surface();
+                if old != new {
                     unsafe {
-                        ffi::ghostty_surface_set_focus(self.surfaces[old].surface, false);
-                        ffi::ghostty_surface_set_focus(self.surfaces[index].surface, true);
+                        if !old.is_null() { ffi::ghostty_surface_set_focus(old, false); }
+                        if !new.is_null() { ffi::ghostty_surface_set_focus(new, true); }
                     }
-                    self.cb_state.surface = self.surfaces[index].surface;
+                    self.cb_state.surface = new;
                 }
             }
             control::ControlCmd::SendKey { keyspec } => {
@@ -406,22 +378,7 @@ impl GhosttyApp {
         match action {
             bindings::Action::NewSplit(dir) => self.create_split(dir),
             bindings::Action::GotoSplit(dir) => {
-                let old = self.focused;
-                self.focused = match dir {
-                    ffi::ghostty_action_goto_split_e::GHOSTTY_GOTO_SPLIT_NEXT => {
-                        (self.focused + 1) % self.surfaces.len()
-                    }
-                    ffi::ghostty_action_goto_split_e::GHOSTTY_GOTO_SPLIT_PREVIOUS => {
-                        if self.focused == 0 { self.surfaces.len() - 1 } else { self.focused - 1 }
-                    }
-                };
-                if old != self.focused && !self.surfaces.is_empty() {
-                    unsafe {
-                        ffi::ghostty_surface_set_focus(self.surfaces[old].surface, false);
-                        ffi::ghostty_surface_set_focus(self.surfaces[self.focused].surface, true);
-                    }
-                    self.cb_state.surface = self.surfaces[self.focused].surface;
-                }
+                self.switch_focus(dir);
             }
             bindings::Action::ResizeSplit(_dir, _amount) => {
                 // TODO: implement split resize
@@ -482,39 +439,34 @@ impl GhosttyApp {
     }
 
     fn handle_resize(&mut self, size: Size) {
-        let scale = self.scale_factor();
-        for entry in &mut self.surfaces {
-            let w = (size.width as f64 * scale) as u32;
-            let h = (size.height as f64 * scale) as u32;
-            if (w, h) != entry.last_size && w > 0 && h > 0 {
-                let first = entry.last_size == (0, 0);
-                entry.last_size = (w, h);
-                unsafe {
-                    ffi::ghostty_surface_set_content_scale(entry.surface, scale, scale);
-                    ffi::ghostty_surface_set_size(entry.surface, w, h);
-                    if first {
-                        ffi::ghostty_surface_set_focus(entry.surface, true);
-                    }
-                }
-            }
-        }
+        self.last_size = size;
+        self.relayout();
     }
 
     fn init_surface(&mut self) {
-        if !self.surfaces.is_empty() {
+        if !self.tree.is_empty() {
             return;
         }
         let Some(cv) = appkit::content_view() else { return };
         self.parent_nsview = objc2::rc::Retained::as_ptr(&cv) as *mut c_void;
         let frame = cv.bounds();
-        self.add_surface(frame);
+        let (surface, nsview) = self.create_ghostty_surface(frame, true);
+        let Some(surface) = surface else { return };
+        self.tree.add_root(surface, nsview);
+        self.cb_state.surface = surface;
+        log::info!("surface created (total: {})", self.tree.len());
     }
 
-    fn add_surface(&mut self, frame: objc2_foundation::NSRect) {
-        let Some(parent_view) = appkit::content_view() else { return };
+    fn create_ghostty_surface(
+        &self,
+        frame: objc2_foundation::NSRect,
+        is_first: bool,
+    ) -> (Option<ffi::ghostty_surface_t>, *mut c_void) {
+        let Some(parent_view) = appkit::content_view() else {
+            return (None, ptr::null_mut());
+        };
         let child = appkit::create_child_view(&parent_view, frame);
         let child_view = objc2::rc::Retained::as_ptr(&child) as *mut c_void;
-        // Keep the Retained alive — the view is retained by its superview
         std::mem::forget(child);
 
         let scale = self.scale_factor();
@@ -525,7 +477,7 @@ impl GhosttyApp {
             macos: ffi::ghostty_platform_macos_s { nsview: child_view },
         };
         config.scale_factor = scale;
-        config.context = if self.surfaces.is_empty() {
+        config.context = if is_first {
             ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_WINDOW
         } else {
             ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_SPLIT
@@ -534,75 +486,76 @@ impl GhosttyApp {
         let surface = unsafe { ffi::ghostty_surface_new(self.app, &config) };
         if surface.is_null() {
             log::error!("failed to create ghostty surface");
-            return;
+            return (None, child_view);
         }
 
-        // Don't call set_size/set_content_scale here — the io-reader thread starts
-        // immediately after surface_new and a concurrent resize causes page corruption.
-        // The event loop's resize handler will set these once the terminal has initialized.
-
-        self.focused = self.surfaces.len();
-        self.surfaces.push(SurfaceEntry { surface, nsview: child_view, last_size: (0, 0) });
-        self.cb_state.surface = surface;
-        log::info!("surface created (total: {})", self.surfaces.len());
+        (Some(surface), child_view)
     }
 
     fn create_split(&mut self, direction: ffi::ghostty_action_split_direction_e) {
-        if self.parent_nsview.is_null() || self.surfaces.is_empty() {
+        if self.parent_nsview.is_null() || self.tree.is_empty() {
             return;
         }
-
         let parent_bounds = appkit::view_bounds(self.parent_nsview);
-
-        let n = self.surfaces.len() + 1;
-        let is_horizontal = matches!(
-            direction,
+        let split_dir = match direction {
             ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_RIGHT
-                | ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_LEFT
-        );
-
-        // Simple equal-size layout
-        let new_frame = if is_horizontal {
-            let w = parent_bounds.size.width / n as f64;
-            objc2_foundation::NSRect::new(
-                objc2_foundation::NSPoint::new(w * (n - 1) as f64, 0.0),
-                objc2_foundation::NSSize::new(w, parent_bounds.size.height),
-            )
-        } else {
-            let h = parent_bounds.size.height / n as f64;
-            objc2_foundation::NSRect::new(
-                objc2_foundation::NSPoint::new(0.0, 0.0),
-                objc2_foundation::NSSize::new(parent_bounds.size.width, h),
-            )
+            | ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_LEFT => {
+                splits::Direction::Horizontal
+            }
+            _ => splits::Direction::Vertical,
         };
 
-        self.add_surface(new_frame);
-        self.relayout(is_horizontal);
+        // Create with a temporary frame; relayout will fix it
+        let (surface, nsview) = self.create_ghostty_surface(parent_bounds, false);
+        let Some(surface) = surface else { return };
+
+        let old_focused = self.tree.focused_surface();
+        self.tree.split_focused(split_dir, surface, nsview);
+        self.cb_state.surface = surface;
+
+        // Update focus on ghostty side
+        if !old_focused.is_null() {
+            unsafe { ffi::ghostty_surface_set_focus(old_focused, false) };
+        }
+
+        self.relayout();
+        log::info!("split created (total: {})", self.tree.len());
     }
 
-    fn relayout(&self, horizontal: bool) {
-        let parent_bounds = appkit::view_bounds(self.parent_nsview);
-        let n = self.surfaces.len();
-        let scale = self.scale_factor();
+    fn switch_focus(&mut self, dir: ffi::ghostty_action_goto_split_e) {
+        let old = self.tree.focused_surface();
+        match dir {
+            ffi::ghostty_action_goto_split_e::GHOSTTY_GOTO_SPLIT_NEXT => self.tree.focus_next(),
+            ffi::ghostty_action_goto_split_e::GHOSTTY_GOTO_SPLIT_PREVIOUS => self.tree.focus_prev(),
+        }
+        let new = self.tree.focused_surface();
+        if old != new {
+            unsafe {
+                if !old.is_null() { ffi::ghostty_surface_set_focus(old, false); }
+                if !new.is_null() { ffi::ghostty_surface_set_focus(new, true); }
+            }
+            self.cb_state.surface = new;
+        }
+    }
 
-        for (i, entry) in self.surfaces.iter().enumerate() {
-            let frame = if horizontal {
-                let w = parent_bounds.size.width / n as f64;
-                objc2_foundation::NSRect::new(
-                    objc2_foundation::NSPoint::new(w * i as f64, 0.0),
-                    objc2_foundation::NSSize::new(w, parent_bounds.size.height),
-                )
-            } else {
-                let h = parent_bounds.size.height / n as f64;
-                objc2_foundation::NSRect::new(
-                    objc2_foundation::NSPoint::new(0.0, h * (n - 1 - i) as f64),
-                    objc2_foundation::NSSize::new(parent_bounds.size.width, h),
-                )
-            };
-            appkit::set_view_frame(entry.nsview, frame);
-            let pw = (frame.size.width * scale) as u32;
-            let ph = (frame.size.height * scale) as u32;
-            unsafe { ffi::ghostty_surface_set_size(entry.surface, pw, ph) };
+    fn relayout(&self) {
+        if self.tree.is_empty() || self.last_size.width == 0.0 {
+            return;
+        }
+        let scale = self.scale_factor();
+        let frame = objc2_foundation::NSRect::new(
+            objc2_foundation::NSPoint::new(0.0, 0.0),
+            objc2_foundation::NSSize::new(
+                self.last_size.width as f64,
+                self.last_size.height as f64,
+            ),
+        );
+        let surfaces = self.tree.layout(frame, scale);
+        for (surface, w, h) in surfaces {
+            unsafe {
+                ffi::ghostty_surface_set_content_scale(surface, scale, scale);
+                ffi::ghostty_surface_set_size(surface, w, h);
+            }
         }
     }
 
@@ -627,8 +580,8 @@ impl GhosttyApp {
 
 impl Drop for GhosttyApp {
     fn drop(&mut self) {
-        for entry in &self.surfaces {
-            unsafe { ffi::ghostty_surface_free(entry.surface) };
+        for surface in self.tree.all_surfaces() {
+            unsafe { ffi::ghostty_surface_free(surface) };
         }
         unsafe {
             ffi::ghostty_app_free(self.app);
