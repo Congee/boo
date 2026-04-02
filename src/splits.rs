@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Binary split tree for managing terminal surface layout.
 //!
 //! The tree has two node types:

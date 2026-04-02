@@ -104,9 +104,6 @@ impl Bindings {
         }
     }
 
-    pub fn in_prefix_mode(&self) -> bool {
-        self.mode == Mode::Prefix
-    }
 }
 
 /// Parse "ctrl+s" into a PrefixKey with keycode and mods.

@@ -16,10 +16,8 @@ fn mtm() -> MainThreadMarker {
 
 /// Get the main NSWindow, if any.
 pub fn main_window() -> Option<Retained<NSWindow>> {
-    unsafe {
-        let app = NSApplication::sharedApplication(mtm());
-        app.mainWindow()
-    }
+    let app = NSApplication::sharedApplication(mtm());
+    app.mainWindow()
 }
 
 /// Get the backing scale factor of the main window.
@@ -85,9 +83,7 @@ pub fn set_view_hidden(view: *mut c_void, hidden: bool) {
 
 /// Request a redraw of the content view (called from wakeup on any thread).
 pub fn request_redraw() {
-    unsafe {
-        if let Some(view) = content_view() {
-            view.setNeedsDisplay(true);
-        }
+    if let Some(view) = content_view() {
+        view.setNeedsDisplay(true);
     }
 }

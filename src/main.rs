@@ -240,13 +240,21 @@ impl GhosttyApp {
                     ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS
                 };
 
+                // Apply option-as-alt translation
+                let surface = self.focused_surface();
+                let translation_mods = if !surface.is_null() {
+                    unsafe { ffi::ghostty_surface_key_translation_mods(surface, mods) }
+                } else {
+                    mods
+                };
+
                 // unshifted_codepoint: character with NO modifiers (matches macOS byApplyingModifiers:[])
                 let unshifted_codepoint = key_to_codepoint(&key);
 
-                // consumed_mods: Shift and Alt consumed for character production, NOT Ctrl/Cmd
-                let mut consumed_mods = ffi::GHOSTTY_MODS_NONE;
-                if modifiers.shift() { consumed_mods |= ffi::GHOSTTY_MODS_SHIFT; }
-                if modifiers.alt() { consumed_mods |= ffi::GHOSTTY_MODS_ALT; }
+                // consumed_mods: from translation_mods, strip Ctrl and Cmd
+                // (matching Swift: translationMods.subtracting([.control, .command]))
+                let consumed_mods = translation_mods
+                    & !(ffi::GHOSTTY_MODS_CTRL | ffi::GHOSTTY_MODS_SUPER);
 
                 // text: the produced character. Filter control chars < 0x20 — ghostty handles Ctrl mapping
                 let text_cstring = text
