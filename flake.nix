@@ -42,8 +42,6 @@
           glib
           fontconfig
           freetype
-          mesa  # libgbm + libEGL_mesa
-          libdrm
         ];
 
         RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
@@ -53,11 +51,14 @@
           echo "  Zig: $(zig version)"
           echo "  Rust: $(rustc --version)"
         '' + pkgs.lib.optionalString pkgs.stdenv.isLinux ''
-          export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath (with pkgs; [ wayland libxkbcommon libGL vulkan-loader ])}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          # Use system OpenGL/EGL stack via /run/opengl-driver (NixOS hardware.graphics)
+          # and add nix-store libs for Wayland/XKB. System mesa needs its own deps
+          # on LD_LIBRARY_PATH because dlopen doesn't follow RUNPATH transitively.
+          SYSTEM_GL="$(dirname $(readlink -f /run/opengl-driver/lib/libEGL_mesa.so.0 2>/dev/null) 2>/dev/null)"
+          export LD_LIBRARY_PATH="''${SYSTEM_GL:+$SYSTEM_GL:}${pkgs.lib.makeLibraryPath (with pkgs; [ wayland libxkbcommon libGL vulkan-loader ])}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           export __EGL_VENDOR_LIBRARY_DIRS="/run/opengl-driver/share/glvnd/egl_vendor.d"
-          export NIX_CFLAGS_COMPILE="$(echo "$NIX_CFLAGS_COMPILE" | sed 's/-fmacro-prefix-map=[^ ]*//g')"
-          unset NIX_CFLAGS_COMPILE
-          unset NIX_LDFLAGS 
+          # Strip -fmacro-prefix-map flags that zig doesn't understand
+          export NIX_CFLAGS_COMPILE="$(echo "$NIX_CFLAGS_COMPILE" | sed 's/ *-fmacro-prefix-map=[^ ]*//g')"
         '' + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
           unset SDKROOT
           unset DEVELOPER_DIR

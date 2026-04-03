@@ -2371,6 +2371,10 @@ impl GhosttyApp {
                     .expect("failed to create EGL context")
             });
             config.platform = platform::platform_config(egl);
+            // Release EGL context from main thread BEFORE ghostty_surface_new.
+            // surfaceInit will make it current temporarily for GL init,
+            // then threadEnter claims it on the renderer thread.
+            egl.release_current();
             ptr::null_mut()
         };
 
@@ -2380,12 +2384,6 @@ impl GhosttyApp {
             return (None, child_view);
         }
         platform::set_view_layer_transparent(child_view);
-
-        // Release EGL from main thread so renderer thread can claim it
-        #[cfg(target_os = "linux")]
-        if let Some(ref egl) = self.egl_state {
-            egl.release_current();
-        }
 
         (Some(surface), child_view)
     }
