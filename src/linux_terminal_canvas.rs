@@ -18,6 +18,7 @@ pub struct LinuxTerminalCanvas {
     pub cell_height: f32,
     pub font_size: f32,
     pub font_family: Option<&'static str>,
+    pub appearance_revision: u64,
     pub background_opacity: f32,
     pub background_opacity_cells: bool,
     pub selection_rects: Vec<TerminalSelectionRect>,
@@ -39,6 +40,7 @@ impl LinuxTerminalCanvas {
         cell_height: f32,
         font_size: f32,
         font_family: Option<&'static str>,
+        appearance_revision: u64,
         background_opacity: f32,
         background_opacity_cells: bool,
         selection_rects: Vec<TerminalSelectionRect>,
@@ -50,6 +52,7 @@ impl LinuxTerminalCanvas {
             cell_height,
             font_size,
             font_family,
+            appearance_revision,
             background_opacity,
             background_opacity_cells,
             selection_rects,
@@ -260,6 +263,7 @@ impl LinuxTerminalCanvas {
         self.background_opacity.to_bits().hash(&mut hasher);
         self.background_opacity_cells.hash(&mut hasher);
         self.font_family.hash(&mut hasher);
+        self.appearance_revision.hash(&mut hasher);
         self.selection_rects.len().hash(&mut hasher);
         for rect in &self.selection_rects {
             rect.x.to_bits().hash(&mut hasher);
@@ -283,5 +287,32 @@ impl LinuxTerminalCanvas {
             }
         }
         hasher.finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_canvas(revision: u64) -> LinuxTerminalCanvas {
+        LinuxTerminalCanvas::new(
+            linux_vt_backend::TerminalSnapshot::default(),
+            8.0,
+            16.0,
+            14.0,
+            Some("CodeNewRoman Nerd Font Mono"),
+            revision,
+            0.8,
+            true,
+            Vec::new(),
+            Color::from_rgba(0.65, 0.72, 0.95, 0.35),
+        )
+    }
+
+    #[test]
+    fn fingerprint_changes_when_appearance_revision_changes() {
+        let before = sample_canvas(1).fingerprint();
+        let after = sample_canvas(2).fingerprint();
+        assert_ne!(before, after);
     }
 }

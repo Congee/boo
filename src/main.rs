@@ -58,6 +58,16 @@ static STARTUP_SESSION: std::sync::OnceLock<String> = std::sync::OnceLock::new()
 const DEFAULT_TERMINAL_FONT_SIZE: f32 = 14.0;
 const DEFAULT_BACKGROUND_OPACITY: f32 = 1.0;
 
+#[derive(Debug)]
+struct ResolvedAppearance {
+    font_family: Option<&'static str>,
+    font_size: f32,
+    background_opacity: f32,
+    background_opacity_cells: bool,
+    #[cfg(target_os = "linux")]
+    font_bytes: Option<Vec<u8>>,
+}
+
 fn leak_font_family(name: &str) -> &'static str {
     Box::leak(name.to_owned().into_boxed_str())
 }
@@ -207,6 +217,9 @@ struct GhosttyApp {
     terminal_font_size: f32,
     background_opacity: f32,
     background_opacity_cells: bool,
+    appearance_revision: u64,
+    #[cfg(target_os = "linux")]
+    pending_font_bytes: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -363,10 +376,35 @@ fn fuzzy_score(query: &str, target: &str) -> i32 {
 #[derive(Debug, Clone)]
 enum Message {
     Frame,
+    FontLoaded,
     IcedEvent(Event),
 }
 
 impl GhosttyApp {
+    fn resolve_appearance_config(config: &config::Config) -> ResolvedAppearance {
+        #[cfg(target_os = "linux")]
+        let (font_family, font_bytes) = config
+            .font_family
+            .as_deref()
+            .map(resolve_linux_font)
+            .unwrap_or((None, None));
+
+        #[cfg(not(target_os = "linux"))]
+        let font_family = config.font_family.as_deref().map(leak_font_family);
+
+        ResolvedAppearance {
+            font_family,
+            font_size: config.font_size.unwrap_or(DEFAULT_TERMINAL_FONT_SIZE),
+            background_opacity: config
+                .background_opacity
+                .unwrap_or(DEFAULT_BACKGROUND_OPACITY)
+                .clamp(0.0, 1.0),
+            background_opacity_cells: config.background_opacity_cells,
+            #[cfg(target_os = "linux")]
+            font_bytes,
+        }
+    }
+
     fn split_direction_from_str(direction: &str) -> bindings::SplitDirection {
         match direction {
             "right" => bindings::SplitDirection::Right,
@@ -438,24 +476,8 @@ impl GhosttyApp {
         let boo_config = config::Config::load();
         let ctl_rx = control::start(boo_config.control_socket.as_deref());
         let bindings = bindings::Bindings::from_config(&boo_config);
-        #[cfg(target_os = "linux")]
-        let (terminal_font_family, font_load_bytes) = boo_config
-            .font_family
-            .as_deref()
-            .map(resolve_linux_font)
-            .unwrap_or((None, None));
-        #[cfg(not(target_os = "linux"))]
-        let terminal_font_family = boo_config
-            .font_family
-            .as_deref()
-            .map(leak_font_family);
-        let terminal_font_size = boo_config.font_size.unwrap_or(DEFAULT_TERMINAL_FONT_SIZE);
-        let background_opacity = boo_config
-            .background_opacity
-            .unwrap_or(DEFAULT_BACKGROUND_OPACITY)
-            .clamp(0.0, 1.0);
-        let background_opacity_cells = boo_config.background_opacity_cells;
-        let (cell_width, cell_height) = terminal_metrics(terminal_font_size);
+        let appearance = Self::resolve_appearance_config(&boo_config);
+        let (cell_width, cell_height) = terminal_metrics(appearance.font_size);
 
         #[cfg(target_os = "linux")]
         {
@@ -495,14 +517,14 @@ impl GhosttyApp {
                     last_clipboard_text: String::new(),
                     copy_mode: None,
                     command_prompt: CommandPrompt::new(),
-                    terminal_font_family,
-                    terminal_font_size,
-                    background_opacity,
-                    background_opacity_cells,
+                    terminal_font_family: appearance.font_family,
+                    terminal_font_size: appearance.font_size,
+                    background_opacity: appearance.background_opacity,
+                    background_opacity_cells: appearance.background_opacity_cells,
+                    appearance_revision: 1,
+                    pending_font_bytes: appearance.font_bytes,
                 },
-                font_load_bytes
-                    .map(|bytes| iced::font::load(bytes).map(|_| Message::Frame))
-                    .unwrap_or_else(Task::none),
+                Task::none(),
             )
         }
 
@@ -544,10 +566,11 @@ impl GhosttyApp {
                     last_clipboard_text: String::new(),
                     copy_mode: None,
                     command_prompt: CommandPrompt::new(),
-                    terminal_font_family,
-                    terminal_font_size,
-                    background_opacity,
-                    background_opacity_cells,
+                    terminal_font_family: appearance.font_family,
+                    terminal_font_size: appearance.font_size,
+                    background_opacity: appearance.background_opacity,
+                    background_opacity_cells: appearance.background_opacity_cells,
+                    appearance_revision: 1,
                 },
                 Task::none(),
             )
@@ -727,29 +750,19 @@ impl GhosttyApp {
         self.linux_snapshots.get(&id)
     }
 
-    fn apply_appearance_config(&mut self, config: &config::Config) {
-        #[cfg(target_os = "linux")]
-        {
-            self.terminal_font_family = config
-                .font_family
-                .as_deref()
-                .map(resolve_linux_font)
-                .map(|(family, _)| family)
-                .flatten();
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            self.terminal_font_family = config.font_family.as_deref().map(leak_font_family);
-        }
-        self.terminal_font_size = config.font_size.unwrap_or(DEFAULT_TERMINAL_FONT_SIZE);
-        self.background_opacity = config
-            .background_opacity
-            .unwrap_or(DEFAULT_BACKGROUND_OPACITY)
-            .clamp(0.0, 1.0);
-        self.background_opacity_cells = config.background_opacity_cells;
+    fn apply_appearance(&mut self, appearance: ResolvedAppearance) {
+        self.terminal_font_family = appearance.font_family;
+        self.terminal_font_size = appearance.font_size;
+        self.background_opacity = appearance.background_opacity;
+        self.background_opacity_cells = appearance.background_opacity_cells;
         let (cell_width, cell_height) = terminal_metrics(self.terminal_font_size);
         self.cell_width = cell_width;
         self.cell_height = cell_height;
+        self.appearance_revision = self.appearance_revision.wrapping_add(1);
+        #[cfg(target_os = "linux")]
+        {
+            self.pending_font_bytes = appearance.font_bytes;
+        }
     }
 
     fn ui_font(&self) -> Font {
@@ -949,6 +962,11 @@ impl GhosttyApp {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        #[cfg(target_os = "linux")]
+        if let Some(bytes) = self.pending_font_bytes.take() {
+            return iced::font::load(bytes).map(|_| Message::FontLoaded);
+        }
+
         #[cfg(not(target_os = "linux"))]
         unsafe {
             ffi::ghostty_app_tick(self.app)
@@ -1034,6 +1052,11 @@ impl GhosttyApp {
         }
 
         let event = match message {
+            Message::FontLoaded => {
+                self.appearance_revision = self.appearance_revision.wrapping_add(1);
+                self.relayout();
+                return Task::none();
+            }
             Message::Frame => {
                 // Fade out scrollbar (but not while dragging)
                 if self.scrollbar_opacity > 0.0 && !self.scrollbar_drag {
@@ -2450,7 +2473,7 @@ impl GhosttyApp {
                 // Reload boo's own config
                 let boo_config = config::Config::load();
                 self.bindings = bindings::Bindings::from_config(&boo_config);
-                self.apply_appearance_config(&boo_config);
+                self.apply_appearance(Self::resolve_appearance_config(&boo_config));
                 #[cfg(not(target_os = "linux"))]
                 {
                     let new_config = unsafe { ffi::ghostty_config_new() };
@@ -3500,6 +3523,7 @@ impl GhosttyApp {
                         self.cell_height as f32,
                         self.terminal_font_size,
                         self.terminal_font_family,
+                        self.appearance_revision,
                         self.background_opacity,
                         self.background_opacity_cells,
                         selection_rects,

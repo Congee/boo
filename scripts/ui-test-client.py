@@ -56,7 +56,7 @@ def main() -> int:
     req.add_argument("pairs", nargs="*", help="Optional key=value payload entries")
 
     wait = sub.add_parser("wait-ready", help="Wait until Boo reports a populated UI snapshot")
-    wait.add_argument("--timeout", type=float, default=12.0, help="Timeout in seconds")
+    wait.add_argument("--timeout", type=float, default=20.0, help="Timeout in seconds")
 
     args = parser.parse_args()
 
