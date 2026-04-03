@@ -1,8 +1,8 @@
 //! Boo configuration parsed from ~/.config/boo/config.boo.
 //!
 //! Single config file using ghostty's key=value format.
-//! Ghostty-native keys (font-family, background-opacity, etc.) are handled by libghostty.
-//! Boo-specific keys (prefix-key, control-socket, keybind) are parsed here.
+//! On Linux, Boo now consumes the visual settings it needs directly because the
+//! terminal runtime is `libghostty-vt`, not the full Ghostty surface runtime.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -11,6 +11,10 @@ pub struct Config {
     pub prefix_key: Option<String>,
     pub control_socket: Option<String>,
     pub keybinds: HashMap<String, String>,
+    pub font_family: Option<String>,
+    pub font_size: Option<f32>,
+    pub background_opacity: Option<f32>,
+    pub background_opacity_cells: bool,
 }
 
 impl Config {
@@ -39,20 +43,38 @@ impl Config {
             }
             let Some((key, value)) = line.split_once('=') else { continue };
             let key = key.trim();
-            let value = value.trim();
+            let value = strip_quotes(value.trim());
             match key {
                 "prefix-key" => config.prefix_key = Some(value.to_string()),
                 "control-socket" => config.control_socket = Some(value.to_string()),
+                "font-family" => {
+                    if !value.is_empty() {
+                        config.font_family = Some(value.to_string());
+                    }
+                }
+                "font-size" => {
+                    if let Ok(size) = value.parse::<f32>() {
+                        config.font_size = Some(size.max(1.0));
+                    }
+                }
+                "background-opacity" => {
+                    if let Ok(opacity) = value.parse::<f32>() {
+                        config.background_opacity = Some(opacity.clamp(0.0, 1.0));
+                    }
+                }
+                "background-opacity-cells" => {
+                    config.background_opacity_cells = parse_bool(value).unwrap_or(false);
+                }
                 "keybind" => {
                     // Format: keybind = <key>=<action>
                     if let Some((bind_key, action)) = value.split_once('=') {
                         config.keybinds.insert(
-                            bind_key.trim().to_string(),
-                            action.trim().to_string(),
+                            strip_quotes(bind_key.trim()).to_string(),
+                            strip_quotes(action.trim()).to_string(),
                         );
                     }
                 }
-                _ => {} // ghostty-native keys — ignored here, handled by libghostty
+                _ => {}
             }
         }
         log::info!("loaded boo config from {} lines", content.lines().count());
@@ -66,7 +88,27 @@ impl Default for Config {
             prefix_key: None,
             control_socket: None,
             keybinds: HashMap::new(),
+            font_family: None,
+            font_size: None,
+            background_opacity: None,
+            background_opacity_cells: false,
         }
+    }
+}
+
+fn strip_quotes(value: &str) -> &str {
+    value
+        .strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+        .unwrap_or(value)
+}
+
+fn parse_bool(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "yes" | "on" | "1" => Some(true),
+        "false" | "no" | "off" | "0" => Some(false),
+        _ => None,
     }
 }
 
@@ -82,6 +124,7 @@ fn config_path() -> PathBuf {
 
 /// Path to the config file for loading into ghostty.
 /// Same file as boo's config — ghostty ignores boo- prefixed keys.
+#[cfg(not(target_os = "linux"))]
 pub fn ghostty_config_path() -> PathBuf {
     config_path()
 }
@@ -93,10 +136,11 @@ mod tests {
     #[test]
     fn test_parse_config() {
         let content = r#"
-# ghostty settings (ignored by boo parser)
-font-family = Fira Code
+# visual settings
+font-family = "Fira Code"
 font-size = 14
 background-opacity = 0.9
+background-opacity-cells = true
 
 # boo settings
 prefix-key = ctrl+s
@@ -109,6 +153,10 @@ keybind = super+1 = goto_tab:1
         let config = Config::parse(content);
         assert_eq!(config.prefix_key.as_deref(), Some("ctrl+s"));
         assert_eq!(config.control_socket.as_deref(), Some("/tmp/boo.sock"));
+        assert_eq!(config.font_family.as_deref(), Some("Fira Code"));
+        assert_eq!(config.font_size, Some(14.0));
+        assert_eq!(config.background_opacity, Some(0.9));
+        assert!(config.background_opacity_cells);
         assert_eq!(config.keybinds.len(), 3);
         assert_eq!(config.keybinds.get("\"").map(|s| s.as_str()), Some("new_split:right"));
         assert_eq!(config.keybinds.get("%").map(|s| s.as_str()), Some("new_split:down"));
@@ -116,11 +164,12 @@ keybind = super+1 = goto_tab:1
     }
 
     #[test]
-    fn test_ghostty_keys_ignored() {
+    fn test_visual_keys_parse_without_boo_keys() {
         let content = "font-size = 14\nwindow-decoration = none\n";
         let config = Config::parse(content);
         assert!(config.prefix_key.is_none());
         assert!(config.keybinds.is_empty());
+        assert_eq!(config.font_size, Some(14.0));
     }
 
     #[test]
@@ -128,6 +177,8 @@ keybind = super+1 = goto_tab:1
         let config = Config::parse("");
         assert!(config.prefix_key.is_none());
         assert!(config.keybinds.is_empty());
+        assert!(config.font_family.is_none());
+        assert!(config.background_opacity.is_none());
     }
 
     #[test]
@@ -135,5 +186,14 @@ keybind = super+1 = goto_tab:1
         let content = "# comment\n\nprefix-key = ctrl+a\n# another\n";
         let config = Config::parse(content);
         assert_eq!(config.prefix_key.as_deref(), Some("ctrl+a"));
+    }
+
+    #[test]
+    fn test_parse_bool_forms() {
+        let config = Config::parse("background-opacity-cells = yes\n");
+        assert!(config.background_opacity_cells);
+
+        let config = Config::parse("background-opacity-cells = off\n");
+        assert!(!config.background_opacity_cells);
     }
 }

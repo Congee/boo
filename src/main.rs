@@ -4,26 +4,32 @@ mod control;
 mod ffi;
 mod keymap;
 #[cfg(target_os = "linux")]
+mod linux_terminal_canvas;
+#[cfg(target_os = "linux")]
 mod linux_vt_backend;
 mod pane;
 mod platform;
 mod session;
 mod splits;
+mod surface_backend;
 mod tabs;
 mod tmux;
+#[cfg(target_os = "linux")]
 mod vt;
 #[cfg(target_os = "linux")]
 mod unix_pty;
 
-use iced::widget::{column, container, rich_text, row, span, text};
+use iced::widget::{column, container, row, text};
 use iced::window;
-use iced::{keyboard, mouse, Background, Color, Element, Event, Font, Length, Size, Subscription, Task, Theme};
+use iced::{keyboard, mouse, Color, Element, Event, Font, Length, Size, Subscription, Task, Theme};
 use pane::PaneHandle;
 #[cfg(target_os = "linux")]
 use std::collections::HashMap;
 use std::ffi::{c_void, CStr, CString};
 #[cfg(target_os = "linux")]
 use std::os::unix::ffi::OsStrExt;
+#[cfg(target_os = "linux")]
+use std::process::Command;
 use std::ptr;
 
 /// Status bar height in points.
@@ -35,8 +41,8 @@ static SCROLL_RX: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Receiver
 /// Shared state accessible from C callbacks via runtime_config.userdata.
 struct CallbackState {
     surface: ffi::ghostty_surface_t,
-    pending_split: Option<ffi::ghostty_action_split_direction_e>,
-    pending_focus: Option<ffi::ghostty_action_goto_split_e>,
+    pending_split: Option<bindings::SplitDirection>,
+    pending_focus: Option<bindings::PaneFocusDirection>,
     pending_title: Option<String>,
     pending_close: bool,
     scrollbar: Option<ffi::ghostty_action_scrollbar_s>,
@@ -49,6 +55,82 @@ struct CallbackState {
 
 static STARTUP_SESSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+const DEFAULT_TERMINAL_FONT_SIZE: f32 = 14.0;
+const DEFAULT_BACKGROUND_OPACITY: f32 = 1.0;
+
+fn leak_font_family(name: &str) -> &'static str {
+    Box::leak(name.to_owned().into_boxed_str())
+}
+
+#[cfg(target_os = "linux")]
+fn resolve_linux_font(name: &str) -> (Option<&'static str>, Option<Vec<u8>>) {
+    let output = Command::new("fc-match")
+        .args(["-f", "%{family[0]}|%{file}\n", name])
+        .output();
+
+    let Ok(output) = output else {
+        log::warn!("failed to run fc-match for font family {:?}", name);
+        return (Some(leak_font_family(name)), None);
+    };
+
+    if !output.status.success() {
+        log::warn!("fc-match failed for font family {:?}", name);
+        return (Some(leak_font_family(name)), None);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout.trim();
+    let Some((resolved_family, resolved_file)) = line.split_once('|') else {
+        return (Some(leak_font_family(name)), None);
+    };
+
+    let resolved_family = resolved_family.trim();
+    let resolved_file = resolved_file.trim();
+
+    let family = if resolved_family.is_empty() {
+        leak_font_family(name)
+    } else {
+        if resolved_family != name {
+            log::info!(
+                "resolved font family {:?} to {:?} via fc-match",
+                name,
+                resolved_family
+            );
+        }
+        leak_font_family(resolved_family)
+    };
+
+    let font_bytes = if resolved_file.is_empty() {
+        None
+    } else {
+        match std::fs::read(resolved_file) {
+            Ok(bytes) => Some(bytes),
+            Err(error) => {
+                log::warn!(
+                    "failed to read resolved font file {:?} for family {:?}: {}",
+                    resolved_file,
+                    family,
+                    error
+                );
+                None
+            }
+        }
+    };
+
+    (Some(family), font_bytes)
+}
+
+fn terminal_metrics(font_size: f32) -> (f64, f64) {
+    let size = font_size.max(8.0) as f64;
+    let cell_width = (size * 0.62).max(6.0).ceil();
+    let cell_height = (size * 1.35).max(12.0).ceil();
+    (cell_width, cell_height)
+}
+
+fn configured_font(family: Option<&'static str>) -> Font {
+    family.map(Font::with_name).unwrap_or(Font::MONOSPACE)
+}
+
 fn main() {
     env_logger::init();
 
@@ -60,13 +142,16 @@ fn main() {
         }
     }
 
-    let result = unsafe { ffi::ghostty_init(0, ptr::null_mut()) };
-    if result != ffi::GHOSTTY_SUCCESS {
-        eprintln!("Failed to initialize ghostty: error code {result}");
-        std::process::exit(1);
-    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let result = unsafe { ffi::ghostty_init(0, ptr::null_mut()) };
+        if result != ffi::GHOSTTY_SUCCESS {
+            eprintln!("Failed to initialize ghostty: error code {result}");
+            std::process::exit(1);
+        }
 
-    log::info!("ghostty initialized");
+        log::info!("ghostty initialized");
+    }
 
     let (scroll_tx, scroll_rx) = std::sync::mpsc::channel();
     platform::install_event_monitors(scroll_tx);
@@ -77,10 +162,7 @@ fn main() {
         .title("boo")
         .decorations(false)
         .transparent(true)
-        .style(|_state, _theme| iced::theme::Style {
-            background_color: Color::TRANSPARENT,
-            text_color: Color::WHITE,
-        })
+        .style(|state, _theme| state.window_style())
         .theme(GhosttyApp::theme)
         .subscription(GhosttyApp::subscription)
         .run()
@@ -88,18 +170,16 @@ fn main() {
 }
 
 struct GhosttyApp {
+    #[cfg(not(target_os = "linux"))]
     app: ffi::ghostty_app_t,
+    #[cfg(not(target_os = "linux"))]
     config: ffi::ghostty_config_t,
     tabs: tabs::TabManager,
     parent_view: *mut c_void,
     #[cfg(target_os = "linux")]
-    egl_state: Option<platform::EglState>,
-    #[cfg(target_os = "linux")]
     linux_panes: HashMap<pane::PaneId, linux_vt_backend::LinuxVtPane>,
     #[cfg(target_os = "linux")]
     linux_snapshots: HashMap<pane::PaneId, linux_vt_backend::TerminalSnapshot>,
-    #[cfg(target_os = "linux")]
-    linux_vt_only: bool,
     cb_state: Box<CallbackState>,
     ctl_rx: std::sync::mpsc::Receiver<control::ControlCmd>,
     scroll_rx: std::sync::mpsc::Receiver<platform::ScrollEvent>,
@@ -120,8 +200,13 @@ struct GhosttyApp {
     search_total: isize,
     search_selected: isize,
     pwd: String,
+    last_clipboard_text: String,
     copy_mode: Option<CopyModeState>,
     command_prompt: CommandPrompt,
+    terminal_font_family: Option<&'static str>,
+    terminal_font_size: f32,
+    background_opacity: f32,
+    background_opacity_cells: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -189,6 +274,7 @@ const COMMANDS: &[CommandDef] = &[
     CommandDef { name: "next-pane", description: "focus next pane", args: "" },
     CommandDef { name: "prev-pane", description: "focus previous pane", args: "" },
     CommandDef { name: "copy-mode", description: "enter copy mode", args: "" },
+    CommandDef { name: "command-prompt", description: "open command prompt", args: "" },
     CommandDef { name: "search", description: "open search", args: "" },
     CommandDef { name: "paste", description: "paste from clipboard", args: "" },
     CommandDef { name: "zoom", description: "toggle pane zoom", args: "" },
@@ -281,30 +367,18 @@ enum Message {
 }
 
 impl GhosttyApp {
+    fn split_direction_from_str(direction: &str) -> bindings::SplitDirection {
+        match direction {
+            "right" => bindings::SplitDirection::Right,
+            "down" => bindings::SplitDirection::Down,
+            "left" => bindings::SplitDirection::Left,
+            "up" => bindings::SplitDirection::Up,
+            _ => bindings::SplitDirection::Right,
+        }
+    }
+
     fn new() -> (Self, Task<Message>) {
-        let config = unsafe { ffi::ghostty_config_new() };
-        assert!(!config.is_null(), "failed to create ghostty config");
-
-        let config_path = config::ghostty_config_path();
-        if config_path.exists() {
-            let path_cstr = CString::new(config_path.to_str().unwrap()).unwrap();
-            unsafe { ffi::ghostty_config_load_file(config, path_cstr.as_ptr()) };
-            log::info!("loaded config: {}", config_path.display());
-        } else {
-            unsafe { ffi::ghostty_config_load_default_files(config) };
-        }
-        unsafe { ffi::ghostty_config_finalize(config) };
-
-        let diag_count = unsafe { ffi::ghostty_config_diagnostics_count(config) };
-        for i in 0..diag_count {
-            let diag = unsafe { ffi::ghostty_config_get_diagnostic(config, i) };
-            if !diag.message.is_null() {
-                let msg = unsafe { std::ffi::CStr::from_ptr(diag.message) };
-                log::warn!("config: {}", msg.to_string_lossy());
-            }
-        }
-
-        let mut cb_state = Box::new(CallbackState {
+        let cb_state = Box::new(CallbackState {
             surface: ptr::null_mut(),
             pending_split: None,
             pending_focus: None,
@@ -316,98 +390,328 @@ impl GhosttyApp {
             pending_pwd: None,
             pending_cell_size: None,
         });
+        #[cfg(not(target_os = "linux"))]
+        let (app, config) = {
+            let config = unsafe { ffi::ghostty_config_new() };
+            assert!(!config.is_null(), "failed to create ghostty config");
 
-        let runtime_config = ffi::ghostty_runtime_config_s {
-            userdata: &mut *cb_state as *mut CallbackState as *mut c_void,
-            supports_selection_clipboard: false,
-            wakeup_cb: Some(cb_wakeup),
-            action_cb: Some(cb_action),
-            read_clipboard_cb: Some(cb_read_clipboard),
-            confirm_read_clipboard_cb: Some(cb_confirm_read_clipboard),
-            write_clipboard_cb: Some(cb_write_clipboard),
-            close_surface_cb: Some(cb_close_surface),
+            let config_path = config::ghostty_config_path();
+            if config_path.exists() {
+                let path_cstr = CString::new(config_path.to_str().unwrap()).unwrap();
+                unsafe { ffi::ghostty_config_load_file(config, path_cstr.as_ptr()) };
+                log::info!("loaded config: {}", config_path.display());
+            } else {
+                unsafe { ffi::ghostty_config_load_default_files(config) };
+            }
+            unsafe { ffi::ghostty_config_finalize(config) };
+
+            let diag_count = unsafe { ffi::ghostty_config_diagnostics_count(config) };
+            for i in 0..diag_count {
+                let diag = unsafe { ffi::ghostty_config_get_diagnostic(config, i) };
+                if !diag.message.is_null() {
+                    let msg = unsafe { std::ffi::CStr::from_ptr(diag.message) };
+                    log::warn!("config: {}", msg.to_string_lossy());
+                }
+            }
+
+            let runtime_config = ffi::ghostty_runtime_config_s {
+                userdata: &mut *cb_state as *mut CallbackState as *mut c_void,
+                supports_selection_clipboard: false,
+                wakeup_cb: Some(cb_wakeup),
+                action_cb: Some(cb_action),
+                read_clipboard_cb: Some(cb_read_clipboard),
+                confirm_read_clipboard_cb: Some(cb_confirm_read_clipboard),
+                write_clipboard_cb: Some(cb_write_clipboard),
+                close_surface_cb: Some(cb_close_surface),
+            };
+
+            let app = unsafe { ffi::ghostty_app_new(&runtime_config, config) };
+            assert!(!app.is_null(), "failed to create ghostty app");
+            log::info!("ghostty app created");
+            (app, config)
         };
 
-        let app = unsafe { ffi::ghostty_app_new(&runtime_config, config) };
-        assert!(!app.is_null(), "failed to create ghostty app");
-        log::info!("ghostty app created");
+        #[cfg(target_os = "linux")]
+        let (_app, _config): (ffi::ghostty_app_t, ffi::ghostty_config_t) =
+            (ptr::null_mut(), ptr::null_mut());
 
         let boo_config = config::Config::load();
         let ctl_rx = control::start(boo_config.control_socket.as_deref());
         let bindings = bindings::Bindings::from_config(&boo_config);
+        #[cfg(target_os = "linux")]
+        let (terminal_font_family, font_load_bytes) = boo_config
+            .font_family
+            .as_deref()
+            .map(resolve_linux_font)
+            .unwrap_or((None, None));
+        #[cfg(not(target_os = "linux"))]
+        let terminal_font_family = boo_config
+            .font_family
+            .as_deref()
+            .map(leak_font_family);
+        let terminal_font_size = boo_config.font_size.unwrap_or(DEFAULT_TERMINAL_FONT_SIZE);
+        let background_opacity = boo_config
+            .background_opacity
+            .unwrap_or(DEFAULT_BACKGROUND_OPACITY)
+            .clamp(0.0, 1.0);
+        let background_opacity_cells = boo_config.background_opacity_cells;
+        let (cell_width, cell_height) = terminal_metrics(terminal_font_size);
 
-        (
-            Self {
-                app,
-                config,
-                tabs: tabs::TabManager::new(),
-                parent_view: ptr::null_mut(),
-                #[cfg(target_os = "linux")]
-                egl_state: None,
-                #[cfg(target_os = "linux")]
-                linux_panes: HashMap::new(),
-                #[cfg(target_os = "linux")]
-                linux_snapshots: HashMap::new(),
-                #[cfg(target_os = "linux")]
-                linux_vt_only: std::env::var("BOO_LINUX_VT").ok().as_deref() == Some("1"),
-                cb_state,
-                ctl_rx,
-                scroll_rx: SCROLL_RX
-                    .get()
-                    .and_then(|m| m.lock().ok())
-                    .map(|mut guard| {
-                        // Take the receiver out of the mutex
-                        let (_, rx) = std::sync::mpsc::channel();
-                        std::mem::replace(&mut *guard, rx)
-                    })
-                    .unwrap_or_else(|| std::sync::mpsc::channel().1),
-                bindings,
-                socket_path: boo_config.control_socket.clone(),
-                dump_keys: std::env::args().any(|a| a == "--dump-keys"),
-                last_size: Size::new(0.0, 0.0),
-                last_mouse_pos: (0.0, 0.0),
-                divider_drag: None,
-                scrollbar_drag: false,
-                scrollbar_opacity: 0.0,
-                cell_width: 8.0,
-                cell_height: 16.0,
-                scrollbar: ffi::ghostty_action_scrollbar_s { total: 0, offset: 0, len: 0 },
-                scrollbar_layer: ptr::null_mut(),
-                search_active: false,
-                search_query: String::new(),
-                search_total: 0,
-                search_selected: 0,
-                pwd: String::new(),
-                copy_mode: None,
-                command_prompt: CommandPrompt::new(),
-            },
-            Task::none(),
-        )
+        #[cfg(target_os = "linux")]
+        {
+            (
+                Self {
+                    tabs: tabs::TabManager::new(),
+                    parent_view: ptr::null_mut(),
+                    linux_panes: HashMap::new(),
+                    linux_snapshots: HashMap::new(),
+                    cb_state,
+                    ctl_rx,
+                    scroll_rx: SCROLL_RX
+                        .get()
+                        .and_then(|m| m.lock().ok())
+                        .map(|mut guard| {
+                            let (_, rx) = std::sync::mpsc::channel();
+                            std::mem::replace(&mut *guard, rx)
+                        })
+                        .unwrap_or_else(|| std::sync::mpsc::channel().1),
+                    bindings,
+                    socket_path: boo_config.control_socket.clone(),
+                    dump_keys: std::env::args().any(|a| a == "--dump-keys"),
+                    last_size: Size::new(0.0, 0.0),
+                    last_mouse_pos: (0.0, 0.0),
+                    divider_drag: None,
+                    scrollbar_drag: false,
+                    scrollbar_opacity: 0.0,
+                    cell_width,
+                    cell_height,
+                    scrollbar: ffi::ghostty_action_scrollbar_s { total: 0, offset: 0, len: 0 },
+                    scrollbar_layer: ptr::null_mut(),
+                    search_active: false,
+                    search_query: String::new(),
+                    search_total: 0,
+                    search_selected: 0,
+                    pwd: String::new(),
+                    last_clipboard_text: String::new(),
+                    copy_mode: None,
+                    command_prompt: CommandPrompt::new(),
+                    terminal_font_family,
+                    terminal_font_size,
+                    background_opacity,
+                    background_opacity_cells,
+                },
+                font_load_bytes
+                    .map(|bytes| iced::font::load(bytes).map(|_| Message::Frame))
+                    .unwrap_or_else(Task::none),
+            )
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            (
+                Self {
+                    app,
+                    config,
+                    tabs: tabs::TabManager::new(),
+                    parent_view: ptr::null_mut(),
+                    cb_state,
+                    ctl_rx,
+                    scroll_rx: SCROLL_RX
+                        .get()
+                        .and_then(|m| m.lock().ok())
+                        .map(|mut guard| {
+                            let (_, rx) = std::sync::mpsc::channel();
+                            std::mem::replace(&mut *guard, rx)
+                        })
+                        .unwrap_or_else(|| std::sync::mpsc::channel().1),
+                    bindings,
+                    socket_path: boo_config.control_socket.clone(),
+                    dump_keys: std::env::args().any(|a| a == "--dump-keys"),
+                    last_size: Size::new(0.0, 0.0),
+                    last_mouse_pos: (0.0, 0.0),
+                    divider_drag: None,
+                    scrollbar_drag: false,
+                    scrollbar_opacity: 0.0,
+                    cell_width,
+                    cell_height,
+                    scrollbar: ffi::ghostty_action_scrollbar_s { total: 0, offset: 0, len: 0 },
+                    scrollbar_layer: ptr::null_mut(),
+                    search_active: false,
+                    search_query: String::new(),
+                    search_total: 0,
+                    search_selected: 0,
+                    pwd: String::new(),
+                    last_clipboard_text: String::new(),
+                    copy_mode: None,
+                    command_prompt: CommandPrompt::new(),
+                    terminal_font_family,
+                    terminal_font_size,
+                    background_opacity,
+                    background_opacity_cells,
+                },
+                Task::none(),
+            )
+        }
     }
 
     fn focused_surface(&self) -> ffi::ghostty_surface_t {
         self.tabs.focused_pane().surface()
     }
 
+    fn set_surface_focus(&self, surface: ffi::ghostty_surface_t, focused: bool) {
+        surface_backend::set_focus(surface, focused);
+    }
+
+    fn resize_pane_backend(&mut self, pane: PaneHandle, scale: f64, width: u32, height: u32) {
+        let surface = pane.surface();
+        surface_backend::resize(surface, scale, width, height);
+
+        #[cfg(target_os = "linux")]
+        if let Some(vt_pane) = self.linux_panes.get_mut(&pane.id()) {
+            let cols = ((width as f64 / self.cell_width).floor() as u16).max(2);
+            let rows = ((height as f64 / self.cell_height).floor() as u16).max(1);
+            let _ = vt_pane.resize(
+                cols,
+                rows,
+                self.cell_width.max(1.0).round() as u32,
+                self.cell_height.max(1.0).round() as u32,
+            );
+        }
+    }
+
+    fn free_pane_backend(&mut self, pane: PaneHandle) {
+        #[cfg(target_os = "linux")]
+        {
+            self.linux_panes.remove(&pane.id());
+            self.linux_snapshots.remove(&pane.id());
+        }
+
+        let surface = pane.surface();
+        surface_backend::free(surface);
+
+        platform::remove_view(pane.view());
+    }
+
+    fn surface_key_translation_mods(
+        &self,
+        surface: ffi::ghostty_surface_t,
+        mods: i32,
+    ) -> i32 {
+        surface_backend::key_translation_mods(surface, mods)
+    }
+
+    fn forward_surface_key(&self, event: ffi::ghostty_input_key_s) -> bool {
+        surface_backend::key(self.focused_surface(), event)
+    }
+
+    fn forward_surface_mouse_pos(&self, x: f64, y: f64, mods: i32) {
+        surface_backend::mouse_pos(self.focused_surface(), x, y, mods);
+    }
+
+    fn forward_surface_mouse_button(
+        &self,
+        state: ffi::ghostty_input_mouse_state_e,
+        button: ffi::ghostty_input_mouse_button_e,
+        mods: i32,
+    ) {
+        surface_backend::mouse_button(self.focused_surface(), state, button, mods);
+    }
+
+    fn forward_surface_mouse_scroll(&self, dx: f64, dy: f64, mods: i32) {
+        surface_backend::mouse_scroll(self.focused_surface(), dx, dy, mods);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn update_focused_surface_config(&self, config: ffi::ghostty_config_t) {
+        surface_backend::update_config(self.focused_surface(), config);
+    }
+
+    fn focused_cursor_cell_position(&self) -> Option<(u32, i64, f64)> {
+        let scale = self.scale_factor();
+        let cell_w_pts = self.cell_width / scale;
+        let mut cell_h_pts = self.cell_height / scale;
+        let surface = self.focused_surface();
+        if let Some((x, y, _, h)) = surface_backend::ime_point(surface) {
+            if h > 0.0 {
+                cell_h_pts = h;
+            }
+            let col = if cell_w_pts > 0.0 {
+                (x / cell_w_pts) as u32
+            } else {
+                0
+            };
+            let row = if cell_h_pts > 0.0 {
+                ((y - cell_h_pts) / cell_h_pts) as i64
+            } else {
+                0
+            };
+            Some((col, row, cell_h_pts))
+        } else {
+            #[cfg(target_os = "linux")]
+            {
+                self.linux_active_snapshot().map(|snapshot| {
+                    (
+                        snapshot.cursor.x as u32,
+                        self.scrollbar.offset as i64 + snapshot.cursor.y as i64,
+                        cell_h_pts,
+                    )
+                })
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                None
+            }
+        }
+    }
+
     #[cfg(target_os = "linux")]
     fn poll_linux_vt_panes(&mut self) {
         let active_id = self.tabs.focused_pane().id();
-        for (id, pane) in &mut self.linux_panes {
-            let changed = pane.poll_pty().unwrap_or(false);
-            if changed || *id == active_id {
-                if let Ok(snapshot) = pane.snapshot() {
-                    if *id == active_id {
-                        self.pwd = snapshot.pwd.clone();
-                        if !snapshot.title.is_empty() {
-                            self.tabs.set_active_title(snapshot.title.clone());
+        let active_pane_ids: Vec<pane::PaneId> = self
+            .tabs
+            .active_tree()
+            .map(|tree| tree.all_panes().into_iter().map(|pane| pane.id()).collect())
+            .unwrap_or_default();
+        let mut exited_panes = Vec::new();
+        for id in active_pane_ids {
+            let Some(pane) = self.linux_panes.get_mut(&id) else {
+                continue;
+            };
+            let poll = match pane.poll_pty() {
+                Ok(poll) => poll,
+                Err(error) => {
+                    log::warn!("linux vt PTY poll failed for pane {id}: {error}");
+                    continue;
+                }
+            };
+            let changed = poll.changed;
+            if poll.exited {
+                exited_panes.push(id);
+            }
+            let needs_snapshot =
+                changed || pane.is_dirty() || !self.linux_snapshots.contains_key(&id);
+            if needs_snapshot {
+                match pane.snapshot() {
+                    Ok(snapshot) => {
+                        if id == active_id {
+                            self.pwd = snapshot.pwd.clone();
+                            if !snapshot.title.is_empty() {
+                                self.tabs.set_active_title(snapshot.title.clone());
+                            }
+                            self.scrollbar.total = snapshot.scrollbar.total;
+                            self.scrollbar.offset = snapshot.scrollbar.offset;
+                            self.scrollbar.len = snapshot.scrollbar.len;
                         }
-                        self.scrollbar.total = snapshot.scrollbar.total;
-                        self.scrollbar.offset = snapshot.scrollbar.offset;
-                        self.scrollbar.len = snapshot.scrollbar.len;
+                        self.linux_snapshots.insert(id, snapshot);
                     }
-                    self.linux_snapshots.insert(*id, snapshot);
+                    Err(error) => {
+                        log::warn!("linux vt snapshot failed for pane {id}: {error}");
+                    }
                 }
             }
+        }
+        for pane_id in exited_panes {
+            self.close_active_pane_by_id(pane_id);
         }
     }
 
@@ -423,8 +727,232 @@ impl GhosttyApp {
         self.linux_snapshots.get(&id)
     }
 
+    fn apply_appearance_config(&mut self, config: &config::Config) {
+        #[cfg(target_os = "linux")]
+        {
+            self.terminal_font_family = config
+                .font_family
+                .as_deref()
+                .map(resolve_linux_font)
+                .map(|(family, _)| family)
+                .flatten();
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            self.terminal_font_family = config.font_family.as_deref().map(leak_font_family);
+        }
+        self.terminal_font_size = config.font_size.unwrap_or(DEFAULT_TERMINAL_FONT_SIZE);
+        self.background_opacity = config
+            .background_opacity
+            .unwrap_or(DEFAULT_BACKGROUND_OPACITY)
+            .clamp(0.0, 1.0);
+        self.background_opacity_cells = config.background_opacity_cells;
+        let (cell_width, cell_height) = terminal_metrics(self.terminal_font_size);
+        self.cell_width = cell_width;
+        self.cell_height = cell_height;
+    }
+
+    fn ui_font(&self) -> Font {
+        configured_font(self.terminal_font_family)
+    }
+
+    fn panel_alpha(&self, base: f32) -> f32 {
+        (base * self.background_opacity.max(0.3)).clamp(0.2, 0.98)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn terminal_background_color(&self) -> Color {
+        Color::from_rgba(0.0, 0.0, 0.0, self.background_opacity)
+    }
+
+    fn window_style(&self) -> iced::theme::Style {
+        #[cfg(target_os = "linux")]
+        {
+            iced::theme::Style {
+                background_color: Color::TRANSPARENT,
+                text_color: Color::WHITE,
+            }
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            iced::theme::Style {
+                background_color: self.terminal_background_color(),
+                text_color: Color::WHITE,
+            }
+        }
+    }
+
+    fn terminate(&self, code: i32) -> ! {
+        control::cleanup(self.socket_path.as_deref());
+        std::process::exit(code);
+    }
+
+    fn close_active_pane_by_id(&mut self, pane_id: pane::PaneId) {
+        let Some(tree) = self.tabs.active_tree_mut() else {
+            return;
+        };
+        let Some(leaf_id) = tree
+            .export_panes()
+            .into_iter()
+            .find(|pane| pane.pane.id() == pane_id)
+            .map(|pane| pane.leaf_id)
+        else {
+            return;
+        };
+        tree.set_focus(leaf_id);
+        self.cb_state.surface = self.tabs.focused_pane().surface();
+        self.handle_surface_closed();
+    }
+
+    fn ui_snapshot(&self) -> control::UiSnapshot {
+        let focused_pane = self.tabs.focused_pane();
+        let terminal_frame = self.terminal_frame();
+        let visible_panes = self
+            .tabs
+            .active_tree()
+            .map(|tree| {
+                tree.export_panes_with_frames(terminal_frame)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(leaf_index, pane)| control::UiPaneSnapshot {
+                        leaf_index,
+                        leaf_id: pane.leaf_id,
+                        pane_id: pane.pane.id(),
+                        focused: pane.pane.id() == focused_pane.id(),
+                        frame: pane.frame.map_or(ui_rect_snapshot(0.0, 0.0, 0.0, 0.0), |frame| {
+                            ui_rect_snapshot(
+                                frame.origin.x,
+                                frame.origin.y,
+                                frame.size.width,
+                                frame.size.height,
+                            )
+                        }),
+                        split_direction: pane.split.map(|(direction, _)| split_direction_name(direction).to_string()),
+                        split_ratio: pane.split.map(|(_, ratio)| ratio),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let copy_mode_frame = terminal_frame;
+        let copy_mode = self.copy_mode.as_ref().map_or(
+            control::UiCopyModeSnapshot {
+                active: false,
+                cursor_row: 0,
+                cursor_col: 0,
+                selection_mode: "none".to_string(),
+                has_selection_anchor: false,
+                anchor_row: None,
+                anchor_col: None,
+                selection_rects: Vec::new(),
+                show_position: false,
+            },
+            |copy_mode| {
+                let selection_rects =
+                    copy_mode
+                        .sel_anchor
+                        .map_or_else(Vec::new, |(anchor_row, anchor_col)| {
+                            Self::compute_selection_rects_static(
+                                copy_mode.selection,
+                                copy_mode.cursor_row,
+                                copy_mode.cursor_col,
+                                anchor_row,
+                                anchor_col,
+                                self.scrollbar.offset as i64,
+                                copy_mode.viewport_cols,
+                                copy_mode.cell_width,
+                                copy_mode.cell_height,
+                                copy_mode_frame.origin.y,
+                            )
+                            .into_iter()
+                            .map(|(x, y, width, height)| ui_rect_snapshot(x, y, width, height))
+                            .collect()
+                        });
+                control::UiCopyModeSnapshot {
+                    active: true,
+                    cursor_row: copy_mode.cursor_row,
+                    cursor_col: copy_mode.cursor_col,
+                    selection_mode: selection_mode_name(copy_mode.selection).to_string(),
+                    has_selection_anchor: copy_mode.sel_anchor.is_some(),
+                    anchor_row: copy_mode.sel_anchor.map(|(row, _)| row),
+                    anchor_col: copy_mode.sel_anchor.map(|(_, col)| col),
+                    selection_rects,
+                    show_position: copy_mode.show_position,
+                }
+            },
+        );
+
+        let tabs = self
+            .tabs
+            .tab_info()
+            .into_iter()
+            .map(|tab| control::UiTabSnapshot {
+                index: tab.index,
+                active: tab.active,
+                title: tab.title,
+                pane_count: tab.surfaces,
+            })
+            .collect();
+
+        let command_prompt = control::UiCommandPromptSnapshot {
+            active: self.command_prompt.active,
+            input: self.command_prompt.input.clone(),
+            selected_suggestion: self.command_prompt.selected_suggestion,
+            suggestions: self
+                .command_prompt
+                .suggestions
+                .iter()
+                .filter_map(|&index| COMMANDS.get(index))
+                .map(|command| command.name.to_string())
+                .collect(),
+        };
+
+        let terminal = {
+            #[cfg(target_os = "linux")]
+            {
+                self.linux_active_snapshot().map(ui_terminal_snapshot_from_linux)
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                None
+            }
+        };
+
+        control::UiSnapshot {
+            active_tab: self.tabs.active_index(),
+            focused_pane: focused_pane.id(),
+            appearance: control::UiAppearanceSnapshot {
+                font_family: self.terminal_font_family.map(str::to_string),
+                font_size: self.terminal_font_size,
+                background_opacity: self.background_opacity,
+                background_opacity_cells: self.background_opacity_cells,
+            },
+            tabs,
+            visible_panes,
+            copy_mode,
+            search: control::UiSearchSnapshot {
+                active: self.search_active,
+                query: self.search_query.clone(),
+                total: self.search_total,
+                selected: self.search_selected,
+            },
+            command_prompt,
+            pwd: self.pwd.clone(),
+            scrollbar: control::UiScrollbarSnapshot {
+                total: self.scrollbar.total,
+                offset: self.scrollbar.offset,
+                len: self.scrollbar.len,
+            },
+            terminal,
+        }
+    }
+
     fn update(&mut self, message: Message) -> Task<Message> {
-        unsafe { ffi::ghostty_app_tick(self.app) };
+        #[cfg(not(target_os = "linux"))]
+        unsafe {
+            ffi::ghostty_app_tick(self.app)
+        };
 
         #[cfg(target_os = "linux")]
         self.poll_linux_vt_panes();
@@ -443,12 +971,10 @@ impl GhosttyApp {
                 if self.scrollbar.total > self.scrollbar.len {
                     self.scrollbar_opacity = 1.0;
                 }
-                unsafe {
-                    ffi::ghostty_surface_mouse_scroll(surface, scroll.dx, scroll.dy, mods);
-                }
+                self.forward_surface_mouse_scroll(scroll.dx, scroll.dy, mods);
             } else {
                 #[cfg(target_os = "linux")]
-                if self.linux_vt_only {
+                {
                     if self.scrollbar.total > self.scrollbar.len {
                         self.scrollbar_opacity = 1.0;
                     }
@@ -529,16 +1055,18 @@ impl GhosttyApp {
             }
             Event::Window(window::Event::Focused) => {
                 if !surface.is_null() {
+                    self.set_surface_focus(surface, true);
+                    #[cfg(not(target_os = "linux"))]
                     unsafe {
-                        ffi::ghostty_surface_set_focus(surface, true);
                         ffi::ghostty_app_set_focus(self.app, true);
                     };
                 }
             }
             Event::Window(window::Event::Unfocused) => {
                 if !surface.is_null() {
+                    self.set_surface_focus(surface, false);
+                    #[cfg(not(target_os = "linux"))]
                     unsafe {
-                        ffi::ghostty_surface_set_focus(surface, false);
                         ffi::ghostty_app_set_focus(self.app, false);
                     };
                 }
@@ -663,11 +1191,7 @@ impl GhosttyApp {
 
                 // Apply option-as-alt translation
                 let surface = self.focused_surface();
-                let translation_mods = if !surface.is_null() {
-                    unsafe { ffi::ghostty_surface_key_translation_mods(surface, mods) }
-                } else {
-                    mods
-                };
+                let translation_mods = self.surface_key_translation_mods(surface, mods);
 
                 // unshifted_codepoint: character with NO modifiers (matches macOS byApplyingModifiers:[])
                 let unshifted_codepoint = key_to_codepoint(&key);
@@ -678,12 +1202,13 @@ impl GhosttyApp {
                     & !(ffi::GHOSTTY_MODS_CTRL | ffi::GHOSTTY_MODS_SUPER);
 
                 #[cfg(target_os = "linux")]
-                if self.linux_vt_only && surface.is_null() {
+                if surface.is_null() {
                     let _ = self.forward_key_to_linux_vt(
                         if repeat { vt::GHOSTTY_KEY_ACTION_REPEAT } else { vt::GHOSTTY_KEY_ACTION_PRESS },
                         keycode,
                         mods as vt::GhosttyMods,
                         consumed_mods as vt::GhosttyMods,
+                        key_char,
                         text.as_deref().unwrap_or(""),
                         false,
                         unshifted_codepoint,
@@ -711,7 +1236,7 @@ impl GhosttyApp {
                     composing: false,
                 };
 
-                let consumed = unsafe { ffi::ghostty_surface_key(self.focused_surface(), key_event) };
+                let consumed = self.forward_surface_key(key_event);
                 if self.dump_keys {
                     log::info!(
                         "→ghostty: keycode=0x{keycode:02x} mods={mods:#x} cp={unshifted_codepoint:#x} text={:?} consumed={consumed}",
@@ -728,12 +1253,13 @@ impl GhosttyApp {
                     return;
                 };
                 #[cfg(target_os = "linux")]
-                if self.linux_vt_only && self.focused_surface().is_null() {
+                if self.focused_surface().is_null() {
                     let _ = self.forward_key_to_linux_vt(
                         vt::GHOSTTY_KEY_ACTION_RELEASE,
                         keycode,
                         iced_mods_to_ghostty(&modifiers) as vt::GhosttyMods,
                         0,
+                        None,
                         "",
                         false,
                         0,
@@ -749,7 +1275,7 @@ impl GhosttyApp {
                     unshifted_codepoint: 0,
                     composing: false,
                 };
-                unsafe { ffi::ghostty_surface_key(self.focused_surface(), key_event) };
+                let _ = self.forward_surface_key(key_event);
             }
             _ => {}
         }
@@ -762,6 +1288,7 @@ impl GhosttyApp {
         keycode: u32,
         mods: vt::GhosttyMods,
         consumed_mods: vt::GhosttyMods,
+        key_char: Option<char>,
         text: &str,
         composing: bool,
         unshifted_codepoint: u32,
@@ -774,8 +1301,20 @@ impl GhosttyApp {
         ev.set_consumed_mods(consumed_mods);
         ev.set_composing(composing);
         ev.set_unshifted_codepoint(unshifted_codepoint);
-        if !text.is_empty() {
-            ev.set_utf8(text);
+        let fallback_text = key_char
+            .filter(|ch| !ch.is_control())
+            .map(|ch| ch.to_string());
+        let utf8 = if text
+            .as_bytes()
+            .first()
+            .is_some_and(|&byte| byte >= 0x20)
+        {
+            Some(text)
+        } else {
+            fallback_text.as_deref()
+        };
+        if let Some(utf8) = utf8 {
+            ev.set_utf8(utf8);
         }
         let bytes = pane
             .key_encoder()
@@ -791,7 +1330,7 @@ impl GhosttyApp {
         match cmd {
             control::ControlCmd::DumpKeysOn => self.dump_keys = true,
             control::ControlCmd::DumpKeysOff => self.dump_keys = false,
-            control::ControlCmd::Quit => std::process::exit(0),
+            control::ControlCmd::Quit => self.terminate(0),
             control::ControlCmd::ListSurfaces { reply } => {
                 let info = if let Some(tree) = self.tabs.active_tree() {
                     tree.surface_info()
@@ -804,15 +1343,7 @@ impl GhosttyApp {
                 let _ = reply.send(control::Response::Surfaces { surfaces: info });
             }
             control::ControlCmd::NewSplit { direction } => {
-                use ffi::ghostty_action_split_direction_e::*;
-                let dir = match direction.as_str() {
-                    "right" => GHOSTTY_SPLIT_DIRECTION_RIGHT,
-                    "down" => GHOSTTY_SPLIT_DIRECTION_DOWN,
-                    "left" => GHOSTTY_SPLIT_DIRECTION_LEFT,
-                    "up" => GHOSTTY_SPLIT_DIRECTION_UP,
-                    _ => GHOSTTY_SPLIT_DIRECTION_RIGHT,
-                };
-                self.create_split(dir);
+                self.create_split(Self::split_direction_from_str(&direction));
             }
             control::ControlCmd::FocusSurface { index } => {
                 let old = self.tabs.focused_pane().surface();
@@ -821,10 +1352,8 @@ impl GhosttyApp {
                 }
                 let new = self.tabs.focused_pane().surface();
                 if old != new {
-                    unsafe {
-                        if !old.is_null() { ffi::ghostty_surface_set_focus(old, false); }
-                        if !new.is_null() { ffi::ghostty_surface_set_focus(new, true); }
-                    }
+                    self.set_surface_focus(old, false);
+                    self.set_surface_focus(new, true);
                     self.cb_state.surface = new;
                 }
             }
@@ -832,6 +1361,35 @@ impl GhosttyApp {
                 let _ = reply.send(control::Response::Tabs {
                     tabs: self.tabs.tab_info(),
                 });
+            }
+            control::ControlCmd::GetClipboard { reply } => {
+                let _ = reply.send(control::Response::Clipboard {
+                    text: if self.last_clipboard_text.is_empty() {
+                        platform::clipboard_read().unwrap_or_default()
+                    } else {
+                        self.last_clipboard_text.clone()
+                    },
+                });
+            }
+            control::ControlCmd::GetUiSnapshot { reply } => {
+                let _ = reply.send(control::Response::UiSnapshot {
+                    snapshot: self.ui_snapshot(),
+                });
+            }
+            control::ControlCmd::ExecuteCommand { input } => {
+                self.execute_command(&input);
+            }
+            control::ControlCmd::SendText { text } => {
+                #[cfg(target_os = "linux")]
+                if let Some(pane) = self.linux_focused_pane_mut() {
+                    let _ = pane.write_input(text.as_bytes());
+                }
+            }
+            control::ControlCmd::SendVt { text } => {
+                #[cfg(target_os = "linux")]
+                if let Some(pane) = self.linux_focused_pane_mut() {
+                    pane.write_vt_bytes(text.as_bytes());
+                }
             }
             control::ControlCmd::NewTab => self.new_tab(),
             control::ControlCmd::GotoTab { index } => {
@@ -862,6 +1420,22 @@ impl GhosttyApp {
         };
 
         let key_char = shifted_char(keycode, mods);
+
+        if self.command_prompt.active {
+            let key = control_key_to_keyboard_key(keyspec, key_char);
+            let text = key_char.map(|ch| ch.to_string());
+            let modifiers = ghostty_mods_to_iced(mods);
+            self.handle_command_key(&key, &text, &modifiers);
+            return;
+        }
+
+        if self.search_active {
+            let key = control_key_to_keyboard_key(keyspec, key_char);
+            let text = key_char.map(|ch| ch.to_string());
+            let modifiers = ghostty_mods_to_iced(mods);
+            self.handle_search_key(&key, &text, &modifiers);
+            return;
+        }
 
         // Route through boo's binding system first (prefix key, etc.)
         match self.bindings.handle_key(key_char, keycode, mods, None) {
@@ -906,7 +1480,7 @@ impl GhosttyApp {
             unshifted_codepoint: unshifted,
             composing: false,
         };
-        let consumed = unsafe { ffi::ghostty_surface_key(surface, ev) };
+        let consumed = self.forward_surface_key(ev);
         if self.dump_keys {
             log::info!("ctl key: keycode=0x{keycode:02x} mods={mods:#x} cp=0x{unshifted:02x} text={text_str:?} consumed={consumed}");
         }
@@ -1309,10 +1883,6 @@ impl GhosttyApp {
 
     fn read_viewport_line(&self, viewport_row: u32) -> Option<String> {
         let cm = self.copy_mode.as_ref()?;
-        let surface = self.focused_surface();
-        if surface.is_null() {
-            return None;
-        }
         let sel = ffi::ghostty_selection_s {
             top_left: ffi::ghostty_point_s {
                 tag: ffi::GHOSTTY_POINT_VIEWPORT,
@@ -1328,20 +1898,7 @@ impl GhosttyApp {
             },
             rectangle: false,
         };
-        let mut text = ffi::ghostty_text_s {
-            tl_px_x: 0.0, tl_px_y: 0.0,
-            offset_start: 0, offset_len: 0,
-            text: ptr::null(), text_len: 0,
-        };
-        let ok = unsafe { ffi::ghostty_surface_read_text(surface, sel, &mut text) };
-        if ok && !text.text.is_null() && text.text_len > 0 {
-            let slice = unsafe { std::slice::from_raw_parts(text.text as *const u8, text.text_len) };
-            let s = std::str::from_utf8(slice).ok().map(|s| s.to_string());
-            unsafe { ffi::ghostty_surface_free_text(surface, &mut text) };
-            s
-        } else {
-            None
-        }
+        self.read_surface_selection_text(sel)
     }
 
     fn copy_mode_word_move(&mut self, kind: WordMoveKind) {
@@ -1561,13 +2118,15 @@ impl GhosttyApp {
         Some(chars[start..=end].iter().collect())
     }
 
-    fn copy_mode_append_copy(&self) {
-        let existing = platform::clipboard_read().unwrap_or_default();
+    fn copy_mode_append_copy(&mut self) {
+        let existing = if self.last_clipboard_text.is_empty() {
+            platform::clipboard_read().unwrap_or_default()
+        } else {
+            self.last_clipboard_text.clone()
+        };
 
         let Some(ref cm) = self.copy_mode else { return };
         let Some((anchor_row, anchor_col)) = cm.sel_anchor else { return };
-        let surface = self.focused_surface();
-        if surface.is_null() { return; }
 
         let (r1, c1, r2, c2) = if anchor_row < cm.cursor_row
             || (anchor_row == cm.cursor_row && anchor_col <= cm.cursor_col)
@@ -1595,43 +2154,21 @@ impl GhosttyApp {
             },
             rectangle: cm.selection == SelectionMode::Rectangle,
         };
-        let mut text = ffi::ghostty_text_s {
-            tl_px_x: 0.0, tl_px_y: 0.0,
-            offset_start: 0, offset_len: 0,
-            text: ptr::null(), text_len: 0,
-        };
-        let ok = unsafe { ffi::ghostty_surface_read_text(surface, sel, &mut text) };
-        if ok && !text.text.is_null() && text.text_len > 0 {
-            let slice = unsafe { std::slice::from_raw_parts(text.text as *const u8, text.text_len) };
-            if let Ok(new_text) = std::str::from_utf8(slice) {
-                let combined = format!("{existing}{new_text}");
-                platform::clipboard_write(&combined);
-                log::info!("copy mode: appended {} bytes to clipboard", text.text_len);
-            }
-            unsafe { ffi::ghostty_surface_free_text(surface, &mut text) };
+        if let Some(new_text) = self.read_surface_selection_text(sel) {
+            let combined = format!("{existing}{new_text}");
+            platform::clipboard_write(&combined);
+            self.last_clipboard_text = combined;
+            log::info!("copy mode: appended {} bytes to clipboard", new_text.len());
         }
     }
 
     fn enter_copy_mode(&mut self) {
-        let surface = self.focused_surface();
-        if surface.is_null() {
-            return;
-        }
-        // Get cursor position (returns screen points, y = bottom of cursor cell)
-        let mut x: f64 = 0.0;
-        let mut y: f64 = 0.0;
-        let mut _w: f64 = 0.0;
-        let mut h: f64 = 0.0;
-        unsafe { ffi::ghostty_surface_ime_point(surface, &mut x, &mut y, &mut _w, &mut h) };
-
-        // h from ime_point = cell_height in screen points
         let scale = self.scale_factor();
         let cell_w_pts = self.cell_width / scale;
-        let cell_h_pts = if h > 0.0 { h } else { self.cell_height / scale };
+        let Some((col, row, cell_h_pts)) = self.focused_cursor_cell_position() else {
+            return;
+        };
 
-        // ime_point x includes padding and is at cell midpoint; y is at cell bottom
-        let col = if cell_w_pts > 0.0 { (x / cell_w_pts) as u32 } else { 0 };
-        let row = if cell_h_pts > 0.0 { ((y - cell_h_pts) / cell_h_pts) as i64 } else { 0 };
         let viewport_rows = if cell_h_pts > 0.0 {
             ((self.last_size.height as f64 - STATUS_BAR_HEIGHT) / cell_h_pts) as u32
         } else {
@@ -1781,13 +2318,9 @@ impl GhosttyApp {
         }
     }
 
-    fn copy_mode_copy(&self) {
+    fn copy_mode_copy(&mut self) {
         let Some(ref cm) = self.copy_mode else { return };
         let Some((anchor_row, anchor_col)) = cm.sel_anchor else { return };
-        let surface = self.focused_surface();
-        if surface.is_null() {
-            return;
-        }
 
         let (r1, c1, r2, c2) = if anchor_row < cm.cursor_row
             || (anchor_row == cm.cursor_row && anchor_col <= cm.cursor_col)
@@ -1819,23 +2352,10 @@ impl GhosttyApp {
             },
             rectangle: cm.selection == SelectionMode::Rectangle,
         };
-
-        let mut text = ffi::ghostty_text_s {
-            tl_px_x: 0.0,
-            tl_px_y: 0.0,
-            offset_start: 0,
-            offset_len: 0,
-            text: ptr::null(),
-            text_len: 0,
-        };
-        let ok = unsafe { ffi::ghostty_surface_read_text(surface, sel, &mut text) };
-        if ok && !text.text.is_null() && text.text_len > 0 {
-            let slice = unsafe { std::slice::from_raw_parts(text.text as *const u8, text.text_len) };
-            if let Ok(s) = std::str::from_utf8(slice) {
-                platform::clipboard_write(s);
-                log::info!("copy mode: copied {} bytes", text.text_len);
-            }
-            unsafe { ffi::ghostty_surface_free_text(surface, &mut text) };
+        if let Some(text) = self.read_surface_selection_text(sel) {
+            platform::clipboard_write(&text);
+            self.last_clipboard_text = text.clone();
+            log::info!("copy mode: copied {} bytes", text.len());
         }
     }
 
@@ -1870,12 +2390,12 @@ impl GhosttyApp {
             }
             bindings::Action::CloseTab => {
                 if self.tabs.len() <= 1 {
-                    std::process::exit(0);
+                    self.terminate(0);
                 }
                 let active = self.tabs.active_index();
                 let panes = self.tabs.remove_tab(active);
                 for pane in panes {
-                    unsafe { ffi::ghostty_surface_free(pane.surface()) };
+                    self.free_pane_backend(pane);
                 }
                 self.sync_after_tab_change();
             }
@@ -1910,7 +2430,7 @@ impl GhosttyApp {
                 }
                 let new = self.tabs.focused_pane().surface();
                 self.cb_state.surface = new;
-                unsafe { if !new.is_null() { ffi::ghostty_surface_set_focus(new, true); } }
+                self.set_surface_focus(new, true);
             }
             bindings::Action::PreviousPane => {
                 if let Some(tree) = self.tabs.active_tree_mut() {
@@ -1918,7 +2438,7 @@ impl GhosttyApp {
                 }
                 let new = self.tabs.focused_pane().surface();
                 self.cb_state.surface = new;
-                unsafe { if !new.is_null() { ffi::ghostty_surface_set_focus(new, true); } }
+                self.set_surface_focus(new, true);
             }
             bindings::Action::PreviousTab => {
                 let prev = self.tabs.previous_active();
@@ -1930,19 +2450,23 @@ impl GhosttyApp {
                 // Reload boo's own config
                 let boo_config = config::Config::load();
                 self.bindings = bindings::Bindings::from_config(&boo_config);
-                // Reload ghostty config
-                let new_config = unsafe { ffi::ghostty_config_new() };
-                if !new_config.is_null() {
-                    let path = config::ghostty_config_path();
-                    if path.exists() {
-                        let cstr = CString::new(path.to_str().unwrap_or_default()).unwrap();
-                        unsafe { ffi::ghostty_config_load_file(new_config, cstr.as_ptr()) };
+                self.apply_appearance_config(&boo_config);
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let new_config = unsafe { ffi::ghostty_config_new() };
+                    if !new_config.is_null() {
+                        let path = config::ghostty_config_path();
+                        if path.exists() {
+                            let cstr = CString::new(path.to_str().unwrap_or_default()).unwrap();
+                            unsafe { ffi::ghostty_config_load_file(new_config, cstr.as_ptr()) };
+                        }
+                        unsafe { ffi::ghostty_config_finalize(new_config) };
+                        unsafe { ffi::ghostty_app_update_config(self.app, new_config) };
+                        unsafe { ffi::ghostty_config_free(self.config) };
+                        self.config = new_config;
                     }
-                    unsafe { ffi::ghostty_config_finalize(new_config) };
-                    unsafe { ffi::ghostty_app_update_config(self.app, new_config) };
-                    unsafe { ffi::ghostty_config_free(self.config) };
-                    self.config = new_config;
                 }
+                self.relayout();
                 log::info!("config reloaded");
             }
             bindings::Action::OpenCommandPrompt => {
@@ -2060,13 +2584,11 @@ impl GhosttyApp {
         let cmd = parts[0];
         let arg1 = parts.get(1).copied();
 
-        use ffi::ghostty_action_split_direction_e::*;
-
         match cmd {
-            "split-right" => self.dispatch_binding_action(bindings::Action::NewSplit(GHOSTTY_SPLIT_DIRECTION_RIGHT)),
-            "split-down" => self.dispatch_binding_action(bindings::Action::NewSplit(GHOSTTY_SPLIT_DIRECTION_DOWN)),
-            "split-left" => self.dispatch_binding_action(bindings::Action::NewSplit(GHOSTTY_SPLIT_DIRECTION_LEFT)),
-            "split-up" => self.dispatch_binding_action(bindings::Action::NewSplit(GHOSTTY_SPLIT_DIRECTION_UP)),
+            "split-right" => self.dispatch_binding_action(bindings::Action::NewSplit(bindings::SplitDirection::Right)),
+            "split-down" => self.dispatch_binding_action(bindings::Action::NewSplit(bindings::SplitDirection::Down)),
+            "split-left" => self.dispatch_binding_action(bindings::Action::NewSplit(bindings::SplitDirection::Left)),
+            "split-up" => self.dispatch_binding_action(bindings::Action::NewSplit(bindings::SplitDirection::Up)),
             "resize-left" => {
                 let n: u16 = arg1.and_then(|s| s.parse().ok()).unwrap_or(10);
                 self.dispatch_binding_action(bindings::Action::ResizeSplit(bindings::Direction::Left, n));
@@ -2097,6 +2619,7 @@ impl GhosttyApp {
             "next-pane" => self.dispatch_binding_action(bindings::Action::NextPane),
             "prev-pane" => self.dispatch_binding_action(bindings::Action::PreviousPane),
             "copy-mode" => self.dispatch_binding_action(bindings::Action::EnterCopyMode),
+            "command-prompt" => self.dispatch_binding_action(bindings::Action::OpenCommandPrompt),
             "search" => self.dispatch_binding_action(bindings::Action::Search),
             "paste" => self.dispatch_binding_action(bindings::Action::Paste),
             "zoom" => self.dispatch_binding_action(bindings::Action::ToggleZoom),
@@ -2116,29 +2639,29 @@ impl GhosttyApp {
                 if parts.len() >= 3 {
                     let key = parts[1];
                     let val = parts[2..].join(" ");
-                    let kv = format!("{key} = {val}\n");
-                    let tmp = std::env::temp_dir().join("boo-set-config.tmp");
-                    if std::fs::write(&tmp, &kv).is_ok() {
-                        let new_config = unsafe { ffi::ghostty_config_new() };
-                        if !new_config.is_null() {
-                            // Load base config first
-                            let base = config::ghostty_config_path();
-                            if base.exists() {
-                                let cstr = CString::new(base.to_str().unwrap_or_default()).unwrap();
+                    #[cfg(not(target_os = "linux"))]
+                    {
+                        let kv = format!("{key} = {val}\n");
+                        let tmp = std::env::temp_dir().join("boo-set-config.tmp");
+                        if std::fs::write(&tmp, &kv).is_ok() {
+                            let new_config = unsafe { ffi::ghostty_config_new() };
+                            if !new_config.is_null() {
+                                // Load base config first
+                                let base = config::ghostty_config_path();
+                                if base.exists() {
+                                    let cstr = CString::new(base.to_str().unwrap_or_default()).unwrap();
+                                    unsafe { ffi::ghostty_config_load_file(new_config, cstr.as_ptr()) };
+                                }
+                                // Then load override
+                                let cstr = CString::new(tmp.to_str().unwrap_or_default()).unwrap();
                                 unsafe { ffi::ghostty_config_load_file(new_config, cstr.as_ptr()) };
+                                unsafe { ffi::ghostty_config_finalize(new_config) };
+                                self.update_focused_surface_config(new_config);
+                                unsafe { ffi::ghostty_config_free(self.config) };
+                                self.config = new_config;
                             }
-                            // Then load override
-                            let cstr = CString::new(tmp.to_str().unwrap_or_default()).unwrap();
-                            unsafe { ffi::ghostty_config_load_file(new_config, cstr.as_ptr()) };
-                            unsafe { ffi::ghostty_config_finalize(new_config) };
-                            let surface = self.focused_surface();
-                            if !surface.is_null() {
-                                unsafe { ffi::ghostty_surface_update_config(surface, new_config) };
-                            }
-                            unsafe { ffi::ghostty_config_free(self.config) };
-                            self.config = new_config;
+                            let _ = std::fs::remove_file(&tmp);
                         }
-                        let _ = std::fs::remove_file(&tmp);
                     }
                     log::info!("set: {key} = {val}");
                 }
@@ -2250,21 +2773,91 @@ impl GhosttyApp {
         self.relayout();
     }
 
-    fn ghostty_binding_action(&self, action: &str) {
-        let surface = self.focused_surface();
-        if !surface.is_null() {
-            unsafe {
-                ffi::ghostty_surface_binding_action(
-                    surface,
-                    action.as_ptr() as *const _,
-                    action.len(),
-                );
+    fn surface_binding_action(&self, action: &str) {
+        surface_backend::binding_action(self.focused_surface(), action);
+    }
+
+    fn read_surface_selection_text(&self, selection: ffi::ghostty_selection_s) -> Option<String> {
+        #[cfg(target_os = "linux")]
+        if self.focused_surface().is_null() {
+            return self.read_linux_selection_text(selection);
+        }
+        surface_backend::read_text(self.focused_surface(), selection)
+    }
+
+    fn ghostty_binding_action(&mut self, action: &str) {
+        #[cfg(target_os = "linux")]
+        if self.focused_surface().is_null() {
+            self.linux_binding_action(action);
+            return;
+        }
+        self.surface_binding_action(action);
+    }
+
+    fn send_search(&mut self) {
+        self.ghostty_binding_action(&format!("search:{}", self.search_query));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn linux_binding_action(&mut self, action: &str) {
+        let id = self.tabs.focused_pane().id();
+        match action {
+            "scroll_to_top" => {
+                if let Some(pane) = self.linux_panes.get_mut(&id) {
+                    let _ = pane.scroll_viewport_top();
+                }
+            }
+            "scroll_to_bottom" => {
+                // VT viewport scrolling is owned by the pane; jumping to the bottom
+                // is the common Linux copy-mode exit behavior.
+                if let Some(pane) = self.linux_panes.get_mut(&id) {
+                    let _ = pane.scroll_viewport_bottom();
+                }
+            }
+            "scroll_page_up" => {
+                if let Some(pane) = self.linux_panes.get_mut(&id) {
+                    let page = self.scrollbar.len.saturating_sub(1).max(1) as isize;
+                    let _ = pane.scroll_viewport_delta(-page);
+                }
+            }
+            "scroll_page_down" => {
+                if let Some(pane) = self.linux_panes.get_mut(&id) {
+                    let page = self.scrollbar.len.saturating_sub(1).max(1) as isize;
+                    let _ = pane.scroll_viewport_delta(page);
+                }
+            }
+            "paste_from_clipboard" => {
+                if let Some(text) = platform::clipboard_read() {
+                    if let Some(active_pane) = self.linux_panes.get(&id) {
+                        let _ = active_pane.write_input(text.as_bytes());
+                    }
+                }
+            }
+            "end_search" | "toggle_split_zoom" => {}
+            _ => {
+                if let Some(lines) = action.strip_prefix("scroll_page_lines:") {
+                    if let Ok(lines) = lines.parse::<isize>() {
+                        if let Some(pane) = self.linux_panes.get_mut(&id) {
+                            let _ = pane.scroll_viewport_delta(lines);
+                        }
+                    }
+                }
             }
         }
     }
 
-    fn send_search(&self) {
-        self.ghostty_binding_action(&format!("search:{}", self.search_query));
+    #[cfg(target_os = "linux")]
+    fn read_linux_selection_text(&self, selection: ffi::ghostty_selection_s) -> Option<String> {
+        if selection.top_left.tag != ffi::GHOSTTY_POINT_VIEWPORT
+            || selection.bottom_right.tag != ffi::GHOSTTY_POINT_VIEWPORT
+            || selection.top_left.coord != ffi::GHOSTTY_POINT_COORD_EXACT
+            || selection.bottom_right.coord != ffi::GHOSTTY_POINT_COORD_EXACT
+        {
+            return None;
+        }
+
+        let snapshot = self.linux_active_snapshot()?;
+        Some(linux_snapshot_selection_text(snapshot, selection))
     }
 
     fn scroll_to_mouse_y(&mut self, y: f64) {
@@ -2281,7 +2874,7 @@ impl GhosttyApp {
             return;
         }
         #[cfg(target_os = "linux")]
-        if self.linux_vt_only {
+        {
             let delta = target_row as i64 - self.scrollbar.offset as i64;
             if let Some(pane) = self.linux_focused_pane_mut() {
                 let _ = if target_row == 0 {
@@ -2324,7 +2917,7 @@ impl GhosttyApp {
                     return;
                 }
                 #[cfg(target_os = "linux")]
-                if self.linux_vt_only && self.focused_surface().is_null() {
+                if self.focused_surface().is_null() {
                     if let Some(pane) = self.linux_focused_pane_mut() {
                         let _ = pane.send_mouse_input(
                             vt::GHOSTTY_MOUSE_ACTION_MOTION,
@@ -2336,14 +2929,11 @@ impl GhosttyApp {
                     }
                     return;
                 }
-                unsafe {
-                    ffi::ghostty_surface_mouse_pos(
-                        self.focused_surface(),
-                        position.x as f64,
-                        position.y as f64,
-                        ffi::GHOSTTY_MODS_NONE,
-                    );
-                }
+                self.forward_surface_mouse_pos(
+                    position.x as f64,
+                    position.y as f64,
+                    ffi::GHOSTTY_MODS_NONE,
+                );
             }
             mouse::Event::ButtonPressed(button) => {
                 if button == mouse::Button::Left {
@@ -2374,16 +2964,14 @@ impl GhosttyApp {
                     if let Some(tree) = self.tabs.active_tree_mut() {
                         if tree.focus_at(frame, point) {
                             let new = self.tabs.focused_pane().surface();
-                            unsafe {
-                                if !old.is_null() { ffi::ghostty_surface_set_focus(old, false); }
-                                if !new.is_null() { ffi::ghostty_surface_set_focus(new, true); }
-                            }
+                            self.set_surface_focus(old, false);
+                            self.set_surface_focus(new, true);
                             self.cb_state.surface = new;
                         }
                     }
                 }
                 #[cfg(target_os = "linux")]
-                if self.linux_vt_only && self.focused_surface().is_null() {
+                if self.focused_surface().is_null() {
                     let (mx, my) = self.last_mouse_pos;
                     if let Some(pane) = self.linux_focused_pane_mut() {
                         let _ = pane.send_mouse_input(
@@ -2396,14 +2984,11 @@ impl GhosttyApp {
                     }
                     return;
                 }
-                unsafe {
-                    ffi::ghostty_surface_mouse_button(
-                        self.focused_surface(),
-                        ffi::ghostty_input_mouse_state_e::GHOSTTY_MOUSE_PRESS,
-                        iced_button_to_ghostty(button),
-                        ffi::GHOSTTY_MODS_NONE,
-                    );
-                }
+                self.forward_surface_mouse_button(
+                    ffi::ghostty_input_mouse_state_e::GHOSTTY_MOUSE_PRESS,
+                    iced_button_to_ghostty(button),
+                    ffi::GHOSTTY_MODS_NONE,
+                );
             }
             mouse::Event::ButtonReleased(button) => {
                 if button == mouse::Button::Left {
@@ -2417,7 +3002,7 @@ impl GhosttyApp {
                     }
                 }
                 #[cfg(target_os = "linux")]
-                if self.linux_vt_only && self.focused_surface().is_null() {
+                if self.focused_surface().is_null() {
                     let (mx, my) = self.last_mouse_pos;
                     if let Some(pane) = self.linux_focused_pane_mut() {
                         let _ = pane.send_mouse_input(
@@ -2430,14 +3015,11 @@ impl GhosttyApp {
                     }
                     return;
                 }
-                unsafe {
-                    ffi::ghostty_surface_mouse_button(
-                        self.focused_surface(),
-                        ffi::ghostty_input_mouse_state_e::GHOSTTY_MOUSE_RELEASE,
-                        iced_button_to_ghostty(button),
-                        ffi::GHOSTTY_MODS_NONE,
-                    );
-                }
+                self.forward_surface_mouse_button(
+                    ffi::ghostty_input_mouse_state_e::GHOSTTY_MOUSE_RELEASE,
+                    iced_button_to_ghostty(button),
+                    ffi::GHOSTTY_MODS_NONE,
+                );
             }
             mouse::Event::WheelScrolled { delta } => {
                 // macOS: handled via native NSEvent monitor for precision + momentum.
@@ -2453,10 +3035,8 @@ impl GhosttyApp {
                         self.scrollbar_opacity = 1.0;
                     }
                     if !surface.is_null() {
-                        unsafe {
-                            ffi::ghostty_surface_mouse_scroll(surface, dx, dy, 0);
-                        }
-                    } else if self.linux_vt_only {
+                        self.forward_surface_mouse_scroll(dx, dy, 0);
+                    } else {
                         let line_delta = if dy.abs() >= 1.0 {
                             -dy.round() as isize
                         } else if dy > 0.0 {
@@ -2513,12 +3093,7 @@ impl GhosttyApp {
             } else {
                 (800, 600) // default until first resize
             };
-            unsafe {
-                if !pane.surface().is_null() {
-                    ffi::ghostty_surface_set_content_scale(pane.surface(), scale, scale);
-                    ffi::ghostty_surface_set_size(pane.surface(), w, h);
-                }
-            }
+            self.resize_pane_backend(pane, scale, w, h);
             log::info!("tab 0 created, size {w}x{h}");
         }
 
@@ -2545,63 +3120,22 @@ impl GhosttyApp {
         working_directory: Option<&CStr>,
     ) -> Option<PaneHandle> {
         #[cfg(target_os = "linux")]
-        if self.linux_vt_only {
+        {
             return self.create_linux_vt_pane(frame, command, working_directory);
         }
 
-        let scale = self.scale_factor();
-        let mut config = unsafe { ffi::ghostty_surface_config_new() };
-        config.userdata = &*self.cb_state as *const CallbackState as *mut c_void;
-        config.platform_tag = platform::platform_tag();
-        config.scale_factor = scale;
-        config.context = if is_first {
-            ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_WINDOW
-        } else {
-            ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_SPLIT
-        };
-        if let Some(cmd) = command {
-            config.command = cmd.as_ptr();
+        #[cfg(not(target_os = "linux"))]
+        {
+            surface_backend::create_pane(
+                self.app,
+                &*self.cb_state as *const CallbackState as *mut c_void,
+                self.scale_factor(),
+                frame,
+                is_first,
+                command,
+                working_directory,
+            )
         }
-        if let Some(wd) = working_directory {
-            config.working_directory = wd.as_ptr();
-        }
-
-        // Platform-specific: set up the native view / EGL context
-        #[cfg(target_os = "macos")]
-        let child_view = {
-            let parent_handle = platform::content_view_handle();
-            if parent_handle.is_null() {
-                return None;
-            }
-            let cv = platform::create_child_view(parent_handle, frame);
-            config.platform = platform::platform_config(cv);
-            cv
-        };
-
-        #[cfg(target_os = "linux")]
-        let child_view = {
-            let w = ((frame.size.width * self.scale_factor()) as u32).max(800);
-            let h = ((frame.size.height * self.scale_factor()) as u32).max(600);
-            let egl = self.egl_state.get_or_insert_with(|| {
-                platform::EglState::new(w, h)
-                    .expect("failed to create EGL context")
-            });
-            config.platform = platform::platform_config(egl);
-            // Release EGL context from main thread BEFORE ghostty_surface_new.
-            // surfaceInit will make it current temporarily for GL init,
-            // then threadEnter claims it on the renderer thread.
-            egl.release_current();
-            ptr::null_mut()
-        };
-
-        let surface = unsafe { ffi::ghostty_surface_new(self.app, &config) };
-        if surface.is_null() {
-            log::error!("failed to create ghostty surface");
-            return None;
-        }
-        platform::set_view_layer_transparent(child_view);
-
-        Some(PaneHandle::new(surface, child_view))
     }
 
     #[cfg(target_os = "linux")]
@@ -2617,32 +3151,41 @@ impl GhosttyApp {
         let cell_height_px = self.cell_height.max(1.0).round() as u32;
         let pane = PaneHandle::detached();
         let wd_path = working_directory.map(|wd| std::path::Path::new(std::ffi::OsStr::from_bytes(wd.to_bytes())));
-        let backend = linux_vt_backend::LinuxVtPane::spawn(
+        let backend = match linux_vt_backend::LinuxVtPane::spawn(
             cols,
             rows,
             cell_width_px,
             cell_height_px,
             command,
             wd_path,
-        )
-        .ok()?;
+        ) {
+            Ok(backend) => backend,
+            Err(error) => {
+                log::warn!("failed to spawn linux vt pane: {error}");
+                return None;
+            }
+        };
         self.linux_panes.insert(pane.id(), backend);
         if let Some(backend) = self.linux_panes.get_mut(&pane.id()) {
-            if let Ok(snapshot) = backend.snapshot() {
-                self.linux_snapshots.insert(pane.id(), snapshot);
+            match backend.snapshot() {
+                Ok(snapshot) => {
+                    self.linux_snapshots.insert(pane.id(), snapshot);
+                }
+                Err(error) => {
+                    log::warn!("initial linux vt snapshot failed for pane {}: {error}", pane.id());
+                }
             }
         }
         Some(pane)
     }
 
-    fn create_split(&mut self, direction: ffi::ghostty_action_split_direction_e) {
+    fn create_split(&mut self, direction: bindings::SplitDirection) {
         if self.parent_view.is_null() || self.tabs.is_empty() {
             return;
         }
         let parent_bounds = platform::view_bounds(self.parent_view);
         let split_dir = match direction {
-            ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_RIGHT
-            | ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_LEFT => {
+            bindings::SplitDirection::Right | bindings::SplitDirection::Left => {
                 splits::Direction::Horizontal
             }
             _ => splits::Direction::Vertical,
@@ -2657,28 +3200,24 @@ impl GhosttyApp {
         }
         self.cb_state.surface = surface;
 
-        if !old_focused.is_null() {
-            unsafe { ffi::ghostty_surface_set_focus(old_focused, false) };
-        }
+        self.set_surface_focus(old_focused, false);
 
         self.relayout();
         log::info!("split created");
     }
 
-    fn switch_focus(&mut self, dir: ffi::ghostty_action_goto_split_e) {
+    fn switch_focus(&mut self, dir: bindings::PaneFocusDirection) {
         let old = self.tabs.focused_pane().surface();
         if let Some(tree) = self.tabs.active_tree_mut() {
             match dir {
-                ffi::ghostty_action_goto_split_e::GHOSTTY_GOTO_SPLIT_NEXT => tree.focus_next(),
-                ffi::ghostty_action_goto_split_e::GHOSTTY_GOTO_SPLIT_PREVIOUS => tree.focus_prev(),
+                bindings::PaneFocusDirection::Next => tree.focus_next(),
+                bindings::PaneFocusDirection::Previous => tree.focus_prev(),
             }
         }
         let new = self.tabs.focused_pane().surface();
         if old != new {
-            unsafe {
-                if !old.is_null() { ffi::ghostty_surface_set_focus(old, false); }
-                if !new.is_null() { ffi::ghostty_surface_set_focus(new, true); }
-            }
+            self.set_surface_focus(old, false);
+            self.set_surface_focus(new, true);
             self.cb_state.surface = new;
         }
     }
@@ -2691,77 +3230,48 @@ impl GhosttyApp {
         let frame = self.terminal_frame();
         let surfaces = self.tabs.layout_active(frame, scale);
         for (pane, w, h) in surfaces {
-            let surface = pane.surface();
-            if !surface.is_null() {
-                unsafe {
-                    ffi::ghostty_surface_set_content_scale(surface, scale, scale);
-                    ffi::ghostty_surface_set_size(surface, w, h);
-                }
-            }
-            #[cfg(target_os = "linux")]
-            if let Some(vt_pane) = self.linux_panes.get_mut(&pane.id()) {
-                let cols = ((w as f64 / self.cell_width).floor() as u16).max(2);
-                let rows = ((h as f64 / self.cell_height).floor() as u16).max(1);
-                let _ = vt_pane.resize(
-                    cols,
-                    rows,
-                    self.cell_width.max(1.0).round() as u32,
-                    self.cell_height.max(1.0).round() as u32,
-                );
-            }
+            self.resize_pane_backend(pane, scale, w, h);
         }
     }
 
     fn handle_surface_closed(&mut self) {
         // Remove just the focused leaf from the split tree
-        if let Some(tree) = self.tabs.active_tree_mut() {
-            if let Some(pane) = tree.remove_focused() {
-                let surface = pane.surface();
-                let nsview = pane.view();
-                #[cfg(target_os = "linux")]
-                {
-                    self.linux_panes.remove(&pane.id());
-                    self.linux_snapshots.remove(&pane.id());
-                }
-                unsafe { ffi::ghostty_surface_free(surface) };
-                platform::remove_view(nsview);
+        let removed = if let Some(tree) = self.tabs.active_tree_mut() {
+            tree.remove_focused().map(|pane| (pane, tree.len() == 0))
+        } else {
+            None
+        };
+        if let Some((pane, tab_empty)) = removed {
+            self.free_pane_backend(pane);
 
-                if tree.len() == 0 {
-                    // Tab is empty — remove it or exit
-                    if self.tabs.len() <= 1 {
-                        std::process::exit(0);
-                    }
-                    let active = self.tabs.active_index();
-                    self.tabs.remove_tab(active);
+            if tab_empty {
+                // Tab is empty — remove it or exit
+                if self.tabs.len() <= 1 {
+                    self.terminate(0);
                 }
-
-                self.cb_state.surface = self.tabs.focused_pane().surface();
-                if !self.cb_state.surface.is_null() {
-                    unsafe { ffi::ghostty_surface_set_focus(self.cb_state.surface, true) };
-                }
-                self.relayout();
-                log::info!(
-                    "surface closed, {} surfaces in tab, {} tabs",
-                    self.tabs.active_tree().map(|t| t.len()).unwrap_or(0),
-                    self.tabs.len()
-                );
-                return;
+                let active = self.tabs.active_index();
+                self.tabs.remove_tab(active);
             }
+
+            self.cb_state.surface = self.tabs.focused_pane().surface();
+            self.set_surface_focus(self.cb_state.surface, true);
+            self.relayout();
+            log::info!(
+                "surface closed, {} surfaces in tab, {} tabs",
+                self.tabs.active_tree().map(|t| t.len()).unwrap_or(0),
+                self.tabs.len()
+            );
+            return;
         }
 
         // Fallback: no active tree or focused leaf not found
         if self.tabs.len() <= 1 {
-            std::process::exit(0);
+            self.terminate(0);
         }
         let active = self.tabs.active_index();
         let panes = self.tabs.remove_tab(active);
         for pane in panes {
-            #[cfg(target_os = "linux")]
-            {
-                self.linux_panes.remove(&pane.id());
-                self.linux_snapshots.remove(&pane.id());
-            }
-            unsafe { ffi::ghostty_surface_free(pane.surface()) };
+            self.free_pane_backend(pane);
         }
         self.cb_state.surface = self.tabs.focused_pane().surface();
         self.relayout();
@@ -2776,9 +3286,7 @@ impl GhosttyApp {
         let surface = pane.surface();
 
         let old = self.tabs.focused_pane().surface();
-        if !old.is_null() {
-            unsafe { ffi::ghostty_surface_set_focus(old, false) };
-        }
+        self.set_surface_focus(old, false);
 
         let idx = self.tabs.new_tab(pane);
         self.cb_state.surface = surface;
@@ -2818,9 +3326,7 @@ impl GhosttyApp {
                     ) else { continue };
                     let surface = pane.surface();
                     let old = self.tabs.focused_pane().surface();
-                    if !old.is_null() {
-                        unsafe { ffi::ghostty_surface_set_focus(old, false) };
-                    }
+                    self.set_surface_focus(old, false);
                     self.tabs.new_tab(pane);
                     self.cb_state.surface = surface;
                 } else {
@@ -2906,6 +3412,7 @@ impl GhosttyApp {
     }
 
     fn view(&self) -> Element<'_, Message> {
+        let ui_font = self.ui_font();
         // Search bar (overlays top of terminal area when active)
         let search_bar: Option<Element<'_, Message>> = if self.search_active {
             let label = if self.search_total > 0 {
@@ -2923,13 +3430,13 @@ impl GhosttyApp {
             Some(
                 container(
                     text(label)
-                        .font(Font::MONOSPACE)
+                        .font(ui_font)
                         .size(13)
                         .color(Color::from_rgb(0.9, 0.9, 0.9)),
                 )
                 .style(|_: &Theme| container::Style {
                     background: Some(iced::Background::Color(Color::from_rgba(
-                        0.15, 0.15, 0.15, 0.95,
+                        0.15, 0.15, 0.15, self.panel_alpha(0.95),
                     ))),
                     ..Default::default()
                 })
@@ -2956,106 +3463,57 @@ impl GhosttyApp {
         }
         #[cfg(target_os = "linux")]
         {
-            if self.linux_vt_only && self.focused_surface().is_null() {
+            if self.focused_surface().is_null() {
                 if let Some(snapshot) = self.linux_active_snapshot() {
-                    let mut spans: Vec<iced::widget::text::Span<'static>> = Vec::with_capacity(
-                        snapshot.rows_data.iter().map(Vec::len).sum::<usize>() + snapshot.rows as usize,
-                    );
-                    let cursor_bg = if snapshot.colors.cursor_has_value {
-                        snapshot.colors.cursor
-                    } else {
-                        snapshot.colors.foreground
-                    };
-                    for row_index in 0..snapshot.rows as usize {
-                        let row = snapshot.rows_data.get(row_index);
-                        for col_index in 0..snapshot.cols as usize {
-                            let cell = row.and_then(|cells| cells.get(col_index));
-                            let text_content = cell
-                                .map(|cell| cell.text.clone())
-                                .filter(|text| !text.is_empty() && text != "\0")
-                                .unwrap_or_else(|| " ".to_string());
-                            let mut fg = cell
-                                .map(|cell| vt_color_to_iced(cell.fg))
-                                .unwrap_or_else(|| vt_color_to_iced(snapshot.colors.foreground));
-                            let mut bg = cell
-                                .map(|cell| vt_color_to_iced(cell.bg))
-                                .unwrap_or_else(|| vt_color_to_iced(snapshot.colors.background));
-                            let underline = cell.map(|cell| cell.underline != 0).unwrap_or(false);
-                            if snapshot.cursor.visible
-                                && snapshot.cursor.x as usize == col_index
-                                && snapshot.cursor.y as usize == row_index
-                            {
-                                fg = vt_color_to_iced(snapshot.colors.background);
-                                bg = vt_color_to_iced(cursor_bg);
-                            }
-                            spans.push(
-                                span(text_content)
-                                    .font(Font::MONOSPACE)
-                                    .color(fg)
-                                    .background(bg)
-                                    .underline(underline)
-                                    .to_static(),
-                            );
-                        }
-                        if row_index + 1 < snapshot.rows as usize {
-                            spans.push(
-                                span("\n")
-                                    .font(Font::MONOSPACE)
-                                    .color(vt_color_to_iced(snapshot.colors.foreground))
-                                    .to_static(),
-                            );
-                        }
-                    }
+                    let selection_rects = self
+                        .copy_mode
+                        .as_ref()
+                        .and_then(|copy_mode| {
+                            copy_mode.sel_anchor.map(|(anchor_row, anchor_col)| {
+                                Self::compute_selection_rects_static(
+                                    copy_mode.selection,
+                                    copy_mode.cursor_row,
+                                    copy_mode.cursor_col,
+                                    anchor_row,
+                                    anchor_col,
+                                    self.scrollbar.offset as i64,
+                                    copy_mode.viewport_cols,
+                                    copy_mode.cell_width,
+                                    copy_mode.cell_height,
+                                    0.0,
+                                )
+                            })
+                        })
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|(x, y, width, height)| linux_terminal_canvas::TerminalSelectionRect {
+                            x: x as f32,
+                            y: y as f32,
+                            width: width as f32,
+                            height: height as f32,
+                        })
+                        .collect::<Vec<_>>();
 
-                    let bg = vt_color_to_iced(snapshot.colors.background);
+                    let terminal_canvas = linux_terminal_canvas::LinuxTerminalCanvas::new(
+                        snapshot.clone(),
+                        self.cell_width as f32,
+                        self.cell_height as f32,
+                        self.terminal_font_size,
+                        self.terminal_font_family,
+                        self.background_opacity,
+                        self.background_opacity_cells,
+                        selection_rects,
+                        Color::from_rgba(0.65, 0.72, 0.95, 0.35),
+                    );
                     main_col = main_col.push(
                         container(
-                            rich_text(spans)
-                                .font(Font::MONOSPACE)
-                                .size((self.cell_height.max(12.0) - 2.0) as f32)
+                            iced::widget::canvas(terminal_canvas)
                                 .width(Length::Fill)
-                                .height(Length::Fill)
-                                .wrapping(iced::widget::text::Wrapping::None),
+                                .height(Length::Fill),
                         )
                         .width(Length::Fill)
                         .height(Length::Fill)
-                        .padding([2, 4])
-                        .style(move |_: &Theme| container::Style {
-                            background: Some(Background::Color(bg)),
-                            ..Default::default()
-                        }),
-                    );
-                } else {
-                    main_col = main_col.push(
-                        iced::widget::Space::new().width(Length::Fill).height(Length::Fill),
-                    );
-                }
-            } else if let Some(ref egl) = self.egl_state {
-                let frame = egl.frame_buffer.lock().unwrap();
-                if frame.dirty && frame.width > 0 && frame.height > 0 {
-                    // Flip vertically (GL bottom-up) and force alpha opaque
-                    let stride = (frame.width * 4) as usize;
-                    let mut pixels = Vec::with_capacity(frame.pixels.len());
-                    for row in (0..frame.height as usize).rev() {
-                        let start = row * stride;
-                        pixels.extend_from_slice(&frame.pixels[start..start + stride]);
-                    }
-                    for pixel in pixels.chunks_exact_mut(4) {
-                        pixel[3] = 255;
-                    }
-
-                    // Save as PNG file, display via from_path (avoids atlas overflow)
-                    let path = "/tmp/boo_frame.png";
-                    image::save_buffer(
-                        path, &pixels, frame.width, frame.height,
-                        image::ColorType::Rgba8,
-                    ).ok();
-                    let handle = iced::widget::image::Handle::from_path(path);
-                    main_col = main_col.push(
-                        iced::widget::image(handle)
-                            .content_fit(iced::ContentFit::Fill)
-                            .width(Length::Fill)
-                            .height(Length::Fill),
+                        .style(|_: &Theme| container::Style { ..Default::default() }),
                     );
                 } else {
                     main_col = main_col.push(
@@ -3094,7 +3552,7 @@ impl GhosttyApp {
                     };
                     suggestion_col = suggestion_col.push(
                         container(
-                            text(label).font(Font::MONOSPACE).size(13).color(fg),
+                            text(label).font(ui_font).size(13).color(fg),
                         )
                         .style(move |_: &Theme| container::Style {
                             background: Some(iced::Background::Color(bg)),
@@ -3113,13 +3571,13 @@ impl GhosttyApp {
             main_col = main_col.push(
                 container(
                     text(prompt_label)
-                        .font(Font::MONOSPACE)
+                        .font(ui_font)
                         .size(13)
                         .color(Color::from_rgb(0.9, 0.9, 0.9)),
                 )
                 .style(|_: &Theme| container::Style {
                     background: Some(iced::Background::Color(Color::from_rgba(
-                        0.15, 0.15, 0.15, 0.95,
+                        0.15, 0.15, 0.15, self.panel_alpha(0.95),
                     ))),
                     ..Default::default()
                 })
@@ -3134,19 +3592,24 @@ impl GhosttyApp {
                 container(
                     row![
                         text(status_left)
-                            .font(Font::MONOSPACE)
+                            .font(ui_font)
                             .size(13)
                             .color(Color::from_rgb(0.8, 0.8, 0.8)),
                         iced::widget::Space::new().width(Length::Fill),
                         text(status_right)
-                            .font(Font::MONOSPACE)
+                            .font(ui_font)
                             .size(13)
                             .color(Color::from_rgb(0.6, 0.6, 0.6)),
                     ]
                     .width(Length::Fill),
                 )
                 .style(|_: &Theme| container::Style {
-                    background: Some(iced::Background::Color(Color::from_rgb(0.12, 0.12, 0.12))),
+                    background: Some(iced::Background::Color(Color::from_rgba(
+                        0.12,
+                        0.12,
+                        0.12,
+                        self.panel_alpha(0.92),
+                    ))),
                     ..Default::default()
                 })
                 .width(Length::Fill)
@@ -3233,13 +3696,9 @@ impl GhosttyApp {
 impl Drop for GhosttyApp {
     fn drop(&mut self) {
         for pane in self.tabs.all_panes() {
-            #[cfg(target_os = "linux")]
-            {
-                self.linux_panes.remove(&pane.id());
-                self.linux_snapshots.remove(&pane.id());
-            }
-            unsafe { ffi::ghostty_surface_free(pane.surface()) };
+            self.free_pane_backend(pane);
         }
+        #[cfg(not(target_os = "linux"))]
         unsafe {
             ffi::ghostty_app_free(self.app);
             ffi::ghostty_config_free(self.config);
@@ -3251,6 +3710,7 @@ impl Drop for GhosttyApp {
 /// For control pipe injection: compute the character for a keycode+mods combo.
 fn shifted_codepoint(keycode: u32, mods: i32) -> u32 {
     let has_shift = mods & ffi::GHOSTTY_MODS_SHIFT != 0;
+    #[cfg(target_os = "macos")]
     let base = match keycode {
         0x00 => 'a', 0x01 => 's', 0x02 => 'd', 0x03 => 'f', 0x04 => 'h',
         0x05 => 'g', 0x06 => 'z', 0x07 => 'x', 0x08 => 'c', 0x09 => 'v',
@@ -3279,6 +3739,37 @@ fn shifted_codepoint(keycode: u32, mods: i32) -> u32 {
         0x21 => if has_shift { '{' } else { '[' },
         0x1E => if has_shift { '}' } else { ']' },
         0x32 => if has_shift { '~' } else { '`' },
+        _ => return 0,
+    };
+    #[cfg(target_os = "linux")]
+    let base = match keycode {
+        20 => 'a', 21 => 'b', 22 => 'c', 23 => 'd', 24 => 'e',
+        25 => 'f', 26 => 'g', 27 => 'h', 28 => 'i', 29 => 'j',
+        30 => 'k', 31 => 'l', 32 => 'm', 33 => 'n', 34 => 'o',
+        35 => 'p', 36 => 'q', 37 => 'r', 38 => 's', 39 => 't',
+        40 => 'u', 41 => 'v', 42 => 'w', 43 => 'x', 44 => 'y',
+        45 => 'z', 63 => ' ', 58 => '\r', 64 => '\t',
+        7 => if has_shift { '!' } else { '1' },
+        8 => if has_shift { '@' } else { '2' },
+        9 => if has_shift { '#' } else { '3' },
+        10 => if has_shift { '$' } else { '4' },
+        11 => if has_shift { '%' } else { '5' },
+        12 => if has_shift { '^' } else { '6' },
+        13 => if has_shift { '&' } else { '7' },
+        14 => if has_shift { '*' } else { '8' },
+        15 => if has_shift { '(' } else { '9' },
+        6 => if has_shift { ')' } else { '0' },
+        48 => if has_shift { '"' } else { '\'' },
+        2 => if has_shift { '|' } else { '\\' },
+        5 => if has_shift { '<' } else { ',' },
+        47 => if has_shift { '>' } else { '.' },
+        50 => if has_shift { '?' } else { '/' },
+        49 => if has_shift { ':' } else { ';' },
+        46 => if has_shift { '_' } else { '-' },
+        16 => if has_shift { '+' } else { '=' },
+        3 => if has_shift { '{' } else { '[' },
+        4 => if has_shift { '}' } else { ']' },
+        1 => if has_shift { '~' } else { '`' },
         _ => return 0,
     };
     if has_shift && base.is_ascii_lowercase() {
@@ -3317,6 +3808,7 @@ fn parse_keyspec(spec: &str) -> Option<(u32, i32)> {
             break;
         }
     }
+    #[cfg(target_os = "macos")]
     let keycode = match key_part {
         "a" => 0x00, "s" => 0x01, "d" => 0x02, "f" => 0x03,
         "h" => 0x04, "g" => 0x05, "z" => 0x06, "x" => 0x07,
@@ -3333,7 +3825,66 @@ fn parse_keyspec(spec: &str) -> Option<(u32, i32)> {
         }
         _ => return None,
     };
+    #[cfg(target_os = "linux")]
+    let keycode = match key_part {
+        "a" => 20, "b" => 21, "c" => 22, "d" => 23,
+        "e" => 24, "f" => 25, "g" => 26, "h" => 27,
+        "i" => 28, "j" => 29, "k" => 30, "l" => 31,
+        "m" => 32, "n" => 33, "o" => 34, "p" => 35,
+        "q" => 36, "r" => 37, "s" => 38, "t" => 39,
+        "u" => 40, "v" => 41, "w" => 42, "x" => 43,
+        "y" => 44, "z" => 45,
+        "0" => 6, "1" => 7, "2" => 8, "3" => 9,
+        "4" => 10, "5" => 11, "6" => 12, "7" => 13,
+        "8" => 14, "9" => 15,
+        "enter" | "return" => 58,
+        "tab" => 64,
+        "space" => 63,
+        "escape" | "esc" => 120,
+        "backspace" => 53,
+        _ if key_part.starts_with("0x") => {
+            u32::from_str_radix(&key_part[2..], 16).ok()?
+        }
+        _ => return None,
+    };
     Some((keycode, mods))
+}
+
+fn control_key_to_keyboard_key(spec: &str, key_char: Option<char>) -> keyboard::Key {
+    use keyboard::key::Named;
+
+    let key_name = spec
+        .rsplit_once('+')
+        .map(|(_, key)| key)
+        .unwrap_or(spec);
+
+    match key_name {
+        "enter" | "return" => keyboard::Key::Named(Named::Enter),
+        "tab" => keyboard::Key::Named(Named::Tab),
+        "space" => keyboard::Key::Named(Named::Space),
+        "escape" | "esc" => keyboard::Key::Named(Named::Escape),
+        "backspace" => keyboard::Key::Named(Named::Backspace),
+        _ => keyboard::Key::Character(key_char.unwrap_or_default().to_string().into()),
+    }
+}
+
+fn ghostty_mods_to_iced(mods: i32) -> keyboard::Modifiers {
+    use iced::keyboard::Modifiers;
+
+    let mut result = Modifiers::empty();
+    if mods & ffi::GHOSTTY_MODS_SHIFT != 0 {
+        result.insert(Modifiers::SHIFT);
+    }
+    if mods & ffi::GHOSTTY_MODS_CTRL != 0 {
+        result.insert(Modifiers::CTRL);
+    }
+    if mods & ffi::GHOSTTY_MODS_ALT != 0 {
+        result.insert(Modifiers::ALT);
+    }
+    if mods & ffi::GHOSTTY_MODS_SUPER != 0 {
+        result.insert(Modifiers::LOGO);
+    }
+    result
 }
 
 fn key_to_codepoint(key: &keyboard::Key) -> u32 {
@@ -3392,16 +3943,128 @@ fn iced_button_to_vt(button: mouse::Button) -> vt::GhosttyMouseButton {
 }
 
 #[cfg(target_os = "linux")]
-fn vt_color_to_iced(color: vt::GhosttyColorRgb) -> Color {
-    Color::from_rgb8(color.r, color.g, color.b)
+fn linux_snapshot_selection_text(
+    snapshot: &linux_vt_backend::TerminalSnapshot,
+    selection: ffi::ghostty_selection_s,
+) -> String {
+    let start_row = selection.top_left.y.min(selection.bottom_right.y) as usize;
+    let end_row = selection.top_left.y.max(selection.bottom_right.y) as usize;
+    let start_col = selection.top_left.x.min(selection.bottom_right.x) as usize;
+    let end_col = selection.top_left.x.max(selection.bottom_right.x) as usize;
+    let max_row = snapshot.rows_data.len().saturating_sub(1);
+
+    let mut lines = Vec::new();
+    for row_index in start_row.min(max_row)..=end_row.min(max_row) {
+        let row = snapshot.rows_data.get(row_index).map(Vec::as_slice).unwrap_or(&[]);
+        let line_start = if selection.rectangle || row_index == start_row {
+            start_col
+        } else {
+            0
+        };
+        let line_end = if selection.rectangle || row_index == end_row {
+            end_col
+        } else {
+            snapshot.cols.saturating_sub(1) as usize
+        };
+        let text = linux_snapshot_row_text(row, line_start, line_end, selection.rectangle);
+        lines.push(text);
+    }
+
+    lines.join("\n")
+}
+
+#[cfg(target_os = "linux")]
+fn linux_snapshot_row_text(
+    row: &[linux_vt_backend::CellSnapshot],
+    start_col: usize,
+    end_col: usize,
+    preserve_trailing_spaces: bool,
+) -> String {
+    if row.is_empty() || start_col > end_col {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    for col in start_col..=end_col {
+        let text = row
+            .get(col)
+            .map(|cell| cell.text.as_str())
+            .filter(|text| !text.is_empty() && *text != "\0")
+            .unwrap_or(" ");
+        out.push_str(text);
+    }
+
+    if preserve_trailing_spaces {
+        out
+    } else {
+        out.trim_end_matches(' ').to_string()
+    }
+}
+
+fn split_direction_name(direction: splits::Direction) -> &'static str {
+    match direction {
+        splits::Direction::Horizontal => "horizontal",
+        splits::Direction::Vertical => "vertical",
+    }
+}
+
+fn selection_mode_name(selection: SelectionMode) -> &'static str {
+    match selection {
+        SelectionMode::None => "none",
+        SelectionMode::Char => "character",
+        SelectionMode::Line => "line",
+        SelectionMode::Rectangle => "rectangle",
+    }
+}
+
+fn ui_rect_snapshot(x: f64, y: f64, width: f64, height: f64) -> control::UiRectSnapshot {
+    control::UiRectSnapshot { x, y, width, height }
+}
+
+#[cfg(target_os = "linux")]
+fn ui_terminal_snapshot_from_linux(
+    snapshot: &linux_vt_backend::TerminalSnapshot,
+) -> control::UiTerminalSnapshot {
+    control::UiTerminalSnapshot {
+        cols: snapshot.cols,
+        rows: snapshot.rows,
+        title: snapshot.title.clone(),
+        pwd: snapshot.pwd.clone(),
+        cursor: control::UiCursorSnapshot {
+            visible: snapshot.cursor.visible,
+            x: snapshot.cursor.x,
+            y: snapshot.cursor.y,
+            style: snapshot.cursor.style,
+        },
+        rows_data: snapshot
+            .rows_data
+            .iter()
+            .map(|row| control::UiTerminalRowSnapshot {
+                cells: row
+                    .iter()
+                    .map(|cell| control::UiTerminalCellSnapshot {
+                        text: cell.text.clone(),
+                        display_width: cell.display_width,
+                        fg: [cell.fg.r, cell.fg.g, cell.fg.b],
+                        bg: [cell.bg.r, cell.bg.g, cell.bg.b],
+                        bold: cell.bold,
+                        italic: cell.italic,
+                        underline: cell.underline,
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
 }
 
 // --- Runtime callbacks ---
 
+#[cfg(not(target_os = "linux"))]
 unsafe extern "C" fn cb_wakeup(_userdata: *mut c_void) {
     platform::request_redraw();
 }
 
+#[cfg(not(target_os = "linux"))]
 unsafe extern "C" fn cb_action(
     _app: ffi::ghostty_app_t,
     _target: ffi::ghostty_target_s,
@@ -3435,12 +4098,22 @@ unsafe extern "C" fn cb_action(
             }
             GHOSTTY_ACTION_NEW_SPLIT => {
                 let cb = &mut *(ffi::ghostty_app_userdata(_app) as *mut CallbackState);
-                cb.pending_split = Some(action.payload());
+                let payload: ffi::ghostty_action_split_direction_e = action.payload();
+                cb.pending_split = Some(match payload {
+                    ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_RIGHT => bindings::SplitDirection::Right,
+                    ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_DOWN => bindings::SplitDirection::Down,
+                    ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_LEFT => bindings::SplitDirection::Left,
+                    ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_UP => bindings::SplitDirection::Up,
+                });
                 true
             }
             GHOSTTY_ACTION_GOTO_SPLIT => {
                 let cb = &mut *(ffi::ghostty_app_userdata(_app) as *mut CallbackState);
-                cb.pending_focus = Some(action.payload());
+                let payload: ffi::ghostty_action_goto_split_e = action.payload();
+                cb.pending_focus = Some(match payload {
+                    ffi::ghostty_action_goto_split_e::GHOSTTY_GOTO_SPLIT_PREVIOUS => bindings::PaneFocusDirection::Previous,
+                    ffi::ghostty_action_goto_split_e::GHOSTTY_GOTO_SPLIT_NEXT => bindings::PaneFocusDirection::Next,
+                });
                 true
             }
             GHOSTTY_ACTION_SCROLLBAR => {
@@ -3489,34 +4162,23 @@ unsafe extern "C" fn cb_action(
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 unsafe extern "C" fn cb_read_clipboard(
     userdata: *mut c_void,
     _clipboard: ffi::ghostty_clipboard_e,
     state: *mut c_void,
 ) -> bool {
     let cb = unsafe { &*(userdata as *const CallbackState) };
-    let surface = cb.surface;
-    if surface.is_null() {
-        return false;
-    }
     match platform::clipboard_read() {
         Some(text) => {
             let cstr = CString::new(text).unwrap_or_default();
-            unsafe {
-                ffi::ghostty_surface_complete_clipboard_request(
-                    surface, cstr.as_ptr(), state, true,
-                );
-            }
+            surface_backend::complete_clipboard_request(cb.surface, cstr.as_ptr(), state, true)
         }
-        None => unsafe {
-            ffi::ghostty_surface_complete_clipboard_request(
-                surface, ptr::null(), state, true,
-            );
-        },
+        None => surface_backend::complete_clipboard_request(cb.surface, ptr::null(), state, true),
     }
-    true
 }
 
+#[cfg(not(target_os = "linux"))]
 unsafe extern "C" fn cb_confirm_read_clipboard(
     userdata: *mut c_void,
     content: *const std::os::raw::c_char,
@@ -3525,12 +4187,11 @@ unsafe extern "C" fn cb_confirm_read_clipboard(
 ) {
     let cb = unsafe { &*(userdata as *const CallbackState) };
     if !cb.surface.is_null() && !content.is_null() {
-        unsafe {
-            ffi::ghostty_surface_complete_clipboard_request(cb.surface, content, state, true);
-        }
+        let _ = surface_backend::complete_clipboard_request(cb.surface, content, state, true);
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 unsafe extern "C" fn cb_write_clipboard(
     _userdata: *mut c_void,
     _clipboard: ffi::ghostty_clipboard_e,
@@ -3554,6 +4215,7 @@ unsafe extern "C" fn cb_write_clipboard(
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 unsafe extern "C" fn cb_close_surface(userdata: *mut c_void, _process_alive: bool) {
     log::info!("close surface");
     let cb = unsafe { &mut *(userdata as *mut CallbackState) };
@@ -3687,5 +4349,155 @@ pub mod main_tests {
         cp.history_idx = Some(0);
         cp.input = cp.history[0].clone();
         assert_eq!(cp.input, "split-right");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_ui_terminal_snapshot_from_linux_preserves_cells_and_cursor() {
+        let snapshot = linux_vt_backend::TerminalSnapshot {
+            cols: 2,
+            rows: 1,
+            title: "shell".to_string(),
+            pwd: "/tmp".to_string(),
+            cursor: linux_vt_backend::CursorSnapshot {
+                visible: true,
+                x: 1,
+                y: 0,
+                style: 2,
+            },
+            rows_data: vec![vec![
+                linux_vt_backend::CellSnapshot {
+                    text: "a".to_string(),
+                    display_width: 1,
+                    fg: vt::GhosttyColorRgb { r: 1, g: 2, b: 3 },
+                    bg: vt::GhosttyColorRgb { r: 4, g: 5, b: 6 },
+                    bold: true,
+                    italic: false,
+                    underline: 1,
+                },
+                linux_vt_backend::CellSnapshot {
+                    text: "b".to_string(),
+                    display_width: 1,
+                    fg: vt::GhosttyColorRgb { r: 7, g: 8, b: 9 },
+                    bg: vt::GhosttyColorRgb { r: 10, g: 11, b: 12 },
+                    bold: false,
+                    italic: true,
+                    underline: 0,
+                },
+            ]],
+            scrollbar: vt::GhosttyTerminalScrollbar {
+                total: 1,
+                offset: 0,
+                len: 1,
+            },
+            colors: vt::GhosttyRenderStateColors::default(),
+        };
+
+        let ui = ui_terminal_snapshot_from_linux(&snapshot);
+
+        assert_eq!(ui.cols, 2);
+        assert_eq!(ui.rows, 1);
+        assert_eq!(ui.cursor.x, 1);
+        assert_eq!(ui.rows_data[0].cells[0].text, "a");
+        assert_eq!(ui.rows_data[0].cells[0].display_width, 1);
+        assert_eq!(ui.rows_data[0].cells[0].fg, [1, 2, 3]);
+        assert!(ui.rows_data[0].cells[0].bold);
+        assert!(ui.rows_data[0].cells[1].italic);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_linux_snapshot_selection_text_trims_non_rectangular_lines() {
+        let snapshot = linux_vt_backend::TerminalSnapshot {
+            cols: 4,
+            rows: 2,
+            title: String::new(),
+            pwd: String::new(),
+            cursor: linux_vt_backend::CursorSnapshot::default(),
+            rows_data: vec![
+                vec![
+                    linux_vt_backend::CellSnapshot { text: "a".into(), ..Default::default() },
+                    linux_vt_backend::CellSnapshot { text: "b".into(), ..Default::default() },
+                    linux_vt_backend::CellSnapshot::default(),
+                    linux_vt_backend::CellSnapshot::default(),
+                ],
+                vec![
+                    linux_vt_backend::CellSnapshot { text: "c".into(), ..Default::default() },
+                    linux_vt_backend::CellSnapshot::default(),
+                    linux_vt_backend::CellSnapshot::default(),
+                    linux_vt_backend::CellSnapshot { text: "d".into(), ..Default::default() },
+                ],
+            ],
+            scrollbar: vt::GhosttyTerminalScrollbar::default(),
+            colors: vt::GhosttyRenderStateColors::default(),
+        };
+
+        let text = linux_snapshot_selection_text(
+            &snapshot,
+            ffi::ghostty_selection_s {
+                top_left: ffi::ghostty_point_s {
+                    tag: ffi::GHOSTTY_POINT_VIEWPORT,
+                    coord: ffi::GHOSTTY_POINT_COORD_EXACT,
+                    x: 0,
+                    y: 0,
+                },
+                bottom_right: ffi::ghostty_point_s {
+                    tag: ffi::GHOSTTY_POINT_VIEWPORT,
+                    coord: ffi::GHOSTTY_POINT_COORD_EXACT,
+                    x: 3,
+                    y: 1,
+                },
+                rectangle: false,
+            },
+        );
+
+        assert_eq!(text, "ab\nc  d");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_linux_snapshot_selection_text_preserves_rectangle_width() {
+        let snapshot = linux_vt_backend::TerminalSnapshot {
+            cols: 3,
+            rows: 2,
+            title: String::new(),
+            pwd: String::new(),
+            cursor: linux_vt_backend::CursorSnapshot::default(),
+            rows_data: vec![
+                vec![
+                    linux_vt_backend::CellSnapshot { text: "a".into(), ..Default::default() },
+                    linux_vt_backend::CellSnapshot::default(),
+                    linux_vt_backend::CellSnapshot { text: "b".into(), ..Default::default() },
+                ],
+                vec![
+                    linux_vt_backend::CellSnapshot::default(),
+                    linux_vt_backend::CellSnapshot { text: "c".into(), ..Default::default() },
+                    linux_vt_backend::CellSnapshot::default(),
+                ],
+            ],
+            scrollbar: vt::GhosttyTerminalScrollbar::default(),
+            colors: vt::GhosttyRenderStateColors::default(),
+        };
+
+        let text = linux_snapshot_selection_text(
+            &snapshot,
+            ffi::ghostty_selection_s {
+                top_left: ffi::ghostty_point_s {
+                    tag: ffi::GHOSTTY_POINT_VIEWPORT,
+                    coord: ffi::GHOSTTY_POINT_COORD_EXACT,
+                    x: 0,
+                    y: 0,
+                },
+                bottom_right: ffi::ghostty_point_s {
+                    tag: ffi::GHOSTTY_POINT_VIEWPORT,
+                    coord: ffi::GHOSTTY_POINT_COORD_EXACT,
+                    x: 2,
+                    y: 1,
+                },
+                rectangle: true,
+            },
+        );
+
+        assert_eq!(text, "a b\n c ");
     }
 }

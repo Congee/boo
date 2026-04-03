@@ -143,6 +143,15 @@ impl SplitTree {
         panes
     }
 
+    /// Export the tree as a flat list of panes with split info and frames.
+    pub fn export_panes_with_frames(&self, frame: Rect) -> Vec<ExportedPane> {
+        let mut panes = Vec::new();
+        if let Some(ref root) = self.root {
+            export_node_with_frame(root, frame, None, &mut panes);
+        }
+        panes
+    }
+
     /// Collect all panes for cleanup.
     pub fn all_panes(&self) -> Vec<PaneHandle> {
         match &self.root {
@@ -562,15 +571,19 @@ fn leaf_at_point(node: &Node, frame: Rect, point: (f64, f64)) -> Option<LeafId> 
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExportedPane {
+    pub leaf_id: LeafId,
     #[allow(dead_code)]
     pub pane: PaneHandle,
+    pub frame: Option<Rect>,
     pub split: Option<(Direction, f64)>,
 }
 
 fn export_node(node: &Node, parent_split: Option<(Direction, f64)>, out: &mut Vec<ExportedPane>) {
     match node {
-        Node::Leaf { pane, .. } => out.push(ExportedPane {
+        Node::Leaf { id, pane } => out.push(ExportedPane {
+            leaf_id: *id,
             pane: *pane,
+            frame: None,
             split: parent_split,
         }),
         Node::Split {
@@ -585,6 +598,32 @@ fn export_node(node: &Node, parent_split: Option<(Direction, f64)>, out: &mut Ve
     }
 }
 
+fn export_node_with_frame(
+    node: &Node,
+    frame: Rect,
+    parent_split: Option<(Direction, f64)>,
+    out: &mut Vec<ExportedPane>,
+) {
+    match node {
+        Node::Leaf { id, pane } => out.push(ExportedPane {
+            leaf_id: *id,
+            pane: *pane,
+            frame: Some(frame),
+            split: parent_split,
+        }),
+        Node::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } => {
+            let (first_frame, second_frame) = split_frame(frame, *direction, *ratio);
+            export_node_with_frame(first, first_frame, Some((*direction, *ratio)), out);
+            export_node_with_frame(second, second_frame, Some((*direction, *ratio)), out);
+        }
+    }
+}
+
 fn set_hidden_recursive(node: &Node, hidden: bool) {
     match node {
         Node::Leaf { pane, .. } => crate::platform::set_view_hidden(pane.view(), hidden),
@@ -592,5 +631,111 @@ fn set_hidden_recursive(node: &Node, hidden: bool) {
             set_hidden_recursive(first, hidden);
             set_hidden_recursive(second, hidden);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{split_frame, Direction, SplitTree, SPLIT_BORDER};
+    use crate::pane::PaneHandle;
+    use crate::platform::{Point, Rect, Size};
+
+    #[test]
+    fn split_focused_adds_new_leaf_and_focuses_it() {
+        let mut tree = SplitTree::new();
+        let root = PaneHandle::detached();
+        let split = PaneHandle::detached();
+
+        tree.add_root(root);
+        let new_id = tree
+            .split_focused(Direction::Horizontal, split)
+            .expect("split should succeed");
+
+        assert_eq!(tree.len(), 2);
+        assert_eq!(tree.focused_pane(), split);
+
+        let info = tree.surface_info();
+        assert_eq!(info.len(), 2);
+        assert!(info.iter().any(|(id, focused)| *id == new_id && *focused));
+    }
+
+    #[test]
+    fn remove_focused_promotes_remaining_leaf() {
+        let mut tree = SplitTree::new();
+        let root = PaneHandle::detached();
+        let split = PaneHandle::detached();
+
+        tree.add_root(root);
+        tree.split_focused(Direction::Vertical, split);
+
+        let removed = tree.remove_focused().expect("focused leaf should be removed");
+
+        assert_eq!(removed, split);
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree.focused_pane(), root);
+    }
+
+    #[test]
+    fn focus_navigation_cycles_through_leaves() {
+        let mut tree = SplitTree::new();
+        let a = PaneHandle::detached();
+        let b = PaneHandle::detached();
+        let c = PaneHandle::detached();
+
+        tree.add_root(a);
+        tree.split_focused(Direction::Horizontal, b);
+        tree.split_focused(Direction::Vertical, c);
+
+        assert_eq!(tree.focused_pane(), c);
+        tree.focus_next();
+        assert_eq!(tree.focused_pane(), a);
+        tree.focus_prev();
+        assert_eq!(tree.focused_pane(), c);
+    }
+
+    #[test]
+    fn split_frame_respects_border_gap() {
+        let frame = Rect::new(Point::new(0.0, 0.0), Size::new(100.0, 50.0));
+        let (left, right) = split_frame(frame, Direction::Horizontal, 0.5);
+
+        assert_eq!(left.origin.x, 0.0);
+        assert_eq!(left.size.width + right.size.width + SPLIT_BORDER, 100.0);
+        assert_eq!(right.origin.x, left.size.width + SPLIT_BORDER);
+    }
+
+    #[test]
+    fn focus_at_selects_leaf_from_point() {
+        let mut tree = SplitTree::new();
+        let left = PaneHandle::detached();
+        let right = PaneHandle::detached();
+        let frame = Rect::new(Point::new(0.0, 0.0), Size::new(120.0, 40.0));
+
+        tree.add_root(left);
+        tree.split_focused(Direction::Horizontal, right);
+
+        assert!(tree.focus_at(frame, (10.0, 10.0)));
+        assert_eq!(tree.focused_pane(), left);
+        assert!(tree.focus_at(frame, (110.0, 10.0)));
+        assert_eq!(tree.focused_pane(), right);
+    }
+
+    #[test]
+    fn export_panes_with_frames_preserves_split_geometry() {
+        let mut tree = SplitTree::new();
+        tree.add_root(PaneHandle::detached());
+        tree.split_focused(Direction::Horizontal, PaneHandle::detached());
+
+        let frame = Rect::new(Point::new(0.0, 20.0), Size::new(120.0, 40.0));
+        let panes = tree.export_panes_with_frames(frame);
+
+        assert_eq!(panes.len(), 2);
+        assert_eq!(panes[0].frame.unwrap().origin.x, 0.0);
+        assert_eq!(panes[0].frame.unwrap().origin.y, 20.0);
+        assert_eq!(panes[0].frame.unwrap().size.height, 40.0);
+        assert_eq!(panes[1].frame.unwrap().origin.y, 20.0);
+        assert_eq!(
+            panes[0].frame.unwrap().size.width + panes[1].frame.unwrap().size.width + SPLIT_BORDER,
+            120.0
+        );
     }
 }

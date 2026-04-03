@@ -184,3 +184,73 @@ pub struct TabInfo {
     pub title: String,
     pub surfaces: usize,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::TabManager;
+    use crate::pane::PaneHandle;
+
+    #[test]
+    fn new_tab_switches_active_pane() {
+        let mut tabs = TabManager::new();
+        let first = PaneHandle::detached();
+        let second = PaneHandle::detached();
+
+        tabs.add_initial_tab(first);
+        let new_index = tabs.new_tab(second);
+
+        assert_eq!(new_index, 1);
+        assert_eq!(tabs.active_index(), 1);
+        assert_eq!(tabs.focused_pane(), second);
+        assert_eq!(tabs.len(), 2);
+    }
+
+    #[test]
+    fn goto_next_and_prev_tab_update_active_index() {
+        let mut tabs = TabManager::new();
+        tabs.add_initial_tab(PaneHandle::detached());
+        tabs.new_tab(PaneHandle::detached());
+        tabs.new_tab(PaneHandle::detached());
+
+        assert!(tabs.goto_tab(0));
+        assert_eq!(tabs.active_index(), 0);
+        assert!(tabs.next_tab());
+        assert_eq!(tabs.active_index(), 1);
+        assert!(tabs.prev_tab());
+        assert_eq!(tabs.active_index(), 0);
+    }
+
+    #[test]
+    fn remove_tab_returns_panes_and_keeps_valid_active_tab() {
+        let mut tabs = TabManager::new();
+        let first = PaneHandle::detached();
+        let second = PaneHandle::detached();
+
+        tabs.add_initial_tab(first);
+        tabs.new_tab(second);
+
+        let removed = tabs.remove_tab(1);
+
+        assert_eq!(removed, vec![second]);
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs.active_index(), 0);
+        assert_eq!(tabs.focused_pane(), first);
+    }
+
+    #[test]
+    fn tab_info_tracks_active_state_and_titles() {
+        let mut tabs = TabManager::new();
+        tabs.add_initial_tab(PaneHandle::detached());
+        tabs.set_active_title("shell".to_string());
+        tabs.new_tab(PaneHandle::detached());
+        tabs.set_active_title("logs".to_string());
+
+        let info = tabs.tab_info();
+
+        assert_eq!(info.len(), 2);
+        assert_eq!(info[0].title, "shell");
+        assert!(!info[0].active);
+        assert_eq!(info[1].title, "logs");
+        assert!(info[1].active);
+    }
+}

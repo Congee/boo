@@ -6,10 +6,12 @@ use crate::vt;
 use std::ffi::{c_void, CStr};
 use std::io;
 use std::path::Path;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, Clone, Default)]
 pub struct CellSnapshot {
     pub text: String,
+    pub display_width: u8,
     pub fg: vt::GhosttyColorRgb,
     pub bg: vt::GhosttyColorRgb,
     pub bold: bool,
@@ -48,6 +50,12 @@ pub struct LinuxVtPane {
     rows: u16,
     cell_width_px: u32,
     cell_height_px: u32,
+    dirty: bool,
+}
+
+pub struct PollPtyResult {
+    pub changed: bool,
+    pub exited: bool,
 }
 
 struct PtyWriteProxy {
@@ -55,6 +63,8 @@ struct PtyWriteProxy {
 }
 
 impl LinuxVtPane {
+    const VT_WRITE_CHUNK: usize = 512;
+
     pub fn spawn(
         cols: u16,
         rows: u16,
@@ -111,21 +121,31 @@ impl LinuxVtPane {
             rows,
             cell_width_px,
             cell_height_px,
+            dirty: true,
         })
     }
 
-    pub fn poll_pty(&mut self) -> io::Result<bool> {
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub fn poll_pty(&mut self) -> io::Result<PollPtyResult> {
         let mut changed = false;
         for chunk in self.pty.try_read() {
-            self.terminal.write(&chunk);
+            for slice in chunk.chunks(Self::VT_WRITE_CHUNK) {
+                self.terminal.write(slice);
+            }
             changed = true;
         }
         if changed {
-            self.render_state.update(&self.terminal).map_err(vt_to_io)?;
             self.key_encoder.sync_from_terminal(&self.terminal);
             self.mouse_encoder.sync_from_terminal(&self.terminal);
+            self.dirty = true;
         }
-        Ok(changed)
+        Ok(PollPtyResult {
+            changed,
+            exited: self.pty.try_wait()?,
+        })
     }
 
     pub fn resize(
@@ -159,12 +179,24 @@ impl LinuxVtPane {
             padding_right: 0,
             padding_left: 0,
         });
-        self.render_state.update(&self.terminal).map_err(vt_to_io)?;
+        self.dirty = true;
         Ok(())
     }
 
     pub fn write_input(&self, bytes: &[u8]) -> io::Result<()> {
         self.pty.write(bytes)
+    }
+
+    pub fn write_vt_bytes(&mut self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        for slice in bytes.chunks(Self::VT_WRITE_CHUNK) {
+            self.terminal.write(slice);
+        }
+        self.key_encoder.sync_from_terminal(&self.terminal);
+        self.mouse_encoder.sync_from_terminal(&self.terminal);
+        self.dirty = true;
     }
 
     pub fn send_mouse_input(
@@ -196,19 +228,19 @@ impl LinuxVtPane {
             return Ok(());
         }
         self.terminal.scroll_viewport_delta(delta);
-        self.render_state.update(&self.terminal).map_err(vt_to_io)?;
+        self.dirty = true;
         Ok(())
     }
 
     pub fn scroll_viewport_top(&mut self) -> io::Result<()> {
         self.terminal.scroll_viewport_top();
-        self.render_state.update(&self.terminal).map_err(vt_to_io)?;
+        self.dirty = true;
         Ok(())
     }
 
     pub fn scroll_viewport_bottom(&mut self) -> io::Result<()> {
         self.terminal.scroll_viewport_bottom();
-        self.render_state.update(&self.terminal).map_err(vt_to_io)?;
+        self.dirty = true;
         Ok(())
     }
 
@@ -247,8 +279,10 @@ impl LinuxVtPane {
                 let style = cells.style().map_err(vt_to_io)?;
                 let fg = cells.fg_color().unwrap_or(colors.foreground);
                 let bg = cells.bg_color().unwrap_or(colors.background);
+                let display_width = text_width(&text);
                 row.push(CellSnapshot {
                     text,
+                    display_width,
                     fg,
                     bg,
                     bold: style.bold,
@@ -259,6 +293,8 @@ impl LinuxVtPane {
             rows_data.push(row);
             let _ = row_iter.clear_dirty();
         }
+
+        self.dirty = false;
 
         Ok(TerminalSnapshot {
             cols,
@@ -316,4 +352,95 @@ fn write_all_fd(fd: i32, mut bytes: &[u8]) -> io::Result<()> {
 
 fn vt_to_io(err: vt::Error) -> io::Error {
     io::Error::new(io::ErrorKind::Other, err)
+}
+
+fn text_width(text: &str) -> u8 {
+    UnicodeWidthStr::width(text).max(1).min(u8::MAX as usize) as u8
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vt_snapshot_preserves_bold_italic_and_underline() {
+        let mut terminal = vt::Terminal::new(16, 4, 0).expect("terminal");
+        terminal.resize(16, 4, 8, 16).expect("resize");
+        terminal.write(b"\x1b[1;3;4mSTYLE\x1b[0m");
+
+        let mut render_state = vt::RenderState::new().expect("render state");
+        render_state.update(&terminal).expect("update");
+
+        let mut rows = render_state.row_iterator().expect("rows");
+        assert!(rows.next(), "expected first row");
+        let mut cells = rows.cells().expect("cells");
+
+        let mut seen = String::new();
+        let mut matched = Vec::new();
+        while cells.next() {
+            let len = cells.grapheme_len().expect("grapheme len") as usize;
+            let text = if len == 0 {
+                String::new()
+            } else {
+                cells.graphemes(len)
+                    .expect("graphemes")
+                    .into_iter()
+                    .filter_map(char::from_u32)
+                    .collect::<String>()
+            };
+            if text.is_empty() {
+                continue;
+            }
+            let style = cells.style().expect("style");
+            seen.push_str(&text);
+            matched.push((text, style.bold, style.italic, style.underline));
+            if seen == "STYLE" {
+                break;
+            }
+        }
+
+        assert_eq!(seen, "STYLE");
+        assert_eq!(matched.len(), 5);
+        for (text, bold, italic, underline) in matched {
+            assert!(!text.is_empty());
+            assert!(bold, "cell {text:?} should be bold");
+            assert!(italic, "cell {text:?} should be italic");
+            assert_ne!(underline, 0, "cell {text:?} should be underlined");
+        }
+    }
+
+    #[test]
+    fn vt_snapshot_preserves_combining_and_wide_graphemes() {
+        let mut terminal = vt::Terminal::new(16, 4, 0).expect("terminal");
+        terminal.resize(16, 4, 8, 16).expect("resize");
+        terminal.write("e\u{301}🙂".as_bytes());
+
+        let mut render_state = vt::RenderState::new().expect("render state");
+        render_state.update(&terminal).expect("update");
+
+        let mut rows = render_state.row_iterator().expect("rows");
+        assert!(rows.next(), "expected first row");
+        let mut cells = rows.cells().expect("cells");
+
+        let mut seen = Vec::new();
+        while cells.next() {
+            let len = cells.grapheme_len().expect("grapheme len") as usize;
+            if len == 0 {
+                continue;
+            }
+            let text = cells
+                .graphemes(len)
+                .expect("graphemes")
+                .into_iter()
+                .filter_map(char::from_u32)
+                .collect::<String>();
+            seen.push((text.clone(), text_width(&text)));
+            if seen.len() == 2 {
+                break;
+            }
+        }
+
+        assert_eq!(seen[0], ("e\u{301}".to_string(), 1));
+        assert_eq!(seen[1], ("🙂".to_string(), 2));
+    }
 }

@@ -10,8 +10,8 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub enum Action {
-    NewSplit(ffi::ghostty_action_split_direction_e),
-    GotoSplit(ffi::ghostty_action_goto_split_e),
+    NewSplit(SplitDirection),
+    GotoSplit(PaneFocusDirection),
     ResizeSplit(Direction, u16),
     CloseSurface,
     NewTab,
@@ -42,6 +42,20 @@ pub enum Direction {
     Right,
     Up,
     Down,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplitDirection {
+    Right,
+    Down,
+    Left,
+    Up,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneFocusDirection {
+    Previous,
+    Next,
 }
 
 /// Actions emitted while in copy mode (tmux vi copy-mode compatible).
@@ -101,6 +115,7 @@ enum Mode {
 }
 
 /// Parsed prefix key: a keycode + required modifiers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PrefixKey {
     keycode: u32,
     mods_mask: i32,
@@ -117,7 +132,7 @@ pub struct Bindings {
 
 impl Bindings {
     pub fn from_config(config: &Config) -> Self {
-        let prefix = config.prefix_key.as_deref().and_then(parse_prefix_key);
+        let mut prefix = config.prefix_key.as_deref().and_then(parse_prefix_key);
         let mut table = HashMap::new();
         let mut direct = HashMap::new();
 
@@ -126,14 +141,38 @@ impl Bindings {
                 log::warn!("unknown boo action: {action_str}");
                 continue;
             };
-            if key.contains('+') {
+            if let Some((prefix_spec, trigger_spec)) = key.split_once('>') {
+                let Some(parsed_prefix) = parse_prefix_key(prefix_spec.trim()) else {
+                    log::warn!("unparseable prefixed keybind prefix: {key}");
+                    continue;
+                };
+                match prefix {
+                    Some(existing) if existing != parsed_prefix => {
+                        log::warn!(
+                            "ignoring prefixed keybind with different prefix: {key} (boo supports one prefix key)"
+                        );
+                        continue;
+                    }
+                    None => prefix = Some(parsed_prefix),
+                    _ => {}
+                }
+                if let Some(trigger) = parse_prefix_trigger(trigger_spec.trim()) {
+                    table.insert(trigger, action);
+                } else {
+                    log::warn!("unparseable prefixed keybind trigger: {key}");
+                }
+            } else if key.contains('+') {
                 if let Some(parsed) = parse_prefix_key(key) {
                     direct.insert((parsed.keycode, parsed.mods_mask), action);
                 } else {
                     log::warn!("unparseable direct keybind: {key}");
                 }
             } else {
-                table.insert(key.clone(), action);
+                if let Some(trigger) = parse_prefix_trigger(key) {
+                    table.insert(trigger, action);
+                } else {
+                    log::warn!("unparseable prefix keybind trigger: {key}");
+                }
             }
         }
 
@@ -396,6 +435,17 @@ fn parse_prefix_key(spec: &str) -> Option<PrefixKey> {
     })
 }
 
+fn parse_prefix_trigger(spec: &str) -> Option<String> {
+    match spec {
+        "space" => Some(" ".to_string()),
+        "tab" => Some("\t".to_string()),
+        "enter" | "return" => Some("\r".to_string()),
+        "escape" | "esc" => Some("\u{1b}".to_string()),
+        _ if spec.chars().count() == 1 => Some(spec.to_string()),
+        _ => None,
+    }
+}
+
 /// Map a single-character key name to a platform-native keycode.
 /// Must match the values returned by keymap::physical_to_native_keycode().
 fn single_char_to_keycode(key: &str) -> Option<u32> {
@@ -444,8 +494,8 @@ fn single_char_to_keycode(key: &str) -> Option<u32> {
 }
 
 fn parse_action(s: &str) -> Option<Action> {
-    use ffi::ghostty_action_goto_split_e::*;
-    use ffi::ghostty_action_split_direction_e::*;
+    use PaneFocusDirection::*;
+    use SplitDirection::*;
 
     match s {
         "reload_config" => Some(Action::ReloadConfig),
@@ -462,15 +512,15 @@ fn parse_action(s: &str) -> Option<Action> {
         "next_pane" => Some(Action::NextPane),
         "previous_pane" => Some(Action::PreviousPane),
         "previous_tab" => Some(Action::PreviousTab),
-        "goto_split:left" => Some(Action::GotoSplit(GHOSTTY_GOTO_SPLIT_PREVIOUS)),
+        "goto_split:left" => Some(Action::GotoSplit(Previous)),
         "goto_split:right" | "goto_split:bottom" => {
-            Some(Action::GotoSplit(GHOSTTY_GOTO_SPLIT_NEXT))
+            Some(Action::GotoSplit(Next))
         }
-        "goto_split:top" => Some(Action::GotoSplit(GHOSTTY_GOTO_SPLIT_PREVIOUS)),
-        "new_split:right" => Some(Action::NewSplit(GHOSTTY_SPLIT_DIRECTION_RIGHT)),
-        "new_split:down" => Some(Action::NewSplit(GHOSTTY_SPLIT_DIRECTION_DOWN)),
-        "new_split:left" => Some(Action::NewSplit(GHOSTTY_SPLIT_DIRECTION_LEFT)),
-        "new_split:up" => Some(Action::NewSplit(GHOSTTY_SPLIT_DIRECTION_UP)),
+        "goto_split:top" => Some(Action::GotoSplit(Previous)),
+        "new_split:right" => Some(Action::NewSplit(Right)),
+        "new_split:down" => Some(Action::NewSplit(Down)),
+        "new_split:left" => Some(Action::NewSplit(Left)),
+        "new_split:up" => Some(Action::NewSplit(Up)),
         "goto_tab:last" => Some(Action::GotoTab(TabTarget::Last)),
         _ if s.starts_with("goto_tab:") => {
             let n: usize = s["goto_tab:".len()..].parse().ok()?;
@@ -502,6 +552,10 @@ mod tests {
             prefix_key: Some("ctrl+s".to_string()),
             keybinds: Default::default(),
             control_socket: None,
+            font_family: None,
+            font_size: None,
+            background_opacity: None,
+            background_opacity_cells: false,
         };
         let mut b = Bindings::from_config(&config);
         b.mode = Mode::CopyMode;
@@ -795,5 +849,31 @@ mod tests {
         assert_eq!(pk.mods_mask, ffi::GHOSTTY_MODS_CTRL | ffi::GHOSTTY_MODS_SHIFT);
 
         assert!(parse_prefix_key("ctrl+unknown").is_none());
+    }
+
+    #[test]
+    fn test_prefixed_keybind_uses_implicit_prefix() {
+        let mut config = Config::default();
+        config
+            .keybinds
+            .insert("ctrl+a>c".to_string(), "new_tab".to_string());
+        let mut bindings = Bindings::from_config(&config);
+
+        assert!(matches!(
+            bindings.handle_key(Some('a'), single_char_to_keycode("a").unwrap(), ffi::GHOSTTY_MODS_CTRL, None),
+            KeyResult::Consumed(None)
+        ));
+        assert!(matches!(
+            bindings.handle_key(Some('c'), single_char_to_keycode("c").unwrap(), ffi::GHOSTTY_MODS_NONE, None),
+            KeyResult::Consumed(Some(Action::NewTab))
+        ));
+    }
+
+    #[test]
+    fn test_parse_prefix_trigger_named_keys() {
+        assert_eq!(parse_prefix_trigger("space").as_deref(), Some(" "));
+        assert_eq!(parse_prefix_trigger("tab").as_deref(), Some("\t"));
+        assert_eq!(parse_prefix_trigger("enter").as_deref(), Some("\r"));
+        assert_eq!(parse_prefix_trigger("esc").as_deref(), Some("\u{1b}"));
     }
 }

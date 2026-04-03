@@ -22,6 +22,11 @@ use std::sync::mpsc;
 pub enum Request {
     ListSurfaces,
     ListTabs,
+    GetClipboard,
+    GetUiSnapshot,
+    ExecuteCommand { input: String },
+    SendText { text: String },
+    SendVt { text: String },
     NewSplit { direction: Option<String> },
     NewTab,
     GotoTab { index: usize },
@@ -38,6 +43,8 @@ pub enum Request {
 pub enum Response {
     Surfaces { surfaces: Vec<SurfaceInfo> },
     Tabs { tabs: Vec<crate::tabs::TabInfo> },
+    Clipboard { text: String },
+    UiSnapshot { snapshot: UiSnapshot },
     Ok { ok: bool },
     Error { error: String },
 }
@@ -48,6 +55,126 @@ pub struct SurfaceInfo {
     pub focused: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UiSnapshot {
+    pub active_tab: usize,
+    pub focused_pane: u64,
+    pub appearance: UiAppearanceSnapshot,
+    pub tabs: Vec<UiTabSnapshot>,
+    pub visible_panes: Vec<UiPaneSnapshot>,
+    pub copy_mode: UiCopyModeSnapshot,
+    pub search: UiSearchSnapshot,
+    pub command_prompt: UiCommandPromptSnapshot,
+    pub pwd: String,
+    pub scrollbar: UiScrollbarSnapshot,
+    pub terminal: Option<UiTerminalSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UiAppearanceSnapshot {
+    pub font_family: Option<String>,
+    pub font_size: f32,
+    pub background_opacity: f32,
+    pub background_opacity_cells: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UiTabSnapshot {
+    pub index: usize,
+    pub active: bool,
+    pub title: String,
+    pub pane_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UiPaneSnapshot {
+    pub leaf_index: usize,
+    pub leaf_id: usize,
+    pub pane_id: u64,
+    pub focused: bool,
+    pub frame: UiRectSnapshot,
+    pub split_direction: Option<String>,
+    pub split_ratio: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UiRectSnapshot {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UiCopyModeSnapshot {
+    pub active: bool,
+    pub cursor_row: i64,
+    pub cursor_col: u32,
+    pub selection_mode: String,
+    pub has_selection_anchor: bool,
+    pub anchor_row: Option<i64>,
+    pub anchor_col: Option<u32>,
+    pub selection_rects: Vec<UiRectSnapshot>,
+    pub show_position: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UiSearchSnapshot {
+    pub active: bool,
+    pub query: String,
+    pub total: isize,
+    pub selected: isize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UiCommandPromptSnapshot {
+    pub active: bool,
+    pub input: String,
+    pub selected_suggestion: usize,
+    pub suggestions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UiScrollbarSnapshot {
+    pub total: u64,
+    pub offset: u64,
+    pub len: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UiTerminalSnapshot {
+    pub cols: u16,
+    pub rows: u16,
+    pub title: String,
+    pub pwd: String,
+    pub cursor: UiCursorSnapshot,
+    pub rows_data: Vec<UiTerminalRowSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UiCursorSnapshot {
+    pub visible: bool,
+    pub x: u16,
+    pub y: u16,
+    pub style: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UiTerminalRowSnapshot {
+    pub cells: Vec<UiTerminalCellSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UiTerminalCellSnapshot {
+    pub text: String,
+    pub display_width: u8,
+    pub fg: [u8; 3],
+    pub bg: [u8; 3],
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: i32,
+}
+
 /// Commands sent from the control thread to the main iced update loop.
 #[derive(Debug)]
 pub enum ControlCmd {
@@ -55,7 +182,12 @@ pub enum ControlCmd {
     DumpKeysOff,
     ListSurfaces { reply: mpsc::Sender<Response> },
     ListTabs { reply: mpsc::Sender<Response> },
+    GetClipboard { reply: mpsc::Sender<Response> },
+    GetUiSnapshot { reply: mpsc::Sender<Response> },
+    ExecuteCommand { input: String },
     SendKey { keyspec: String },
+    SendText { text: String },
+    SendVt { text: String },
     NewSplit { direction: String },
     NewTab,
     GotoTab { index: usize },
@@ -146,6 +278,27 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
             let _ = tx.send(ControlCmd::SendKey { keyspec: key });
             Response::Ok { ok: true }
         }
+        Request::ExecuteCommand { input } => {
+            let _ = tx.send(ControlCmd::ExecuteCommand { input });
+            Response::Ok { ok: true }
+        }
+        Request::SendText { text } => {
+            let _ = tx.send(ControlCmd::SendText { text });
+            Response::Ok { ok: true }
+        }
+        Request::SendVt { text } => {
+            let _ = tx.send(ControlCmd::SendVt { text });
+            Response::Ok { ok: true }
+        }
+        Request::GetClipboard => {
+            let (reply_tx, reply_rx) = mpsc::channel();
+            let _ = tx.send(ControlCmd::GetClipboard { reply: reply_tx });
+            reply_rx
+                .recv_timeout(std::time::Duration::from_millis(500))
+                .unwrap_or(Response::Error {
+                    error: "clipboard request timed out".to_string(),
+                })
+        }
         Request::NewSplit { direction } => {
             let _ = tx.send(ControlCmd::NewSplit {
                 direction: direction.unwrap_or_else(|| "right".into()),
@@ -167,6 +320,14 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
         Request::ListTabs => {
             let (reply_tx, reply_rx) = mpsc::channel();
             let _ = tx.send(ControlCmd::ListTabs { reply: reply_tx });
+            match reply_rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                Ok(resp) => resp,
+                Err(_) => Response::Error { error: "timeout".into() },
+            }
+        }
+        Request::GetUiSnapshot => {
+            let (reply_tx, reply_rx) = mpsc::channel();
+            let _ = tx.send(ControlCmd::GetUiSnapshot { reply: reply_tx });
             match reply_rx.recv_timeout(std::time::Duration::from_secs(2)) {
                 Ok(resp) => resp,
                 Err(_) => Response::Error { error: "timeout".into() },
@@ -241,5 +402,336 @@ pub fn cleanup(socket_path: Option<&str>) {
     let _ = std::fs::remove_file(PIPE_PATH);
     if let Some(path) = socket_path {
         let _ = std::fs::remove_file(path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{dispatch_request, ControlCmd, Request, Response, UiAppearanceSnapshot, UiCommandPromptSnapshot, UiCopyModeSnapshot, UiPaneSnapshot, UiRectSnapshot, UiScrollbarSnapshot, UiSearchSnapshot, UiSnapshot, UiTabSnapshot};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn dump_keys_request_maps_to_control_command() {
+        let (tx, rx) = mpsc::channel();
+
+        let response = dispatch_request(Request::DumpKeys { enabled: true }, &tx);
+
+        assert!(matches!(response, Response::Ok { ok: true }));
+        assert!(matches!(rx.recv().unwrap(), ControlCmd::DumpKeysOn));
+    }
+
+    #[test]
+    fn new_split_defaults_to_right() {
+        let (tx, rx) = mpsc::channel();
+
+        let response = dispatch_request(Request::NewSplit { direction: None }, &tx);
+
+        assert!(matches!(response, Response::Ok { ok: true }));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            ControlCmd::NewSplit { direction } if direction == "right"
+        ));
+    }
+
+    #[test]
+    fn execute_command_request_maps_to_control_command() {
+        let (tx, rx) = mpsc::channel();
+
+        let response = dispatch_request(
+            Request::ExecuteCommand {
+                input: "search".to_string(),
+            },
+            &tx,
+        );
+
+        assert!(matches!(response, Response::Ok { ok: true }));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            ControlCmd::ExecuteCommand { input } if input == "search"
+        ));
+    }
+
+    #[test]
+    fn send_text_request_maps_to_control_command() {
+        let (tx, rx) = mpsc::channel();
+
+        let response = dispatch_request(
+            Request::SendText {
+                text: "pwd\r".to_string(),
+            },
+            &tx,
+        );
+
+        assert!(matches!(response, Response::Ok { ok: true }));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            ControlCmd::SendText { text } if text == "pwd\r"
+        ));
+    }
+
+    #[test]
+    fn send_vt_request_maps_to_control_command() {
+        let (tx, rx) = mpsc::channel();
+
+        let response = dispatch_request(
+            Request::SendVt {
+                text: "\u{1b}[1mSTYLE\u{1b}[0m".to_string(),
+            },
+            &tx,
+        );
+
+        assert!(matches!(response, Response::Ok { ok: true }));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            ControlCmd::SendVt { text } if text == "\u{1b}[1mSTYLE\u{1b}[0m"
+        ));
+    }
+
+    #[test]
+    fn get_clipboard_round_trips_reply() {
+        let (tx, rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || match rx.recv().unwrap() {
+            ControlCmd::GetClipboard { reply } => {
+                reply
+                    .send(Response::Clipboard {
+                        text: "copied text".to_string(),
+                    })
+                    .unwrap();
+            }
+            other => panic!("unexpected command: {other:?}"),
+        });
+
+        let response = dispatch_request(Request::GetClipboard, &tx);
+        worker.join().unwrap();
+
+        match response {
+            Response::Clipboard { text } => assert_eq!(text, "copied text"),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn list_surfaces_round_trips_reply() {
+        let (tx, rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || match rx.recv().unwrap() {
+            ControlCmd::ListSurfaces { reply } => {
+                reply
+                    .send(Response::Surfaces {
+                        surfaces: vec![super::SurfaceInfo {
+                            index: 0,
+                            focused: true,
+                        }],
+                    })
+                    .unwrap();
+            }
+            other => panic!("unexpected command: {other:?}"),
+        });
+
+        let response = dispatch_request(Request::ListSurfaces, &tx);
+        worker.join().unwrap();
+
+        match response {
+            Response::Surfaces { surfaces } => {
+                assert_eq!(surfaces.len(), 1);
+                assert_eq!(surfaces[0].index, 0);
+                assert!(surfaces[0].focused);
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn list_tabs_times_out_without_reply() {
+        let (tx, rx) = mpsc::channel::<ControlCmd>();
+        let worker = std::thread::spawn(move || {
+            let _ = rx.recv_timeout(Duration::from_millis(50));
+        });
+
+        let response = dispatch_request(Request::ListTabs, &tx);
+        worker.join().unwrap();
+
+        assert!(matches!(response, Response::Error { error } if error == "timeout"));
+    }
+
+    #[test]
+    fn get_ui_snapshot_round_trips_reply() {
+        let (tx, rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || match rx.recv().unwrap() {
+            ControlCmd::GetUiSnapshot { reply } => {
+                reply
+                    .send(Response::UiSnapshot {
+                        snapshot: UiSnapshot {
+                            active_tab: 0,
+                            focused_pane: 42,
+                            appearance: UiAppearanceSnapshot {
+                                font_family: Some("JetBrains Mono".to_string()),
+                                font_size: 14.0,
+                                background_opacity: 0.8,
+                                background_opacity_cells: true,
+                            },
+                            tabs: vec![UiTabSnapshot {
+                                index: 0,
+                                active: true,
+                                title: "shell".to_string(),
+                                pane_count: 1,
+                            }],
+                            visible_panes: vec![UiPaneSnapshot {
+                                leaf_index: 0,
+                                leaf_id: 0,
+                                pane_id: 42,
+                                focused: true,
+                                frame: UiRectSnapshot {
+                                    x: 0.0,
+                                    y: 20.0,
+                                    width: 100.0,
+                                    height: 80.0,
+                                },
+                                split_direction: None,
+                                split_ratio: None,
+                            }],
+                            copy_mode: UiCopyModeSnapshot {
+                                active: false,
+                                cursor_row: 0,
+                                cursor_col: 0,
+                                selection_mode: "none".to_string(),
+                                has_selection_anchor: false,
+                                anchor_row: None,
+                                anchor_col: None,
+                                selection_rects: Vec::new(),
+                                show_position: false,
+                            },
+                            search: UiSearchSnapshot {
+                                active: false,
+                                query: String::new(),
+                                total: 0,
+                                selected: 0,
+                            },
+                            command_prompt: UiCommandPromptSnapshot {
+                                active: false,
+                                input: String::new(),
+                                selected_suggestion: 0,
+                                suggestions: Vec::new(),
+                            },
+                            pwd: "/tmp".to_string(),
+                            scrollbar: UiScrollbarSnapshot {
+                                total: 10,
+                                offset: 0,
+                                len: 10,
+                            },
+                            terminal: None,
+                        },
+                    })
+                    .unwrap();
+            }
+            other => panic!("unexpected command: {other:?}"),
+        });
+
+        let response = dispatch_request(Request::GetUiSnapshot, &tx);
+        worker.join().unwrap();
+
+        match response {
+            Response::UiSnapshot { snapshot } => {
+                assert_eq!(snapshot.focused_pane, 42);
+                assert_eq!(snapshot.tabs.len(), 1);
+                assert_eq!(snapshot.visible_panes.len(), 1);
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ui_snapshot_response_serializes_to_json() {
+        let response = Response::UiSnapshot {
+            snapshot: UiSnapshot {
+                active_tab: 1,
+                focused_pane: 7,
+                appearance: UiAppearanceSnapshot {
+                    font_family: Some("Fira Code".to_string()),
+                    font_size: 15.0,
+                    background_opacity: 0.7,
+                    background_opacity_cells: false,
+                },
+                tabs: vec![
+                    UiTabSnapshot {
+                        index: 0,
+                        active: false,
+                        title: "shell".to_string(),
+                        pane_count: 1,
+                    },
+                    UiTabSnapshot {
+                        index: 1,
+                        active: true,
+                        title: "logs".to_string(),
+                        pane_count: 2,
+                    },
+                ],
+                visible_panes: vec![UiPaneSnapshot {
+                    leaf_index: 0,
+                    leaf_id: 0,
+                    pane_id: 7,
+                    focused: true,
+                    frame: UiRectSnapshot {
+                        x: 0.0,
+                        y: 20.0,
+                        width: 200.0,
+                        height: 100.0,
+                    },
+                    split_direction: Some("horizontal".to_string()),
+                    split_ratio: Some(0.5),
+                }],
+                copy_mode: UiCopyModeSnapshot {
+                    active: true,
+                    cursor_row: 12,
+                    cursor_col: 4,
+                    selection_mode: "character".to_string(),
+                    has_selection_anchor: true,
+                    anchor_row: Some(12),
+                    anchor_col: Some(4),
+                    selection_rects: vec![UiRectSnapshot {
+                        x: 32.0,
+                        y: 48.0,
+                        width: 8.0,
+                        height: 16.0,
+                    }],
+                    show_position: true,
+                },
+                search: UiSearchSnapshot {
+                    active: true,
+                    query: "panic".to_string(),
+                    total: 2,
+                    selected: 1,
+                },
+                command_prompt: UiCommandPromptSnapshot {
+                    active: false,
+                    input: String::new(),
+                    selected_suggestion: 0,
+                    suggestions: Vec::new(),
+                },
+                pwd: "/repo".to_string(),
+                scrollbar: UiScrollbarSnapshot {
+                    total: 100,
+                    offset: 40,
+                    len: 20,
+                },
+                terminal: None,
+            },
+        };
+
+        let value = serde_json::to_value(response).unwrap();
+
+        assert_eq!(value["snapshot"]["active_tab"], 1);
+        assert_eq!(value["snapshot"]["focused_pane"], 7);
+        assert_eq!(value["snapshot"]["appearance"]["font_family"], "Fira Code");
+        assert!(
+            value["snapshot"]["appearance"]["background_opacity"]
+                .as_f64()
+                .is_some_and(|opacity| (opacity - 0.7).abs() < 0.001)
+        );
+        assert_eq!(value["snapshot"]["copy_mode"]["selection_mode"], "character");
+        assert_eq!(value["snapshot"]["copy_mode"]["anchor_row"], 12);
+        assert_eq!(value["snapshot"]["copy_mode"]["selection_rects"][0]["width"], 8.0);
+        assert_eq!(value["snapshot"]["visible_panes"][0]["frame"]["width"], 200.0);
+        assert_eq!(value["snapshot"]["search"]["query"], "panic");
     }
 }

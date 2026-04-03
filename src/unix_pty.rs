@@ -32,6 +32,7 @@ pub struct PtyProcess {
     reader_fd: RawFd,
     child_pid: libc::pid_t,
     rx: mpsc::Receiver<Vec<u8>>,
+    reaped: bool,
 }
 
 impl PtyProcess {
@@ -41,12 +42,10 @@ impl PtyProcess {
         size: PtySize,
     ) -> io::Result<Self> {
         let (master_fd, slave_fd) = open_pty(size)?;
-        let reader_fd = dup_fd(master_fd)?;
 
         let child_pid = unsafe { libc::fork() };
         if child_pid < 0 {
             unsafe {
-                libc::close(reader_fd);
                 libc::close(master_fd);
                 libc::close(slave_fd);
             }
@@ -60,6 +59,8 @@ impl PtyProcess {
         unsafe {
             libc::close(slave_fd);
         }
+        let reader_fd = dup_fd(master_fd)?;
+        set_cloexec(reader_fd)?;
 
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || read_loop(reader_fd, tx));
@@ -69,6 +70,7 @@ impl PtyProcess {
             reader_fd,
             child_pid,
             rx,
+            reaped: false,
         })
     }
 
@@ -102,14 +104,43 @@ impl PtyProcess {
     pub fn child_pid(&self) -> libc::pid_t { self.child_pid }
 
     pub fn master_fd(&self) -> RawFd { self.master_fd }
+
+    pub fn try_wait(&mut self) -> io::Result<bool> {
+        if self.reaped {
+            return Ok(true);
+        }
+
+        let mut status = 0;
+        let rc = unsafe { libc::waitpid(self.child_pid, &mut status, libc::WNOHANG) };
+        if rc == 0 {
+            return Ok(false);
+        }
+        if rc == self.child_pid {
+            self.reaped = true;
+            return Ok(true);
+        }
+        if rc < 0 {
+            let err = io::Error::last_os_error();
+            if matches!(err.raw_os_error(), Some(libc::ECHILD)) {
+                self.reaped = true;
+                return Ok(true);
+            }
+            return Err(err);
+        }
+
+        Ok(false)
+    }
 }
 
 impl Drop for PtyProcess {
     fn drop(&mut self) {
         unsafe {
+            libc::close(self.reader_fd);
             libc::close(self.master_fd);
-            libc::kill(self.child_pid, libc::SIGHUP);
-            libc::waitpid(self.child_pid, std::ptr::null_mut(), libc::WNOHANG);
+            if !self.reaped {
+                libc::kill(self.child_pid, libc::SIGHUP);
+                libc::waitpid(self.child_pid, std::ptr::null_mut(), libc::WNOHANG);
+            }
         }
     }
 }
@@ -225,6 +256,13 @@ fn child_exec(
         }
     }
 
+    // A terminal emulator must set its own terminal identity inside the PTY.
+    // Inheriting TERM from the parent terminal (for example Kitty) causes
+    // shells and TUIs inside Boo to emit escape sequences for the wrong
+    // terminal type.
+    set_env("TERM", "xterm-256color");
+    set_env("COLORTERM", "truecolor");
+
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     let shell_c = CString::new(shell).unwrap_or_else(|_| CString::new("/bin/sh").unwrap());
     let shell_name = shell_c
@@ -257,6 +295,14 @@ fn child_exec(
                 libc::_exit(127);
             }
         }
+    }
+}
+
+fn set_env(key: &str, value: &str) {
+    let key = CString::new(key).expect("environment key should not contain NUL");
+    let value = CString::new(value).expect("environment value should not contain NUL");
+    unsafe {
+        libc::setenv(key.as_ptr(), value.as_ptr(), 1);
     }
 }
 

@@ -21,8 +21,11 @@ base for Boo's Linux implementation.
 ## Current transition state
 
 - `ghostty/` is clean again with no local EGL embedding patches.
-- Linux build plumbing now links both `libghostty.so` and `libghostty-vt.so`.
-- [src/vt.rs](/home/example/dev/boo/src/vt.rs) provides the first Rust wrapper for:
+- Linux runtime now uses the VT backend only; the old EGL readback path has
+  been removed from the app flow.
+- Linux now depends on the published `libghostty-vt` crate; the vendored
+  `ghostty/` submodule remains for the macOS surface backend.
+- [src/vt.rs](/home/example/dev/boo/src/vt.rs) provides Boo's Linux-facing wrapper for:
   - terminal creation and resize
   - VT stream writes
   - render-state snapshots
@@ -33,22 +36,25 @@ base for Boo's Linux implementation.
 - [src/linux_vt_backend.rs](/home/example/dev/boo/src/linux_vt_backend.rs) combines
   the PTY layer with `libghostty-vt` terminal state, render-state updates, and
   a serializable snapshot model for future Iced/wgpu rendering.
+- [src/control.rs](/home/example/dev/boo/src/control.rs) and the Wayland scripts now
+  provide an app-owned snapshot-based UI testing surface for Linux.
+- The control socket can drive raw terminal input with `send-text`, so
+  integration tests can assert on visible terminal content instead of relying
+  on one-key-at-a-time injection.
+- Linux terminal rendering now goes through Boo's canvas-based VT renderer
+  instead of the old `rich_text` fallback.
 
 ## Next implementation steps
 
-1. Introduce a backend boundary so Linux panes stop depending directly on
-   `ghostty_surface_t`.
-2. Add a Linux pane state object backed by `vt::Terminal` + `vt::RenderState`.
-3. Feed PTY output into `vt::Terminal::write`.
-4. Replace Linux key and mouse forwarding with `vt::KeyEncoder` and
-   `vt::MouseEncoder`.
-5. Replace the Linux shell lifecycle currently hidden inside full `libghostty`
-   with `unix_pty.rs` + `linux_vt_backend.rs`.
-6. Render Linux panes directly in Iced instead of round-tripping through PNGs.
-7. Port copy-mode, search, selection, and scrollback to the render-state model.
+1. Improve Linux renderer fidelity and performance further:
+   glyph caching, wide/combining glyph handling, and visual polish.
+2. Expand integration coverage for terminal-heavy workflows and edge cases.
+3. Switch Linux VT integration fully over to the external crate surface as
+   that crate grows safer/higher-level APIs, while keeping Boo's wrapper API
+   stable.
 
 ## Constraint
 
-Feature parity with the macOS backend is still the goal, but it will require a
-proper Linux renderer in Boo. The code added in this change is the ABI and
-linker foundation for that work, not the final Linux backend.
+Feature parity with the macOS backend remains the goal. The Linux backend is
+now usable, testable, and VT-only; remaining work is mostly polish and
+maintainability rather than the original embedding bring-up.

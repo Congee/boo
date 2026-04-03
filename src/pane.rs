@@ -54,3 +54,29 @@ impl PaneHandle {
 
     pub fn is_null(self) -> bool { self.surface.is_null() }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::PaneHandle;
+
+    #[test]
+    fn detached_panes_get_unique_ids() {
+        let a = PaneHandle::detached();
+        let b = PaneHandle::detached();
+
+        assert_ne!(a.id(), 0);
+        assert_ne!(b.id(), 0);
+        assert_ne!(a.id(), b.id());
+        assert!(a.is_null());
+        assert!(b.is_null());
+    }
+
+    #[test]
+    fn null_pane_is_zero_and_null() {
+        let pane = PaneHandle::null();
+
+        assert_eq!(pane.id(), 0);
+        assert!(pane.is_null());
+        assert!(pane.view().is_null());
+    }
+}

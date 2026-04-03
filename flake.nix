@@ -26,6 +26,10 @@
           toolchain
           zig.packages.${system}."0.15.2"
           pkg-config
+          clang-tools
+          lldb
+          gdb
+          valgrind
         ];
 
         buildInputs = with pkgs; [
