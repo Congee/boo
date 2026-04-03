@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 iced = { version = "0.14", features = ["wgpu", "tokio", "image"] }
+image = "0.25"
 raw-window-handle = "0.6"
 anyhow = "1"
 log = "0.4"

@@ -510,6 +510,7 @@ dependencies = [
  "block2 0.6.2",
  "env_logger",
  "iced",
+ "image",
  "khronos-egl",
  "libc",
  "log",

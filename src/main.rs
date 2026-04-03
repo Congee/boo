@@ -2683,18 +2683,27 @@ impl GhosttyApp {
             if let Some(ref egl) = self.egl_state {
                 let frame = egl.frame_buffer.lock().unwrap();
                 if frame.dirty && frame.width > 0 && frame.height > 0 {
-                    // OpenGL renders bottom-up; flip vertically for display
+                    // Flip vertically (GL bottom-up) and force alpha opaque
                     let stride = (frame.width * 4) as usize;
-                    let mut flipped = Vec::with_capacity(frame.pixels.len());
+                    let mut pixels = Vec::with_capacity(frame.pixels.len());
                     for row in (0..frame.height as usize).rev() {
                         let start = row * stride;
-                        flipped.extend_from_slice(&frame.pixels[start..start + stride]);
+                        pixels.extend_from_slice(&frame.pixels[start..start + stride]);
                     }
-                    let handle = iced::widget::image::Handle::from_rgba(
-                        frame.width, frame.height, flipped,
-                    );
+                    for pixel in pixels.chunks_exact_mut(4) {
+                        pixel[3] = 255;
+                    }
+
+                    // Save as PNG file, display via from_path (avoids atlas overflow)
+                    let path = "/tmp/boo_frame.png";
+                    image::save_buffer(
+                        path, &pixels, frame.width, frame.height,
+                        image::ColorType::Rgba8,
+                    ).ok();
+                    let handle = iced::widget::image::Handle::from_path(path);
                     main_col = main_col.push(
                         iced::widget::image(handle)
+                            .content_fit(iced::ContentFit::Fill)
                             .width(Length::Fill)
                             .height(Length::Fill),
                     );
