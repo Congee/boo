@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-iced = { version = "0.14", features = ["wgpu", "tokio"] }
+iced = { version = "0.14", features = ["wgpu", "tokio", "image"] }
 raw-window-handle = "0.6"
 anyhow = "1"
 log = "0.4"
@@ -24,8 +24,4 @@ objc2-core-graphics = { version = "0.3", features = ["CGColor"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = "3"
 khronos-egl = { version = "6", features = ["dynamic"] }
-wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client"] }
-wayland-sys = { version = "0.31", features = ["egl", "client", "dlopen"] }
-wayland-backend = { version = "0.3", features = ["client_system"] }
 

@@ -54,6 +54,10 @@
           echo "  Rust: $(rustc --version)"
         '' + pkgs.lib.optionalString pkgs.stdenv.isLinux ''
           export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath (with pkgs; [ wayland libxkbcommon libGL vulkan-loader ])}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          export __EGL_VENDOR_LIBRARY_DIRS="/run/opengl-driver/share/glvnd/egl_vendor.d"
+          export NIX_CFLAGS_COMPILE="$(echo "$NIX_CFLAGS_COMPILE" | sed 's/-fmacro-prefix-map=[^ ]*//g')"
+          unset NIX_CFLAGS_COMPILE
+          unset NIX_LDFLAGS 
         '' + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
           unset SDKROOT
           unset DEVELOPER_DIR

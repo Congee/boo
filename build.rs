@@ -50,10 +50,9 @@ fn main() {
             println!("cargo:rustc-link-lib=dylib=ghostty");
             println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
             println!("cargo:rustc-link-arg=-Wl,--allow-shlib-undefined");
-            // Wayland subsurface compositing + GBM/EGL rendering
-            println!("cargo:rustc-link-lib=dylib=wayland-client");
-            println!("cargo:rustc-link-lib=dylib=gbm");
+            // EGL + GL for ghostty's OpenGL rendering and frame readback
             println!("cargo:rustc-link-lib=dylib=EGL");
+            println!("cargo:rustc-link-lib=dylib=GL");
         } else {
             println!(
                 "cargo:warning=libghostty not found at {}. \

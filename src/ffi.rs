@@ -128,12 +128,16 @@ pub struct ghostty_platform_ios_s {
     pub uiview: *mut c_void,
 }
 
+pub type ghostty_frame_cb = Option<unsafe extern "C" fn(*mut c_void, u32, u32)>;
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ghostty_platform_egl_s {
     pub display: *mut c_void,
     pub surface: *mut c_void,
     pub context: *mut c_void,
+    pub frame_cb: ghostty_frame_cb,
+    pub frame_cb_userdata: *mut c_void,
 }
 
 #[repr(C)]
