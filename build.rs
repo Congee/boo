@@ -40,19 +40,19 @@ fn main() {
 
         println!("cargo:rerun-if-changed=ghostty/macos/GhosttyKit.xcframework");
     } else if cfg!(target_os = "linux") {
-        // Build with: cd ghostty && zig build -Doptimize=Debug -Dapp-runtime=none
-        // The .so bundles all vendored deps (oniguruma, harfbuzz, spirv-cross, etc.)
+        // Transitional Linux setup:
+        // - `libghostty.so` keeps the current Boo implementation building.
+        // - `libghostty-vt.so` is the clean cross-platform API we are
+        //   migrating the Linux backend toward.
         let lib_dir = ghostty_dir.join("zig-out/lib");
         let zig_out_so = lib_dir.join("libghostty.so");
+        let zig_out_vt_so = lib_dir.join("libghostty-vt.so");
 
         if zig_out_so.exists() {
             println!("cargo:rustc-link-search=native={}", lib_dir.display());
             println!("cargo:rustc-link-lib=dylib=ghostty");
             println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
             println!("cargo:rustc-link-arg=-Wl,--allow-shlib-undefined");
-            // EGL + GL for ghostty's OpenGL rendering and frame readback
-            println!("cargo:rustc-link-lib=dylib=EGL");
-            println!("cargo:rustc-link-lib=dylib=GL");
         } else {
             println!(
                 "cargo:warning=libghostty not found at {}. \
@@ -61,7 +61,20 @@ fn main() {
             );
         }
 
+        if zig_out_vt_so.exists() {
+            println!("cargo:rustc-link-search=native={}", lib_dir.display());
+            println!("cargo:rustc-link-lib=dylib=ghostty-vt");
+            println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
+        } else {
+            println!(
+                "cargo:warning=libghostty-vt not found at {}. \
+                 Build it: cd ghostty && zig build -Doptimize=Debug -Demit-lib-vt=true",
+                zig_out_vt_so.display()
+            );
+        }
+
         println!("cargo:rerun-if-changed=ghostty/zig-out/lib/libghostty.so");
+        println!("cargo:rerun-if-changed=ghostty/zig-out/lib/libghostty-vt.so");
     }
 
     println!("cargo:include={}", include_dir.display());

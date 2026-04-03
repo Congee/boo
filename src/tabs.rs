@@ -1,8 +1,7 @@
 //! Tab management — each tab contains its own split tree.
 
-use crate::ffi;
+use crate::pane::PaneHandle;
 use crate::splits::SplitTree;
-use std::ffi::c_void;
 
 pub struct TabManager {
     tabs: Vec<Tab>,
@@ -17,40 +16,31 @@ pub struct Tab {
 
 impl TabManager {
     pub fn new() -> Self {
-        TabManager {
+        Self {
             tabs: Vec::new(),
             active: 0,
             prev_active: 0,
         }
     }
 
-    /// Add the first tab with a root surface.
-    pub fn add_initial_tab(
-        &mut self,
-        surface: ffi::ghostty_surface_t,
-        nsview: *mut c_void,
-    ) {
+    /// Add the first tab with a root pane.
+    pub fn add_initial_tab(&mut self, pane: PaneHandle) {
         let mut tree = SplitTree::new();
-        tree.add_root(surface, nsview);
+        tree.add_root(pane);
         self.tabs.push(Tab {
             tree,
             title: String::new(),
         });
     }
 
-    /// Create a new tab with a surface. Returns the new tab index.
-    pub fn new_tab(
-        &mut self,
-        surface: ffi::ghostty_surface_t,
-        nsview: *mut c_void,
-    ) -> usize {
-        // Hide current tab
+    /// Create a new tab with a root pane. Returns the new tab index.
+    pub fn new_tab(&mut self, pane: PaneHandle) -> usize {
         if let Some(tab) = self.tabs.get(self.active) {
             tab.tree.set_hidden(true);
         }
 
         let mut tree = SplitTree::new();
-        tree.add_root(surface, nsview);
+        tree.add_root(pane);
         let idx = self.tabs.len();
         self.tabs.push(Tab {
             tree,
@@ -60,7 +50,6 @@ impl TabManager {
         idx
     }
 
-    /// Switch to tab at index.
     pub fn goto_tab(&mut self, index: usize) -> bool {
         if index >= self.tabs.len() || index == self.active {
             return false;
@@ -72,7 +61,6 @@ impl TabManager {
         true
     }
 
-    /// Switch to next tab.
     pub fn next_tab(&mut self) -> bool {
         if self.tabs.len() <= 1 {
             return false;
@@ -81,7 +69,6 @@ impl TabManager {
         self.goto_tab(next)
     }
 
-    /// Switch to previous tab.
     pub fn prev_tab(&mut self) -> bool {
         if self.tabs.len() <= 1 {
             return false;
@@ -94,16 +81,15 @@ impl TabManager {
         self.goto_tab(prev)
     }
 
-    /// Remove a tab by index. Returns surfaces for cleanup.
-    pub fn remove_tab(&mut self, index: usize) -> Vec<ffi::ghostty_surface_t> {
+    /// Remove a tab by index. Returns panes for cleanup.
+    pub fn remove_tab(&mut self, index: usize) -> Vec<PaneHandle> {
         if index >= self.tabs.len() {
             return Vec::new();
         }
         let tab = self.tabs.remove(index);
         tab.tree.set_hidden(true);
-        let surfaces = tab.tree.all_surfaces();
+        let panes = tab.tree.all_panes();
 
-        // Adjust active index
         if self.tabs.is_empty() {
             self.active = 0;
         } else if self.active >= self.tabs.len() {
@@ -112,32 +98,27 @@ impl TabManager {
             self.active -= 1;
         }
 
-        // Show new active tab
         if let Some(tab) = self.tabs.get(self.active) {
             tab.tree.set_hidden(false);
         }
 
-        surfaces
+        panes
     }
 
-    /// Get the active split tree.
     pub fn active_tree(&self) -> Option<&SplitTree> {
         self.tabs.get(self.active).map(|t| &t.tree)
     }
 
-    /// Get the active split tree mutably.
     pub fn active_tree_mut(&mut self) -> Option<&mut SplitTree> {
         self.tabs.get_mut(self.active).map(|t| &mut t.tree)
     }
 
-    /// Get the focused surface of the active tab.
-    pub fn focused_surface(&self) -> ffi::ghostty_surface_t {
+    pub fn focused_pane(&self) -> PaneHandle {
         self.active_tree()
-            .map(|t| t.focused_surface())
-            .unwrap_or(std::ptr::null_mut())
+            .map(|t| t.focused_pane())
+            .unwrap_or(PaneHandle::null())
     }
 
-    /// Number of tabs.
     pub fn len(&self) -> usize {
         self.tabs.len()
     }
@@ -154,24 +135,20 @@ impl TabManager {
         self.active
     }
 
-    /// Set title for the active tab.
     pub fn set_active_title(&mut self, title: String) {
         if let Some(tab) = self.tabs.get_mut(self.active) {
             tab.title = title;
         }
     }
 
-    /// Get mutable access to a tab by index.
     pub fn tab_mut(&mut self, index: usize) -> Option<&mut Tab> {
         self.tabs.get_mut(index)
     }
 
-    /// Get the tree for a tab by index.
     pub fn tab_tree(&self, index: usize) -> Option<&SplitTree> {
         self.tabs.get(index).map(|t| &t.tree)
     }
 
-    /// Get info for control socket.
     pub fn tab_info(&self) -> Vec<TabInfo> {
         self.tabs
             .iter()
@@ -185,20 +162,15 @@ impl TabManager {
             .collect()
     }
 
-    /// Collect all surfaces across all tabs for cleanup.
-    pub fn all_surfaces(&self) -> Vec<ffi::ghostty_surface_t> {
-        self.tabs
-            .iter()
-            .flat_map(|t| t.tree.all_surfaces())
-            .collect()
+    pub fn all_panes(&self) -> Vec<PaneHandle> {
+        self.tabs.iter().flat_map(|t| t.tree.all_panes()).collect()
     }
 
-    /// Relay layout to active tab.
     pub fn layout_active(
         &self,
         frame: crate::platform::Rect,
         scale: f64,
-    ) -> Vec<(ffi::ghostty_surface_t, u32, u32)> {
+    ) -> Vec<(PaneHandle, u32, u32)> {
         self.active_tree()
             .map(|t| t.layout(frame, scale))
             .unwrap_or_default()

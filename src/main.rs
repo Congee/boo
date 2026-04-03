@@ -3,16 +3,27 @@ mod config;
 mod control;
 mod ffi;
 mod keymap;
+#[cfg(target_os = "linux")]
+mod linux_vt_backend;
+mod pane;
 mod platform;
 mod session;
 mod splits;
 mod tabs;
 mod tmux;
+mod vt;
+#[cfg(target_os = "linux")]
+mod unix_pty;
 
-use iced::widget::{column, container, row, text};
+use iced::widget::{column, container, rich_text, row, span, text};
 use iced::window;
-use iced::{keyboard, mouse, Color, Element, Event, Font, Length, Size, Subscription, Task, Theme};
+use iced::{keyboard, mouse, Background, Color, Element, Event, Font, Length, Size, Subscription, Task, Theme};
+use pane::PaneHandle;
+#[cfg(target_os = "linux")]
+use std::collections::HashMap;
 use std::ffi::{c_void, CStr, CString};
+#[cfg(target_os = "linux")]
+use std::os::unix::ffi::OsStrExt;
 use std::ptr;
 
 /// Status bar height in points.
@@ -83,6 +94,12 @@ struct GhosttyApp {
     parent_view: *mut c_void,
     #[cfg(target_os = "linux")]
     egl_state: Option<platform::EglState>,
+    #[cfg(target_os = "linux")]
+    linux_panes: HashMap<pane::PaneId, linux_vt_backend::LinuxVtPane>,
+    #[cfg(target_os = "linux")]
+    linux_snapshots: HashMap<pane::PaneId, linux_vt_backend::TerminalSnapshot>,
+    #[cfg(target_os = "linux")]
+    linux_vt_only: bool,
     cb_state: Box<CallbackState>,
     ctl_rx: std::sync::mpsc::Receiver<control::ControlCmd>,
     scroll_rx: std::sync::mpsc::Receiver<platform::ScrollEvent>,
@@ -327,6 +344,12 @@ impl GhosttyApp {
                 parent_view: ptr::null_mut(),
                 #[cfg(target_os = "linux")]
                 egl_state: None,
+                #[cfg(target_os = "linux")]
+                linux_panes: HashMap::new(),
+                #[cfg(target_os = "linux")]
+                linux_snapshots: HashMap::new(),
+                #[cfg(target_os = "linux")]
+                linux_vt_only: std::env::var("BOO_LINUX_VT").ok().as_deref() == Some("1"),
                 cb_state,
                 ctl_rx,
                 scroll_rx: SCROLL_RX
@@ -363,11 +386,48 @@ impl GhosttyApp {
     }
 
     fn focused_surface(&self) -> ffi::ghostty_surface_t {
-        self.tabs.focused_surface()
+        self.tabs.focused_pane().surface()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn poll_linux_vt_panes(&mut self) {
+        let active_id = self.tabs.focused_pane().id();
+        for (id, pane) in &mut self.linux_panes {
+            let changed = pane.poll_pty().unwrap_or(false);
+            if changed || *id == active_id {
+                if let Ok(snapshot) = pane.snapshot() {
+                    if *id == active_id {
+                        self.pwd = snapshot.pwd.clone();
+                        if !snapshot.title.is_empty() {
+                            self.tabs.set_active_title(snapshot.title.clone());
+                        }
+                        self.scrollbar.total = snapshot.scrollbar.total;
+                        self.scrollbar.offset = snapshot.scrollbar.offset;
+                        self.scrollbar.len = snapshot.scrollbar.len;
+                    }
+                    self.linux_snapshots.insert(*id, snapshot);
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn linux_focused_pane_mut(&mut self) -> Option<&mut linux_vt_backend::LinuxVtPane> {
+        let id = self.tabs.focused_pane().id();
+        self.linux_panes.get_mut(&id)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn linux_active_snapshot(&self) -> Option<&linux_vt_backend::TerminalSnapshot> {
+        let id = self.tabs.focused_pane().id();
+        self.linux_snapshots.get(&id)
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
         unsafe { ffi::ghostty_app_tick(self.app) };
+
+        #[cfg(target_os = "linux")]
+        self.poll_linux_vt_panes();
 
         // Process one control command per frame
         if let Ok(cmd) = self.ctl_rx.try_recv() {
@@ -385,6 +445,25 @@ impl GhosttyApp {
                 }
                 unsafe {
                     ffi::ghostty_surface_mouse_scroll(surface, scroll.dx, scroll.dy, mods);
+                }
+            } else {
+                #[cfg(target_os = "linux")]
+                if self.linux_vt_only {
+                    if self.scrollbar.total > self.scrollbar.len {
+                        self.scrollbar_opacity = 1.0;
+                    }
+                    let line_delta = if scroll.dy.abs() >= 1.0 {
+                        -scroll.dy.round() as isize
+                    } else if scroll.dy > 0.0 {
+                        -1
+                    } else if scroll.dy < 0.0 {
+                        1
+                    } else {
+                        0
+                    };
+                    if let Some(pane) = self.linux_focused_pane_mut() {
+                        let _ = pane.scroll_viewport_delta(line_delta);
+                    }
                 }
             }
         }
@@ -441,9 +520,6 @@ impl GhosttyApp {
         };
 
         let surface = self.focused_surface();
-        if surface.is_null() {
-            return Task::none();
-        }
 
         match event {
             Event::Keyboard(kb_event) => self.handle_keyboard(kb_event),
@@ -452,16 +528,20 @@ impl GhosttyApp {
                 self.handle_resize(size);
             }
             Event::Window(window::Event::Focused) => {
-                unsafe {
-                    ffi::ghostty_surface_set_focus(surface, true);
-                    ffi::ghostty_app_set_focus(self.app, true);
-                };
+                if !surface.is_null() {
+                    unsafe {
+                        ffi::ghostty_surface_set_focus(surface, true);
+                        ffi::ghostty_app_set_focus(self.app, true);
+                    };
+                }
             }
             Event::Window(window::Event::Unfocused) => {
-                unsafe {
-                    ffi::ghostty_surface_set_focus(surface, false);
-                    ffi::ghostty_app_set_focus(self.app, false);
-                };
+                if !surface.is_null() {
+                    unsafe {
+                        ffi::ghostty_surface_set_focus(surface, false);
+                        ffi::ghostty_app_set_focus(self.app, false);
+                    };
+                }
             }
             _ => {}
         }
@@ -597,6 +677,20 @@ impl GhosttyApp {
                 let consumed_mods = translation_mods
                     & !(ffi::GHOSTTY_MODS_CTRL | ffi::GHOSTTY_MODS_SUPER);
 
+                #[cfg(target_os = "linux")]
+                if self.linux_vt_only && surface.is_null() {
+                    let _ = self.forward_key_to_linux_vt(
+                        if repeat { vt::GHOSTTY_KEY_ACTION_REPEAT } else { vt::GHOSTTY_KEY_ACTION_PRESS },
+                        keycode,
+                        mods as vt::GhosttyMods,
+                        consumed_mods as vt::GhosttyMods,
+                        text.as_deref().unwrap_or(""),
+                        false,
+                        unshifted_codepoint,
+                    );
+                    return;
+                }
+
                 // text: the produced character. Filter control chars < 0x20 — ghostty handles Ctrl mapping
                 let text_cstring = text
                     .as_ref()
@@ -633,6 +727,19 @@ impl GhosttyApp {
                 let Some(keycode) = keymap::physical_to_native_keycode(&physical_key) else {
                     return;
                 };
+                #[cfg(target_os = "linux")]
+                if self.linux_vt_only && self.focused_surface().is_null() {
+                    let _ = self.forward_key_to_linux_vt(
+                        vt::GHOSTTY_KEY_ACTION_RELEASE,
+                        keycode,
+                        iced_mods_to_ghostty(&modifiers) as vt::GhosttyMods,
+                        0,
+                        "",
+                        false,
+                        0,
+                    );
+                    return;
+                }
                 let key_event = ffi::ghostty_input_key_s {
                     action: ffi::ghostty_input_action_e::GHOSTTY_ACTION_RELEASE,
                     mods: iced_mods_to_ghostty(&modifiers),
@@ -646,6 +753,38 @@ impl GhosttyApp {
             }
             _ => {}
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn forward_key_to_linux_vt(
+        &mut self,
+        action: i32,
+        keycode: u32,
+        mods: vt::GhosttyMods,
+        consumed_mods: vt::GhosttyMods,
+        text: &str,
+        composing: bool,
+        unshifted_codepoint: u32,
+    ) -> std::io::Result<()> {
+        let Some(pane) = self.linux_focused_pane_mut() else { return Ok(()); };
+        let mut ev = vt::KeyEvent::new().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        ev.set_action(action);
+        ev.set_key(keycode as vt::GhosttyKey);
+        ev.set_mods(mods);
+        ev.set_consumed_mods(consumed_mods);
+        ev.set_composing(composing);
+        ev.set_unshifted_codepoint(unshifted_codepoint);
+        if !text.is_empty() {
+            ev.set_utf8(text);
+        }
+        let bytes = pane
+            .key_encoder()
+            .encode(&ev)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        if !bytes.is_empty() {
+            pane.write_input(&bytes)?;
+        }
+        Ok(())
     }
 
     fn handle_control_cmd(&mut self, cmd: control::ControlCmd) {
@@ -676,11 +815,11 @@ impl GhosttyApp {
                 self.create_split(dir);
             }
             control::ControlCmd::FocusSurface { index } => {
-                let old = self.tabs.focused_surface();
+                let old = self.tabs.focused_pane().surface();
                 if let Some(tree) = self.tabs.active_tree_mut() {
                     tree.set_focus(index);
                 }
-                let new = self.tabs.focused_surface();
+                let new = self.tabs.focused_pane().surface();
                 if old != new {
                     unsafe {
                         if !old.is_null() { ffi::ghostty_surface_set_focus(old, false); }
@@ -1734,9 +1873,9 @@ impl GhosttyApp {
                     std::process::exit(0);
                 }
                 let active = self.tabs.active_index();
-                let surfaces = self.tabs.remove_tab(active);
-                for s in surfaces {
-                    unsafe { ffi::ghostty_surface_free(s) };
+                let panes = self.tabs.remove_tab(active);
+                for pane in panes {
+                    unsafe { ffi::ghostty_surface_free(pane.surface()) };
                 }
                 self.sync_after_tab_change();
             }
@@ -1769,7 +1908,7 @@ impl GhosttyApp {
                 if let Some(tree) = self.tabs.active_tree_mut() {
                     tree.focus_next();
                 }
-                let new = self.tabs.focused_surface();
+                let new = self.tabs.focused_pane().surface();
                 self.cb_state.surface = new;
                 unsafe { if !new.is_null() { ffi::ghostty_surface_set_focus(new, true); } }
             }
@@ -1777,7 +1916,7 @@ impl GhosttyApp {
                 if let Some(tree) = self.tabs.active_tree_mut() {
                     tree.focus_prev();
                 }
-                let new = self.tabs.focused_surface();
+                let new = self.tabs.focused_pane().surface();
                 self.cb_state.surface = new;
                 unsafe { if !new.is_null() { ffi::ghostty_surface_set_focus(new, true); } }
             }
@@ -2107,7 +2246,7 @@ impl GhosttyApp {
     }
 
     fn sync_after_tab_change(&mut self) {
-        self.cb_state.surface = self.tabs.focused_surface();
+        self.cb_state.surface = self.tabs.focused_pane().surface();
         self.relayout();
     }
 
@@ -2128,15 +2267,32 @@ impl GhosttyApp {
         self.ghostty_binding_action(&format!("search:{}", self.search_query));
     }
 
-    fn scroll_to_mouse_y(&self, y: f64) {
+    fn scroll_to_mouse_y(&mut self, y: f64) {
         let terminal_h = self.last_size.height as f64 - STATUS_BAR_HEIGHT;
         if terminal_h <= 0.0 || self.scrollbar.total <= self.scrollbar.len {
             return;
         }
         let fraction = (y / terminal_h).clamp(0.0, 1.0);
         let max_offset = self.scrollbar.total.saturating_sub(self.scrollbar.len);
-        let target_row = (fraction * max_offset as f64) as usize;
-        self.ghostty_binding_action(&format!("scroll_to_row:{target_row}"));
+        let target_row = (fraction * max_offset as f64) as u64;
+        let surface = self.focused_surface();
+        if !surface.is_null() {
+            self.ghostty_binding_action(&format!("scroll_to_row:{target_row}"));
+            return;
+        }
+        #[cfg(target_os = "linux")]
+        if self.linux_vt_only {
+            let delta = target_row as i64 - self.scrollbar.offset as i64;
+            if let Some(pane) = self.linux_focused_pane_mut() {
+                let _ = if target_row == 0 {
+                    pane.scroll_viewport_top()
+                } else if target_row >= max_offset {
+                    pane.scroll_viewport_bottom()
+                } else {
+                    pane.scroll_viewport_delta(delta as isize)
+                };
+            }
+        }
     }
 
     fn terminal_frame(&self) -> platform::Rect {
@@ -2165,6 +2321,19 @@ impl GhosttyApp {
                 }
                 if self.scrollbar_drag {
                     self.scroll_to_mouse_y(position.y as f64);
+                    return;
+                }
+                #[cfg(target_os = "linux")]
+                if self.linux_vt_only && self.focused_surface().is_null() {
+                    if let Some(pane) = self.linux_focused_pane_mut() {
+                        let _ = pane.send_mouse_input(
+                            vt::GHOSTTY_MOUSE_ACTION_MOTION,
+                            None,
+                            position.x,
+                            position.y,
+                            ffi::GHOSTTY_MODS_NONE as vt::GhosttyMods,
+                        );
+                    }
                     return;
                 }
                 unsafe {
@@ -2204,7 +2373,7 @@ impl GhosttyApp {
                     let old = self.focused_surface();
                     if let Some(tree) = self.tabs.active_tree_mut() {
                         if tree.focus_at(frame, point) {
-                            let new = self.tabs.focused_surface();
+                            let new = self.tabs.focused_pane().surface();
                             unsafe {
                                 if !old.is_null() { ffi::ghostty_surface_set_focus(old, false); }
                                 if !new.is_null() { ffi::ghostty_surface_set_focus(new, true); }
@@ -2212,6 +2381,20 @@ impl GhosttyApp {
                             self.cb_state.surface = new;
                         }
                     }
+                }
+                #[cfg(target_os = "linux")]
+                if self.linux_vt_only && self.focused_surface().is_null() {
+                    let (mx, my) = self.last_mouse_pos;
+                    if let Some(pane) = self.linux_focused_pane_mut() {
+                        let _ = pane.send_mouse_input(
+                            vt::GHOSTTY_MOUSE_ACTION_PRESS,
+                            Some(iced_button_to_vt(button)),
+                            mx as f32,
+                            my as f32,
+                            ffi::GHOSTTY_MODS_NONE as vt::GhosttyMods,
+                        );
+                    }
+                    return;
                 }
                 unsafe {
                     ffi::ghostty_surface_mouse_button(
@@ -2233,6 +2416,20 @@ impl GhosttyApp {
                         return;
                     }
                 }
+                #[cfg(target_os = "linux")]
+                if self.linux_vt_only && self.focused_surface().is_null() {
+                    let (mx, my) = self.last_mouse_pos;
+                    if let Some(pane) = self.linux_focused_pane_mut() {
+                        let _ = pane.send_mouse_input(
+                            vt::GHOSTTY_MOUSE_ACTION_RELEASE,
+                            Some(iced_button_to_vt(button)),
+                            mx as f32,
+                            my as f32,
+                            ffi::GHOSTTY_MODS_NONE as vt::GhosttyMods,
+                        );
+                    }
+                    return;
+                }
                 unsafe {
                     ffi::ghostty_surface_mouse_button(
                         self.focused_surface(),
@@ -2248,16 +2445,29 @@ impl GhosttyApp {
                 #[cfg(target_os = "linux")]
                 {
                     let surface = self.focused_surface();
+                    let (dx, dy) = match delta {
+                        mouse::ScrollDelta::Lines { x, y } => (x as f64, y as f64),
+                        mouse::ScrollDelta::Pixels { x, y } => (x as f64, y as f64),
+                    };
+                    if self.scrollbar.total > self.scrollbar.len {
+                        self.scrollbar_opacity = 1.0;
+                    }
                     if !surface.is_null() {
-                        let (dx, dy) = match delta {
-                            mouse::ScrollDelta::Lines { x, y } => (x as f64, y as f64),
-                            mouse::ScrollDelta::Pixels { x, y } => (x as f64, y as f64),
-                        };
-                        if self.scrollbar.total > self.scrollbar.len {
-                            self.scrollbar_opacity = 1.0;
-                        }
                         unsafe {
                             ffi::ghostty_surface_mouse_scroll(surface, dx, dy, 0);
+                        }
+                    } else if self.linux_vt_only {
+                        let line_delta = if dy.abs() >= 1.0 {
+                            -dy.round() as isize
+                        } else if dy > 0.0 {
+                            -1
+                        } else if dy < 0.0 {
+                            1
+                        } else {
+                            0
+                        };
+                        if let Some(pane) = self.linux_focused_pane_mut() {
+                            let _ = pane.scroll_viewport_delta(line_delta);
                         }
                     }
                 }
@@ -2291,10 +2501,9 @@ impl GhosttyApp {
         self.scrollbar_layer = platform::create_scrollbar_layer();
         let frame = self.terminal_frame();
 
-        let (surface, child_view) = self.create_ghostty_surface(frame, true);
-        let Some(surface) = surface else { return };
-        self.tabs.add_initial_tab(surface, child_view);
-        self.cb_state.surface = surface;
+        let Some(pane) = self.create_pane(frame, true) else { return };
+        self.tabs.add_initial_tab(pane);
+        self.cb_state.surface = pane.surface();
 
         // Tell ghostty the initial surface size so it starts rendering.
         {
@@ -2305,8 +2514,10 @@ impl GhosttyApp {
                 (800, 600) // default until first resize
             };
             unsafe {
-                ffi::ghostty_surface_set_content_scale(surface, scale, scale);
-                ffi::ghostty_surface_set_size(surface, w, h);
+                if !pane.surface().is_null() {
+                    ffi::ghostty_surface_set_content_scale(pane.surface(), scale, scale);
+                    ffi::ghostty_surface_set_size(pane.surface(), w, h);
+                }
             }
             log::info!("tab 0 created, size {w}x{h}");
         }
@@ -2317,22 +2528,27 @@ impl GhosttyApp {
         }
     }
 
-    fn create_ghostty_surface(
+    fn create_pane(
         &mut self,
         frame: platform::Rect,
         is_first: bool,
-    ) -> (Option<ffi::ghostty_surface_t>, *mut c_void) {
-        self.create_ghostty_surface_with(frame, is_first, None, None)
+    ) -> Option<PaneHandle> {
+        self.create_pane_with(frame, is_first, None, None)
     }
 
     #[allow(unused_variables)]
-    fn create_ghostty_surface_with(
+    fn create_pane_with(
         &mut self,
         frame: platform::Rect,
         is_first: bool,
         command: Option<&CStr>,
         working_directory: Option<&CStr>,
-    ) -> (Option<ffi::ghostty_surface_t>, *mut c_void) {
+    ) -> Option<PaneHandle> {
+        #[cfg(target_os = "linux")]
+        if self.linux_vt_only {
+            return self.create_linux_vt_pane(frame, command, working_directory);
+        }
+
         let scale = self.scale_factor();
         let mut config = unsafe { ffi::ghostty_surface_config_new() };
         config.userdata = &*self.cb_state as *const CallbackState as *mut c_void;
@@ -2355,7 +2571,7 @@ impl GhosttyApp {
         let child_view = {
             let parent_handle = platform::content_view_handle();
             if parent_handle.is_null() {
-                return (None, ptr::null_mut());
+                return None;
             }
             let cv = platform::create_child_view(parent_handle, frame);
             config.platform = platform::platform_config(cv);
@@ -2381,11 +2597,42 @@ impl GhosttyApp {
         let surface = unsafe { ffi::ghostty_surface_new(self.app, &config) };
         if surface.is_null() {
             log::error!("failed to create ghostty surface");
-            return (None, child_view);
+            return None;
         }
         platform::set_view_layer_transparent(child_view);
 
-        (Some(surface), child_view)
+        Some(PaneHandle::new(surface, child_view))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn create_linux_vt_pane(
+        &mut self,
+        frame: platform::Rect,
+        command: Option<&CStr>,
+        working_directory: Option<&CStr>,
+    ) -> Option<PaneHandle> {
+        let cols = ((frame.size.width / self.cell_width).floor() as u16).max(2);
+        let rows = ((frame.size.height / self.cell_height).floor() as u16).max(1);
+        let cell_width_px = self.cell_width.max(1.0).round() as u32;
+        let cell_height_px = self.cell_height.max(1.0).round() as u32;
+        let pane = PaneHandle::detached();
+        let wd_path = working_directory.map(|wd| std::path::Path::new(std::ffi::OsStr::from_bytes(wd.to_bytes())));
+        let backend = linux_vt_backend::LinuxVtPane::spawn(
+            cols,
+            rows,
+            cell_width_px,
+            cell_height_px,
+            command,
+            wd_path,
+        )
+        .ok()?;
+        self.linux_panes.insert(pane.id(), backend);
+        if let Some(backend) = self.linux_panes.get_mut(&pane.id()) {
+            if let Ok(snapshot) = backend.snapshot() {
+                self.linux_snapshots.insert(pane.id(), snapshot);
+            }
+        }
+        Some(pane)
     }
 
     fn create_split(&mut self, direction: ffi::ghostty_action_split_direction_e) {
@@ -2401,12 +2648,12 @@ impl GhosttyApp {
             _ => splits::Direction::Vertical,
         };
 
-        let (surface, nsview) = self.create_ghostty_surface(parent_bounds, false);
-        let Some(surface) = surface else { return };
+        let Some(pane) = self.create_pane(parent_bounds, false) else { return };
+        let surface = pane.surface();
 
-        let old_focused = self.tabs.focused_surface();
+        let old_focused = self.tabs.focused_pane().surface();
         if let Some(tree) = self.tabs.active_tree_mut() {
-            tree.split_focused(split_dir, surface, nsview);
+            tree.split_focused(split_dir, pane);
         }
         self.cb_state.surface = surface;
 
@@ -2419,14 +2666,14 @@ impl GhosttyApp {
     }
 
     fn switch_focus(&mut self, dir: ffi::ghostty_action_goto_split_e) {
-        let old = self.tabs.focused_surface();
+        let old = self.tabs.focused_pane().surface();
         if let Some(tree) = self.tabs.active_tree_mut() {
             match dir {
                 ffi::ghostty_action_goto_split_e::GHOSTTY_GOTO_SPLIT_NEXT => tree.focus_next(),
                 ffi::ghostty_action_goto_split_e::GHOSTTY_GOTO_SPLIT_PREVIOUS => tree.focus_prev(),
             }
         }
-        let new = self.tabs.focused_surface();
+        let new = self.tabs.focused_pane().surface();
         if old != new {
             unsafe {
                 if !old.is_null() { ffi::ghostty_surface_set_focus(old, false); }
@@ -2436,17 +2683,31 @@ impl GhosttyApp {
         }
     }
 
-    fn relayout(&self) {
+    fn relayout(&mut self) {
         if self.tabs.is_empty() || self.last_size.width == 0.0 {
             return;
         }
         let scale = self.scale_factor();
         let frame = self.terminal_frame();
         let surfaces = self.tabs.layout_active(frame, scale);
-        for (surface, w, h) in surfaces {
-            unsafe {
-                ffi::ghostty_surface_set_content_scale(surface, scale, scale);
-                ffi::ghostty_surface_set_size(surface, w, h);
+        for (pane, w, h) in surfaces {
+            let surface = pane.surface();
+            if !surface.is_null() {
+                unsafe {
+                    ffi::ghostty_surface_set_content_scale(surface, scale, scale);
+                    ffi::ghostty_surface_set_size(surface, w, h);
+                }
+            }
+            #[cfg(target_os = "linux")]
+            if let Some(vt_pane) = self.linux_panes.get_mut(&pane.id()) {
+                let cols = ((w as f64 / self.cell_width).floor() as u16).max(2);
+                let rows = ((h as f64 / self.cell_height).floor() as u16).max(1);
+                let _ = vt_pane.resize(
+                    cols,
+                    rows,
+                    self.cell_width.max(1.0).round() as u32,
+                    self.cell_height.max(1.0).round() as u32,
+                );
             }
         }
     }
@@ -2454,7 +2715,14 @@ impl GhosttyApp {
     fn handle_surface_closed(&mut self) {
         // Remove just the focused leaf from the split tree
         if let Some(tree) = self.tabs.active_tree_mut() {
-            if let Some((surface, nsview)) = tree.remove_focused() {
+            if let Some(pane) = tree.remove_focused() {
+                let surface = pane.surface();
+                let nsview = pane.view();
+                #[cfg(target_os = "linux")]
+                {
+                    self.linux_panes.remove(&pane.id());
+                    self.linux_snapshots.remove(&pane.id());
+                }
                 unsafe { ffi::ghostty_surface_free(surface) };
                 platform::remove_view(nsview);
 
@@ -2467,7 +2735,7 @@ impl GhosttyApp {
                     self.tabs.remove_tab(active);
                 }
 
-                self.cb_state.surface = self.tabs.focused_surface();
+                self.cb_state.surface = self.tabs.focused_pane().surface();
                 if !self.cb_state.surface.is_null() {
                     unsafe { ffi::ghostty_surface_set_focus(self.cb_state.surface, true) };
                 }
@@ -2486,11 +2754,16 @@ impl GhosttyApp {
             std::process::exit(0);
         }
         let active = self.tabs.active_index();
-        let surfaces = self.tabs.remove_tab(active);
-        for s in surfaces {
-            unsafe { ffi::ghostty_surface_free(s) };
+        let panes = self.tabs.remove_tab(active);
+        for pane in panes {
+            #[cfg(target_os = "linux")]
+            {
+                self.linux_panes.remove(&pane.id());
+                self.linux_snapshots.remove(&pane.id());
+            }
+            unsafe { ffi::ghostty_surface_free(pane.surface()) };
         }
-        self.cb_state.surface = self.tabs.focused_surface();
+        self.cb_state.surface = self.tabs.focused_pane().surface();
         self.relayout();
     }
 
@@ -2499,15 +2772,15 @@ impl GhosttyApp {
             return;
         }
         let frame = platform::view_bounds(self.parent_view);
-        let (surface, nsview) = self.create_ghostty_surface(frame, false);
-        let Some(surface) = surface else { return };
+        let Some(pane) = self.create_pane(frame, false) else { return };
+        let surface = pane.surface();
 
-        let old = self.tabs.focused_surface();
+        let old = self.tabs.focused_pane().surface();
         if !old.is_null() {
             unsafe { ffi::ghostty_surface_set_focus(old, false) };
         }
 
-        let idx = self.tabs.new_tab(surface, nsview);
+        let idx = self.tabs.new_tab(pane);
         self.cb_state.surface = surface;
         self.relayout();
         log::info!("new tab {idx} (total: {})", self.tabs.len());
@@ -2538,17 +2811,17 @@ impl GhosttyApp {
 
                 if pane_idx == 0 {
                     // First pane → create a new tab
-                    let (surface, nsview) = self.create_ghostty_surface_with(
+                    let Some(pane) = self.create_pane_with(
                         frame, false,
                         cmd_cstr.as_deref(),
                         wd_cstr.as_deref(),
-                    );
-                    let Some(surface) = surface else { continue };
-                    let old = self.tabs.focused_surface();
+                    ) else { continue };
+                    let surface = pane.surface();
+                    let old = self.tabs.focused_pane().surface();
                     if !old.is_null() {
                         unsafe { ffi::ghostty_surface_set_focus(old, false) };
                     }
-                    self.tabs.new_tab(surface, nsview);
+                    self.tabs.new_tab(pane);
                     self.cb_state.surface = surface;
                 } else {
                     // Determine split direction and ratio
@@ -2571,14 +2844,18 @@ impl GhosttyApp {
                         (splits::Direction::Vertical, 0.5)
                     };
 
-                    let (surface, nsview) = self.create_ghostty_surface_with(
+                    let Some(pane) = self.create_pane_with(
                         frame, false,
                         cmd_cstr.as_deref(),
                         wd_cstr.as_deref(),
-                    );
-                    let Some(surface) = surface else { continue };
+                    ) else { continue };
+                    let surface = pane.surface();
                     if let Some(tree) = self.tabs.active_tree_mut() {
-                        tree.split_focused_with_ratio(split_dir, surface, nsview, ratio);
+                        tree.split_focused_with_ratio(
+                            split_dir,
+                            pane,
+                            ratio,
+                        );
                     }
                     self.cb_state.surface = surface;
                 }
@@ -2679,8 +2956,81 @@ impl GhosttyApp {
         }
         #[cfg(target_os = "linux")]
         {
-            // Linux: display ghostty's rendered frame as an image
-            if let Some(ref egl) = self.egl_state {
+            if self.linux_vt_only && self.focused_surface().is_null() {
+                if let Some(snapshot) = self.linux_active_snapshot() {
+                    let mut spans: Vec<iced::widget::text::Span<'static>> = Vec::with_capacity(
+                        snapshot.rows_data.iter().map(Vec::len).sum::<usize>() + snapshot.rows as usize,
+                    );
+                    let cursor_bg = if snapshot.colors.cursor_has_value {
+                        snapshot.colors.cursor
+                    } else {
+                        snapshot.colors.foreground
+                    };
+                    for row_index in 0..snapshot.rows as usize {
+                        let row = snapshot.rows_data.get(row_index);
+                        for col_index in 0..snapshot.cols as usize {
+                            let cell = row.and_then(|cells| cells.get(col_index));
+                            let text_content = cell
+                                .map(|cell| cell.text.clone())
+                                .filter(|text| !text.is_empty() && text != "\0")
+                                .unwrap_or_else(|| " ".to_string());
+                            let mut fg = cell
+                                .map(|cell| vt_color_to_iced(cell.fg))
+                                .unwrap_or_else(|| vt_color_to_iced(snapshot.colors.foreground));
+                            let mut bg = cell
+                                .map(|cell| vt_color_to_iced(cell.bg))
+                                .unwrap_or_else(|| vt_color_to_iced(snapshot.colors.background));
+                            let underline = cell.map(|cell| cell.underline != 0).unwrap_or(false);
+                            if snapshot.cursor.visible
+                                && snapshot.cursor.x as usize == col_index
+                                && snapshot.cursor.y as usize == row_index
+                            {
+                                fg = vt_color_to_iced(snapshot.colors.background);
+                                bg = vt_color_to_iced(cursor_bg);
+                            }
+                            spans.push(
+                                span(text_content)
+                                    .font(Font::MONOSPACE)
+                                    .color(fg)
+                                    .background(bg)
+                                    .underline(underline)
+                                    .to_static(),
+                            );
+                        }
+                        if row_index + 1 < snapshot.rows as usize {
+                            spans.push(
+                                span("\n")
+                                    .font(Font::MONOSPACE)
+                                    .color(vt_color_to_iced(snapshot.colors.foreground))
+                                    .to_static(),
+                            );
+                        }
+                    }
+
+                    let bg = vt_color_to_iced(snapshot.colors.background);
+                    main_col = main_col.push(
+                        container(
+                            rich_text(spans)
+                                .font(Font::MONOSPACE)
+                                .size((self.cell_height.max(12.0) - 2.0) as f32)
+                                .width(Length::Fill)
+                                .height(Length::Fill)
+                                .wrapping(iced::widget::text::Wrapping::None),
+                        )
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .padding([2, 4])
+                        .style(move |_: &Theme| container::Style {
+                            background: Some(Background::Color(bg)),
+                            ..Default::default()
+                        }),
+                    );
+                } else {
+                    main_col = main_col.push(
+                        iced::widget::Space::new().width(Length::Fill).height(Length::Fill),
+                    );
+                }
+            } else if let Some(ref egl) = self.egl_state {
                 let frame = egl.frame_buffer.lock().unwrap();
                 if frame.dirty && frame.width > 0 && frame.height > 0 {
                     // Flip vertically (GL bottom-up) and force alpha opaque
@@ -2882,8 +3232,13 @@ impl GhosttyApp {
 
 impl Drop for GhosttyApp {
     fn drop(&mut self) {
-        for surface in self.tabs.all_surfaces() {
-            unsafe { ffi::ghostty_surface_free(surface) };
+        for pane in self.tabs.all_panes() {
+            #[cfg(target_os = "linux")]
+            {
+                self.linux_panes.remove(&pane.id());
+                self.linux_snapshots.remove(&pane.id());
+            }
+            unsafe { ffi::ghostty_surface_free(pane.surface()) };
         }
         unsafe {
             ffi::ghostty_app_free(self.app);
@@ -3024,6 +3379,21 @@ fn iced_button_to_ghostty(button: mouse::Button) -> ffi::ghostty_input_mouse_but
         mouse::Button::Middle => ffi::ghostty_input_mouse_button_e::GHOSTTY_MOUSE_MIDDLE,
         _ => ffi::ghostty_input_mouse_button_e::GHOSTTY_MOUSE_UNKNOWN,
     }
+}
+
+#[cfg(target_os = "linux")]
+fn iced_button_to_vt(button: mouse::Button) -> vt::GhosttyMouseButton {
+    match button {
+        mouse::Button::Left => vt::GHOSTTY_MOUSE_BUTTON_LEFT,
+        mouse::Button::Right => vt::GHOSTTY_MOUSE_BUTTON_RIGHT,
+        mouse::Button::Middle => vt::GHOSTTY_MOUSE_BUTTON_MIDDLE,
+        _ => vt::GHOSTTY_MOUSE_BUTTON_UNKNOWN,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn vt_color_to_iced(color: vt::GhosttyColorRgb) -> Color {
+    Color::from_rgb8(color.r, color.g, color.b)
 }
 
 // --- Runtime callbacks ---

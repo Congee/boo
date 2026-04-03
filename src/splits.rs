@@ -1,16 +1,15 @@
-//! Binary split tree for managing terminal surface layout.
+//! Binary split tree for managing terminal pane layout.
 //!
 //! The tree has two node types:
-//! - Leaf: a single terminal surface
+//! - Leaf: a single terminal pane
 //! - Split: two children with a direction and ratio
 //!
 //! The tree is used to compute view frames when the window resizes.
 
-use crate::ffi;
+use crate::pane::PaneHandle;
 use crate::platform::{Point, Rect, Size};
-use std::ffi::c_void;
 
-/// Unique ID for a leaf node (surface).
+/// Unique ID for a leaf node (pane).
 pub type LeafId = usize;
 
 /// Split direction.
@@ -25,12 +24,11 @@ pub enum Direction {
 pub enum Node {
     Leaf {
         id: LeafId,
-        surface: ffi::ghostty_surface_t,
-        nsview: *mut c_void,
+        pane: PaneHandle,
     },
     Split {
         direction: Direction,
-        ratio: f64, // 0.0..1.0, size of first child relative to total
+        ratio: f64,
         first: Box<Node>,
         second: Box<Node>,
     },
@@ -45,18 +43,18 @@ pub struct SplitTree {
 
 impl SplitTree {
     pub fn new() -> Self {
-        SplitTree {
+        Self {
             root: None,
             next_id: 0,
             focused_id: 0,
         }
     }
 
-    /// Add the first surface (becomes root leaf).
-    pub fn add_root(&mut self, surface: ffi::ghostty_surface_t, nsview: *mut c_void) -> LeafId {
+    /// Add the first pane (becomes root leaf).
+    pub fn add_root(&mut self, pane: PaneHandle) -> LeafId {
         let id = self.next_id;
         self.next_id += 1;
-        self.root = Some(Node::Leaf { id, surface, nsview });
+        self.root = Some(Node::Leaf { id, pane });
         self.focused_id = id;
         id
     }
@@ -65,18 +63,16 @@ impl SplitTree {
     pub fn split_focused(
         &mut self,
         direction: Direction,
-        surface: ffi::ghostty_surface_t,
-        nsview: *mut c_void,
+        pane: PaneHandle,
     ) -> Option<LeafId> {
-        self.split_focused_with_ratio(direction, surface, nsview, 0.5)
+        self.split_focused_with_ratio(direction, pane, 0.5)
     }
 
     /// Split the focused leaf with a specific ratio.
     pub fn split_focused_with_ratio(
         &mut self,
         direction: Direction,
-        surface: ffi::ghostty_surface_t,
-        nsview: *mut c_void,
+        pane: PaneHandle,
         ratio: f64,
     ) -> Option<LeafId> {
         let focused = self.focused_id;
@@ -84,18 +80,24 @@ impl SplitTree {
         self.next_id += 1;
 
         let root = self.root.take()?;
-        self.root = Some(split_node_with_ratio(root, focused, direction, new_id, surface, nsview, ratio));
+        self.root = Some(split_node_with_ratio(
+            root,
+            focused,
+            direction,
+            new_id,
+            pane,
+            ratio,
+        ));
         self.focused_id = new_id;
         Some(new_id)
     }
 
-    /// Get the focused surface.
-    pub fn focused_surface(&self) -> ffi::ghostty_surface_t {
+    /// Get the focused pane.
+    pub fn focused_pane(&self) -> PaneHandle {
         self.root
             .as_ref()
             .and_then(|r| find_leaf(r, self.focused_id))
-            .map(|(s, _)| s)
-            .unwrap_or(std::ptr::null_mut())
+            .unwrap_or(PaneHandle::null())
     }
 
     /// Set focus to a specific leaf.
@@ -123,9 +125,8 @@ impl SplitTree {
         }
     }
 
-    /// Lay out all surfaces within the given frame. Calls set_frame on each view
-    /// and returns (surface, pixel_width, pixel_height) for each leaf.
-    pub fn layout(&self, frame: Rect, scale: f64) -> Vec<(ffi::ghostty_surface_t, u32, u32)> {
+    /// Lay out all panes within the given frame and return pane sizes.
+    pub fn layout(&self, frame: Rect, scale: f64) -> Vec<(PaneHandle, u32, u32)> {
         let mut result = Vec::new();
         if let Some(ref root) = self.root {
             layout_node(root, frame, scale, &mut result);
@@ -142,13 +143,13 @@ impl SplitTree {
         panes
     }
 
-    /// Collect all surfaces for cleanup.
-    pub fn all_surfaces(&self) -> Vec<ffi::ghostty_surface_t> {
+    /// Collect all panes for cleanup.
+    pub fn all_panes(&self) -> Vec<PaneHandle> {
         match &self.root {
             Some(root) => {
-                let mut surfaces = Vec::new();
-                collect_surfaces(root, &mut surfaces);
-                surfaces
+                let mut panes = Vec::new();
+                collect_panes(root, &mut panes);
+                panes
             }
             None => Vec::new(),
         }
@@ -159,7 +160,7 @@ impl SplitTree {
         self.root.as_ref().map(count_leaves).unwrap_or(0)
     }
 
-    /// Show or hide all NSViews in this tree.
+    /// Show or hide all native views in this tree.
     pub fn set_hidden(&self, hidden: bool) {
         if let Some(ref root) = self.root {
             set_hidden_recursive(root, hidden);
@@ -167,25 +168,19 @@ impl SplitTree {
     }
 
     /// Remove the focused leaf from the tree.
-    /// Returns the removed surface and nsview, or None if not found.
-    /// When a split loses one child, the other child replaces the split node.
-    pub fn remove_focused(&mut self) -> Option<(ffi::ghostty_surface_t, *mut c_void)> {
+    /// Returns the removed pane, or None if not found.
+    pub fn remove_focused(&mut self) -> Option<PaneHandle> {
         let root = self.root.take()?;
         match remove_leaf(root, self.focused_id) {
-            RemoveResult::Removed {
-                surface,
-                nsview,
-                remaining,
-            } => {
+            RemoveResult::Removed { pane, remaining } => {
                 self.root = remaining;
-                // Focus the first available leaf
                 if let Some(ref root) = self.root {
                     let leaves = collect_leaf_ids(root);
                     if !leaves.is_empty() {
                         self.focused_id = leaves[0];
                     }
                 }
-                Some((surface, nsview))
+                Some(pane)
             }
             RemoveResult::NotFound(node) => {
                 self.root = Some(node);
@@ -195,8 +190,6 @@ impl SplitTree {
     }
 
     /// Resize the nearest matching split ancestor of the focused leaf.
-    /// `axis` is which split direction to resize (Horizontal or Vertical).
-    /// `delta` is the ratio change (positive = grow first child).
     pub fn resize_focused(&mut self, axis: Direction, delta: f64) {
         if let Some(ref mut root) = self.root {
             resize_toward_leaf(root, self.focused_id, axis, delta);
@@ -210,8 +203,7 @@ impl SplitTree {
             .and_then(|root| divider_at_node(root, frame, point))
     }
 
-    /// Update the ratio of the split being dragged. Finds the shallowest split
-    /// with matching direction whose frame contains the point.
+    /// Update the ratio of the split being dragged.
     pub fn resize_drag(&mut self, frame: Rect, dir: Direction, point: (f64, f64)) {
         if let Some(ref mut root) = self.root {
             resize_drag_node(root, frame, dir, point);
@@ -219,7 +211,6 @@ impl SplitTree {
     }
 
     /// Find the leaf at a given point and set focus to it.
-    /// Returns true if focus changed.
     pub fn focus_at(&mut self, frame: Rect, point: (f64, f64)) -> bool {
         if let Some(ref root) = self.root {
             if let Some(id) = leaf_at_point(root, frame, point) {
@@ -249,13 +240,12 @@ fn split_node_with_ratio(
     target_id: LeafId,
     direction: Direction,
     new_id: LeafId,
-    surface: ffi::ghostty_surface_t,
-    nsview: *mut c_void,
+    pane: PaneHandle,
     ratio: f64,
 ) -> Node {
     match node {
         Node::Leaf { id, .. } if id == target_id => {
-            let new_leaf = Node::Leaf { id: new_id, surface, nsview };
+            let new_leaf = Node::Leaf { id: new_id, pane };
             Node::Split {
                 direction,
                 ratio: ratio.clamp(0.1, 0.9),
@@ -263,24 +253,39 @@ fn split_node_with_ratio(
                 second: Box::new(new_leaf),
             }
         }
-        Node::Split { direction: d, ratio: r, first, second } => {
-            Node::Split {
-                direction: d,
-                ratio: r,
-                first: Box::new(split_node_with_ratio(*first, target_id, direction, new_id, surface, nsview, ratio)),
-                second: Box::new(split_node_with_ratio(*second, target_id, direction, new_id, surface, nsview, ratio)),
-            }
-        }
+        Node::Split {
+            direction: existing_direction,
+            ratio: existing_ratio,
+            first,
+            second,
+        } => Node::Split {
+            direction: existing_direction,
+            ratio: existing_ratio,
+            first: Box::new(split_node_with_ratio(
+                *first,
+                target_id,
+                direction,
+                new_id,
+                pane,
+                ratio,
+            )),
+            second: Box::new(split_node_with_ratio(
+                *second,
+                target_id,
+                direction,
+                new_id,
+                pane,
+                ratio,
+            )),
+        },
         other => other,
     }
 }
 
-fn find_leaf(node: &Node, id: LeafId) -> Option<(ffi::ghostty_surface_t, *mut c_void)> {
+fn find_leaf(node: &Node, id: LeafId) -> Option<PaneHandle> {
     match node {
-        Node::Leaf { id: lid, surface, nsview } if *lid == id => Some((*surface, *nsview)),
-        Node::Split { first, second, .. } => {
-            find_leaf(first, id).or_else(|| find_leaf(second, id))
-        }
+        Node::Leaf { id: leaf_id, pane } if *leaf_id == id => Some(*pane),
+        Node::Split { first, second, .. } => find_leaf(first, id).or_else(|| find_leaf(second, id)),
         _ => None,
     }
 }
@@ -296,12 +301,12 @@ fn collect_leaf_ids(node: &Node) -> Vec<LeafId> {
     }
 }
 
-fn collect_surfaces(node: &Node, out: &mut Vec<ffi::ghostty_surface_t>) {
+fn collect_panes(node: &Node, out: &mut Vec<PaneHandle>) {
     match node {
-        Node::Leaf { surface, .. } => out.push(*surface),
+        Node::Leaf { pane, .. } => out.push(*pane),
         Node::Split { first, second, .. } => {
-            collect_surfaces(first, out);
-            collect_surfaces(second, out);
+            collect_panes(first, out);
+            collect_panes(second, out);
         }
     }
 }
@@ -313,18 +318,13 @@ fn count_leaves(node: &Node) -> usize {
     }
 }
 
-fn layout_node(
-    node: &Node,
-    frame: Rect,
-    scale: f64,
-    out: &mut Vec<(ffi::ghostty_surface_t, u32, u32)>,
-) {
+fn layout_node(node: &Node, frame: Rect, scale: f64, out: &mut Vec<(PaneHandle, u32, u32)>) {
     match node {
-        Node::Leaf { surface, nsview, .. } => {
-            crate::platform::set_view_frame(*nsview, frame);
+        Node::Leaf { pane, .. } => {
+            crate::platform::set_view_frame(pane.view(), frame);
             let w = (frame.size.width * scale) as u32;
             let h = (frame.size.height * scale) as u32;
-            out.push((*surface, w, h));
+            out.push((*pane, w, h));
         }
         Node::Split { direction, ratio, first, second } => {
             let (first_frame, second_frame) = split_frame(frame, *direction, *ratio);
@@ -352,7 +352,6 @@ fn split_frame(frame: Rect, direction: Direction, ratio: f64) -> (Rect, Rect) {
             )
         }
         Direction::Vertical => {
-            // First child at top, second below (flipped coordinates: origin is top-left)
             let usable = frame.size.height - SPLIT_BORDER;
             let h1 = usable * ratio;
             let h2 = usable - h1;
@@ -367,11 +366,9 @@ fn split_frame(frame: Rect, direction: Direction, ratio: f64) -> (Rect, Rect) {
     }
 }
 
-
 enum RemoveResult {
     Removed {
-        surface: ffi::ghostty_surface_t,
-        nsview: *mut c_void,
+        pane: PaneHandle,
         remaining: Option<Node>,
     },
     NotFound(Node),
@@ -379,9 +376,8 @@ enum RemoveResult {
 
 fn remove_leaf(node: Node, target_id: LeafId) -> RemoveResult {
     match node {
-        Node::Leaf { id, surface, nsview } if id == target_id => RemoveResult::Removed {
-            surface,
-            nsview,
+        Node::Leaf { id, pane } if id == target_id => RemoveResult::Removed {
+            pane,
             remaining: None,
         },
         Node::Split {
@@ -389,81 +385,59 @@ fn remove_leaf(node: Node, target_id: LeafId) -> RemoveResult {
             ratio,
             first,
             second,
-        } => {
-            match remove_leaf(*first, target_id) {
+        } => match remove_leaf(*first, target_id) {
+            RemoveResult::Removed {
+                pane,
+                remaining: Some(remaining_first),
+            } => RemoveResult::Removed {
+                pane,
+                remaining: Some(Node::Split {
+                    direction,
+                    ratio,
+                    first: Box::new(remaining_first),
+                    second,
+                }),
+            },
+            RemoveResult::Removed {
+                pane,
+                remaining: None,
+            } => RemoveResult::Removed {
+                pane,
+                remaining: Some(*second),
+            },
+            RemoveResult::NotFound(first_node) => match remove_leaf(*second, target_id) {
                 RemoveResult::Removed {
-                    surface,
-                    nsview,
-                    remaining: Some(remaining_first),
+                    pane,
+                    remaining: Some(remaining_second),
                 } => RemoveResult::Removed {
-                    surface,
-                    nsview,
+                    pane,
                     remaining: Some(Node::Split {
                         direction,
                         ratio,
-                        first: Box::new(remaining_first),
-                        second,
+                        first: Box::new(first_node),
+                        second: Box::new(remaining_second),
                     }),
                 },
                 RemoveResult::Removed {
-                    surface,
-                    nsview,
+                    pane,
                     remaining: None,
-                } => {
-                    // First child was the target leaf — replace split with second child
-                    RemoveResult::Removed {
-                        surface,
-                        nsview,
-                        remaining: Some(*second),
-                    }
-                }
-                RemoveResult::NotFound(first_node) => {
-                    // Try second child
-                    match remove_leaf(*second, target_id) {
-                        RemoveResult::Removed {
-                            surface,
-                            nsview,
-                            remaining: Some(remaining_second),
-                        } => RemoveResult::Removed {
-                            surface,
-                            nsview,
-                            remaining: Some(Node::Split {
-                                direction,
-                                ratio,
-                                first: Box::new(first_node),
-                                second: Box::new(remaining_second),
-                            }),
-                        },
-                        RemoveResult::Removed {
-                            surface,
-                            nsview,
-                            remaining: None,
-                        } => {
-                            // Second child was target — replace split with first child
-                            RemoveResult::Removed {
-                                surface,
-                                nsview,
-                                remaining: Some(first_node),
-                            }
-                        }
-                        RemoveResult::NotFound(second_node) => {
-                            RemoveResult::NotFound(Node::Split {
-                                direction,
-                                ratio,
-                                first: Box::new(first_node),
-                                second: Box::new(second_node),
-                            })
-                        }
-                    }
-                }
-            }
-        }
+                } => RemoveResult::Removed {
+                    pane,
+                    remaining: Some(first_node),
+                },
+                RemoveResult::NotFound(second_node) => RemoveResult::NotFound(Node::Split {
+                    direction,
+                    ratio,
+                    first: Box::new(first_node),
+                    second: Box::new(second_node),
+                }),
+            },
+        },
         other => RemoveResult::NotFound(other),
     }
 }
 
-/// Find the nearest ancestor split matching `axis` that contains the focused leaf,
-/// and adjust its ratio by `delta`. Returns (found_focused, resize_applied).
+/// Find the nearest ancestor split matching `axis` that contains the focused leaf.
 fn resize_toward_leaf(node: &mut Node, target: LeafId, axis: Direction, delta: f64) -> (bool, bool) {
     match node {
         Node::Leaf { id, .. } => (*id == target, false),
@@ -519,8 +493,7 @@ fn divider_at_node(node: &Node, frame: Rect, point: (f64, f64)) -> Option<Direct
                         && point.1 <= frame.origin.y + frame.size.height
                 }
                 Direction::Vertical => {
-                    let div_y =
-                        first_frame.origin.y + first_frame.size.height + SPLIT_BORDER / 2.0;
+                    let div_y = first_frame.origin.y + first_frame.size.height + SPLIT_BORDER / 2.0;
                     (point.1 - div_y).abs() < half
                         && point.0 >= frame.origin.x
                         && point.0 <= frame.origin.x + frame.size.width
@@ -528,24 +501,16 @@ fn divider_at_node(node: &Node, frame: Rect, point: (f64, f64)) -> Option<Direct
             };
 
             if on_divider {
-                return Some(*direction);
+                Some(*direction)
+            } else {
+                divider_at_node(first, first_frame, point)
+                    .or_else(|| divider_at_node(second, second_frame, point))
             }
-
-            // Recurse into children (deeper splits take priority)
-            divider_at_node(first, first_frame, point)
-                .or_else(|| divider_at_node(second, second_frame, point))
         }
     }
 }
 
-/// During drag: find the shallowest split with matching direction whose frame
-/// contains the point, and set its ratio from the mouse position.
-fn resize_drag_node(
-    node: &mut Node,
-    frame: Rect,
-    target_dir: Direction,
-    point: (f64, f64),
-) -> bool {
+fn resize_drag_node(node: &mut Node, frame: Rect, dir: Direction, point: (f64, f64)) -> bool {
     match node {
         Node::Leaf { .. } => false,
         Node::Split {
@@ -554,24 +519,29 @@ fn resize_drag_node(
             first,
             second,
         } => {
-            if *direction == target_dir {
-                // Update this split's ratio from mouse position
-                let new_ratio = match direction {
-                    Direction::Horizontal => (point.0 - frame.origin.x) / frame.size.width,
-                    Direction::Vertical => (point.1 - frame.origin.y) / frame.size.height,
-                };
-                *ratio = new_ratio.clamp(0.1, 0.9);
-                return true;
+            let (first_frame, second_frame) = split_frame(frame, *direction, *ratio);
+
+            if *direction == dir {
+                match dir {
+                    Direction::Horizontal => {
+                        if point.1 >= frame.origin.y && point.1 <= frame.origin.y + frame.size.height {
+                            let rel = (point.0 - frame.origin.x) / frame.size.width.max(1.0);
+                            *ratio = rel.clamp(0.1, 0.9);
+                            return true;
+                        }
+                    }
+                    Direction::Vertical => {
+                        if point.0 >= frame.origin.x && point.0 <= frame.origin.x + frame.size.width {
+                            let rel = (point.1 - frame.origin.y) / frame.size.height.max(1.0);
+                            *ratio = rel.clamp(0.1, 0.9);
+                            return true;
+                        }
+                    }
+                }
             }
 
-            // Wrong direction — recurse to find a matching child split
-            let (first_frame, second_frame) = split_frame(frame, *direction, *ratio);
-            let in_first = point_in_frame(point, first_frame);
-            if in_first {
-                resize_drag_node(first, first_frame, target_dir, point)
-            } else {
-                resize_drag_node(second, second_frame, target_dir, point)
-            }
+            resize_drag_node(first, first_frame, dir, point)
+                || resize_drag_node(second, second_frame, dir, point)
         }
     }
 }
@@ -579,65 +549,48 @@ fn resize_drag_node(
 fn leaf_at_point(node: &Node, frame: Rect, point: (f64, f64)) -> Option<LeafId> {
     match node {
         Node::Leaf { id, .. } => {
-            if point_in_frame(point, frame) {
-                Some(*id)
-            } else {
-                None
-            }
+            let inside_x = point.0 >= frame.origin.x && point.0 <= frame.origin.x + frame.size.width;
+            let inside_y = point.1 >= frame.origin.y && point.1 <= frame.origin.y + frame.size.height;
+            if inside_x && inside_y { Some(*id) } else { None }
         }
+        Node::Split { direction, ratio, first, second } => {
+            let (first_frame, second_frame) = split_frame(frame, *direction, *ratio);
+            leaf_at_point(first, first_frame, point).or_else(|| leaf_at_point(second, second_frame, point))
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ExportedPane {
+    #[allow(dead_code)]
+    pub pane: PaneHandle,
+    pub split: Option<(Direction, f64)>,
+}
+
+fn export_node(node: &Node, parent_split: Option<(Direction, f64)>, out: &mut Vec<ExportedPane>) {
+    match node {
+        Node::Leaf { pane, .. } => out.push(ExportedPane {
+            pane: *pane,
+            split: parent_split,
+        }),
         Node::Split {
             direction,
             ratio,
             first,
             second,
-            ..
         } => {
-            let (first_frame, second_frame) = split_frame(frame, *direction, *ratio);
-            leaf_at_point(first, first_frame, point)
-                .or_else(|| leaf_at_point(second, second_frame, point))
+            export_node(first, Some((*direction, *ratio)), out);
+            export_node(second, Some((*direction, *ratio)), out);
         }
     }
-}
-
-fn point_in_frame(point: (f64, f64), frame: Rect) -> bool {
-    point.0 >= frame.origin.x
-        && point.0 <= frame.origin.x + frame.size.width
-        && point.1 >= frame.origin.y
-        && point.1 <= frame.origin.y + frame.size.height
 }
 
 fn set_hidden_recursive(node: &Node, hidden: bool) {
     match node {
-        Node::Leaf { nsview, .. } => crate::platform::set_view_hidden(*nsview, hidden),
+        Node::Leaf { pane, .. } => crate::platform::set_view_hidden(pane.view(), hidden),
         Node::Split { first, second, .. } => {
             set_hidden_recursive(first, hidden);
             set_hidden_recursive(second, hidden);
-        }
-    }
-}
-
-/// A pane exported from the split tree for session saving.
-pub struct ExportedPane {
-    /// The split that created this pane (None for the first pane).
-    pub split: Option<(Direction, f64)>, // (direction, ratio)
-}
-
-/// In-order walk: first child inherits parent's split context, second child
-/// records the split that separated it from first.
-fn export_node(
-    node: &Node,
-    split_info: Option<(Direction, f64)>,
-    out: &mut Vec<ExportedPane>,
-) {
-    match node {
-        Node::Leaf { .. } => {
-            out.push(ExportedPane { split: split_info });
-        }
-        Node::Split { direction, ratio, first, second } => {
-            // First child: inherits whatever split_info was passed to us
-            export_node(first, split_info, out);
-            // Second child: was created by THIS split
-            export_node(second, Some((*direction, *ratio)), out);
         }
     }
 }
