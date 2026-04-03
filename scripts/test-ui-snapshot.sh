@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_ROOT="${BOO_TEST_CONFIG_ROOT:-/tmp/boo-ui-test}"
 CONFIG_DIR="$CONFIG_ROOT/boo"
 SOCKET_PATH="${BOO_TEST_SOCKET:-/tmp/boo-ui-test.sock}"
+LOG_PATH="${BOO_TEST_LOG:-/tmp/boo-ui-test.log}"
 KEEP_RUNNING="${BOO_TEST_KEEP_RUNNING:-0}"
 
 mkdir -p "$CONFIG_DIR"
@@ -12,7 +13,7 @@ cat > "$CONFIG_DIR/config.boo" <<EOF
 control-socket = $SOCKET_PATH
 EOF
 
-rm -f "$SOCKET_PATH"
+rm -f "$SOCKET_PATH" "$LOG_PATH"
 
 cleanup() {
   if [[ -n "${BOO_PID:-}" ]] && kill -0 "$BOO_PID" 2>/dev/null; then
@@ -27,38 +28,16 @@ fi
 
 (
   cd "$ROOT_DIR"
-  XDG_CONFIG_HOME="$CONFIG_ROOT" cargo run
+  cargo build >/dev/null
+)
+
+(
+  cd "$ROOT_DIR"
+  XDG_CONFIG_HOME="$CONFIG_ROOT" target/debug/boo >"$LOG_PATH" 2>&1
 ) &
 BOO_PID=$!
 
-for _ in $(seq 1 120); do
-  if [[ -S "$SOCKET_PATH" ]]; then
-    break
-  fi
-  sleep 0.1
-done
-
-if [[ ! -S "$SOCKET_PATH" ]]; then
-  echo "control socket did not appear at $SOCKET_PATH" >&2
-  exit 1
-fi
-
-SNAPSHOT=""
-for _ in $(seq 1 120); do
-  SNAPSHOT="$(echo '{"cmd":"get-ui-snapshot"}' | socat - "UNIX-CONNECT:$SOCKET_PATH")"
-  if python3 -c 'import json,sys; data=json.load(sys.stdin); raise SystemExit(0 if data["snapshot"]["tabs"] else 1)' <<<"$SNAPSHOT" 2>/dev/null
-  then
-    break
-  fi
-  sleep 0.1
-done
-
-if ! python3 -c 'import json,sys; data=json.load(sys.stdin); raise SystemExit(0 if data["snapshot"]["tabs"] else 1)' <<<"$SNAPSHOT" 2>/dev/null
-then
-  echo "ui snapshot never populated" >&2
-  exit 1
-fi
-
+SNAPSHOT="$(python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" wait-ready)"
 printf '%s\n' "$SNAPSHOT"
 
 if [[ "$KEEP_RUNNING" == "1" ]]; then

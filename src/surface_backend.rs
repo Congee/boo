@@ -6,7 +6,7 @@ use crate::pane::PaneHandle;
 #[cfg(not(target_os = "linux"))]
 use crate::platform;
 #[cfg(not(target_os = "linux"))]
-use std::ffi::{c_void, CStr};
+use std::ffi::{c_void, CStr, CString};
 
 #[cfg(not(target_os = "linux"))]
 pub fn set_focus(surface: ffi::ghostty_surface_t, focused: bool) {
@@ -222,35 +222,45 @@ pub fn binding_action(_surface: ffi::ghostty_surface_t, _action: &str) {}
 pub fn create_pane(
     app: ffi::ghostty_app_t,
     cb_userdata: *mut c_void,
+    parent_view: *mut c_void,
     scale: f64,
     frame: platform::Rect,
-    is_first: bool,
+    context: ffi::ghostty_surface_context_e,
     command: Option<&CStr>,
     working_directory: Option<&CStr>,
 ) -> Option<PaneHandle> {
-    let mut config = unsafe { ffi::ghostty_surface_config_new() };
-    config.userdata = cb_userdata;
-    config.platform_tag = platform::platform_tag();
-    config.scale_factor = scale;
-    config.context = if is_first {
-        ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_WINDOW
-    } else {
-        ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_SPLIT
+    let mut config = ffi::ghostty_surface_config_s {
+        platform_tag: platform::platform_tag(),
+        platform: unsafe { std::mem::zeroed() },
+        userdata: cb_userdata,
+        scale_factor: scale,
+        font_size: 0.0,
+        working_directory: std::ptr::null(),
+        command: std::ptr::null(),
+        env_vars: std::ptr::null_mut(),
+        env_var_count: 0,
+        initial_input: std::ptr::null(),
+        wait_after_command: false,
+        context,
     };
+    let cwd_storage: Option<CString> = std::env::var_os("HOME")
+        .and_then(|home| CString::new(home.to_string_lossy().as_bytes()).ok());
     if let Some(cmd) = command {
         config.command = cmd.as_ptr();
     }
     if let Some(wd) = working_directory {
         config.working_directory = wd.as_ptr();
+    } else if let Some(cwd) = cwd_storage.as_ref() {
+        config.working_directory = cwd.as_ptr();
     }
 
     #[cfg(target_os = "macos")]
     let child_view = {
-        let parent_handle = platform::content_view_handle();
-        if parent_handle.is_null() {
+        if parent_view.is_null() {
+            log::warn!("create_pane: parent view is null");
             return None;
         }
-        let cv = platform::create_child_view(parent_handle, frame);
+        let cv = platform::create_child_view(parent_view, frame);
         config.platform = platform::platform_config(cv);
         cv
     };

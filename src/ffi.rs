@@ -128,23 +128,10 @@ pub struct ghostty_platform_ios_s {
     pub uiview: *mut c_void,
 }
 
-pub type ghostty_frame_cb = Option<unsafe extern "C" fn(*mut c_void, u32, u32)>;
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct ghostty_platform_egl_s {
-    pub display: *mut c_void,
-    pub surface: *mut c_void,
-    pub context: *mut c_void,
-    pub frame_cb: ghostty_frame_cb,
-    pub frame_cb_userdata: *mut c_void,
-}
-
 #[repr(C)]
 pub union ghostty_platform_u {
     pub macos: ghostty_platform_macos_s,
     pub ios: ghostty_platform_ios_s,
-    pub egl: ghostty_platform_egl_s,
 }
 
 #[repr(C)]
@@ -546,4 +533,34 @@ unsafe extern "C" {
         state: *mut c_void,
         confirmed: bool,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem::{offset_of, size_of};
+
+    #[test]
+    fn ghostty_platform_union_matches_header_layout() {
+        assert_eq!(size_of::<ghostty_platform_macos_s>(), size_of::<*mut c_void>());
+        assert_eq!(size_of::<ghostty_platform_ios_s>(), size_of::<*mut c_void>());
+        assert_eq!(size_of::<ghostty_platform_u>(), size_of::<*mut c_void>());
+    }
+
+    #[test]
+    fn ghostty_surface_config_matches_header_layout() {
+        assert_eq!(offset_of!(ghostty_surface_config_s, platform_tag), 0);
+        assert_eq!(offset_of!(ghostty_surface_config_s, platform), 8);
+        assert_eq!(offset_of!(ghostty_surface_config_s, userdata), 16);
+        assert_eq!(offset_of!(ghostty_surface_config_s, scale_factor), 24);
+        assert_eq!(offset_of!(ghostty_surface_config_s, font_size), 32);
+        assert_eq!(offset_of!(ghostty_surface_config_s, working_directory), 40);
+        assert_eq!(offset_of!(ghostty_surface_config_s, command), 48);
+        assert_eq!(offset_of!(ghostty_surface_config_s, env_vars), 56);
+        assert_eq!(offset_of!(ghostty_surface_config_s, env_var_count), 64);
+        assert_eq!(offset_of!(ghostty_surface_config_s, initial_input), 72);
+        assert_eq!(offset_of!(ghostty_surface_config_s, wait_after_command), 80);
+        assert_eq!(offset_of!(ghostty_surface_config_s, context), 84);
+        assert_eq!(size_of::<ghostty_surface_config_s>(), 88);
+    }
 }

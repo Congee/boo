@@ -92,6 +92,9 @@ pub fn create_child_view(parent: ViewHandle, frame: Rect) -> ViewHandle {
 }
 
 pub fn view_bounds(view: ViewHandle) -> Rect {
+    if view.is_null() {
+        return Rect::default();
+    }
     unsafe {
         let view = &*(view as *const NSView);
         from_nsrect(view.bounds())
@@ -99,6 +102,9 @@ pub fn view_bounds(view: ViewHandle) -> Rect {
 }
 
 pub fn set_view_frame(view: ViewHandle, frame: Rect) {
+    if view.is_null() {
+        return;
+    }
     unsafe {
         let view = &*(view as *const NSView);
         view.setFrame(to_nsrect(frame));
@@ -119,6 +125,9 @@ pub fn set_resize_increments(width: f64, height: f64) {
 }
 
 pub fn set_view_hidden(view: ViewHandle, hidden: bool) {
+    if view.is_null() {
+        return;
+    }
     unsafe {
         let view = &*(view as *const NSView);
         view.setHidden(hidden);
@@ -126,6 +135,9 @@ pub fn set_view_hidden(view: ViewHandle, hidden: bool) {
 }
 
 pub fn remove_view(view: ViewHandle) {
+    if view.is_null() {
+        return;
+    }
     unsafe {
         let view = &*(view as *const NSView);
         view.removeFromSuperview();
@@ -330,7 +342,9 @@ pub fn clipboard_write_from_thread(text: String) {
     let block = block2::RcBlock::new(move || {
         clipboard_write(&text);
     });
-    objc2_foundation::NSOperationQueue::mainQueue().addOperationWithBlock(&block);
+    unsafe {
+        objc2_foundation::NSOperationQueue::mainQueue().addOperationWithBlock(&block);
+    }
 }
 
 // --- Platform config for ghostty surface creation ---
