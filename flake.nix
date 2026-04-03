@@ -42,6 +42,8 @@
           glib
           fontconfig
           freetype
+          mesa  # libgbm + libEGL_mesa
+          libdrm
         ];
 
         RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";

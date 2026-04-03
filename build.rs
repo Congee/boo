@@ -50,9 +50,9 @@ fn main() {
             println!("cargo:rustc-link-lib=dylib=ghostty");
             println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
             println!("cargo:rustc-link-arg=-Wl,--allow-shlib-undefined");
-            // Wayland subsurface compositing + EGL rendering
+            // Wayland subsurface compositing + GBM/EGL rendering
             println!("cargo:rustc-link-lib=dylib=wayland-client");
-            println!("cargo:rustc-link-lib=dylib=wayland-egl");
+            println!("cargo:rustc-link-lib=dylib=gbm");
             println!("cargo:rustc-link-lib=dylib=EGL");
         } else {
             println!(
