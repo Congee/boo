@@ -396,25 +396,51 @@ fn parse_prefix_key(spec: &str) -> Option<PrefixKey> {
     })
 }
 
-/// Map a single-character key name to a macOS virtual keycode.
+/// Map a single-character key name to a platform-native keycode.
+/// Must match the values returned by keymap::physical_to_native_keycode().
 fn single_char_to_keycode(key: &str) -> Option<u32> {
-    Some(match key {
-        "a" => 0x00, "s" => 0x01, "d" => 0x02, "f" => 0x03,
-        "h" => 0x04, "g" => 0x05, "z" => 0x06, "x" => 0x07,
-        "c" => 0x08, "v" => 0x09, "b" => 0x0B, "q" => 0x0C,
-        "w" => 0x0D, "e" => 0x0E, "r" => 0x0F, "y" => 0x10,
-        "t" => 0x11, "u" => 0x20, "i" => 0x22, "o" => 0x1F,
-        "p" => 0x23, "l" => 0x25, "j" => 0x26, "k" => 0x28,
-        "n" => 0x2D, "m" => 0x2E,
-        "1" => 0x12, "2" => 0x13, "3" => 0x14, "4" => 0x15,
-        "5" => 0x17, "6" => 0x16, "7" => 0x1A, "8" => 0x1C,
-        "9" => 0x19, "0" => 0x1D,
-        "space" => 0x31,
-        "enter" => 0x24,
-        "tab" => 0x30,
-        "escape" => 0x35,
-        _ => return None,
-    })
+    #[cfg(target_os = "macos")]
+    {
+        Some(match key {
+            "a" => 0x00, "s" => 0x01, "d" => 0x02, "f" => 0x03,
+            "h" => 0x04, "g" => 0x05, "z" => 0x06, "x" => 0x07,
+            "c" => 0x08, "v" => 0x09, "b" => 0x0B, "q" => 0x0C,
+            "w" => 0x0D, "e" => 0x0E, "r" => 0x0F, "y" => 0x10,
+            "t" => 0x11, "u" => 0x20, "i" => 0x22, "o" => 0x1F,
+            "p" => 0x23, "l" => 0x25, "j" => 0x26, "k" => 0x28,
+            "n" => 0x2D, "m" => 0x2E,
+            "1" => 0x12, "2" => 0x13, "3" => 0x14, "4" => 0x15,
+            "5" => 0x17, "6" => 0x16, "7" => 0x1A, "8" => 0x1C,
+            "9" => 0x19, "0" => 0x1D,
+            "space" => 0x31,
+            "enter" => 0x24,
+            "tab" => 0x30,
+            "escape" => 0x35,
+            _ => return None,
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // ghostty_input_key_e enum values (W3C key codes)
+        Some(match key {
+            "a" => 20, "b" => 21, "c" => 22, "d" => 23,
+            "e" => 24, "f" => 25, "g" => 26, "h" => 27,
+            "i" => 28, "j" => 29, "k" => 30, "l" => 31,
+            "m" => 32, "n" => 33, "o" => 34, "p" => 35,
+            "q" => 36, "r" => 37, "s" => 38, "t" => 39,
+            "u" => 40, "v" => 41, "w" => 42, "x" => 43,
+            "y" => 44, "z" => 45,
+            "0" => 6, "1" => 7, "2" => 8, "3" => 9,
+            "4" => 10, "5" => 11, "6" => 12, "7" => 13,
+            "8" => 14, "9" => 15,
+            "space" => 63,
+            "enter" => 58,
+            "tab" => 64,
+            "escape" => 120,
+            _ => return None,
+        })
+    }
 }
 
 fn parse_action(s: &str) -> Option<Action> {
@@ -759,7 +785,10 @@ mod tests {
     #[test]
     fn test_parse_prefix_key() {
         let pk = parse_prefix_key("ctrl+s").unwrap();
-        assert_eq!(pk.keycode, 0x01); // 's'
+        #[cfg(target_os = "macos")]
+        assert_eq!(pk.keycode, 0x01); // macOS kVK_ANSI_S
+        #[cfg(target_os = "linux")]
+        assert_eq!(pk.keycode, 38); // ghostty_input_key_e::GHOSTTY_KEY_S
         assert_eq!(pk.mods_mask, ffi::GHOSTTY_MODS_CTRL);
 
         let pk = parse_prefix_key("ctrl+shift+a").unwrap();

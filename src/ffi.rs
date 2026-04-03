@@ -25,6 +25,7 @@ pub enum ghostty_platform_e {
     GHOSTTY_PLATFORM_INVALID = 0,
     GHOSTTY_PLATFORM_MACOS = 1,
     GHOSTTY_PLATFORM_IOS = 2,
+    GHOSTTY_PLATFORM_EGL = 3,
 }
 
 #[repr(C)]
@@ -128,9 +129,18 @@ pub struct ghostty_platform_ios_s {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ghostty_platform_egl_s {
+    pub display: *mut c_void,
+    pub surface: *mut c_void,
+    pub context: *mut c_void,
+}
+
+#[repr(C)]
 pub union ghostty_platform_u {
     pub macos: ghostty_platform_macos_s,
     pub ios: ghostty_platform_ios_s,
+    pub egl: ghostty_platform_egl_s,
 }
 
 #[repr(C)]

@@ -196,7 +196,7 @@ impl TabManager {
     /// Relay layout to active tab.
     pub fn layout_active(
         &self,
-        frame: objc2_foundation::NSRect,
+        frame: crate::platform::Rect,
         scale: f64,
     ) -> Vec<(ffi::ghostty_surface_t, u32, u32)> {
         self.active_tree()

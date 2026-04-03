@@ -1,5 +1,7 @@
-//! Safe wrappers around AppKit APIs used by boo.
+//! macOS platform backend — AppKit + Core Animation + NSPasteboard.
 
+use super::{LayerHandle, Point, Rect, ScrollEvent, Size, ViewHandle};
+use crate::ffi;
 use objc2::rc::Retained;
 use objc2::{define_class, msg_send};
 use objc2_app_kit::{
@@ -8,8 +10,24 @@ use objc2_app_kit::{
 use objc2_foundation::{MainThreadMarker, NSRect, NSSize, NSString};
 use std::ffi::c_void;
 
-// Custom NSView subclass that refuses first responder.
-// This ensures keyboard events stay with winit's view so iced receives them.
+// --- NSRect <-> Rect conversions ---
+
+fn to_nsrect(r: Rect) -> NSRect {
+    NSRect::new(
+        objc2_foundation::NSPoint::new(r.origin.x, r.origin.y),
+        NSSize::new(r.size.width, r.size.height),
+    )
+}
+
+fn from_nsrect(r: NSRect) -> Rect {
+    Rect::new(
+        Point::new(r.origin.x, r.origin.y),
+        Size::new(r.size.width, r.size.height),
+    )
+}
+
+// --- Custom NSView subclass (refuses first responder) ---
+
 define_class!(
     #[unsafe(super(NSView))]
     #[name = "BooPassthroughView"]
@@ -23,32 +41,34 @@ define_class!(
     }
 );
 
-/// Get a MainThreadMarker. Safe to call from the main thread (which is always
-/// the case for iced's update loop and AppKit callbacks).
 fn mtm() -> MainThreadMarker {
-    // SAFETY: all callers are on the main thread (iced event loop / AppKit callbacks)
     unsafe { MainThreadMarker::new_unchecked() }
 }
 
-/// Get the main NSWindow, if any.
-pub fn main_window() -> Option<Retained<NSWindow>> {
+fn main_window() -> Option<Retained<NSWindow>> {
     let app = NSApplication::sharedApplication(mtm());
     app.mainWindow()
 }
 
-/// Get the backing scale factor of the main window.
+// --- Public API (matches linux.rs surface) ---
+
 pub fn scale_factor() -> f64 {
     main_window()
         .map(|w| w.backingScaleFactor())
         .unwrap_or(2.0)
 }
 
-/// Get the content view of the main window.
 pub fn content_view() -> Option<Retained<NSView>> {
     main_window().and_then(|w| w.contentView())
 }
 
-/// Make the window transparent so terminal background-opacity works.
+/// Get the content view as an opaque pointer, or null.
+pub fn content_view_handle() -> ViewHandle {
+    content_view()
+        .map(|cv| Retained::as_ptr(&cv) as ViewHandle)
+        .unwrap_or(std::ptr::null_mut())
+}
+
 pub fn set_window_transparent() {
     if let Some(window) = main_window() {
         window.setOpaque(false);
@@ -58,38 +78,33 @@ pub fn set_window_transparent() {
     }
 }
 
-/// Create a child NSView with the given frame, add it to the parent on top.
-/// Uses a custom subclass that refuses first responder so keyboard events
-/// stay with winit's view (iced receives them).
-/// Returns a raw pointer — the parent NSView retains the child.
-pub fn create_child_view(parent: &NSView, frame: NSRect) -> *mut c_void {
+pub fn create_child_view(parent: ViewHandle, frame: Rect) -> ViewHandle {
+    let ns_frame = to_nsrect(frame);
     unsafe {
+        let parent_view = &*(parent as *const NSView);
         let child: Retained<PassthroughView> =
-            msg_send![mtm().alloc::<PassthroughView>(), initWithFrame: frame];
-        parent.addSubview_positioned_relativeTo(&child, NSWindowOrderingMode::Above, None);
+            msg_send![mtm().alloc::<PassthroughView>(), initWithFrame: ns_frame];
+        parent_view.addSubview_positioned_relativeTo(&child, NSWindowOrderingMode::Above, None);
         let ptr = Retained::as_ptr(&child) as *mut c_void;
         std::mem::forget(child);
         ptr
     }
 }
 
-/// Get the bounds of a raw NSView pointer.
-pub fn view_bounds(view: *mut c_void) -> NSRect {
+pub fn view_bounds(view: ViewHandle) -> Rect {
     unsafe {
         let view = &*(view as *const NSView);
-        view.bounds()
+        from_nsrect(view.bounds())
     }
 }
 
-/// Set the frame of a raw NSView pointer.
-pub fn set_view_frame(view: *mut c_void, frame: NSRect) {
+pub fn set_view_frame(view: ViewHandle, frame: Rect) {
     unsafe {
         let view = &*(view as *const NSView);
-        view.setFrame(frame);
+        view.setFrame(to_nsrect(frame));
     }
 }
 
-/// Set the window title.
 pub fn set_window_title(title: &str) {
     if let Some(window) = main_window() {
         let ns_title = NSString::from_str(title);
@@ -97,40 +112,52 @@ pub fn set_window_title(title: &str) {
     }
 }
 
-/// Set content resize increments on the main window.
 pub fn set_resize_increments(width: f64, height: f64) {
     if let Some(window) = main_window() {
         window.setContentResizeIncrements(NSSize::new(width, height));
     }
 }
 
-/// Set hidden state of a raw NSView.
-pub fn set_view_hidden(view: *mut c_void, hidden: bool) {
+pub fn set_view_hidden(view: ViewHandle, hidden: bool) {
     unsafe {
         let view = &*(view as *const NSView);
         view.setHidden(hidden);
     }
 }
 
-/// Remove a view from its parent.
-pub fn remove_view(view: *mut c_void) {
+pub fn remove_view(view: ViewHandle) {
     unsafe {
         let view = &*(view as *const NSView);
         view.removeFromSuperview();
     }
 }
 
-/// Install local event monitors for window drag and smooth scrolling.
+pub fn set_view_layer_transparent(view: ViewHandle) {
+    unsafe {
+        let view = &*(view as *const NSView);
+        if let Some(layer) = view.layer() {
+            layer.setOpaque(false);
+            layer.setBackgroundColor(None);
+            if let Some(sublayers) = layer.sublayers() {
+                for sublayer in sublayers.iter() {
+                    sublayer.setOpaque(false);
+                }
+            }
+        }
+    }
+}
+
+pub fn request_redraw() {
+    if let Some(view) = content_view() {
+        view.setNeedsDisplay(true);
+    }
+}
+
+// --- Event monitors ---
+
 pub fn install_event_monitors(scroll_tx: std::sync::mpsc::Sender<ScrollEvent>) {
     install_cmd_drag_monitor();
     install_scroll_monitor(scroll_tx);
-}
-
-pub struct ScrollEvent {
-    pub dx: f64,
-    pub dy: f64,
-    pub precision: bool,
-    pub momentum: u8,
 }
 
 fn install_scroll_monitor(tx: std::sync::mpsc::Sender<ScrollEvent>) {
@@ -144,7 +171,7 @@ fn install_scroll_monitor(tx: std::sync::mpsc::Sender<ScrollEvent>) {
         let momentum = event_ref.momentumPhase().0 as u8;
 
         let (dx, dy) = if precision {
-            (dx * 2.0, dy * 2.0) // 2x multiplier matches ghostty's feel
+            (dx * 2.0, dy * 2.0)
         } else {
             (dx, dy)
         };
@@ -156,14 +183,10 @@ fn install_scroll_monitor(tx: std::sync::mpsc::Sender<ScrollEvent>) {
             momentum,
         });
 
-        // Consume the event — we handle it ourselves
         std::ptr::null_mut()
     });
     let monitor = unsafe {
-        NSEvent::addLocalMonitorForEventsMatchingMask_handler(
-            NSEventMask::ScrollWheel,
-            &block,
-        )
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::ScrollWheel, &block)
     };
     std::mem::forget(monitor);
 }
@@ -184,40 +207,19 @@ fn install_cmd_drag_monitor() {
         event.as_ptr()
     });
     let monitor = unsafe {
-        NSEvent::addLocalMonitorForEventsMatchingMask_handler(
-            NSEventMask::LeftMouseDown,
-            &block,
-        )
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::LeftMouseDown, &block)
     };
-    // Retain the monitor for the process lifetime
     std::mem::forget(monitor);
 }
 
-/// Set a view's layer (and all sublayers) to non-opaque for transparency.
-pub fn set_view_layer_transparent(view: *mut c_void) {
-    unsafe {
-        let view = &*(view as *const NSView);
-        if let Some(layer) = view.layer() {
-            layer.setOpaque(false);
-            layer.setBackgroundColor(None);
-            if let Some(sublayers) = layer.sublayers() {
-                for sublayer in sublayers.iter() {
-                    sublayer.setOpaque(false);
-                }
-            }
-        }
-    }
-}
+// --- Overlay layers (CALayer) ---
 
-/// Create a scrollbar overlay CALayer on top of all content.
-/// Returns a raw pointer to the layer (caller must retain).
-pub fn create_scrollbar_layer() -> *mut c_void {
+pub fn create_scrollbar_layer() -> LayerHandle {
     use objc2_quartz_core::CALayer;
 
     let layer = CALayer::new();
     layer.setCornerRadius(3.0);
     layer.setOpacity(0.0);
-    // Add to content view's layer so it composites above everything
     if let Some(cv) = content_view() {
         if let Some(parent_layer) = cv.layer() {
             parent_layer.addSublayer(&layer);
@@ -228,9 +230,8 @@ pub fn create_scrollbar_layer() -> *mut c_void {
     ptr
 }
 
-/// Update the scrollbar overlay layer's frame, color, and opacity.
 pub fn update_scrollbar_layer(
-    layer: *mut c_void,
+    layer: LayerHandle,
     x: f64,
     y: f64,
     width: f64,
@@ -243,7 +244,6 @@ pub fn update_scrollbar_layer(
     unsafe {
         use objc2_quartz_core::CALayer;
         let layer = &*(layer as *const CALayer);
-        // Disable implicit animations for smooth updates
         objc2_quartz_core::CATransaction::begin();
         objc2_quartz_core::CATransaction::setDisableActions(true);
         layer.setFrame(NSRect::new(
@@ -251,16 +251,13 @@ pub fn update_scrollbar_layer(
             NSSize::new(width, height),
         ));
         layer.setOpacity(opacity);
-        let color = objc2_core_graphics::CGColor::new_generic_rgb(
-            0.6, 0.6, 0.6, opacity as f64,
-        );
+        let color = objc2_core_graphics::CGColor::new_generic_rgb(0.6, 0.6, 0.6, opacity as f64);
         layer.setBackgroundColor(Some(&color));
         objc2_quartz_core::CATransaction::commit();
     }
 }
 
-/// Create a highlight overlay layer for copy mode cursor/selection.
-pub fn create_highlight_layer() -> *mut c_void {
+pub fn create_highlight_layer() -> LayerHandle {
     use objc2_quartz_core::CALayer;
 
     let layer = CALayer::new();
@@ -275,9 +272,8 @@ pub fn create_highlight_layer() -> *mut c_void {
     ptr
 }
 
-/// Update the highlight layer for copy mode (cursor bar or selection rect).
 pub fn update_highlight_layer(
-    layer: *mut c_void,
+    layer: LayerHandle,
     x: f64,
     y: f64,
     width: f64,
@@ -299,9 +295,9 @@ pub fn update_highlight_layer(
         ));
         layer.setOpacity(if visible { 1.0 } else { 0.0 });
         let (r, g, b, a) = if is_selection {
-            (0.2, 0.5, 1.0, 0.3) // blue selection
+            (0.2, 0.5, 1.0, 0.3)
         } else {
-            (0.9, 0.9, 0.9, 0.8) // white cursor bar
+            (0.9, 0.9, 0.9, 0.8)
         };
         let color = objc2_core_graphics::CGColor::new_generic_rgb(r, g, b, a);
         layer.setBackgroundColor(Some(&color));
@@ -309,9 +305,42 @@ pub fn update_highlight_layer(
     }
 }
 
-/// Request a redraw of the content view (called from wakeup on any thread).
-pub fn request_redraw() {
-    if let Some(view) = content_view() {
-        view.setNeedsDisplay(true);
+// --- Clipboard ---
+
+pub fn clipboard_read() -> Option<String> {
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
+    let pb = NSPasteboard::generalPasteboard();
+    let text = pb.stringForType(unsafe { NSPasteboardTypeString });
+    text.map(|ns_str| ns_str.to_string())
+}
+
+pub fn clipboard_write(text: &str) {
+    use objc2_app_kit::NSPasteboard;
+    let pb = NSPasteboard::generalPasteboard();
+    pb.clearContents();
+    let ns_str = NSString::from_str(text);
+    let array = objc2_foundation::NSArray::from_slice(&[
+        objc2::runtime::ProtocolObject::from_ref(&*ns_str),
+    ]);
+    pb.writeObjects(&array);
+}
+
+/// Write clipboard from a background thread (dispatches to main thread).
+pub fn clipboard_write_from_thread(text: String) {
+    let block = block2::RcBlock::new(move || {
+        clipboard_write(&text);
+    });
+    objc2_foundation::NSOperationQueue::mainQueue().addOperationWithBlock(&block);
+}
+
+// --- Platform config for ghostty surface creation ---
+
+pub fn platform_tag() -> i32 {
+    ffi::ghostty_platform_e::GHOSTTY_PLATFORM_MACOS as i32
+}
+
+pub fn platform_config(view: ViewHandle) -> ffi::ghostty_platform_u {
+    ffi::ghostty_platform_u {
+        macos: ffi::ghostty_platform_macos_s { nsview: view },
     }
 }

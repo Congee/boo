@@ -15,8 +15,13 @@
       toolchain = pkgs.rust-bin.stable.latest.default.override {
         extensions = [ "rust-src" "rust-std" "clippy" "rustfmt" "rust-analyzer" ];
       };
+      llvm = (if pkgs.stdenv.isLinux then pkgs.pkgsLLVM else pkgs).llvmPackages_latest;
+      mkShell = if pkgs.stdenv.isLinux
+        then llvm.stdenv.mkDerivation
+        else pkgs.mkShellNoCC;
     in {
-      devShells.default = pkgs.mkShellNoCC {
+      devShells.default = mkShell {
+        name = "boo-dev";
         nativeBuildInputs = with pkgs; [
           toolchain
           zig.packages.${system}."0.15.2"
@@ -32,6 +37,11 @@
           libGL
           libxkbcommon
           wayland
+          vulkan-loader
+          gtk4
+          glib
+          fontconfig
+          freetype
         ];
 
         RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
@@ -40,6 +50,8 @@
           echo "boo dev shell"
           echo "  Zig: $(zig version)"
           echo "  Rust: $(rustc --version)"
+        '' + pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+          export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath (with pkgs; [ wayland libxkbcommon libGL vulkan-loader ])}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         '' + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
           unset SDKROOT
           unset DEVELOPER_DIR

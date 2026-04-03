@@ -4,10 +4,10 @@
 //! - Leaf: a single terminal surface
 //! - Split: two children with a direction and ratio
 //!
-//! The tree is used to compute NSView frames when the window resizes.
+//! The tree is used to compute view frames when the window resizes.
 
 use crate::ffi;
-use objc2_foundation::{NSPoint, NSRect, NSSize};
+use crate::platform::{Point, Rect, Size};
 use std::ffi::c_void;
 
 /// Unique ID for a leaf node (surface).
@@ -123,9 +123,9 @@ impl SplitTree {
         }
     }
 
-    /// Lay out all surfaces within the given frame. Calls set_frame on each NSView
+    /// Lay out all surfaces within the given frame. Calls set_frame on each view
     /// and returns (surface, pixel_width, pixel_height) for each leaf.
-    pub fn layout(&self, frame: NSRect, scale: f64) -> Vec<(ffi::ghostty_surface_t, u32, u32)> {
+    pub fn layout(&self, frame: Rect, scale: f64) -> Vec<(ffi::ghostty_surface_t, u32, u32)> {
         let mut result = Vec::new();
         if let Some(ref root) = self.root {
             layout_node(root, frame, scale, &mut result);
@@ -204,7 +204,7 @@ impl SplitTree {
     }
 
     /// Check if a point is on a split divider. Returns the direction if so.
-    pub fn divider_at(&self, frame: NSRect, point: (f64, f64)) -> Option<Direction> {
+    pub fn divider_at(&self, frame: Rect, point: (f64, f64)) -> Option<Direction> {
         self.root
             .as_ref()
             .and_then(|root| divider_at_node(root, frame, point))
@@ -212,7 +212,7 @@ impl SplitTree {
 
     /// Update the ratio of the split being dragged. Finds the shallowest split
     /// with matching direction whose frame contains the point.
-    pub fn resize_drag(&mut self, frame: NSRect, dir: Direction, point: (f64, f64)) {
+    pub fn resize_drag(&mut self, frame: Rect, dir: Direction, point: (f64, f64)) {
         if let Some(ref mut root) = self.root {
             resize_drag_node(root, frame, dir, point);
         }
@@ -220,7 +220,7 @@ impl SplitTree {
 
     /// Find the leaf at a given point and set focus to it.
     /// Returns true if focus changed.
-    pub fn focus_at(&mut self, frame: NSRect, point: (f64, f64)) -> bool {
+    pub fn focus_at(&mut self, frame: Rect, point: (f64, f64)) -> bool {
         if let Some(ref root) = self.root {
             if let Some(id) = leaf_at_point(root, frame, point) {
                 if id != self.focused_id {
@@ -315,13 +315,13 @@ fn count_leaves(node: &Node) -> usize {
 
 fn layout_node(
     node: &Node,
-    frame: NSRect,
+    frame: Rect,
     scale: f64,
     out: &mut Vec<(ffi::ghostty_surface_t, u32, u32)>,
 ) {
     match node {
         Node::Leaf { surface, nsview, .. } => {
-            crate::appkit::set_view_frame(*nsview, frame);
+            crate::platform::set_view_frame(*nsview, frame);
             let w = (frame.size.width * scale) as u32;
             let h = (frame.size.height * scale) as u32;
             out.push((*surface, w, h));
@@ -337,17 +337,17 @@ fn layout_node(
 /// Gap between split panes (points). The iced background shows through.
 const SPLIT_BORDER: f64 = 1.0;
 
-fn split_frame(frame: NSRect, direction: Direction, ratio: f64) -> (NSRect, NSRect) {
+fn split_frame(frame: Rect, direction: Direction, ratio: f64) -> (Rect, Rect) {
     match direction {
         Direction::Horizontal => {
             let usable = frame.size.width - SPLIT_BORDER;
             let w1 = usable * ratio;
             let w2 = usable - w1;
             (
-                NSRect::new(frame.origin, NSSize::new(w1, frame.size.height)),
-                NSRect::new(
-                    NSPoint::new(frame.origin.x + w1 + SPLIT_BORDER, frame.origin.y),
-                    NSSize::new(w2, frame.size.height),
+                Rect::new(frame.origin, Size::new(w1, frame.size.height)),
+                Rect::new(
+                    Point::new(frame.origin.x + w1 + SPLIT_BORDER, frame.origin.y),
+                    Size::new(w2, frame.size.height),
                 ),
             )
         }
@@ -357,10 +357,10 @@ fn split_frame(frame: NSRect, direction: Direction, ratio: f64) -> (NSRect, NSRe
             let h1 = usable * ratio;
             let h2 = usable - h1;
             (
-                NSRect::new(frame.origin, NSSize::new(frame.size.width, h1)),
-                NSRect::new(
-                    NSPoint::new(frame.origin.x, frame.origin.y + h1 + SPLIT_BORDER),
-                    NSSize::new(frame.size.width, h2),
+                Rect::new(frame.origin, Size::new(frame.size.width, h1)),
+                Rect::new(
+                    Point::new(frame.origin.x, frame.origin.y + h1 + SPLIT_BORDER),
+                    Size::new(frame.size.width, h2),
                 ),
             )
         }
@@ -499,7 +499,7 @@ fn resize_toward_leaf(node: &mut Node, target: LeafId, axis: Direction, delta: f
 /// Expand hit area beyond the 1pt border for easier clicking.
 const DIVIDER_HIT_MARGIN: f64 = 3.0;
 
-fn divider_at_node(node: &Node, frame: NSRect, point: (f64, f64)) -> Option<Direction> {
+fn divider_at_node(node: &Node, frame: Rect, point: (f64, f64)) -> Option<Direction> {
     match node {
         Node::Leaf { .. } => None,
         Node::Split {
@@ -542,7 +542,7 @@ fn divider_at_node(node: &Node, frame: NSRect, point: (f64, f64)) -> Option<Dire
 /// contains the point, and set its ratio from the mouse position.
 fn resize_drag_node(
     node: &mut Node,
-    frame: NSRect,
+    frame: Rect,
     target_dir: Direction,
     point: (f64, f64),
 ) -> bool {
@@ -576,7 +576,7 @@ fn resize_drag_node(
     }
 }
 
-fn leaf_at_point(node: &Node, frame: NSRect, point: (f64, f64)) -> Option<LeafId> {
+fn leaf_at_point(node: &Node, frame: Rect, point: (f64, f64)) -> Option<LeafId> {
     match node {
         Node::Leaf { id, .. } => {
             if point_in_frame(point, frame) {
@@ -599,7 +599,7 @@ fn leaf_at_point(node: &Node, frame: NSRect, point: (f64, f64)) -> Option<LeafId
     }
 }
 
-fn point_in_frame(point: (f64, f64), frame: NSRect) -> bool {
+fn point_in_frame(point: (f64, f64), frame: Rect) -> bool {
     point.0 >= frame.origin.x
         && point.0 <= frame.origin.x + frame.size.width
         && point.1 >= frame.origin.y
@@ -608,7 +608,7 @@ fn point_in_frame(point: (f64, f64), frame: NSRect) -> bool {
 
 fn set_hidden_recursive(node: &Node, hidden: bool) {
     match node {
-        Node::Leaf { nsview, .. } => crate::appkit::set_view_hidden(*nsview, hidden),
+        Node::Leaf { nsview, .. } => crate::platform::set_view_hidden(*nsview, hidden),
         Node::Split { first, second, .. } => {
             set_hidden_recursive(first, hidden);
             set_hidden_recursive(second, hidden);

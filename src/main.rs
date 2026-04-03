@@ -1,9 +1,9 @@
-mod appkit;
 mod bindings;
 mod config;
 mod control;
 mod ffi;
 mod keymap;
+mod platform;
 mod session;
 mod splits;
 mod tabs;
@@ -18,7 +18,7 @@ use std::ptr;
 /// Status bar height in points.
 const STATUS_BAR_HEIGHT: f64 = 20.0;
 
-static SCROLL_RX: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Receiver<appkit::ScrollEvent>>> =
+static SCROLL_RX: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Receiver<platform::ScrollEvent>>> =
     std::sync::OnceLock::new();
 
 /// Shared state accessible from C callbacks via runtime_config.userdata.
@@ -58,7 +58,7 @@ fn main() {
     log::info!("ghostty initialized");
 
     let (scroll_tx, scroll_rx) = std::sync::mpsc::channel();
-    appkit::install_event_monitors(scroll_tx);
+    platform::install_event_monitors(scroll_tx);
     // Store in a static so GhosttyApp::new can pick it up
     SCROLL_RX.set(std::sync::Mutex::new(scroll_rx)).ok();
 
@@ -80,10 +80,12 @@ struct GhosttyApp {
     app: ffi::ghostty_app_t,
     config: ffi::ghostty_config_t,
     tabs: tabs::TabManager,
-    parent_nsview: *mut c_void,
+    parent_view: *mut c_void,
+    #[cfg(target_os = "linux")]
+    egl_state: Option<platform::EglState>,
     cb_state: Box<CallbackState>,
     ctl_rx: std::sync::mpsc::Receiver<control::ControlCmd>,
-    scroll_rx: std::sync::mpsc::Receiver<appkit::ScrollEvent>,
+    scroll_rx: std::sync::mpsc::Receiver<platform::ScrollEvent>,
     bindings: bindings::Bindings,
     socket_path: Option<String>,
     dump_keys: bool,
@@ -322,7 +324,9 @@ impl GhosttyApp {
                 app,
                 config,
                 tabs: tabs::TabManager::new(),
-                parent_nsview: ptr::null_mut(),
+                parent_view: ptr::null_mut(),
+                #[cfg(target_os = "linux")]
+                egl_state: None,
                 cb_state,
                 ctl_rx,
                 scroll_rx: SCROLL_RX
@@ -1419,12 +1423,7 @@ impl GhosttyApp {
     }
 
     fn copy_mode_append_copy(&self) {
-        use objc2_app_kit::NSPasteboard;
-        use objc2_foundation::NSString;
-        let pb = NSPasteboard::generalPasteboard();
-        let existing = pb.stringForType(unsafe {
-            objc2_app_kit::NSPasteboardTypeString
-        }).map(|s| s.to_string()).unwrap_or_default();
+        let existing = platform::clipboard_read().unwrap_or_default();
 
         let Some(ref cm) = self.copy_mode else { return };
         let Some((anchor_row, anchor_col)) = cm.sel_anchor else { return };
@@ -1467,13 +1466,7 @@ impl GhosttyApp {
             let slice = unsafe { std::slice::from_raw_parts(text.text as *const u8, text.text_len) };
             if let Ok(new_text) = std::str::from_utf8(slice) {
                 let combined = format!("{existing}{new_text}");
-                let pb = NSPasteboard::generalPasteboard();
-                pb.clearContents();
-                let ns_str = NSString::from_str(&combined);
-                let array = objc2_foundation::NSArray::from_slice(&[
-                    objc2::runtime::ProtocolObject::from_ref(&*ns_str),
-                ]);
-                pb.writeObjects(&array);
+                platform::clipboard_write(&combined);
                 log::info!("copy mode: appended {} bytes to clipboard", text.text_len);
             }
             unsafe { ffi::ghostty_surface_free_text(surface, &mut text) };
@@ -1513,7 +1506,7 @@ impl GhosttyApp {
             80
         };
 
-        let cursor_layer = appkit::create_highlight_layer();
+        let cursor_layer = platform::create_highlight_layer();
         self.copy_mode = Some(CopyModeState {
             cursor_row: self.scrollbar.offset as i64 + row,
             cursor_col: col,
@@ -1537,9 +1530,9 @@ impl GhosttyApp {
 
     fn exit_copy_mode(&mut self) {
         if let Some(cm) = self.copy_mode.take() {
-            appkit::update_highlight_layer(cm.cursor_layer, 0.0, 0.0, 0.0, 0.0, false, false);
+            platform::update_highlight_layer(cm.cursor_layer, 0.0, 0.0, 0.0, 0.0, false, false);
             for layer in &cm.highlight_layers {
-                appkit::update_highlight_layer(*layer, 0.0, 0.0, 0.0, 0.0, false, false);
+                platform::update_highlight_layer(*layer, 0.0, 0.0, 0.0, 0.0, false, false);
             }
         }
         self.bindings.exit_copy_mode();
@@ -1559,7 +1552,7 @@ impl GhosttyApp {
         let py = term_y + viewport_row as f64 * cm.cell_height;
 
         // Always show cursor bar
-        appkit::update_highlight_layer(cm.cursor_layer, px, py, 2.0, cm.cell_height, true, false);
+        platform::update_highlight_layer(cm.cursor_layer, px, py, 2.0, cm.cell_height, true, false);
 
         // Compute selection rects (extracted to avoid borrow conflicts)
         let rects = if cm.selection != SelectionMode::None {
@@ -1579,15 +1572,15 @@ impl GhosttyApp {
         // Grow layer pool if needed
         let cm = self.copy_mode.as_mut().unwrap();
         while cm.highlight_layers.len() < rects.len() {
-            cm.highlight_layers.push(appkit::create_highlight_layer());
+            cm.highlight_layers.push(platform::create_highlight_layer());
         }
         // Position visible layers
         for (i, &(x, y, w, h)) in rects.iter().enumerate() {
-            appkit::update_highlight_layer(cm.highlight_layers[i], x, y, w, h, true, true);
+            platform::update_highlight_layer(cm.highlight_layers[i], x, y, w, h, true, true);
         }
         // Hide unused layers
         for i in rects.len()..cm.highlight_layers.len() {
-            appkit::update_highlight_layer(cm.highlight_layers[i], 0.0, 0.0, 0.0, 0.0, false, true);
+            platform::update_highlight_layer(cm.highlight_layers[i], 0.0, 0.0, 0.0, 0.0, false, true);
         }
     }
 
@@ -1700,16 +1693,7 @@ impl GhosttyApp {
         if ok && !text.text.is_null() && text.text_len > 0 {
             let slice = unsafe { std::slice::from_raw_parts(text.text as *const u8, text.text_len) };
             if let Ok(s) = std::str::from_utf8(slice) {
-                // Write to clipboard
-                use objc2_app_kit::NSPasteboard;
-                use objc2_foundation::NSString;
-                let pb = NSPasteboard::generalPasteboard();
-                pb.clearContents();
-                let ns_str = NSString::from_str(s);
-                let array = objc2_foundation::NSArray::from_slice(&[
-                    objc2::runtime::ProtocolObject::from_ref(&*ns_str),
-                ]);
-                pb.writeObjects(&array);
+                platform::clipboard_write(s);
                 log::info!("copy mode: copied {} bytes", text.text_len);
             }
             unsafe { ffi::ghostty_surface_free_text(surface, &mut text) };
@@ -2099,7 +2083,7 @@ impl GhosttyApp {
         let w = self.last_size.width as f64;
         let h = self.last_size.height as f64 - STATUS_BAR_HEIGHT;
         if h <= 0.0 || self.scrollbar.total == 0 {
-            appkit::update_scrollbar_layer(self.scrollbar_layer, 0.0, 0.0, 0.0, 0.0, 0.0);
+            platform::update_scrollbar_layer(self.scrollbar_layer, 0.0, 0.0, 0.0, 0.0, 0.0);
             return;
         }
         let ratio = self.scrollbar.len as f64 / self.scrollbar.total as f64;
@@ -2112,7 +2096,7 @@ impl GhosttyApp {
         };
         let sb_width = 6.0;
         let margin = 2.0;
-        appkit::update_scrollbar_layer(
+        platform::update_scrollbar_layer(
             self.scrollbar_layer,
             w - sb_width - margin,
             thumb_y,
@@ -2155,11 +2139,11 @@ impl GhosttyApp {
         self.ghostty_binding_action(&format!("scroll_to_row:{target_row}"));
     }
 
-    fn terminal_frame(&self) -> objc2_foundation::NSRect {
+    fn terminal_frame(&self) -> platform::Rect {
         let search_offset = if self.search_active { STATUS_BAR_HEIGHT } else { 0.0 };
-        objc2_foundation::NSRect::new(
-            objc2_foundation::NSPoint::new(0.0, search_offset),
-            objc2_foundation::NSSize::new(
+        platform::Rect::new(
+            platform::Point::new(0.0, search_offset),
+            platform::Size::new(
                 self.last_size.width as f64,
                 self.last_size.height as f64 - STATUS_BAR_HEIGHT - search_offset,
             ),
@@ -2258,16 +2242,36 @@ impl GhosttyApp {
                     );
                 }
             }
-            mouse::Event::WheelScrolled { .. } => {
-                // Handled via native NSEvent monitor for precision + momentum
+            mouse::Event::WheelScrolled { delta } => {
+                // macOS: handled via native NSEvent monitor for precision + momentum.
+                // Linux: use iced's scroll event directly.
+                #[cfg(target_os = "linux")]
+                {
+                    let surface = self.focused_surface();
+                    if !surface.is_null() {
+                        let (dx, dy) = match delta {
+                            mouse::ScrollDelta::Lines { x, y } => (x as f64, y as f64),
+                            mouse::ScrollDelta::Pixels { x, y } => (x as f64, y as f64),
+                        };
+                        if self.scrollbar.total > self.scrollbar.len {
+                            self.scrollbar_opacity = 1.0;
+                        }
+                        unsafe {
+                            ffi::ghostty_surface_mouse_scroll(surface, dx, dy, 0);
+                        }
+                    }
+                }
+                #[cfg(target_os = "macos")]
+                let _ = delta; // suppress unused warning
             }
             _ => {}
         }
     }
 
     fn scale_factor(&self) -> f64 {
-        appkit::scale_factor()
+        platform::scale_factor()
     }
+
 
     fn handle_resize(&mut self, size: Size) {
         self.last_size = size;
@@ -2278,14 +2282,17 @@ impl GhosttyApp {
         if !self.tabs.is_empty() {
             return;
         }
-        let Some(cv) = appkit::content_view() else { return };
-        self.parent_nsview = objc2::rc::Retained::as_ptr(&cv) as *mut c_void;
-        appkit::set_window_transparent();
-        self.scrollbar_layer = appkit::create_scrollbar_layer();
-        let frame = cv.bounds();
-        let (surface, nsview) = self.create_ghostty_surface(frame, true);
+        let cv = platform::content_view_handle();
+        if cv.is_null() {
+            return;
+        }
+        self.parent_view = cv;
+        platform::set_window_transparent();
+        self.scrollbar_layer = platform::create_scrollbar_layer();
+        let frame = platform::view_bounds(cv);
+        let (surface, child_view) = self.create_ghostty_surface(frame, true);
         let Some(surface) = surface else { return };
-        self.tabs.add_initial_tab(surface, nsview);
+        self.tabs.add_initial_tab(surface, child_view);
         self.cb_state.surface = surface;
         log::info!("tab 0 created");
 
@@ -2296,32 +2303,25 @@ impl GhosttyApp {
     }
 
     fn create_ghostty_surface(
-        &self,
-        frame: objc2_foundation::NSRect,
+        &mut self,
+        frame: platform::Rect,
         is_first: bool,
     ) -> (Option<ffi::ghostty_surface_t>, *mut c_void) {
         self.create_ghostty_surface_with(frame, is_first, None, None)
     }
 
+    #[allow(unused_variables)]
     fn create_ghostty_surface_with(
-        &self,
-        frame: objc2_foundation::NSRect,
+        &mut self,
+        frame: platform::Rect,
         is_first: bool,
         command: Option<&CStr>,
         working_directory: Option<&CStr>,
     ) -> (Option<ffi::ghostty_surface_t>, *mut c_void) {
-        let Some(parent_view) = appkit::content_view() else {
-            return (None, ptr::null_mut());
-        };
-        let child_view = appkit::create_child_view(&parent_view, frame);
-
         let scale = self.scale_factor();
         let mut config = unsafe { ffi::ghostty_surface_config_new() };
         config.userdata = &*self.cb_state as *const CallbackState as *mut c_void;
-        config.platform_tag = ffi::ghostty_platform_e::GHOSTTY_PLATFORM_MACOS as i32;
-        config.platform = ffi::ghostty_platform_u {
-            macos: ffi::ghostty_platform_macos_s { nsview: child_view },
-        };
+        config.platform_tag = platform::platform_tag();
         config.scale_factor = scale;
         config.context = if is_first {
             ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_WINDOW
@@ -2335,22 +2335,48 @@ impl GhosttyApp {
             config.working_directory = wd.as_ptr();
         }
 
+        // Platform-specific: set up the native view / EGL context
+        #[cfg(target_os = "macos")]
+        let child_view = {
+            let parent_handle = platform::content_view_handle();
+            if parent_handle.is_null() {
+                return (None, ptr::null_mut());
+            }
+            let cv = platform::create_child_view(parent_handle, frame);
+            config.platform = platform::platform_config(cv);
+            cv
+        };
+
+        #[cfg(target_os = "linux")]
+        let child_view = {
+            let egl = self.egl_state.get_or_insert_with(|| {
+                platform::EglState::new().expect("failed to create EGL context")
+            });
+            config.platform = platform::platform_config(egl);
+            ptr::null_mut() // no native child view on Linux
+        };
+
         let surface = unsafe { ffi::ghostty_surface_new(self.app, &config) };
         if surface.is_null() {
             log::error!("failed to create ghostty surface");
             return (None, child_view);
         }
-        // Make the ghostty view's layer non-opaque so background-opacity works
-        appkit::set_view_layer_transparent(child_view);
+        platform::set_view_layer_transparent(child_view);
+
+        // Release EGL from main thread so renderer thread can claim it
+        #[cfg(target_os = "linux")]
+        if let Some(ref egl) = self.egl_state {
+            egl.release_current();
+        }
 
         (Some(surface), child_view)
     }
 
     fn create_split(&mut self, direction: ffi::ghostty_action_split_direction_e) {
-        if self.parent_nsview.is_null() || self.tabs.is_empty() {
+        if self.parent_view.is_null() || self.tabs.is_empty() {
             return;
         }
-        let parent_bounds = appkit::view_bounds(self.parent_nsview);
+        let parent_bounds = platform::view_bounds(self.parent_view);
         let split_dir = match direction {
             ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_RIGHT
             | ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_LEFT => {
@@ -2414,7 +2440,7 @@ impl GhosttyApp {
         if let Some(tree) = self.tabs.active_tree_mut() {
             if let Some((surface, nsview)) = tree.remove_focused() {
                 unsafe { ffi::ghostty_surface_free(surface) };
-                appkit::remove_view(nsview);
+                platform::remove_view(nsview);
 
                 if tree.len() == 0 {
                     // Tab is empty — remove it or exit
@@ -2453,10 +2479,10 @@ impl GhosttyApp {
     }
 
     fn new_tab(&mut self) {
-        if self.parent_nsview.is_null() {
+        if self.parent_view.is_null() {
             return;
         }
-        let frame = appkit::view_bounds(self.parent_nsview);
+        let frame = platform::view_bounds(self.parent_view);
         let (surface, nsview) = self.create_ghostty_surface(frame, false);
         let Some(surface) = surface else { return };
 
@@ -2477,10 +2503,10 @@ impl GhosttyApp {
             return;
         };
         log::info!("loading session: {} ({} tabs)", layout.name, layout.tabs.len());
-        if self.parent_nsview.is_null() {
+        if self.parent_view.is_null() {
             return;
         }
-        let frame = appkit::view_bounds(self.parent_nsview);
+        let frame = platform::view_bounds(self.parent_view);
 
         for (tab_idx, session_tab) in layout.tabs.iter().enumerate() {
             // For named layouts, compute the split sequence automatically
@@ -2944,7 +2970,7 @@ fn iced_button_to_ghostty(button: mouse::Button) -> ffi::ghostty_input_mouse_but
 // --- Runtime callbacks ---
 
 unsafe extern "C" fn cb_wakeup(_userdata: *mut c_void) {
-    appkit::request_redraw();
+    platform::request_redraw();
 }
 
 unsafe extern "C" fn cb_action(
@@ -2961,7 +2987,7 @@ unsafe extern "C" fn cb_action(
                 if !payload.title.is_null() {
                     let title = std::ffi::CStr::from_ptr(payload.title);
                     if let Ok(s) = title.to_str() {
-                        appkit::set_window_title(s);
+                        platform::set_window_title(s);
                         let cb = &mut *(ffi::ghostty_app_userdata(_app) as *mut CallbackState);
                         cb.pending_title = Some(s.to_owned());
                     }
@@ -2970,7 +2996,7 @@ unsafe extern "C" fn cb_action(
             }
             GHOSTTY_ACTION_CELL_SIZE => {
                 let payload: ffi::ghostty_action_cell_size_s = action.payload();
-                appkit::set_resize_increments(payload.width as f64, payload.height as f64);
+                platform::set_resize_increments(payload.width as f64, payload.height as f64);
                 let cb = &mut *(ffi::ghostty_app_userdata(_app) as *mut CallbackState);
                 cb.pending_cell_size = Some((payload.width as f64, payload.height as f64));
                 true
@@ -3044,25 +3070,20 @@ unsafe extern "C" fn cb_read_clipboard(
     if surface.is_null() {
         return false;
     }
-    unsafe {
-        use objc2_app_kit::NSPasteboard;
-        use objc2_app_kit::NSPasteboardTypeString;
-
-        let pb = NSPasteboard::generalPasteboard();
-        let text = pb.stringForType(NSPasteboardTypeString);
-        match text {
-            Some(ns_str) => {
-                let cstr = CString::new(ns_str.to_string()).unwrap_or_default();
+    match platform::clipboard_read() {
+        Some(text) => {
+            let cstr = CString::new(text).unwrap_or_default();
+            unsafe {
                 ffi::ghostty_surface_complete_clipboard_request(
                     surface, cstr.as_ptr(), state, true,
                 );
             }
-            None => {
-                ffi::ghostty_surface_complete_clipboard_request(
-                    surface, ptr::null(), state, true,
-                );
-            }
         }
+        None => unsafe {
+            ffi::ghostty_surface_complete_clipboard_request(
+                surface, ptr::null(), state, true,
+            );
+        },
     }
     true
 }
@@ -3099,21 +3120,8 @@ unsafe extern "C" fn cb_write_clipboard(
         let text = std::ffi::CStr::from_ptr(first.data);
         let Ok(owned) = text.to_str().map(|s| s.to_owned()) else { return };
 
-        // Dispatch to main thread — this callback may be called from io thread
-        let block = block2::RcBlock::new(move || {
-            use objc2_app_kit::NSPasteboard;
-            use objc2_foundation::NSString;
-
-            let pb = NSPasteboard::generalPasteboard();
-            pb.clearContents();
-            let ns_str = NSString::from_str(&owned);
-            let array = objc2_foundation::NSArray::from_slice(&[
-                objc2::runtime::ProtocolObject::from_ref(&*ns_str),
-            ]);
-            pb.writeObjects(&array);
-        });
-        objc2_foundation::NSOperationQueue::mainQueue()
-            .addOperationWithBlock(&block);
+        // May be called from io thread — use thread-safe clipboard write
+        platform::clipboard_write_from_thread(owned);
     }
 }
 

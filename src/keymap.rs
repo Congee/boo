@@ -1,16 +1,19 @@
-//! Map iced physical key codes to macOS virtual keycodes (kVK_* from Events.h).
-//! ghostty_surface_key expects the native platform keycode.
+//! Map iced physical key codes to platform-native keycodes.
+//!
+//! macOS: kVK_* virtual keycodes (Events.h) — ghostty_surface_key expects these.
+//! Linux: ghostty_input_key_e (W3C key codes from ghostty.h).
 
 use iced::keyboard::key::{Code, Physical};
 
 pub fn physical_to_native_keycode(key: &Physical) -> Option<u32> {
     match key {
-        Physical::Code(code) => code_to_macos(*code),
+        Physical::Code(code) => code_to_native(*code),
         Physical::Unidentified(_) => None,
     }
 }
 
-fn code_to_macos(code: Code) -> Option<u32> {
+#[cfg(target_os = "macos")]
+fn code_to_native(code: Code) -> Option<u32> {
     Some(match code {
         Code::KeyA => 0x00,
         Code::KeyS => 0x01,
@@ -119,6 +122,236 @@ fn code_to_macos(code: Code) -> Option<u32> {
         Code::ArrowRight => 0x7C,
         Code::ArrowDown => 0x7D,
         Code::ArrowUp => 0x7E,
+        _ => return None,
+    })
+}
+
+/// ghostty_input_key_e enum values from ghostty.h (W3C key codes).
+/// These are sequential enum discriminants starting at 0.
+#[cfg(target_os = "linux")]
+mod ghostty_key {
+    pub const BACKQUOTE: u32 = 1;
+    pub const BACKSLASH: u32 = 2;
+    pub const BRACKET_LEFT: u32 = 3;
+    pub const BRACKET_RIGHT: u32 = 4;
+    pub const COMMA: u32 = 5;
+    pub const DIGIT_0: u32 = 6;
+    pub const DIGIT_1: u32 = 7;
+    pub const DIGIT_2: u32 = 8;
+    pub const DIGIT_3: u32 = 9;
+    pub const DIGIT_4: u32 = 10;
+    pub const DIGIT_5: u32 = 11;
+    pub const DIGIT_6: u32 = 12;
+    pub const DIGIT_7: u32 = 13;
+    pub const DIGIT_8: u32 = 14;
+    pub const DIGIT_9: u32 = 15;
+    pub const EQUAL: u32 = 16;
+    pub const A: u32 = 20;
+    pub const B: u32 = 21;
+    pub const C: u32 = 22;
+    pub const D: u32 = 23;
+    pub const E: u32 = 24;
+    pub const F: u32 = 25;
+    pub const G: u32 = 26;
+    pub const H: u32 = 27;
+    pub const I: u32 = 28;
+    pub const J: u32 = 29;
+    pub const K: u32 = 30;
+    pub const L: u32 = 31;
+    pub const M: u32 = 32;
+    pub const N: u32 = 33;
+    pub const O: u32 = 34;
+    pub const P: u32 = 35;
+    pub const Q: u32 = 36;
+    pub const R: u32 = 37;
+    pub const S: u32 = 38;
+    pub const T: u32 = 39;
+    pub const U: u32 = 40;
+    pub const V: u32 = 41;
+    pub const W: u32 = 42;
+    pub const X: u32 = 43;
+    pub const Y: u32 = 44;
+    pub const Z: u32 = 45;
+    pub const MINUS: u32 = 46;
+    pub const PERIOD: u32 = 47;
+    pub const QUOTE: u32 = 48;
+    pub const SEMICOLON: u32 = 49;
+    pub const SLASH: u32 = 50;
+    pub const ALT_LEFT: u32 = 51;
+    pub const ALT_RIGHT: u32 = 52;
+    pub const BACKSPACE: u32 = 53;
+    pub const CAPS_LOCK: u32 = 54;
+    pub const CONTROL_LEFT: u32 = 56;
+    pub const CONTROL_RIGHT: u32 = 57;
+    pub const ENTER: u32 = 58;
+    pub const META_LEFT: u32 = 59;
+    pub const META_RIGHT: u32 = 60;
+    pub const SHIFT_LEFT: u32 = 61;
+    pub const SHIFT_RIGHT: u32 = 62;
+    pub const SPACE: u32 = 63;
+    pub const TAB: u32 = 64;
+    pub const DELETE: u32 = 68;
+    pub const END: u32 = 69;
+    pub const HOME: u32 = 71;
+    pub const INSERT: u32 = 72;
+    pub const PAGE_DOWN: u32 = 73;
+    pub const PAGE_UP: u32 = 74;
+    pub const ARROW_DOWN: u32 = 75;
+    pub const ARROW_LEFT: u32 = 76;
+    pub const ARROW_RIGHT: u32 = 77;
+    pub const ARROW_UP: u32 = 78;
+    pub const NUM_LOCK: u32 = 79;
+    pub const NUMPAD_0: u32 = 80;
+    pub const NUMPAD_1: u32 = 81;
+    pub const NUMPAD_2: u32 = 82;
+    pub const NUMPAD_3: u32 = 83;
+    pub const NUMPAD_4: u32 = 84;
+    pub const NUMPAD_5: u32 = 85;
+    pub const NUMPAD_6: u32 = 86;
+    pub const NUMPAD_7: u32 = 87;
+    pub const NUMPAD_8: u32 = 88;
+    pub const NUMPAD_9: u32 = 89;
+    pub const NUMPAD_ADD: u32 = 90;
+    pub const NUMPAD_DECIMAL: u32 = 95;
+    pub const NUMPAD_DIVIDE: u32 = 96;
+    pub const NUMPAD_ENTER: u32 = 97;
+    pub const NUMPAD_EQUAL: u32 = 98;
+    pub const NUMPAD_MULTIPLY: u32 = 104;
+    pub const NUMPAD_SUBTRACT: u32 = 107;
+    pub const ESCAPE: u32 = 120;
+    pub const F1: u32 = 121;
+    pub const F2: u32 = 122;
+    pub const F3: u32 = 123;
+    pub const F4: u32 = 124;
+    pub const F5: u32 = 125;
+    pub const F6: u32 = 126;
+    pub const F7: u32 = 127;
+    pub const F8: u32 = 128;
+    pub const F9: u32 = 129;
+    pub const F10: u32 = 130;
+    pub const F11: u32 = 131;
+    pub const F12: u32 = 132;
+    pub const F13: u32 = 133;
+    pub const F14: u32 = 134;
+    pub const F15: u32 = 135;
+    pub const F16: u32 = 136;
+    pub const F17: u32 = 137;
+    pub const F18: u32 = 138;
+    pub const F19: u32 = 139;
+}
+
+#[cfg(target_os = "linux")]
+fn code_to_native(code: Code) -> Option<u32> {
+    use ghostty_key as gk;
+    Some(match code {
+        Code::KeyA => gk::A,
+        Code::KeyB => gk::B,
+        Code::KeyC => gk::C,
+        Code::KeyD => gk::D,
+        Code::KeyE => gk::E,
+        Code::KeyF => gk::F,
+        Code::KeyG => gk::G,
+        Code::KeyH => gk::H,
+        Code::KeyI => gk::I,
+        Code::KeyJ => gk::J,
+        Code::KeyK => gk::K,
+        Code::KeyL => gk::L,
+        Code::KeyM => gk::M,
+        Code::KeyN => gk::N,
+        Code::KeyO => gk::O,
+        Code::KeyP => gk::P,
+        Code::KeyQ => gk::Q,
+        Code::KeyR => gk::R,
+        Code::KeyS => gk::S,
+        Code::KeyT => gk::T,
+        Code::KeyU => gk::U,
+        Code::KeyV => gk::V,
+        Code::KeyW => gk::W,
+        Code::KeyX => gk::X,
+        Code::KeyY => gk::Y,
+        Code::KeyZ => gk::Z,
+        Code::Digit0 => gk::DIGIT_0,
+        Code::Digit1 => gk::DIGIT_1,
+        Code::Digit2 => gk::DIGIT_2,
+        Code::Digit3 => gk::DIGIT_3,
+        Code::Digit4 => gk::DIGIT_4,
+        Code::Digit5 => gk::DIGIT_5,
+        Code::Digit6 => gk::DIGIT_6,
+        Code::Digit7 => gk::DIGIT_7,
+        Code::Digit8 => gk::DIGIT_8,
+        Code::Digit9 => gk::DIGIT_9,
+        Code::Backquote => gk::BACKQUOTE,
+        Code::Backslash => gk::BACKSLASH,
+        Code::BracketLeft => gk::BRACKET_LEFT,
+        Code::BracketRight => gk::BRACKET_RIGHT,
+        Code::Comma => gk::COMMA,
+        Code::Equal => gk::EQUAL,
+        Code::Minus => gk::MINUS,
+        Code::Period => gk::PERIOD,
+        Code::Quote => gk::QUOTE,
+        Code::Semicolon => gk::SEMICOLON,
+        Code::Slash => gk::SLASH,
+        Code::Enter => gk::ENTER,
+        Code::Tab => gk::TAB,
+        Code::Space => gk::SPACE,
+        Code::Backspace => gk::BACKSPACE,
+        Code::Escape => gk::ESCAPE,
+        Code::ShiftLeft => gk::SHIFT_LEFT,
+        Code::ShiftRight => gk::SHIFT_RIGHT,
+        Code::AltLeft => gk::ALT_LEFT,
+        Code::AltRight => gk::ALT_RIGHT,
+        Code::ControlLeft => gk::CONTROL_LEFT,
+        Code::ControlRight => gk::CONTROL_RIGHT,
+        Code::SuperLeft => gk::META_LEFT,
+        Code::SuperRight => gk::META_RIGHT,
+        Code::CapsLock => gk::CAPS_LOCK,
+        Code::Delete => gk::DELETE,
+        Code::End => gk::END,
+        Code::Home => gk::HOME,
+        Code::Insert => gk::INSERT,
+        Code::PageDown => gk::PAGE_DOWN,
+        Code::PageUp => gk::PAGE_UP,
+        Code::ArrowDown => gk::ARROW_DOWN,
+        Code::ArrowLeft => gk::ARROW_LEFT,
+        Code::ArrowRight => gk::ARROW_RIGHT,
+        Code::ArrowUp => gk::ARROW_UP,
+        Code::NumLock => gk::NUM_LOCK,
+        Code::Numpad0 => gk::NUMPAD_0,
+        Code::Numpad1 => gk::NUMPAD_1,
+        Code::Numpad2 => gk::NUMPAD_2,
+        Code::Numpad3 => gk::NUMPAD_3,
+        Code::Numpad4 => gk::NUMPAD_4,
+        Code::Numpad5 => gk::NUMPAD_5,
+        Code::Numpad6 => gk::NUMPAD_6,
+        Code::Numpad7 => gk::NUMPAD_7,
+        Code::Numpad8 => gk::NUMPAD_8,
+        Code::Numpad9 => gk::NUMPAD_9,
+        Code::NumpadAdd => gk::NUMPAD_ADD,
+        Code::NumpadDecimal => gk::NUMPAD_DECIMAL,
+        Code::NumpadDivide => gk::NUMPAD_DIVIDE,
+        Code::NumpadEnter => gk::NUMPAD_ENTER,
+        Code::NumpadEqual => gk::NUMPAD_EQUAL,
+        Code::NumpadMultiply => gk::NUMPAD_MULTIPLY,
+        Code::NumpadSubtract => gk::NUMPAD_SUBTRACT,
+        Code::F1 => gk::F1,
+        Code::F2 => gk::F2,
+        Code::F3 => gk::F3,
+        Code::F4 => gk::F4,
+        Code::F5 => gk::F5,
+        Code::F6 => gk::F6,
+        Code::F7 => gk::F7,
+        Code::F8 => gk::F8,
+        Code::F9 => gk::F9,
+        Code::F10 => gk::F10,
+        Code::F11 => gk::F11,
+        Code::F12 => gk::F12,
+        Code::F13 => gk::F13,
+        Code::F14 => gk::F14,
+        Code::F15 => gk::F15,
+        Code::F16 => gk::F16,
+        Code::F17 => gk::F17,
+        Code::F18 => gk::F18,
+        Code::F19 => gk::F19,
         _ => return None,
     })
 }
