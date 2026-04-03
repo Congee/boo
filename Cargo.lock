@@ -419,6 +419,10 @@ dependencies = [
  "raw-window-handle",
  "serde",
  "serde_json",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-sys",
 ]
 
 [[package]]

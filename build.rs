@@ -50,7 +50,9 @@ fn main() {
             println!("cargo:rustc-link-lib=dylib=ghostty");
             println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
             println!("cargo:rustc-link-arg=-Wl,--allow-shlib-undefined");
-            // libghostty.so uses eglMakeCurrent — link EGL so the runtime linker can resolve it
+            // Wayland subsurface compositing + EGL rendering
+            println!("cargo:rustc-link-lib=dylib=wayland-client");
+            println!("cargo:rustc-link-lib=dylib=wayland-egl");
             println!("cargo:rustc-link-lib=dylib=EGL");
         } else {
             println!(

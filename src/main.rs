@@ -82,7 +82,9 @@ struct GhosttyApp {
     tabs: tabs::TabManager,
     parent_view: *mut c_void,
     #[cfg(target_os = "linux")]
-    egl_state: Option<platform::EglState>,
+    wayland_display: Option<platform::WaylandDisplay>,
+    #[cfg(target_os = "linux")]
+    wayland_handle_requested: bool,
     cb_state: Box<CallbackState>,
     ctl_rx: std::sync::mpsc::Receiver<control::ControlCmd>,
     scroll_rx: std::sync::mpsc::Receiver<platform::ScrollEvent>,
@@ -258,9 +260,17 @@ fn fuzzy_score(query: &str, target: &str) -> i32 {
 }
 
 #[derive(Debug, Clone)]
+/// Wrapper for raw pointer that is Send (we know the pointer is valid across threads).
+#[cfg(target_os = "linux")]
+struct RawPtr(*mut c_void);
+#[cfg(target_os = "linux")]
+unsafe impl Send for RawPtr {}
+
 enum Message {
     Frame,
     IcedEvent(Event),
+    #[cfg(target_os = "linux")]
+    WaylandReady(RawPtr), // wl_surface pointer from raw-window-handle
 }
 
 impl GhosttyApp {
@@ -326,7 +336,9 @@ impl GhosttyApp {
                 tabs: tabs::TabManager::new(),
                 parent_view: ptr::null_mut(),
                 #[cfg(target_os = "linux")]
-                egl_state: None,
+                wayland_display: None,
+                #[cfg(target_os = "linux")]
+                wayland_handle_requested: false,
                 cb_state,
                 ctl_rx,
                 scroll_rx: SCROLL_RX
@@ -389,9 +401,24 @@ impl GhosttyApp {
             }
         }
 
-        if self.tabs.is_empty() {
-            self.init_surface();
+        // On Linux, handle WaylandReady before anything else
+        #[cfg(target_os = "linux")]
+        if let Message::WaylandReady(RawPtr(surface_ptr)) = &message {
+            if !surface_ptr.is_null() {
+                self.wayland_display = platform::WaylandDisplay::new(*surface_ptr);
+                if self.wayland_display.is_some() {
+                    log::info!("Wayland display ready, initializing surface");
+                    self.parent_view = *surface_ptr;
+                    return self.init_surface();
+                } else {
+                    log::error!("Failed to initialize Wayland display");
+                }
+            }
             return Task::none();
+        }
+
+        if self.tabs.is_empty() {
+            return self.init_surface();
         }
 
         // Process pending actions from C callbacks
@@ -437,6 +464,8 @@ impl GhosttyApp {
                 self.update_scrollbar_overlay();
                 return Task::none();
             }
+            #[cfg(target_os = "linux")]
+            Message::WaylandReady(_) => return Task::none(), // handled above
             Message::IcedEvent(event) => event,
         };
 
@@ -2278,20 +2307,44 @@ impl GhosttyApp {
         self.relayout();
     }
 
-    fn init_surface(&mut self) {
+    fn init_surface(&mut self) -> Task<Message> {
         if !self.tabs.is_empty() {
-            return;
+            return Task::none();
         }
-        let cv = platform::content_view_handle();
-        if cv.is_null() {
-            return;
+
+        #[cfg(target_os = "macos")]
+        {
+            let cv = platform::content_view_handle();
+            if cv.is_null() {
+                return Task::none();
+            }
+            self.parent_view = cv;
         }
-        self.parent_view = cv;
+
+        #[cfg(target_os = "linux")]
+        if self.wayland_display.is_none() {
+            if !self.wayland_handle_requested {
+                self.wayland_handle_requested = true;
+                use raw_window_handle::HasWindowHandle;
+                return window::oldest().and_then(|id| {
+                    window::run(id, |w| {
+                        match w.window_handle().map(|h| h.as_raw()) {
+                            Ok(raw_window_handle::RawWindowHandle::Wayland(h)) =>
+                                RawPtr(h.surface.as_ptr()),
+                            _ => RawPtr(ptr::null_mut()),
+                        }
+                    })
+                }).map(Message::WaylandReady);
+            }
+            return Task::none();
+        }
+
         platform::set_window_transparent();
         self.scrollbar_layer = platform::create_scrollbar_layer();
-        let frame = platform::view_bounds(cv);
+        let frame = self.terminal_frame();
+
         let (surface, child_view) = self.create_ghostty_surface(frame, true);
-        let Some(surface) = surface else { return };
+        let Some(surface) = surface else { return Task::none() };
         self.tabs.add_initial_tab(surface, child_view);
         self.cb_state.surface = surface;
         log::info!("tab 0 created");
@@ -2300,6 +2353,7 @@ impl GhosttyApp {
         if let Some(name) = STARTUP_SESSION.get() {
             self.load_session(name);
         }
+        Task::none()
     }
 
     fn create_ghostty_surface(
@@ -2349,11 +2403,13 @@ impl GhosttyApp {
 
         #[cfg(target_os = "linux")]
         let child_view = {
-            let egl = self.egl_state.get_or_insert_with(|| {
-                platform::EglState::new().expect("failed to create EGL context")
-            });
-            config.platform = platform::platform_config(egl);
-            ptr::null_mut() // no native child view on Linux
+            let wl = self.wayland_display.as_ref()
+                .expect("wayland display not initialized");
+            let pane = wl.create_pane(frame, self.scale_factor())
+                .expect("failed to create wayland pane");
+            config.platform = platform::platform_config(&pane);
+            let ptr = Box::into_raw(pane) as *mut c_void;
+            ptr
         };
 
         let surface = unsafe { ffi::ghostty_surface_new(self.app, &config) };
@@ -2365,8 +2421,8 @@ impl GhosttyApp {
 
         // Release EGL from main thread so renderer thread can claim it
         #[cfg(target_os = "linux")]
-        if let Some(ref egl) = self.egl_state {
-            egl.release_current();
+        if let Some(ref wl) = self.wayland_display {
+            wl.release_current();
         }
 
         (Some(surface), child_view)
