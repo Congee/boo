@@ -8,9 +8,6 @@ nix develop
 
 # Build
 cargo build
-
-# Submodule init (if ghostty/ is empty)
-git submodule update --init
 ```
 
 ## Architecture
@@ -22,7 +19,6 @@ git submodule update --init
 
 ## Project structure
 
-- `ghostty/` — git submodule (ghostty-org/ghostty, official upstream)
 - `src/ffi.rs` — hand-written FFI bindings where Boo still talks to native APIs
 - `src/vt_backend_core.rs` — shared VT pane/runtime core
 - `src/main.rs` — iced application and shared app state
@@ -32,5 +28,5 @@ git submodule update --init
 ## Conventions
 
 - No bindgen — hand-write FFI for the ~30 functions we use
-- Official upstream ghostty as submodule — we reuse the VT stack, not a forked runtime
+- The shipped app depends on the vendored `libghostty-vt` crates, not the full Ghostty app runtime
 - macOS and Linux share one VT architecture; platform code should stay thin

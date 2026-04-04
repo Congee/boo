@@ -1,5 +1,5 @@
 {
-  description = "boo — Rust/iced UI wrapper around libghostty";
+  description = "boo — Rust/iced terminal app built on libghostty-vt";
 
   inputs.nixpkgs.url      = "github:nixos/nixpkgs/nixos-unstable";
   inputs.flake-utils.url  = "github:numtide/flake-utils";
@@ -29,8 +29,7 @@
           clang-tools
           lldb
           gdb
-          valgrind
-        ];
+        ] ++ lib.optional stdenv.isLinux valgrind;
 
         buildInputs = with pkgs; [
           openssl

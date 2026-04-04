@@ -13,10 +13,6 @@ pub type ghostty_app_t = *mut c_void;
 pub type ghostty_config_t = *mut c_void;
 pub type ghostty_surface_t = *mut c_void;
 
-// --- Constants ---
-
-pub const GHOSTTY_SUCCESS: i32 = 0;
-
 // --- Enums ---
 
 #[repr(C)]
@@ -439,8 +435,6 @@ pub struct ghostty_runtime_config_s {
 // --- Extern functions ---
 
 unsafe extern "C" {
-    // Init
-    pub fn ghostty_init(argc: usize, argv: *mut *mut c_char) -> i32;
     pub fn ghostty_info() -> ghostty_info_s;
 
     // Config

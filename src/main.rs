@@ -149,17 +149,6 @@ fn main() {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
-    {
-        let result = unsafe { ffi::ghostty_init(0, ptr::null_mut()) };
-        if result != ffi::GHOSTTY_SUCCESS {
-            eprintln!("Failed to initialize ghostty: error code {result}");
-            std::process::exit(1);
-        }
-
-        log::info!("ghostty initialized");
-    }
-
     let (scroll_tx, scroll_rx) = std::sync::mpsc::channel();
     let (key_event_tx, key_event_rx) = std::sync::mpsc::channel();
     let (text_input_tx, text_input_rx) = std::sync::mpsc::channel();
