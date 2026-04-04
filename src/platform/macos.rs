@@ -3,7 +3,7 @@
 use super::{KeyEvent, LayerHandle, Point, Rect, ScrollEvent, Size, TextInputCommand, TextInputEvent, ViewHandle};
 use objc2::runtime::AnyObject;
 use objc2::rc::Retained;
-use objc2::{define_class, msg_send, sel, ClassType};
+use objc2::{class, define_class, msg_send, sel, ClassType};
 use objc2_app_kit::{
     NSApplication, NSEvent, NSEventMask, NSResponder, NSView, NSWindow, NSWindowOrderingMode,
 };
@@ -16,6 +16,9 @@ static KEY_EVENT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<KeyEvent>> =
     std::sync::OnceLock::new();
 static MARKED_TEXT: std::sync::OnceLock<std::sync::Mutex<String>> = std::sync::OnceLock::new();
 static IME_RECT: std::sync::OnceLock<std::sync::Mutex<Rect>> = std::sync::OnceLock::new();
+
+#[link(name = "UserNotifications", kind = "framework")]
+unsafe extern "C" {}
 
 fn send_text_input_event(event: TextInputEvent) {
     if let Some(tx) = TEXT_INPUT_TX.get() {
@@ -545,18 +548,73 @@ pub fn clipboard_write(text: &str) {
 }
 
 pub fn send_desktop_notification(title: &str, body: &str) {
-    let title = apple_script_literal(title);
-    let body = apple_script_literal(body);
-    std::thread::spawn(move || {
-        let script = format!("display notification {body} with title {title}");
-        let status = std::process::Command::new("osascript")
-            .arg("-e")
-            .arg(script)
-            .status();
-        if let Err(error) = status {
-            log::warn!("failed to send macOS notification: {}", error);
+    let title = title.to_string();
+    let body = body.to_string();
+    std::thread::spawn(move || unsafe {
+        if !send_user_notification(&title, &body) {
+            send_apple_script_notification(&title, &body);
         }
     });
+}
+
+unsafe fn send_user_notification(title: &str, body: &str) -> bool {
+    let center: *mut AnyObject = msg_send![class!(UNUserNotificationCenter), currentNotificationCenter];
+    if center.is_null() {
+        return false;
+    }
+
+    let () = msg_send![
+        center,
+        requestAuthorizationWithOptions: 0b11usize,
+        completionHandler: std::ptr::null::<AnyObject>()
+    ];
+
+    let content: Retained<AnyObject> = msg_send![class!(UNMutableNotificationContent), new];
+    let ns_title = NSString::from_str(title);
+    let ns_body = NSString::from_str(body);
+    let () = msg_send![&*content, setTitle: &*ns_title];
+    let () = msg_send![&*content, setBody: &*ns_body];
+
+    let sound: *mut AnyObject = msg_send![class!(UNNotificationSound), defaultSound];
+    if !sound.is_null() {
+        let () = msg_send![&*content, setSound: sound];
+    }
+
+    let identifier = NSString::from_str(&notification_identifier());
+    let request: Retained<AnyObject> = msg_send![
+        class!(UNNotificationRequest),
+        requestWithIdentifier: &*identifier,
+        content: &*content,
+        trigger: std::ptr::null::<AnyObject>()
+    ];
+
+    let () = msg_send![
+        center,
+        addNotificationRequest: &*request,
+        withCompletionHandler: std::ptr::null::<AnyObject>()
+    ];
+    true
+}
+
+fn notification_identifier() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    format!("boo-{}-{id}", std::process::id())
+}
+
+fn send_apple_script_notification(title: &str, body: &str) {
+    let title = apple_script_literal(title);
+    let body = apple_script_literal(body);
+    let script = format!("display notification {body} with title {title}");
+    let status = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .status();
+    if let Err(error) = status {
+        log::warn!("failed to send macOS notification: {}", error);
+    }
 }
 
 fn apple_script_literal(text: &str) -> String {
@@ -569,7 +627,7 @@ fn apple_script_literal(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::apple_script_literal;
+    use super::{apple_script_literal, notification_identifier};
 
     #[test]
     fn apple_script_literal_escapes_quotes_and_newlines() {
@@ -577,5 +635,12 @@ mod tests {
             apple_script_literal("a\"b\nc\\d"),
             "\"a\\\"b\\nc\\\\d\""
         );
+    }
+
+    #[test]
+    fn notification_identifier_is_stable_and_prefixed() {
+        let id = notification_identifier();
+        assert!(id.starts_with("boo-"));
+        assert!(id.len() > 4);
     }
 }
