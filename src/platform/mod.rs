@@ -52,6 +52,27 @@ pub struct ScrollEvent {
     pub momentum: u8,
 }
 
+pub struct KeyEvent {
+    pub keycode: u32,
+    pub mods: i32,
+    pub repeat: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextInputCommand {
+    Backspace,
+    DeleteForward,
+    InsertNewline,
+    InsertTab,
+}
+
+pub enum TextInputEvent {
+    Commit(String),
+    Preedit(String),
+    PreeditClear,
+    Command(TextInputCommand),
+}
+
 // --- Platform handle types ---
 
 /// Opaque handle to a native view (NSView* on macOS, widget pointer on Linux).

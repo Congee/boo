@@ -1,6 +1,9 @@
-# boo — Feature List & Architecture (macOS)
+# boo — Feature List & Architecture
 
-boo is a Rust/iced terminal multiplexer built on top of libghostty. It provides tmux-like window management, copy mode, and session persistence while delegating all terminal rendering to ghostty's Metal backend.
+boo is a Rust/iced terminal multiplexer built around a shared `libghostty-vt`
+runtime on both macOS and Linux. It provides tmux-like window management, copy
+mode, command-state tracking, and session persistence while Boo owns the app
+chrome, layout, and VT rendering path.
 
 ## Features
 
@@ -53,7 +56,7 @@ boo is a Rust/iced terminal multiplexer built on top of libghostty. It provides 
 - Single config file: `~/.config/boo/config.boo` (respects `XDG_CONFIG_HOME`)
 - Key=value format with `#` comments
 - Boo-specific keys: `prefix-key`, `control-socket`, `keybind`
-- Ghostty-native keys passed through to libghostty (font-family, font-size, background-opacity, etc.)
+- Shared terminal/UI keys: `font-family`, `font-size`, `background-opacity`, `background-opacity-cells`
 - Runtime config reload via `reload_config` action
 
 ### Scrollback & Scrolling
@@ -71,6 +74,8 @@ boo is a Rust/iced terminal multiplexer built on top of libghostty. It provides 
 ### UI
 - Native macOS window (no title bar decorations — iced provides chrome)
 - Tab bar with active tab indicator
+- VT-backed tab bar can show a running-command spinner when shell integration emits `OSC 133`
+- macOS can send command-finished notifications to Notification Center
 - Overlay scrollbar track (6pt width)
 - Status bar (20pt height)
 - Search overlay for in-terminal find
@@ -86,53 +91,57 @@ boo is a Rust/iced terminal multiplexer built on top of libghostty. It provides 
 
 ### Overview
 
-```
-┌─────────────────────────────────────────────┐
-│  iced application (Rust)                    │
-│  ┌──────────┐ ┌──────────┐ ┌─────────────┐ │
-│  │ tab bar  │ │ status   │ │ overlays    │ │
-│  │ widget   │ │ bar      │ │ (search,    │ │
-│  └──────────┘ └──────────┘ │  cmd prompt)│ │
-│                             └─────────────┘ │
-│  ┌─────────────────────────────────────┐    │
-│  │  split tree (binary)               │    │
-│  │  ┌─────────┐  ┌─────────┐         │    │
-│  │  │ NSView  │  │ NSView  │  ...    │    │
-│  │  │ (pane)  │  │ (pane)  │         │    │
-│  │  └────┬────┘  └────┬────┘         │    │
-│  └───────┼─────────────┼──────────────┘    │
-└──────────┼─────────────┼───────────────────┘
-           │             │
-     ┌─────▼─────────────▼─────┐
-     │  libghostty (C API)     │
-     │  Metal + IOSurface      │
-     │  VT parsing, rendering  │
-     └─────────────────────────┘
+```text
+┌──────────────────────────────────────────────┐
+│ iced application (Rust)                      │
+│ ┌──────────┐ ┌──────────┐ ┌───────────────┐  │
+│ │ tab bar  │ │ status   │ │ overlays      │  │
+│ │ widget   │ │ bar      │ │ search/prompt │  │
+│ └──────────┘ └──────────┘ └───────────────┘  │
+│ ┌──────────────────────────────────────────┐ │
+│ │ tabs + binary split tree                │ │
+│ │  ┌──────────────┐  ┌──────────────┐     │ │
+│ │  │ platform view│  │ platform view│ ... │ │
+│ │  │ + VT canvas  │  │ + VT canvas  │     │ │
+│ │  └──────┬───────┘  └──────┬───────┘     │ │
+│ └─────────┼──────────────────┼────────────┘ │
+└───────────┼──────────────────┼──────────────┘
+            │                  │
+      ┌─────▼──────────────────▼─────┐
+      │ shared VT backend core       │
+      │ PTY, scrollback, OSC 133,    │
+      │ snapshots, input encoding    │
+      └──────────────┬───────────────┘
+                     │
+               ┌─────▼─────┐
+               │libghostty-│
+               │vt         │
+               └───────────┘
 ```
 
 ### Rendering Pipeline
 
-1. **libghostty** owns all terminal rendering — VT parsing, text shaping, Metal GPU calls
-2. Each pane gets a native **NSView** created via libghostty's apprt API
-3. ghostty renders into an **IOSurface** framebuffer attached to a **CALayer**
-4. The NSView is positioned as a child of the iced window's content view
-5. **iced** renders window chrome (tab bar, status bar, overlays) via wgpu
-6. Background transparency is achieved by configuring both iced (transparent window) and ghostty (background-opacity)
+1. Boo owns pane layout, focus, tabs, overlays, and copy mode.
+2. Each pane gets a native host view positioned inside the iced window.
+3. The shared VT backend core manages the PTY, `libghostty-vt`, scrollback, and snapshots.
+4. Boo renders VT snapshots through the shared terminal canvas.
+5. Background transparency comes from the VT canvas alpha plus a transparent top-level iced window.
 
 ### Event Flow
 
 ```
 User input (key/mouse/scroll)
-  → iced event handler
+  → iced event handler and AppKit text-input bridge
   → bindings.rs: check prefix mode, match keybind
   ├─ Consumed by boo → dispatch Action (NewSplit, GotoTab, etc.)
   │   → update split tree / tab state
   │   → relayout pane geometry
-  │   → reposition NSViews
-  └─ Forwarded to ghostty → ghostty_surface_key() / mouse FFI
-      → ghostty processes internally
-      → action callback fires (e.g. SET_TITLE, CLOSE_SURFACE)
-      → boo handles callback → update state → relayout
+  │   → resize platform host views
+  └─ Forwarded to shared VT backend
+      → key / mouse encoding
+      → PTY write
+      → libghostty-vt updates terminal state
+      → boo polls snapshots / OSC state / command lifecycle
 ```
 
 ### Module Map
@@ -143,24 +152,26 @@ User input (key/mouse/scroll)
 | `tabs.rs` | Tab collection, per-tab pane tree, focus tracking |
 | `splits.rs` | Binary split tree, geometry computation, relayout algorithm |
 | `bindings.rs` | Keybind parser, prefix-mode FSM, action enum, copy mode dispatcher |
-| `config.rs` | Config file parser, default values, ghostty passthrough |
+| `config.rs` | Config file parser, default values, appearance and notification policy |
 | `session.rs` | Session file parser, layout templates, save/load |
-| `appkit.rs` | macOS NSView lifecycle, CALayer setup, IOSurface, scroll monitor |
-| `ffi.rs` | Hand-written libghostty C FFI (~30 functions) |
+| `vt_backend_core.rs` | Shared VT pane runtime, snapshots, OSC 133 command state |
+| `macos_vt_backend.rs` | macOS VT backend and host-view integration |
+| `linux_vt_backend.rs` | Linux VT backend wrapper |
+| `vt_terminal_canvas.rs` | Shared snapshot renderer for VT panes |
+| `platform/macos.rs` | macOS AppKit host view, text input, clipboard, notifications |
+| `ffi.rs` | Remaining hand-written C FFI used around the app boundary |
 | `control.rs` | Unix domain socket IPC server |
 | `keymap.rs` | Physical key code → logical key mapping |
 | `tmux.rs` | tmux compatibility layer |
 
 ### Build System
 
-```
-nix develop                    # provides zig, rust, apple-sdk
+```text
+nix develop
   → cargo build
     → build.rs
-      → zig build (ghostty submodule → libghostty.a / xcframework)
-      → link: Cocoa, Metal, QuartzCore, IOSurface, CoreGraphics,
-              CoreText, Foundation
-    → rustc compiles src/*.rs against linked libghostty
+      → link platform frameworks and libghostty-vt runtime
+    → rustc compiles src/*.rs against Boo's shared VT backend
 ```
 
 ### Dependencies
@@ -169,15 +180,26 @@ nix develop                    # provides zig, rust, apple-sdk
 |-------|---------|
 | `iced` 0.14 (wgpu, tokio) | Window, widgets, event loop |
 | `objc2` + app-kit/quartz-core/foundation | Type-safe Objective-C interop |
-| `raw-window-handle` 0.6 | Window handle for NSView embedding |
+| `libghostty-vt` | Shared terminal runtime |
 | `anyhow` | Error handling |
 | `serde` + `serde_json` | Serialization (session save/load) |
 | `libc` | POSIX primitives (socket, signals) |
 
 ### Key Design Decisions
 
-- **No bindgen** — FFI is hand-written for the ~30 C functions used, keeping the build simple
-- **Wrapper, not fork** — ghostty is an unmodified git submodule (ghostty-org/ghostty)
-- **macOS first** — Linux support deferred (needs upstream ghostty contribution for GTK-less apprt)
-- **iced for chrome only** — terminal rendering is entirely ghostty's domain; iced handles tab bar, status bar, and overlays
+- **Shared VT core** — macOS and Linux now share the same terminal runtime model
+- **No bindgen** — the remaining FFI is hand-written and layout-tested
+- **iced owns the app shell** — terminal rendering, overlays, and pane chrome live in Boo
 - **Binary split tree** — each tab's pane layout is a binary tree, supporting arbitrary nesting
+
+## Planned Work
+
+### Shell Integration
+- Add Boo shell integration for bash, zsh, and fish that emits `OSC 133` prompt markers
+- Send `OSC 133;C;cmdline_url=...` before exec so tab titles can show the actual running command instead of just a spinner
+
+### Command Finish Notifications
+- Add `notify-on-command-finish` config with a minimum duration threshold, similar to Kitty
+- macOS currently delivers notifications through Notification Center; migrate the delivery path to `UNUserNotificationCenter`
+- Linux backend: use the freedesktop desktop notification API (`org.freedesktop.Notifications` over D-Bus)
+- Optionally add Kitty-compatible `OSC 99` notification handling so scripts can request notifications directly through Boo

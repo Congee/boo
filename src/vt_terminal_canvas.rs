@@ -1,6 +1,6 @@
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
-use crate::linux_vt_backend;
+use crate::vt_backend_core;
 use iced::alignment;
 use iced::font;
 use iced::mouse;
@@ -12,8 +12,8 @@ use std::hash::{Hash, Hasher};
 const PADDING_X: f32 = 4.0;
 const PADDING_Y: f32 = 2.0;
 #[derive(Debug)]
-pub struct LinuxTerminalCanvas {
-    pub snapshot: linux_vt_backend::TerminalSnapshot,
+pub struct TerminalCanvas {
+    pub snapshot: vt_backend_core::TerminalSnapshot,
     pub cell_width: f32,
     pub cell_height: f32,
     pub font_size: f32,
@@ -23,6 +23,7 @@ pub struct LinuxTerminalCanvas {
     pub background_opacity_cells: bool,
     pub selection_rects: Vec<TerminalSelectionRect>,
     pub selection_color: Color,
+    pub preedit_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -33,9 +34,9 @@ pub struct TerminalSelectionRect {
     pub height: f32,
 }
 
-impl LinuxTerminalCanvas {
+impl TerminalCanvas {
     pub fn new(
-        snapshot: linux_vt_backend::TerminalSnapshot,
+        snapshot: vt_backend_core::TerminalSnapshot,
         cell_width: f32,
         cell_height: f32,
         font_size: f32,
@@ -45,6 +46,7 @@ impl LinuxTerminalCanvas {
         background_opacity_cells: bool,
         selection_rects: Vec<TerminalSelectionRect>,
         selection_color: Color,
+        preedit_text: Option<String>,
     ) -> Self {
         Self {
             snapshot,
@@ -57,6 +59,7 @@ impl LinuxTerminalCanvas {
             background_opacity_cells,
             selection_rects,
             selection_color,
+            preedit_text,
         }
     }
 
@@ -183,17 +186,52 @@ impl LinuxTerminalCanvas {
                 _ => {}
             }
         }
+
+        if let Some(preedit) = self
+            .preedit_text
+            .as_deref()
+            .filter(|text| !text.is_empty())
+            .filter(|_| self.snapshot.cursor.y < self.snapshot.rows)
+        {
+            let x = PADDING_X + self.snapshot.cursor.x as f32 * self.cell_width;
+            let y = PADDING_Y + self.snapshot.cursor.y as f32 * self.cell_height;
+            let width = (preedit.chars().count().max(1) as f32) * self.cell_width;
+            let overlay = Color::from_rgba(0.92, 0.82, 0.32, 0.18);
+            let underline = Color::from_rgba(0.98, 0.86, 0.35, 0.9);
+            frame.fill_rectangle(
+                Point::new(x, y),
+                Size::new(width, self.cell_height),
+                overlay,
+            );
+            frame.fill_text(canvas::Text {
+                content: preedit.to_string(),
+                position: Point::new(x, y),
+                color: default_fg,
+                size: Pixels(self.font_size),
+                line_height: iced::widget::text::LineHeight::Absolute(Pixels(self.cell_height)),
+                font: configured_font(self.font_family),
+                align_x: iced::widget::text::Alignment::Left,
+                align_y: alignment::Vertical::Top,
+                shaping: iced::widget::text::Shaping::Advanced,
+                max_width: width,
+            });
+            frame.fill_rectangle(
+                Point::new(x, y + self.cell_height - 2.0),
+                Size::new(width, 1.5),
+                underline,
+            );
+        }
     }
 }
 
 #[derive(Debug, Default)]
-pub struct LinuxTerminalCanvasState {
+pub struct TerminalCanvasState {
     cache: Cache,
     fingerprint: RefCell<Option<u64>>,
 }
 
-impl<Message> canvas::Program<Message> for LinuxTerminalCanvas {
-    type State = LinuxTerminalCanvasState;
+impl<Message> canvas::Program<Message> for TerminalCanvas {
+    type State = TerminalCanvasState;
 
     fn draw(
         &self,
@@ -218,7 +256,7 @@ impl<Message> canvas::Program<Message> for LinuxTerminalCanvas {
     }
 }
 
-fn font_for_cell(cell: &linux_vt_backend::CellSnapshot, family: Option<&'static str>) -> Font {
+fn font_for_cell(cell: &vt_backend_core::CellSnapshot, family: Option<&'static str>) -> Font {
     let base = configured_font(family);
     Font {
         family: base.family,
@@ -244,7 +282,7 @@ fn color_from_rgb(color: crate::vt::GhosttyColorRgb, alpha: f32) -> Color {
     Color::from_rgba8(color.r, color.g, color.b, alpha.clamp(0.0, 1.0))
 }
 
-impl LinuxTerminalCanvas {
+impl TerminalCanvas {
     fn fingerprint(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.snapshot.cols.hash(&mut hasher);
@@ -265,6 +303,7 @@ impl LinuxTerminalCanvas {
         self.font_family.hash(&mut hasher);
         self.appearance_revision.hash(&mut hasher);
         self.selection_rects.len().hash(&mut hasher);
+        self.preedit_text.hash(&mut hasher);
         for rect in &self.selection_rects {
             rect.x.to_bits().hash(&mut hasher);
             rect.y.to_bits().hash(&mut hasher);
@@ -294,9 +333,9 @@ impl LinuxTerminalCanvas {
 mod tests {
     use super::*;
 
-    fn sample_canvas(revision: u64) -> LinuxTerminalCanvas {
-        LinuxTerminalCanvas::new(
-            linux_vt_backend::TerminalSnapshot::default(),
+    fn sample_canvas(revision: u64) -> TerminalCanvas {
+        TerminalCanvas::new(
+            vt_backend_core::TerminalSnapshot::default(),
             8.0,
             16.0,
             14.0,
@@ -306,6 +345,7 @@ mod tests {
             true,
             Vec::new(),
             Color::from_rgba(0.65, 0.72, 0.95, 0.35),
+            None,
         )
     }
 
@@ -314,5 +354,13 @@ mod tests {
         let before = sample_canvas(1).fingerprint();
         let after = sample_canvas(2).fingerprint();
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn fingerprint_changes_when_preedit_changes() {
+        let before = sample_canvas(1).fingerprint();
+        let mut after = sample_canvas(1);
+        after.preedit_text = Some("k".to_string());
+        assert_ne!(before, after.fingerprint());
     }
 }

@@ -1,4 +1,4 @@
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 #![allow(dead_code)]
 
 use std::ffi::{CStr, CString};
@@ -160,7 +160,7 @@ fn open_pty(size: PtySize) -> io::Result<(RawFd, RawFd)> {
             &mut master_fd,
             &mut slave_fd,
             std::ptr::null_mut(),
-            std::ptr::null(),
+            std::ptr::null_mut(),
             &mut winsize,
         )
     };
@@ -235,7 +235,7 @@ fn child_exec(
         if libc::setsid() < 0 {
             libc::_exit(1);
         }
-        if libc::ioctl(slave_fd, libc::TIOCSCTTY, 0) < 0 {
+        if libc::ioctl(slave_fd, libc::TIOCSCTTY as _, 0) < 0 {
             libc::_exit(1);
         }
         if libc::dup2(slave_fd, libc::STDIN_FILENO) < 0

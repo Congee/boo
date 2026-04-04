@@ -283,6 +283,27 @@ pub struct ghostty_action_set_title_s {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub struct ghostty_action_desktop_notification_s {
+    pub title: *const c_char,
+    pub body: *const c_char,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ghostty_action_progress_report_s {
+    pub state: i32,
+    pub progress: i8,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ghostty_action_command_finished_s {
+    pub exit_code: i16,
+    pub duration: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub struct ghostty_action_cell_size_s {
     pub width: u32,
     pub height: u32,

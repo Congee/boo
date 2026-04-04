@@ -10,10 +10,9 @@ static NEXT_PANE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Backend-neutral pane handle.
 ///
-/// Today this still carries the native libghostty surface and platform view
-/// used by the existing implementation. The key change is that tabs/splits
-/// no longer traffic in raw `(surface, view)` tuples directly, which gives
-/// Linux room to swap in a `libghostty-vt`-backed pane implementation later.
+/// Boo now uses backend-owned VT panes on both macOS and Linux. `surface`
+/// remains for compatibility with any native-surface backends, while `view`
+/// keeps the platform host view needed for focus and layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PaneHandle {
     id: PaneId,

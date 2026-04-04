@@ -15,6 +15,23 @@ pub struct Config {
     pub font_size: Option<f32>,
     pub background_opacity: Option<f32>,
     pub background_opacity_cells: bool,
+    pub desktop_notifications: bool,
+    pub notify_on_command_finish: NotifyOnCommandFinish,
+    pub notify_on_command_finish_action: NotifyOnCommandFinishAction,
+    pub notify_on_command_finish_after_ns: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotifyOnCommandFinish {
+    Never,
+    Unfocused,
+    Always,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotifyOnCommandFinishAction {
+    pub bell: bool,
+    pub notify: bool,
 }
 
 impl Config {
@@ -65,6 +82,26 @@ impl Config {
                 "background-opacity-cells" => {
                     config.background_opacity_cells = parse_bool(value).unwrap_or(false);
                 }
+                "desktop-notifications" => {
+                    config.desktop_notifications = parse_bool(value).unwrap_or(true);
+                }
+                "notify-on-command-finish" => {
+                    config.notify_on_command_finish = match value {
+                        "never" => NotifyOnCommandFinish::Never,
+                        "unfocused" => NotifyOnCommandFinish::Unfocused,
+                        "always" => NotifyOnCommandFinish::Always,
+                        _ => NotifyOnCommandFinish::Never,
+                    };
+                }
+                "notify-on-command-finish-action" => {
+                    config.notify_on_command_finish_action =
+                        parse_notify_on_command_finish_action(value);
+                }
+                "notify-on-command-finish-after" => {
+                    if let Some(duration) = parse_duration_ns(value) {
+                        config.notify_on_command_finish_after_ns = duration;
+                    }
+                }
                 "keybind" => {
                     // Format: keybind = <key>=<action>
                     if let Some((bind_key, action)) = value.split_once('=') {
@@ -92,6 +129,13 @@ impl Default for Config {
             font_size: None,
             background_opacity: None,
             background_opacity_cells: false,
+            desktop_notifications: true,
+            notify_on_command_finish: NotifyOnCommandFinish::Never,
+            notify_on_command_finish_action: NotifyOnCommandFinishAction {
+                bell: true,
+                notify: false,
+            },
+            notify_on_command_finish_after_ns: 5 * 1_000_000_000,
         }
     }
 }
@@ -112,6 +156,61 @@ fn parse_bool(value: &str) -> Option<bool> {
     }
 }
 
+fn parse_notify_on_command_finish_action(value: &str) -> NotifyOnCommandFinishAction {
+    let mut action = NotifyOnCommandFinishAction {
+        bell: true,
+        notify: false,
+    };
+    for entry in value.split(',').map(str::trim).filter(|entry| !entry.is_empty()) {
+        match entry {
+            "bell" => action.bell = true,
+            "no-bell" => action.bell = false,
+            "notify" => action.notify = true,
+            "no-notify" => action.notify = false,
+            _ => {}
+        }
+    }
+    action
+}
+
+fn parse_duration_ns(value: &str) -> Option<u64> {
+    let bytes = value.as_bytes();
+    let mut i = 0;
+    let mut total = 0u64;
+    while i < bytes.len() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if start == i {
+            return None;
+        }
+        let number = value[start..i].parse::<u64>().ok()?;
+        let unit_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+            i += 1;
+        }
+        let unit = &value[unit_start..i];
+        let multiplier = match unit {
+            "h" => 3_600_000_000_000,
+            "m" => 60_000_000_000,
+            "s" => 1_000_000_000,
+            "ms" => 1_000_000,
+            "us" => 1_000,
+            "ns" => 1,
+            _ => return None,
+        };
+        total = total.checked_add(number.checked_mul(multiplier)?)?;
+    }
+    Some(total)
+}
+
 pub fn config_dir() -> PathBuf {
     let dir = std::env::var("XDG_CONFIG_HOME")
         .unwrap_or_else(|_| format!("{}/.config", std::env::var("HOME").unwrap_or_default()));
@@ -120,13 +219,6 @@ pub fn config_dir() -> PathBuf {
 
 fn config_path() -> PathBuf {
     config_dir().join("config.boo")
-}
-
-/// Path to the config file for loading into ghostty.
-/// Same file as boo's config — ghostty ignores boo- prefixed keys.
-#[cfg(not(target_os = "linux"))]
-pub fn ghostty_config_path() -> PathBuf {
-    config_path()
 }
 
 #[cfg(test)]
@@ -195,5 +287,16 @@ keybind = super+1 = goto_tab:1
 
         let config = Config::parse("background-opacity-cells = off\n");
         assert!(!config.background_opacity_cells);
+    }
+
+    #[test]
+    fn test_parse_notify_on_command_finish_settings() {
+        let config = Config::parse(
+            "notify-on-command-finish = always\nnotify-on-command-finish-action = no-bell,notify\nnotify-on-command-finish-after = 1m30s\n",
+        );
+        assert_eq!(config.notify_on_command_finish, NotifyOnCommandFinish::Always);
+        assert!(!config.notify_on_command_finish_action.bell);
+        assert!(config.notify_on_command_finish_action.notify);
+        assert_eq!(config.notify_on_command_finish_after_ns, 90_000_000_000);
     }
 }

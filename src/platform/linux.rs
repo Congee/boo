@@ -3,22 +3,24 @@
 //! Linux no longer embeds a Ghostty GL surface. Boo renders through iced and
 //! uses only a minimal native-platform shim here.
 
-#![allow(dead_code)]
-
-use super::{LayerHandle, Rect, ScrollEvent, ViewHandle};
+use super::{KeyEvent, LayerHandle, Rect, ScrollEvent, TextInputEvent, ViewHandle};
 
 pub fn scale_factor() -> f64 { 1.0 }
 pub fn content_view_handle() -> ViewHandle { 1usize as ViewHandle }
 pub fn set_window_transparent() {}
+pub fn create_focusable_child_view(_: ViewHandle, _: Rect) -> ViewHandle { std::ptr::null_mut() }
 
 pub fn view_bounds(_: ViewHandle) -> Rect { Rect::default() }
 pub fn set_view_frame(_: ViewHandle, _: Rect) {}
-pub fn set_window_title(_: &str) {}
-pub fn set_resize_increments(_: f64, _: f64) {}
 pub fn set_view_hidden(_: ViewHandle, _: bool) {}
 pub fn remove_view(_: ViewHandle) {}
-pub fn request_redraw() {}
-pub fn install_event_monitors(_: std::sync::mpsc::Sender<ScrollEvent>) {}
+pub fn focus_view(_: ViewHandle) {}
+pub fn set_text_input_cursor_rect(_: Rect) {}
+pub fn install_event_monitors(
+    _: std::sync::mpsc::Sender<ScrollEvent>,
+    _: std::sync::mpsc::Sender<KeyEvent>,
+    _: std::sync::mpsc::Sender<TextInputEvent>,
+) {}
 pub fn create_scrollbar_layer() -> LayerHandle { std::ptr::null_mut() }
 pub fn update_scrollbar_layer(_: LayerHandle, _: f64, _: f64, _: f64, _: f64, _: f32) {}
 pub fn create_highlight_layer() -> LayerHandle { std::ptr::null_mut() }
@@ -34,8 +36,4 @@ pub fn clipboard_write(text: &str) {
     }
 }
 
-pub fn clipboard_write_from_thread(text: String) {
-    if let Ok(mut cb) = arboard::Clipboard::new() {
-        let _ = cb.set_text(text);
-    }
-}
+pub fn send_desktop_notification(_: &str, _: &str) {}

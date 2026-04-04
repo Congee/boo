@@ -12,6 +12,121 @@ pub fn physical_to_native_keycode(key: &Physical) -> Option<u32> {
     }
 }
 
+pub fn physical_to_vt_keycode(key: &Physical) -> Option<u32> {
+    match key {
+        Physical::Code(code) => code_to_vt(*code),
+        Physical::Unidentified(_) => None,
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn native_to_vt_keycode(keycode: u32) -> Option<u32> {
+    Some(match keycode {
+        0x00 => ghostty_key::A,
+        0x01 => ghostty_key::S,
+        0x02 => ghostty_key::D,
+        0x03 => ghostty_key::F,
+        0x04 => ghostty_key::H,
+        0x05 => ghostty_key::G,
+        0x06 => ghostty_key::Z,
+        0x07 => ghostty_key::X,
+        0x08 => ghostty_key::C,
+        0x09 => ghostty_key::V,
+        0x0B => ghostty_key::B,
+        0x0C => ghostty_key::Q,
+        0x0D => ghostty_key::W,
+        0x0E => ghostty_key::E,
+        0x0F => ghostty_key::R,
+        0x10 => ghostty_key::Y,
+        0x11 => ghostty_key::T,
+        0x12 => ghostty_key::DIGIT_1,
+        0x13 => ghostty_key::DIGIT_2,
+        0x14 => ghostty_key::DIGIT_3,
+        0x15 => ghostty_key::DIGIT_4,
+        0x16 => ghostty_key::DIGIT_6,
+        0x17 => ghostty_key::DIGIT_5,
+        0x18 => ghostty_key::EQUAL,
+        0x19 => ghostty_key::DIGIT_9,
+        0x1A => ghostty_key::DIGIT_7,
+        0x1B => ghostty_key::MINUS,
+        0x1C => ghostty_key::DIGIT_8,
+        0x1D => ghostty_key::DIGIT_0,
+        0x1E => ghostty_key::BRACKET_RIGHT,
+        0x1F => ghostty_key::O,
+        0x20 => ghostty_key::U,
+        0x21 => ghostty_key::BRACKET_LEFT,
+        0x22 => ghostty_key::I,
+        0x23 => ghostty_key::P,
+        0x24 => ghostty_key::ENTER,
+        0x25 => ghostty_key::L,
+        0x26 => ghostty_key::J,
+        0x27 => ghostty_key::QUOTE,
+        0x28 => ghostty_key::K,
+        0x29 => ghostty_key::SEMICOLON,
+        0x2A => ghostty_key::BACKSLASH,
+        0x2B => ghostty_key::COMMA,
+        0x2C => ghostty_key::SLASH,
+        0x2D => ghostty_key::N,
+        0x2E => ghostty_key::M,
+        0x2F => ghostty_key::PERIOD,
+        0x30 => ghostty_key::TAB,
+        0x31 => ghostty_key::SPACE,
+        0x32 => ghostty_key::BACKQUOTE,
+        0x33 => ghostty_key::BACKSPACE,
+        0x35 => ghostty_key::ESCAPE,
+        0x36 => ghostty_key::META_RIGHT,
+        0x37 => ghostty_key::META_LEFT,
+        0x38 => ghostty_key::SHIFT_LEFT,
+        0x39 => ghostty_key::CAPS_LOCK,
+        0x3A => ghostty_key::ALT_LEFT,
+        0x3B => ghostty_key::CONTROL_LEFT,
+        0x3C => ghostty_key::SHIFT_RIGHT,
+        0x3D => ghostty_key::ALT_RIGHT,
+        0x3E => ghostty_key::CONTROL_RIGHT,
+        0x47 => ghostty_key::NUM_LOCK,
+        0x4B => ghostty_key::NUMPAD_DIVIDE,
+        0x4C => ghostty_key::NUMPAD_ENTER,
+        0x4E => ghostty_key::NUMPAD_SUBTRACT,
+        0x51 => ghostty_key::NUMPAD_EQUAL,
+        0x52 => ghostty_key::NUMPAD_0,
+        0x53 => ghostty_key::NUMPAD_1,
+        0x54 => ghostty_key::NUMPAD_2,
+        0x55 => ghostty_key::NUMPAD_3,
+        0x56 => ghostty_key::NUMPAD_4,
+        0x57 => ghostty_key::NUMPAD_5,
+        0x58 => ghostty_key::NUMPAD_6,
+        0x59 => ghostty_key::NUMPAD_7,
+        0x5B => ghostty_key::NUMPAD_8,
+        0x5C => ghostty_key::NUMPAD_9,
+        0x60 => ghostty_key::F5,
+        0x61 => ghostty_key::F6,
+        0x62 => ghostty_key::F7,
+        0x63 => ghostty_key::F3,
+        0x64 => ghostty_key::F8,
+        0x65 => ghostty_key::F9,
+        0x67 => ghostty_key::F11,
+        0x69 => ghostty_key::F13,
+        0x6A => ghostty_key::F16,
+        0x6B => ghostty_key::F14,
+        0x6D => ghostty_key::F10,
+        0x6F => ghostty_key::F12,
+        0x71 => ghostty_key::F15,
+        0x73 => ghostty_key::HOME,
+        0x74 => ghostty_key::PAGE_UP,
+        0x75 => ghostty_key::DELETE,
+        0x76 => ghostty_key::F4,
+        0x77 => ghostty_key::END,
+        0x78 => ghostty_key::F2,
+        0x79 => ghostty_key::PAGE_DOWN,
+        0x7A => ghostty_key::F1,
+        0x7B => ghostty_key::ARROW_LEFT,
+        0x7C => ghostty_key::ARROW_RIGHT,
+        0x7D => ghostty_key::ARROW_DOWN,
+        0x7E => ghostty_key::ARROW_UP,
+        _ => return None,
+    })
+}
+
 #[cfg(target_os = "macos")]
 fn code_to_native(code: Code) -> Option<u32> {
     Some(match code {
@@ -126,9 +241,13 @@ fn code_to_native(code: Code) -> Option<u32> {
     })
 }
 
+#[cfg(target_os = "linux")]
+fn code_to_native(code: Code) -> Option<u32> {
+    code_to_vt(code)
+}
+
 /// ghostty_input_key_e enum values from ghostty.h (W3C key codes).
 /// These are sequential enum discriminants starting at 0.
-#[cfg(target_os = "linux")]
 mod ghostty_key {
     pub const BACKQUOTE: u32 = 1;
     pub const BACKSLASH: u32 = 2;
@@ -240,8 +359,7 @@ mod ghostty_key {
     pub const F19: u32 = 139;
 }
 
-#[cfg(target_os = "linux")]
-fn code_to_native(code: Code) -> Option<u32> {
+fn code_to_vt(code: Code) -> Option<u32> {
     use ghostty_key as gk;
     Some(match code {
         Code::KeyA => gk::A,

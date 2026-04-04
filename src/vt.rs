@@ -4,7 +4,7 @@
 //! backend does not depend directly on the upstream crate layout. On Linux,
 //! the implementation is backed by `libghostty_vt::ffi`.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 #![allow(dead_code, non_camel_case_types)]
 
 use libghostty_vt::ffi;

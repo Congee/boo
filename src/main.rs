@@ -4,20 +4,23 @@ mod config;
 mod control;
 mod ffi;
 mod keymap;
-#[cfg(target_os = "linux")]
-mod linux_terminal_canvas;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod vt_terminal_canvas;
 #[cfg(target_os = "linux")]
 mod linux_vt_backend;
+#[cfg(target_os = "macos")]
+mod macos_vt_backend;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod vt_backend_core;
 mod pane;
 mod platform;
 mod session;
 mod splits;
-mod surface_backend;
 mod tabs;
 mod tmux;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vt;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod unix_pty;
 
 use iced::widget::{column, container, row, text};
@@ -35,19 +38,15 @@ const STATUS_BAR_HEIGHT: f64 = 20.0;
 
 static SCROLL_RX: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Receiver<platform::ScrollEvent>>> =
     std::sync::OnceLock::new();
+static KEY_EVENT_RX: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Receiver<platform::KeyEvent>>> =
+    std::sync::OnceLock::new();
+static TEXT_INPUT_RX: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Receiver<platform::TextInputEvent>>> =
+    std::sync::OnceLock::new();
 
-/// Shared state accessible from C callbacks via runtime_config.userdata.
-struct CallbackState {
-    surface: ffi::ghostty_surface_t,
-    pending_split: Option<bindings::SplitDirection>,
-    pending_focus: Option<bindings::PaneFocusDirection>,
-    pending_title: Option<String>,
-    pending_close: bool,
-    scrollbar: Option<ffi::ghostty_action_scrollbar_s>,
-    search_total: Option<isize>,
-    search_selected: Option<isize>,
-    pending_pwd: Option<String>,
-    pending_cell_size: Option<(f64, f64)>,
+#[derive(Clone, Copy)]
+struct CommandFinishedEvent {
+    exit_code: Option<u8>,
+    duration_ns: u64,
 }
 
 
@@ -162,9 +161,13 @@ fn main() {
     }
 
     let (scroll_tx, scroll_rx) = std::sync::mpsc::channel();
-    platform::install_event_monitors(scroll_tx);
+    let (key_event_tx, key_event_rx) = std::sync::mpsc::channel();
+    let (text_input_tx, text_input_rx) = std::sync::mpsc::channel();
+    platform::install_event_monitors(scroll_tx, key_event_tx, text_input_tx);
     // Store in a static so BooApp::new can pick it up
     SCROLL_RX.set(std::sync::Mutex::new(scroll_rx)).ok();
+    KEY_EVENT_RX.set(std::sync::Mutex::new(key_event_rx)).ok();
+    TEXT_INPUT_RX.set(std::sync::Mutex::new(text_input_rx)).ok();
 
     iced::application(BooApp::new, BooApp::update, BooApp::view)
         .title("boo")
@@ -181,9 +184,10 @@ struct BooApp {
     backend: backend::Backend,
     tabs: tabs::TabManager,
     parent_view: *mut c_void,
-    cb_state: Box<CallbackState>,
     ctl_rx: std::sync::mpsc::Receiver<control::ControlCmd>,
     scroll_rx: std::sync::mpsc::Receiver<platform::ScrollEvent>,
+    key_event_rx: std::sync::mpsc::Receiver<platform::KeyEvent>,
+    text_input_rx: std::sync::mpsc::Receiver<platform::TextInputEvent>,
     bindings: bindings::Bindings,
     socket_path: Option<String>,
     dump_keys: bool,
@@ -201,6 +205,7 @@ struct BooApp {
     search_total: isize,
     search_selected: isize,
     pwd: String,
+    preedit_text: String,
     last_clipboard_text: String,
     copy_mode: Option<CopyModeState>,
     command_prompt: CommandPrompt,
@@ -209,6 +214,11 @@ struct BooApp {
     background_opacity: f32,
     background_opacity_cells: bool,
     appearance_revision: u64,
+    app_focused: bool,
+    desktop_notifications_enabled: bool,
+    notify_on_command_finish: config::NotifyOnCommandFinish,
+    notify_on_command_finish_action: config::NotifyOnCommandFinishAction,
+    notify_on_command_finish_after_ns: u64,
     #[cfg(target_os = "linux")]
     pending_font_bytes: Option<Vec<u8>>,
 }
@@ -408,19 +418,7 @@ impl BooApp {
     }
 
     fn new() -> (Self, Task<Message>) {
-        let mut cb_state = Box::new(CallbackState {
-            surface: ptr::null_mut(),
-            pending_split: None,
-            pending_focus: None,
-            pending_title: None,
-            pending_close: false,
-            scrollbar: None,
-            search_total: None,
-            search_selected: None,
-            pending_pwd: None,
-            pending_cell_size: None,
-        });
-        let backend = backend::Backend::new(&mut *cb_state as *mut CallbackState as *mut c_void);
+        let backend = <backend::Backend as backend::TerminalBackend>::new(ptr::null_mut());
 
         let boo_config = config::Config::load();
         let ctl_rx = control::start(boo_config.control_socket.as_deref());
@@ -435,9 +433,24 @@ impl BooApp {
                     backend,
                     tabs: tabs::TabManager::new(),
                     parent_view: ptr::null_mut(),
-                    cb_state,
                     ctl_rx,
                     scroll_rx: SCROLL_RX
+                        .get()
+                        .and_then(|m| m.lock().ok())
+                        .map(|mut guard| {
+                            let (_, rx) = std::sync::mpsc::channel();
+                            std::mem::replace(&mut *guard, rx)
+                        })
+                        .unwrap_or_else(|| std::sync::mpsc::channel().1),
+                    key_event_rx: KEY_EVENT_RX
+                        .get()
+                        .and_then(|m| m.lock().ok())
+                        .map(|mut guard| {
+                            let (_, rx) = std::sync::mpsc::channel();
+                            std::mem::replace(&mut *guard, rx)
+                        })
+                        .unwrap_or_else(|| std::sync::mpsc::channel().1),
+                    text_input_rx: TEXT_INPUT_RX
                         .get()
                         .and_then(|m| m.lock().ok())
                         .map(|mut guard| {
@@ -462,6 +475,7 @@ impl BooApp {
                     search_total: 0,
                     search_selected: 0,
                     pwd: String::new(),
+                    preedit_text: String::new(),
                     last_clipboard_text: String::new(),
                     copy_mode: None,
                     command_prompt: CommandPrompt::new(),
@@ -470,6 +484,11 @@ impl BooApp {
                     background_opacity: appearance.background_opacity,
                     background_opacity_cells: appearance.background_opacity_cells,
                     appearance_revision: 1,
+                    app_focused: true,
+                    desktop_notifications_enabled: boo_config.desktop_notifications,
+                    notify_on_command_finish: boo_config.notify_on_command_finish,
+                    notify_on_command_finish_action: boo_config.notify_on_command_finish_action,
+                    notify_on_command_finish_after_ns: boo_config.notify_on_command_finish_after_ns,
                     pending_font_bytes: appearance.font_bytes,
                 },
                 Task::none(),
@@ -483,9 +502,24 @@ impl BooApp {
                     backend,
                     tabs: tabs::TabManager::new(),
                     parent_view: ptr::null_mut(),
-                    cb_state,
                     ctl_rx,
                     scroll_rx: SCROLL_RX
+                        .get()
+                        .and_then(|m| m.lock().ok())
+                        .map(|mut guard| {
+                            let (_, rx) = std::sync::mpsc::channel();
+                            std::mem::replace(&mut *guard, rx)
+                        })
+                        .unwrap_or_else(|| std::sync::mpsc::channel().1),
+                    key_event_rx: KEY_EVENT_RX
+                        .get()
+                        .and_then(|m| m.lock().ok())
+                        .map(|mut guard| {
+                            let (_, rx) = std::sync::mpsc::channel();
+                            std::mem::replace(&mut *guard, rx)
+                        })
+                        .unwrap_or_else(|| std::sync::mpsc::channel().1),
+                    text_input_rx: TEXT_INPUT_RX
                         .get()
                         .and_then(|m| m.lock().ok())
                         .map(|mut guard| {
@@ -510,6 +544,7 @@ impl BooApp {
                     search_total: 0,
                     search_selected: 0,
                     pwd: String::new(),
+                    preedit_text: String::new(),
                     last_clipboard_text: String::new(),
                     copy_mode: None,
                     command_prompt: CommandPrompt::new(),
@@ -518,6 +553,11 @@ impl BooApp {
                     background_opacity: appearance.background_opacity,
                     background_opacity_cells: appearance.background_opacity_cells,
                     appearance_revision: 1,
+                    app_focused: true,
+                    desktop_notifications_enabled: boo_config.desktop_notifications,
+                    notify_on_command_finish: boo_config.notify_on_command_finish,
+                    notify_on_command_finish_action: boo_config.notify_on_command_finish_action,
+                    notify_on_command_finish_after_ns: boo_config.notify_on_command_finish_after_ns,
                 },
                 Task::none(),
             )
@@ -528,8 +568,98 @@ impl BooApp {
         self.tabs.focused_pane().surface()
     }
 
-    fn set_surface_focus(&self, surface: ffi::ghostty_surface_t, focused: bool) {
-        self.backend.set_surface_focus(surface, focused);
+    fn set_pane_focus(&self, pane: PaneHandle, focused: bool) {
+        self.backend.set_surface_focus(pane.surface(), focused);
+        #[cfg(target_os = "macos")]
+        if focused && pane.surface().is_null() {
+            platform::focus_view(pane.view());
+        }
+    }
+
+    fn handle_command_finished(&mut self, event: CommandFinishedEvent) {
+        if let Some((title, body)) = command_finish_notification(
+            self.desktop_notifications_enabled,
+            self.notify_on_command_finish_action.notify,
+            self.notify_on_command_finish,
+            self.app_focused,
+            self.notify_on_command_finish_after_ns,
+            event,
+        ) {
+            platform::send_desktop_notification(title, &body);
+        }
+    }
+
+    fn forward_text_input_command(&mut self, command: platform::TextInputCommand) {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let (keycode, unshifted_codepoint) = text_input_command_key(command);
+            let _ = self.backend.forward_vt_key(
+                self.tabs.focused_pane(),
+                vt::GHOSTTY_KEY_ACTION_PRESS,
+                keycode,
+                ffi::GHOSTTY_MODS_NONE as vt::GhosttyMods,
+                ffi::GHOSTTY_MODS_NONE as vt::GhosttyMods,
+                None,
+                "",
+                false,
+                unshifted_codepoint,
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn handle_platform_key_event(&mut self, event: platform::KeyEvent) {
+        let keycode = event.keycode;
+        let mods = event.mods;
+        let key_char = shifted_char(keycode, mods);
+        let named_key = native_keycode_to_named_key(keycode);
+        let keyboard_key = native_keycode_to_keyboard_key(keycode, key_char);
+
+        if self.command_prompt.active {
+            let text = key_char.map(|ch| ch.to_string());
+            self.handle_command_key(&keyboard_key, &text, &ghostty_mods_to_iced(mods));
+            return;
+        }
+
+        if self.search_active {
+            let text = key_char.map(|ch| ch.to_string());
+            self.handle_search_key(&keyboard_key, &text, &ghostty_mods_to_iced(mods));
+            return;
+        }
+
+        match self.bindings.handle_key(key_char, keycode, mods, named_key) {
+            bindings::KeyResult::Consumed(action) => {
+                if let Some(action) = action {
+                    self.dispatch_binding_action(action);
+                }
+                return;
+            }
+            bindings::KeyResult::CopyMode(action) => {
+                self.dispatch_copy_mode_action(action);
+                return;
+            }
+            bindings::KeyResult::Forward => {}
+        }
+
+        let Some(vt_keycode) = keymap::native_to_vt_keycode(keycode) else {
+            return;
+        };
+        let unshifted_codepoint = shifted_codepoint_vt(vt_keycode, 0);
+        let _ = self.backend.forward_vt_key(
+            self.tabs.focused_pane(),
+            if event.repeat {
+                vt::GHOSTTY_KEY_ACTION_REPEAT
+            } else {
+                vt::GHOSTTY_KEY_ACTION_PRESS
+            },
+            vt_keycode,
+            mods as vt::GhosttyMods,
+            (mods & ffi::GHOSTTY_MODS_SHIFT) as vt::GhosttyMods,
+            key_char,
+            "",
+            false,
+            unshifted_codepoint,
+        );
     }
 
     fn resize_pane_backend(&mut self, pane: PaneHandle, scale: f64, width: u32, height: u32) {
@@ -577,8 +707,17 @@ impl BooApp {
         let scale = self.scale_factor();
         let cell_w_pts = self.cell_width / scale;
         let mut cell_h_pts = self.cell_height / scale;
-        let surface = self.focused_surface();
-        if let Some((x, y, _, h)) = self.backend.ime_point(surface) {
+        if self.focused_surface().is_null() {
+            return self.backend.render_snapshot(self.tabs.focused_pane().id()).map(|snapshot| {
+                (
+                    snapshot.cursor.x as u32,
+                    self.scrollbar.offset as i64 + snapshot.cursor.y as i64,
+                    cell_h_pts,
+                )
+            });
+        }
+        let focused_pane = self.tabs.focused_pane();
+        if let Some((x, y, _, h)) = self.backend.ime_point(focused_pane) {
             if h > 0.0 {
                 cell_h_pts = h;
             }
@@ -594,20 +733,33 @@ impl BooApp {
             };
             Some((col, row, cell_h_pts))
         } else {
-            #[cfg(target_os = "linux")]
-            {
-                self.backend.render_snapshot(self.tabs.focused_pane().id()).map(|snapshot| {
-                    (
-                        snapshot.cursor.x as u32,
-                        self.scrollbar.offset as i64 + snapshot.cursor.y as i64,
-                        cell_h_pts,
-                    )
-                })
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                None
-            }
+            self.backend.render_snapshot(self.tabs.focused_pane().id()).map(|snapshot| {
+                (
+                    snapshot.cursor.x as u32,
+                    self.scrollbar.offset as i64 + snapshot.cursor.y as i64,
+                    cell_h_pts,
+                )
+            })
+        }
+    }
+
+    fn update_text_input_cursor_rect(&self) {
+        #[cfg(target_os = "macos")]
+        {
+            let rect = if self.focused_surface().is_null() {
+                self.backend
+                    .ime_point(self.tabs.focused_pane())
+                    .map(|(x, y, w, h)| {
+                        platform::Rect::new(
+                            platform::Point::new(x, y - h),
+                            platform::Size::new(w, h),
+                        )
+                    })
+                    .unwrap_or_default()
+            } else {
+                platform::Rect::default()
+            };
+            platform::set_text_input_cursor_rect(rect);
         }
     }
 
@@ -625,6 +777,25 @@ impl BooApp {
             self.cell_width,
             self.cell_height,
         );
+        for running_command in poll.running_commands.iter().cloned() {
+            self.tabs.set_running_command_for_pane(
+                running_command.pane_id,
+                Some(tabs::RunningCommand {
+                    command: running_command.command,
+                }),
+            );
+        }
+        for pane_id in &active_pane_ids {
+            if !poll.running_commands.iter().any(|running| running.pane_id == *pane_id) {
+                self.tabs.set_running_command_for_pane(*pane_id, None);
+            }
+        }
+        for finished_command in poll.finished_commands {
+            self.handle_command_finished(CommandFinishedEvent {
+                exit_code: finished_command.exit_code,
+                duration_ns: finished_command.duration_ns,
+            });
+        }
         if let Some(pwd) = poll.active_pwd {
             self.pwd = pwd;
         }
@@ -662,11 +833,6 @@ impl BooApp {
         (base * self.background_opacity.max(0.3)).clamp(0.2, 0.98)
     }
 
-    #[cfg(not(target_os = "linux"))]
-    fn terminal_background_color(&self) -> Color {
-        Color::from_rgba(0.0, 0.0, 0.0, self.background_opacity)
-    }
-
     fn window_style(&self) -> iced::theme::Style {
         #[cfg(target_os = "linux")]
         {
@@ -679,7 +845,7 @@ impl BooApp {
         #[cfg(not(target_os = "linux"))]
         {
             iced::theme::Style {
-                background_color: self.terminal_background_color(),
+                background_color: Color::TRANSPARENT,
                 text_color: Color::WHITE,
             }
         }
@@ -703,7 +869,6 @@ impl BooApp {
             return;
         };
         tree.set_focus(leaf_id);
-        self.cb_state.surface = self.tabs.focused_pane().surface();
         self.handle_surface_closed();
     }
 
@@ -851,6 +1016,7 @@ impl BooApp {
 
         self.backend.tick();
         self.poll_backend();
+        self.update_text_input_cursor_rect();
 
         // Process one control command per frame
         if let Ok(cmd) = self.ctl_rx.try_recv() {
@@ -868,7 +1034,7 @@ impl BooApp {
                 }
                 self.forward_surface_mouse_scroll(scroll.dx, scroll.dy, mods);
             } else {
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
                 {
                     if self.scrollbar.total > self.scrollbar.len {
                         self.scrollbar_opacity = 1.0;
@@ -889,43 +1055,69 @@ impl BooApp {
             }
         }
 
+        #[cfg(target_os = "macos")]
+        while let Ok(event) = self.key_event_rx.try_recv() {
+            if self.focused_surface().is_null() {
+                self.handle_platform_key_event(event);
+            }
+        }
+
+        while let Ok(event) = self.text_input_rx.try_recv() {
+            if !self.focused_surface().is_null() {
+                continue;
+            }
+            match apply_text_input_event(&mut self.preedit_text, event) {
+                Some(TextInputAction::Commit(committed)) => {
+                    if self.command_prompt.active {
+                        let key = keyboard::Key::Character(committed.clone().into());
+                        self.handle_command_key(&key, &Some(committed), &keyboard::Modifiers::default());
+                    } else if self.search_active {
+                        let key = keyboard::Key::Character(committed.clone().into());
+                        self.handle_search_key(&key, &Some(committed), &keyboard::Modifiers::default());
+                    } else if self.bindings.is_prefix_mode() {
+                        for ch in committed.chars() {
+                            match self.bindings.handle_key(Some(ch), 0, 0, None) {
+                                bindings::KeyResult::Consumed(action) => {
+                                    if let Some(action) = action {
+                                        self.dispatch_binding_action(action);
+                                    }
+                                }
+                                bindings::KeyResult::CopyMode(action) => {
+                                    self.dispatch_copy_mode_action(action);
+                                }
+                                bindings::KeyResult::Forward => {}
+                            }
+                        }
+                    } else if self.bindings.is_copy_mode() {
+                        for ch in committed.chars() {
+                            match self.bindings.handle_key(Some(ch), 0, 0, None) {
+                                bindings::KeyResult::CopyMode(action) => {
+                                    self.dispatch_copy_mode_action(action);
+                                }
+                                bindings::KeyResult::Consumed(action) => {
+                                    if let Some(action) = action {
+                                        self.dispatch_binding_action(action);
+                                    }
+                                }
+                                bindings::KeyResult::Forward => {}
+                            }
+                        }
+                    } else {
+                        let _ = self
+                            .backend
+                            .write_input(self.tabs.focused_pane(), committed.as_bytes());
+                    }
+                }
+                Some(TextInputAction::Command(command)) => {
+                    self.forward_text_input_command(command);
+                }
+                None => {}
+            }
+        }
+
         if self.tabs.is_empty() {
             self.init_surface();
             return Task::none();
-        }
-
-        // Process pending actions from C callbacks
-        if let Some(title) = self.cb_state.pending_title.take() {
-            self.tabs.set_active_title(title);
-        }
-        if self.cb_state.pending_close {
-            self.cb_state.pending_close = false;
-            self.handle_surface_closed();
-        }
-        if let Some(dir) = self.cb_state.pending_split.take() {
-            self.create_split(dir);
-        }
-        if let Some(dir) = self.cb_state.pending_focus.take() {
-            self.switch_focus(dir);
-        }
-
-        // Process search callbacks
-        if let Some(total) = self.cb_state.search_total.take() {
-            self.search_total = total;
-        }
-        if let Some(selected) = self.cb_state.search_selected.take() {
-            self.search_selected = selected;
-        }
-
-        if let Some((cw, ch)) = self.cb_state.pending_cell_size.take() {
-            self.cell_width = cw;
-            self.cell_height = ch;
-        }
-        if let Some(pwd) = self.cb_state.pending_pwd.take() {
-            self.pwd = pwd;
-        }
-        if let Some(sb) = self.cb_state.scrollbar.take() {
-            self.scrollbar = sb;
         }
 
         let event = match message {
@@ -946,8 +1138,6 @@ impl BooApp {
             Message::IcedEvent(event) => event,
         };
 
-        let surface = self.focused_surface();
-
         match event {
             Event::Keyboard(kb_event) => self.handle_keyboard(kb_event),
             Event::Mouse(mouse_event) => self.handle_mouse(mouse_event),
@@ -955,16 +1145,14 @@ impl BooApp {
                 self.handle_resize(size);
             }
             Event::Window(window::Event::Focused) => {
-                if !surface.is_null() {
-                    self.set_surface_focus(surface, true);
-                    self.backend.set_app_focus(true);
-                }
+                self.app_focused = true;
+                self.set_pane_focus(self.tabs.focused_pane(), true);
+                self.backend.set_app_focus(true);
             }
             Event::Window(window::Event::Unfocused) => {
-                if !surface.is_null() {
-                    self.set_surface_focus(surface, false);
-                    self.backend.set_app_focus(false);
-                }
+                self.app_focused = false;
+                self.set_pane_focus(self.tabs.focused_pane(), false);
+                self.backend.set_app_focus(false);
             }
             _ => {}
         }
@@ -1096,12 +1284,19 @@ impl BooApp {
                 let consumed_mods = translation_mods
                     & !(ffi::GHOSTTY_MODS_CTRL | ffi::GHOSTTY_MODS_SUPER);
 
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
                 if surface.is_null() {
+                    let Some(vt_keycode) = keymap::physical_to_vt_keycode(&physical_key) else {
+                        return;
+                    };
+                    #[cfg(target_os = "macos")]
+                    if should_route_macos_vt_key_via_appkit(vt_keycode, mods) {
+                        return;
+                    }
                     let _ = self.backend.forward_vt_key(
                         self.tabs.focused_pane(),
                         if repeat { vt::GHOSTTY_KEY_ACTION_REPEAT } else { vt::GHOSTTY_KEY_ACTION_PRESS },
-                        keycode,
+                        vt_keycode,
                         mods as vt::GhosttyMods,
                         consumed_mods as vt::GhosttyMods,
                         key_char,
@@ -1148,12 +1343,22 @@ impl BooApp {
                 let Some(keycode) = keymap::physical_to_native_keycode(&physical_key) else {
                     return;
                 };
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
                 if self.focused_surface().is_null() {
+                    let Some(vt_keycode) = keymap::physical_to_vt_keycode(&physical_key) else {
+                        return;
+                    };
+                    #[cfg(target_os = "macos")]
+                    if should_route_macos_vt_key_via_appkit(
+                        vt_keycode,
+                        iced_mods_to_ghostty(&modifiers),
+                    ) && self.preedit_text.is_empty() {
+                        return;
+                    }
                     let _ = self.backend.forward_vt_key(
                         self.tabs.focused_pane(),
                         vt::GHOSTTY_KEY_ACTION_RELEASE,
-                        keycode,
+                        vt_keycode,
                         iced_mods_to_ghostty(&modifiers) as vt::GhosttyMods,
                         0,
                         None,
@@ -1198,15 +1403,14 @@ impl BooApp {
                 self.create_split(Self::split_direction_from_str(&direction));
             }
             control::ControlCmd::FocusSurface { index } => {
-                let old = self.tabs.focused_pane().surface();
+                let old = self.tabs.focused_pane();
                 if let Some(tree) = self.tabs.active_tree_mut() {
                     tree.set_focus(index);
                 }
-                let new = self.tabs.focused_pane().surface();
+                let new = self.tabs.focused_pane();
                 if old != new {
-                    self.set_surface_focus(old, false);
-                    self.set_surface_focus(new, true);
-                    self.cb_state.surface = new;
+                    self.set_pane_focus(old, false);
+                    self.set_pane_focus(new, true);
                 }
             }
             control::ControlCmd::ListTabs { reply } => {
@@ -1232,15 +1436,13 @@ impl BooApp {
                 self.execute_command(&input);
             }
             control::ControlCmd::SendText { text } => {
-                let _ = &text;
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
                 {
                     let _ = self.backend.write_input(self.tabs.focused_pane(), text.as_bytes());
                 }
             }
             control::ControlCmd::SendVt { text } => {
-                let _ = &text;
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
                 {
                     self.backend
                         .write_vt_bytes(self.tabs.focused_pane(), text.as_bytes());
@@ -1308,19 +1510,43 @@ impl BooApp {
             bindings::KeyResult::Forward => {}
         }
 
-        // Forward to ghostty
-        let surface = self.focused_surface();
-        if surface.is_null() {
-            return;
-        }
         let text_str = if key_char.is_some() && mods & ffi::GHOSTTY_MODS_CTRL == 0 {
             key_char.map(|c| c.to_string())
         } else {
             None
         };
+        let unshifted = shifted_codepoint(keycode, 0);
+
+        // Forward to ghostty
+        let surface = self.focused_surface();
+        if surface.is_null() {
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            {
+                let Some((vt_keycode, _)) = parse_vt_keyspec(keyspec) else {
+                    log::warn!("unknown VT keyspec: {keyspec}");
+                    return;
+                };
+                let consumed_mods = if mods & ffi::GHOSTTY_MODS_SHIFT != 0 {
+                    ffi::GHOSTTY_MODS_SHIFT
+                } else {
+                    ffi::GHOSTTY_MODS_NONE
+                };
+                let _ = self.backend.forward_vt_key(
+                    self.tabs.focused_pane(),
+                    vt::GHOSTTY_KEY_ACTION_PRESS,
+                    vt_keycode,
+                    mods as vt::GhosttyMods,
+                    consumed_mods as vt::GhosttyMods,
+                    key_char,
+                    text_str.as_deref().unwrap_or(""),
+                    false,
+                    shifted_codepoint_vt(vt_keycode, 0),
+                );
+            }
+            return;
+        }
         let ctext = text_str.as_ref().and_then(|t| CString::new(t.as_str()).ok());
         let text_ptr = ctext.as_ref().map(|c| c.as_ptr()).unwrap_or(ptr::null());
-        let unshifted = shifted_codepoint(keycode, 0);
         let consumed_mods = if mods & ffi::GHOSTTY_MODS_SHIFT != 0 {
             ffi::GHOSTTY_MODS_SHIFT
         } else {
@@ -2283,17 +2509,15 @@ impl BooApp {
                 if let Some(tree) = self.tabs.active_tree_mut() {
                     tree.focus_next();
                 }
-                let new = self.tabs.focused_pane().surface();
-                self.cb_state.surface = new;
-                self.set_surface_focus(new, true);
+                let new = self.tabs.focused_pane();
+                self.set_pane_focus(new, true);
             }
             bindings::Action::PreviousPane => {
                 if let Some(tree) = self.tabs.active_tree_mut() {
                     tree.focus_prev();
                 }
-                let new = self.tabs.focused_pane().surface();
-                self.cb_state.surface = new;
-                self.set_surface_focus(new, true);
+                let new = self.tabs.focused_pane();
+                self.set_pane_focus(new, true);
             }
             bindings::Action::PreviousTab => {
                 let prev = self.tabs.previous_active();
@@ -2588,7 +2812,8 @@ impl BooApp {
     }
 
     fn sync_after_tab_change(&mut self) {
-        self.cb_state.surface = self.tabs.focused_pane().surface();
+        let focused = self.tabs.focused_pane();
+        self.set_pane_focus(focused, true);
         self.relayout();
     }
 
@@ -2619,7 +2844,7 @@ impl BooApp {
             self.ghostty_binding_action(&format!("scroll_to_row:{target_row}"));
             return;
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let delta = target_row as i64 - self.scrollbar.offset as i64;
             let _ = if target_row == 0 {
@@ -2661,7 +2886,7 @@ impl BooApp {
                     self.scroll_to_mouse_y(position.y as f64);
                     return;
                 }
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
                 if self.focused_surface().is_null() {
                     let _ = self.backend.send_mouse_input(
                         self.tabs.focused_pane(),
@@ -2704,17 +2929,16 @@ impl BooApp {
                     }
 
                     // Click to focus split pane
-                    let old = self.focused_surface();
+                    let old = self.tabs.focused_pane();
                     if let Some(tree) = self.tabs.active_tree_mut() {
                         if tree.focus_at(frame, point) {
-                            let new = self.tabs.focused_pane().surface();
-                            self.set_surface_focus(old, false);
-                            self.set_surface_focus(new, true);
-                            self.cb_state.surface = new;
+                            let new = self.tabs.focused_pane();
+                            self.set_pane_focus(old, false);
+                            self.set_pane_focus(new, true);
                         }
                     }
                 }
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
                 if self.focused_surface().is_null() {
                     let (mx, my) = self.last_mouse_pos;
                     let _ = self.backend.send_mouse_input(
@@ -2744,7 +2968,7 @@ impl BooApp {
                         return;
                     }
                 }
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
                 if self.focused_surface().is_null() {
                     let (mx, my) = self.last_mouse_pos;
                     let _ = self.backend.send_mouse_input(
@@ -2764,9 +2988,7 @@ impl BooApp {
                 );
             }
             mouse::Event::WheelScrolled { delta } => {
-                // macOS: handled via native NSEvent monitor for precision + momentum.
-                // Linux: use iced's scroll event directly.
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
                 {
                     let surface = self.focused_surface();
                     let (dx, dy) = match delta {
@@ -2793,8 +3015,6 @@ impl BooApp {
                             .scroll_viewport_delta(self.tabs.focused_pane(), line_delta);
                     }
                 }
-                #[cfg(target_os = "macos")]
-                let _ = delta; // suppress unused warning
             }
             _ => {}
         }
@@ -2839,7 +3059,7 @@ impl BooApp {
             ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_WINDOW,
         ) else { return };
         self.tabs.add_initial_tab(pane);
-        self.cb_state.surface = pane.surface();
+        self.set_pane_focus(pane, true);
 
         // Tell ghostty the initial surface size so it starts rendering.
         {
@@ -2876,7 +3096,7 @@ impl BooApp {
         working_directory: Option<&CStr>,
     ) -> Option<PaneHandle> {
         self.backend.create_pane(
-            &*self.cb_state as *const CallbackState as *mut c_void,
+            ptr::null_mut(),
             self.parent_view,
             self.scale_factor(),
             frame,
@@ -2904,33 +3124,30 @@ impl BooApp {
             parent_bounds,
             ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_SPLIT,
         ) else { return };
-        let surface = pane.surface();
-
-        let old_focused = self.tabs.focused_pane().surface();
+        let old_focused = self.tabs.focused_pane();
         if let Some(tree) = self.tabs.active_tree_mut() {
             tree.split_focused(split_dir, pane);
         }
-        self.cb_state.surface = surface;
 
-        self.set_surface_focus(old_focused, false);
+        self.set_pane_focus(old_focused, false);
+        self.set_pane_focus(pane, true);
 
         self.relayout();
         log::info!("split created");
     }
 
     fn switch_focus(&mut self, dir: bindings::PaneFocusDirection) {
-        let old = self.tabs.focused_pane().surface();
+        let old = self.tabs.focused_pane();
         if let Some(tree) = self.tabs.active_tree_mut() {
             match dir {
                 bindings::PaneFocusDirection::Next => tree.focus_next(),
                 bindings::PaneFocusDirection::Previous => tree.focus_prev(),
             }
         }
-        let new = self.tabs.focused_pane().surface();
+        let new = self.tabs.focused_pane();
         if old != new {
-            self.set_surface_focus(old, false);
-            self.set_surface_focus(new, true);
-            self.cb_state.surface = new;
+            self.set_pane_focus(old, false);
+            self.set_pane_focus(new, true);
         }
     }
 
@@ -2965,8 +3182,8 @@ impl BooApp {
                 self.tabs.remove_tab(active);
             }
 
-            self.cb_state.surface = self.tabs.focused_pane().surface();
-            self.set_surface_focus(self.cb_state.surface, true);
+            let focused = self.tabs.focused_pane();
+            self.set_pane_focus(focused, true);
             self.relayout();
             log::info!(
                 "surface closed, {} surfaces in tab, {} tabs",
@@ -2985,7 +3202,8 @@ impl BooApp {
         for pane in panes {
             self.free_pane_backend(pane);
         }
-        self.cb_state.surface = self.tabs.focused_pane().surface();
+        let focused = self.tabs.focused_pane();
+        self.set_pane_focus(focused, true);
         self.relayout();
     }
 
@@ -2998,13 +3216,11 @@ impl BooApp {
             frame,
             ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_TAB,
         ) else { return };
-        let surface = pane.surface();
-
-        let old = self.tabs.focused_pane().surface();
-        self.set_surface_focus(old, false);
+        let old = self.tabs.focused_pane();
+        self.set_pane_focus(old, false);
 
         let idx = self.tabs.new_tab(pane);
-        self.cb_state.surface = surface;
+        self.set_pane_focus(pane, true);
         self.relayout();
         log::info!("new tab {idx} (total: {})", self.tabs.len());
     }
@@ -3044,11 +3260,10 @@ impl BooApp {
                         cmd_cstr.as_deref(),
                         wd_cstr.as_deref(),
                     ) else { continue };
-                    let surface = pane.surface();
-                    let old = self.tabs.focused_pane().surface();
-                    self.set_surface_focus(old, false);
+                    let old = self.tabs.focused_pane();
+                    self.set_pane_focus(old, false);
                     self.tabs.new_tab(pane);
-                    self.cb_state.surface = surface;
+                    self.set_pane_focus(pane, true);
                 } else {
                     // Determine split direction and ratio
                     let (split_dir, ratio) = if !auto_splits.is_empty() {
@@ -3076,7 +3291,6 @@ impl BooApp {
                         cmd_cstr.as_deref(),
                         wd_cstr.as_deref(),
                     ) else { continue };
-                    let surface = pane.surface();
                     if let Some(tree) = self.tabs.active_tree_mut() {
                         tree.split_focused_with_ratio(
                             split_dir,
@@ -3084,7 +3298,7 @@ impl BooApp {
                             ratio,
                         );
                     }
-                    self.cb_state.surface = surface;
+                    self.set_pane_focus(pane, true);
                 }
             }
             // Set tab title
@@ -3175,78 +3389,69 @@ impl BooApp {
             main_col = main_col.push(search);
         }
         // Terminal area
-        #[cfg(target_os = "macos")]
-        {
-            // macOS: NSViews and scrollbar CALayer sit on top of transparent space
-            main_col = main_col.push(
-                iced::widget::Space::new().width(Length::Fill).height(Length::Fill),
-            );
-        }
-        #[cfg(target_os = "linux")]
-        {
-            if self.focused_surface().is_null() {
-                if let Some(snapshot) = self.backend.render_snapshot(self.tabs.focused_pane().id()) {
-                    let selection_rects = self
-                        .copy_mode
-                        .as_ref()
-                        .and_then(|copy_mode| {
-                            copy_mode.sel_anchor.map(|(anchor_row, anchor_col)| {
-                                Self::compute_selection_rects_static(
-                                    copy_mode.selection,
-                                    copy_mode.cursor_row,
-                                    copy_mode.cursor_col,
-                                    anchor_row,
-                                    anchor_col,
-                                    self.scrollbar.offset as i64,
-                                    copy_mode.viewport_cols,
-                                    copy_mode.cell_width,
-                                    copy_mode.cell_height,
-                                    0.0,
-                                )
-                            })
+        if self.focused_surface().is_null() {
+            if let Some(snapshot) = self.backend.render_snapshot(self.tabs.focused_pane().id()) {
+                let selection_rects = self
+                    .copy_mode
+                    .as_ref()
+                    .and_then(|copy_mode| {
+                        copy_mode.sel_anchor.map(|(anchor_row, anchor_col)| {
+                            Self::compute_selection_rects_static(
+                                copy_mode.selection,
+                                copy_mode.cursor_row,
+                                copy_mode.cursor_col,
+                                anchor_row,
+                                anchor_col,
+                                self.scrollbar.offset as i64,
+                                copy_mode.viewport_cols,
+                                copy_mode.cell_width,
+                                copy_mode.cell_height,
+                                0.0,
+                            )
                         })
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|(x, y, width, height)| linux_terminal_canvas::TerminalSelectionRect {
-                            x: x as f32,
-                            y: y as f32,
-                            width: width as f32,
-                            height: height as f32,
-                        })
-                        .collect::<Vec<_>>();
+                    })
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(x, y, width, height)| vt_terminal_canvas::TerminalSelectionRect {
+                        x: x as f32,
+                        y: y as f32,
+                        width: width as f32,
+                        height: height as f32,
+                    })
+                    .collect::<Vec<_>>();
 
-                    let terminal_canvas = linux_terminal_canvas::LinuxTerminalCanvas::new(
-                        snapshot,
-                        self.cell_width as f32,
-                        self.cell_height as f32,
-                        self.terminal_font_size,
-                        self.terminal_font_family,
-                        self.appearance_revision,
-                        self.background_opacity,
-                        self.background_opacity_cells,
-                        selection_rects,
-                        Color::from_rgba(0.65, 0.72, 0.95, 0.35),
-                    );
-                    main_col = main_col.push(
-                        container(
-                            iced::widget::canvas(terminal_canvas)
-                                .width(Length::Fill)
-                                .height(Length::Fill),
-                        )
-                        .width(Length::Fill)
-                        .height(Length::Fill)
-                        .style(|_: &Theme| container::Style { ..Default::default() }),
-                    );
-                } else {
-                    main_col = main_col.push(
-                        iced::widget::Space::new().width(Length::Fill).height(Length::Fill),
-                    );
-                }
+                let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
+                    snapshot,
+                    self.cell_width as f32,
+                    self.cell_height as f32,
+                    self.terminal_font_size,
+                    self.terminal_font_family,
+                    self.appearance_revision,
+                    self.background_opacity,
+                    self.background_opacity_cells,
+                    selection_rects,
+                    Color::from_rgba(0.65, 0.72, 0.95, 0.35),
+                    (!self.preedit_text.is_empty()).then(|| self.preedit_text.clone()),
+                );
+                main_col = main_col.push(
+                    container(
+                        iced::widget::canvas(terminal_canvas)
+                            .width(Length::Fill)
+                            .height(Length::Fill),
+                    )
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(|_: &Theme| container::Style { ..Default::default() }),
+                );
             } else {
                 main_col = main_col.push(
                     iced::widget::Space::new().width(Length::Fill).height(Length::Fill),
                 );
             }
+        } else {
+            main_col = main_col.push(
+                iced::widget::Space::new().width(Length::Fill).height(Length::Fill),
+            );
         }
 
         if self.command_prompt.active {
@@ -3345,7 +3550,11 @@ impl BooApp {
     /// Build three-zone status bar: (left, right).
     fn build_status_zones(&self) -> (String, String) {
         // Left: tab list
-        let tabs = self.tabs.tab_info();
+        let spinner_frame = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| (duration.as_millis() / 125) as usize)
+            .unwrap_or(0);
+        let tabs = self.tabs.tab_info_with_spinner(spinner_frame);
         let mut parts = Vec::new();
         for tab in &tabs {
             let display_idx = tab.index + 1;
@@ -3387,6 +3596,9 @@ impl BooApp {
             right_parts.push(format!("{mode_str}{pos_str}"));
         } else if self.bindings.is_prefix_mode() {
             right_parts.push("PREFIX".to_string());
+        }
+        if !self.preedit_text.is_empty() {
+            right_parts.push(format!("IME {}", self.preedit_text));
         }
         if !self.pwd.is_empty() {
             // Show shortened path: ~ for home, last 2 components otherwise
@@ -3459,6 +3671,17 @@ fn shifted_codepoint(keycode: u32, mods: i32) -> u32 {
         _ => return 0,
     };
     #[cfg(target_os = "linux")]
+    return shifted_codepoint_vt(keycode, mods);
+    if has_shift && base.is_ascii_lowercase() {
+        base.to_ascii_uppercase() as u32
+    } else {
+        base as u32
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn shifted_codepoint_vt(keycode: u32, mods: i32) -> u32 {
+    let has_shift = mods & ffi::GHOSTTY_MODS_SHIFT != 0;
     let base = match keycode {
         20 => 'a', 21 => 'b', 22 => 'c', 23 => 'd', 24 => 'e',
         25 => 'f', 26 => 'g', 27 => 'h', 28 => 'i', 29 => 'j',
@@ -3567,6 +3790,52 @@ fn parse_keyspec(spec: &str) -> Option<(u32, i32)> {
     Some((keycode, mods))
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn parse_vt_keyspec(spec: &str) -> Option<(u32, i32)> {
+    let mut mods: i32 = 0;
+    let mut key_part = spec;
+    loop {
+        if let Some(rest) = key_part.strip_prefix("ctrl+") {
+            mods |= ffi::GHOSTTY_MODS_CTRL;
+            key_part = rest;
+        } else if let Some(rest) = key_part.strip_prefix("shift+") {
+            mods |= ffi::GHOSTTY_MODS_SHIFT;
+            key_part = rest;
+        } else if let Some(rest) = key_part.strip_prefix("alt+") {
+            mods |= ffi::GHOSTTY_MODS_ALT;
+            key_part = rest;
+        } else if let Some(rest) = key_part.strip_prefix("super+") {
+            mods |= ffi::GHOSTTY_MODS_SUPER;
+            key_part = rest;
+        } else {
+            break;
+        }
+    }
+    let keycode = match key_part {
+        "a" => 20, "b" => 21, "c" => 22, "d" => 23,
+        "e" => 24, "f" => 25, "g" => 26, "h" => 27,
+        "i" => 28, "j" => 29, "k" => 30, "l" => 31,
+        "m" => 32, "n" => 33, "o" => 34, "p" => 35,
+        "q" => 36, "r" => 37, "s" => 38, "t" => 39,
+        "u" => 40, "v" => 41, "w" => 42, "x" => 43,
+        "y" => 44, "z" => 45,
+        "0" => 6, "1" => 7, "2" => 8, "3" => 9,
+        "4" => 10, "5" => 11, "6" => 12, "7" => 13,
+        "8" => 14, "9" => 15,
+        "enter" | "return" => 58,
+        "tab" => 64,
+        "space" => 63,
+        "escape" | "esc" => 120,
+        "backspace" => 53,
+        "delete" => 68,
+        _ if key_part.starts_with("0x") => {
+            u32::from_str_radix(&key_part[2..], 16).ok()?
+        }
+        _ => return None,
+    };
+    Some((keycode, mods))
+}
+
 fn control_key_to_keyboard_key(spec: &str, key_char: Option<char>) -> keyboard::Key {
     use keyboard::key::Named;
 
@@ -3581,6 +3850,55 @@ fn control_key_to_keyboard_key(spec: &str, key_char: Option<char>) -> keyboard::
         "space" => keyboard::Key::Named(Named::Space),
         "escape" | "esc" => keyboard::Key::Named(Named::Escape),
         "backspace" => keyboard::Key::Named(Named::Backspace),
+        _ => keyboard::Key::Character(key_char.unwrap_or_default().to_string().into()),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn should_route_macos_vt_key_via_appkit(vt_keycode: u32, mods: i32) -> bool {
+    if mods & (ffi::GHOSTTY_MODS_CTRL | ffi::GHOSTTY_MODS_SUPER) != 0 {
+        return false;
+    }
+    matches!(
+        vt_keycode,
+        1..=16 | 20..=50 | 63
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn native_keycode_to_named_key(keycode: u32) -> Option<bindings::NamedKey> {
+    Some(match keycode {
+        0x7E => bindings::NamedKey::ArrowUp,
+        0x7D => bindings::NamedKey::ArrowDown,
+        0x7B => bindings::NamedKey::ArrowLeft,
+        0x7C => bindings::NamedKey::ArrowRight,
+        0x74 => bindings::NamedKey::PageUp,
+        0x79 => bindings::NamedKey::PageDown,
+        0x73 => bindings::NamedKey::Home,
+        0x77 => bindings::NamedKey::End,
+        0x35 => bindings::NamedKey::Escape,
+        _ => return None,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn native_keycode_to_keyboard_key(keycode: u32, key_char: Option<char>) -> keyboard::Key {
+    use keyboard::key::Named;
+    match keycode {
+        0x24 => keyboard::Key::Named(Named::Enter),
+        0x30 => keyboard::Key::Named(Named::Tab),
+        0x31 => keyboard::Key::Named(Named::Space),
+        0x33 => keyboard::Key::Named(Named::Backspace),
+        0x35 => keyboard::Key::Named(Named::Escape),
+        0x75 => keyboard::Key::Named(Named::Delete),
+        0x7E => keyboard::Key::Named(Named::ArrowUp),
+        0x7D => keyboard::Key::Named(Named::ArrowDown),
+        0x7B => keyboard::Key::Named(Named::ArrowLeft),
+        0x7C => keyboard::Key::Named(Named::ArrowRight),
+        0x74 => keyboard::Key::Named(Named::PageUp),
+        0x79 => keyboard::Key::Named(Named::PageDown),
+        0x73 => keyboard::Key::Named(Named::Home),
+        0x77 => keyboard::Key::Named(Named::End),
         _ => keyboard::Key::Character(key_char.unwrap_or_default().to_string().into()),
     }
 }
@@ -3649,7 +3967,7 @@ fn iced_button_to_ghostty(button: mouse::Button) -> ffi::ghostty_input_mouse_but
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn iced_button_to_vt(button: mouse::Button) -> vt::GhosttyMouseButton {
     match button {
         mouse::Button::Left => vt::GHOSTTY_MOUSE_BUTTON_LEFT,
@@ -3774,169 +4092,85 @@ fn ui_terminal_snapshot_from_linux(
     }
 }
 
-// --- Runtime callbacks ---
-
-#[cfg(not(target_os = "linux"))]
-unsafe extern "C" fn cb_wakeup(_userdata: *mut c_void) {
-    platform::request_redraw();
+fn format_command_finished_message(exit_code: Option<u8>, duration_ns: u64) -> String {
+    let duration_ms = duration_ns / 1_000_000;
+    if let Some(exit_code) = exit_code {
+        format!(
+            "Command took {}.{:03}s and exited with code {}.",
+            duration_ms / 1000,
+            duration_ms % 1000,
+            exit_code
+        )
+    } else {
+        format!(
+            "Command took {}.{:03}s.",
+            duration_ms / 1000,
+            duration_ms % 1000
+        )
+    }
 }
 
-#[cfg(not(target_os = "linux"))]
-unsafe extern "C" fn cb_action(
-    _app: ffi::ghostty_app_t,
-    _target: ffi::ghostty_target_s,
-    action: ffi::ghostty_action_s,
-) -> bool {
-    use ffi::ghostty_action_tag_e::*;
-    log::debug!("action: {:?}", action.tag);
-    unsafe {
-        match action.tag {
-            GHOSTTY_ACTION_SET_TITLE => {
-                let payload: ffi::ghostty_action_set_title_s = action.payload();
-                if !payload.title.is_null() {
-                    let title = std::ffi::CStr::from_ptr(payload.title);
-                    if let Ok(s) = title.to_str() {
-                        platform::set_window_title(s);
-                        let cb = &mut *(ffi::ghostty_app_userdata(_app) as *mut CallbackState);
-                        cb.pending_title = Some(s.to_owned());
-                    }
-                }
-                true
-            }
-            GHOSTTY_ACTION_CELL_SIZE => {
-                let payload: ffi::ghostty_action_cell_size_s = action.payload();
-                platform::set_resize_increments(payload.width as f64, payload.height as f64);
-                let cb = &mut *(ffi::ghostty_app_userdata(_app) as *mut CallbackState);
-                cb.pending_cell_size = Some((payload.width as f64, payload.height as f64));
-                true
-            }
-            GHOSTTY_ACTION_QUIT => {
-                std::process::exit(0);
-            }
-            GHOSTTY_ACTION_NEW_SPLIT => {
-                let cb = &mut *(ffi::ghostty_app_userdata(_app) as *mut CallbackState);
-                let payload: ffi::ghostty_action_split_direction_e = action.payload();
-                cb.pending_split = Some(match payload {
-                    ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_RIGHT => bindings::SplitDirection::Right,
-                    ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_DOWN => bindings::SplitDirection::Down,
-                    ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_LEFT => bindings::SplitDirection::Left,
-                    ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_UP => bindings::SplitDirection::Up,
-                });
-                true
-            }
-            GHOSTTY_ACTION_GOTO_SPLIT => {
-                let cb = &mut *(ffi::ghostty_app_userdata(_app) as *mut CallbackState);
-                let payload: ffi::ghostty_action_goto_split_e = action.payload();
-                cb.pending_focus = Some(match payload {
-                    ffi::ghostty_action_goto_split_e::GHOSTTY_GOTO_SPLIT_PREVIOUS => bindings::PaneFocusDirection::Previous,
-                    ffi::ghostty_action_goto_split_e::GHOSTTY_GOTO_SPLIT_NEXT => bindings::PaneFocusDirection::Next,
-                });
-                true
-            }
-            GHOSTTY_ACTION_SCROLLBAR => {
-                let cb = &mut *(ffi::ghostty_app_userdata(_app) as *mut CallbackState);
-                cb.scrollbar = Some(action.payload());
-                true
-            }
-            GHOSTTY_ACTION_SEARCH_TOTAL => {
-                let cb = &mut *(ffi::ghostty_app_userdata(_app) as *mut CallbackState);
-                let payload: ffi::ghostty_action_search_total_s = action.payload();
-                cb.search_total = Some(payload.total);
-                true
-            }
-            GHOSTTY_ACTION_SEARCH_SELECTED => {
-                let cb = &mut *(ffi::ghostty_app_userdata(_app) as *mut CallbackState);
-                let payload: ffi::ghostty_action_search_selected_s = action.payload();
-                cb.search_selected = Some(payload.selected);
-                true
-            }
-            GHOSTTY_ACTION_PWD => {
-                let cb = &mut *(ffi::ghostty_app_userdata(_app) as *mut CallbackState);
-                let payload: ffi::ghostty_action_pwd_s = action.payload();
-                if !payload.pwd.is_null() {
-                    if let Ok(s) = std::ffi::CStr::from_ptr(payload.pwd).to_str() {
-                        cb.pending_pwd = Some(s.to_owned());
-                    }
-                }
-                true
-            }
-            GHOSTTY_ACTION_START_SEARCH | GHOSTTY_ACTION_END_SEARCH => true,
-            GHOSTTY_ACTION_PRESENT_TERMINAL | GHOSTTY_ACTION_OPEN_CONFIG
-            | GHOSTTY_ACTION_INITIAL_SIZE | GHOSTTY_ACTION_RENDER
-            | GHOSTTY_ACTION_MOUSE_SHAPE | GHOSTTY_ACTION_MOUSE_VISIBILITY
-            | GHOSTTY_ACTION_RENDERER_HEALTH
-            | GHOSTTY_ACTION_SET_TAB_TITLE | GHOSTTY_ACTION_COLOR_CHANGE
-            | GHOSTTY_ACTION_RING_BELL | GHOSTTY_ACTION_QUIT_TIMER
-            | GHOSTTY_ACTION_SIZE_LIMIT
-            | GHOSTTY_ACTION_SECURE_INPUT | GHOSTTY_ACTION_KEY_SEQUENCE
-            | GHOSTTY_ACTION_KEY_TABLE | GHOSTTY_ACTION_CLOSE_TAB
-            | GHOSTTY_ACTION_FLOAT_WINDOW | GHOSTTY_ACTION_RESET_WINDOW_SIZE => true,
-            other => {
-                log::debug!("unhandled action: {:?}", other);
-                true // acknowledge all actions to prevent ghostty from taking fallback paths
-            }
+fn command_finish_notification(
+    desktop_notifications_enabled: bool,
+    notify_action_enabled: bool,
+    notify_on_command_finish: config::NotifyOnCommandFinish,
+    app_focused: bool,
+    notify_on_command_finish_after_ns: u64,
+    event: CommandFinishedEvent,
+) -> Option<(&'static str, String)> {
+    if !desktop_notifications_enabled || !notify_action_enabled {
+        return None;
+    }
+    match notify_on_command_finish {
+        config::NotifyOnCommandFinish::Never => return None,
+        config::NotifyOnCommandFinish::Unfocused if app_focused => return None,
+        config::NotifyOnCommandFinish::Unfocused | config::NotifyOnCommandFinish::Always => {}
+    }
+    if event.duration_ns <= notify_on_command_finish_after_ns {
+        return None;
+    }
+
+    let title = match event.exit_code {
+        Some(0) => "Command Succeeded",
+        Some(_) => "Command Failed",
+        None => "Command Finished",
+    };
+    Some((title, format_command_finished_message(event.exit_code, event.duration_ns)))
+}
+
+enum TextInputAction {
+    Commit(String),
+    Command(platform::TextInputCommand),
+}
+
+fn apply_text_input_event(
+    preedit_text: &mut String,
+    event: platform::TextInputEvent,
+) -> Option<TextInputAction> {
+    match event {
+        platform::TextInputEvent::Commit(text) => {
+            preedit_text.clear();
+            Some(TextInputAction::Commit(text))
         }
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-unsafe extern "C" fn cb_read_clipboard(
-    userdata: *mut c_void,
-    _clipboard: ffi::ghostty_clipboard_e,
-    state: *mut c_void,
-) -> bool {
-    let cb = unsafe { &*(userdata as *const CallbackState) };
-    match platform::clipboard_read() {
-        Some(text) => {
-            let cstr = CString::new(text).unwrap_or_default();
-            surface_backend::complete_clipboard_request(cb.surface, cstr.as_ptr(), state, true)
+        platform::TextInputEvent::Preedit(text) => {
+            *preedit_text = text;
+            None
         }
-        None => surface_backend::complete_clipboard_request(cb.surface, ptr::null(), state, true),
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-unsafe extern "C" fn cb_confirm_read_clipboard(
-    userdata: *mut c_void,
-    content: *const std::os::raw::c_char,
-    state: *mut c_void,
-    _request: ffi::ghostty_clipboard_request_e,
-) {
-    let cb = unsafe { &*(userdata as *const CallbackState) };
-    if !cb.surface.is_null() && !content.is_null() {
-        let _ = surface_backend::complete_clipboard_request(cb.surface, content, state, true);
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-unsafe extern "C" fn cb_write_clipboard(
-    _userdata: *mut c_void,
-    _clipboard: ffi::ghostty_clipboard_e,
-    content: *const ffi::ghostty_clipboard_content_s,
-    count: usize,
-    _confirm: bool,
-) {
-    if count == 0 || content.is_null() {
-        return;
-    }
-    unsafe {
-        let first = &*content;
-        if first.data.is_null() {
-            return;
+        platform::TextInputEvent::PreeditClear => {
+            preedit_text.clear();
+            None
         }
-        let text = std::ffi::CStr::from_ptr(first.data);
-        let Ok(owned) = text.to_str().map(|s| s.to_owned()) else { return };
-
-        // May be called from io thread — use thread-safe clipboard write
-        platform::clipboard_write_from_thread(owned);
+        platform::TextInputEvent::Command(command) => Some(TextInputAction::Command(command)),
     }
 }
 
-#[cfg(not(target_os = "linux"))]
-unsafe extern "C" fn cb_close_surface(userdata: *mut c_void, _process_alive: bool) {
-    log::info!("close surface");
-    let cb = unsafe { &mut *(userdata as *mut CallbackState) };
-    cb.pending_close = true;
+fn text_input_command_key(command: platform::TextInputCommand) -> (u32, u32) {
+    match command {
+        platform::TextInputCommand::Backspace => (53, 0x08),
+        platform::TextInputCommand::DeleteForward => (68, 0x7f),
+        platform::TextInputCommand::InsertNewline => (58, '\r' as u32),
+        platform::TextInputCommand::InsertTab => (64, '\t' as u32),
+    }
 }
 
 #[cfg(test)]
@@ -3987,6 +4221,149 @@ pub mod main_tests {
     #[test]
     fn test_fuzzy_score_empty_query() {
         assert!(fuzzy_score("", "anything") > 0);
+    }
+
+    #[test]
+    fn test_command_finish_notification_respects_disabled_settings() {
+        let event = CommandFinishedEvent {
+            exit_code: Some(0),
+            duration_ns: 10_000_000_000,
+        };
+        assert!(command_finish_notification(
+            false,
+            true,
+            config::NotifyOnCommandFinish::Always,
+            false,
+            5_000_000_000,
+            event,
+        )
+        .is_none());
+        assert!(command_finish_notification(
+            true,
+            false,
+            config::NotifyOnCommandFinish::Always,
+            false,
+            5_000_000_000,
+            event,
+        )
+        .is_none());
+        assert!(command_finish_notification(
+            true,
+            true,
+            config::NotifyOnCommandFinish::Never,
+            false,
+            5_000_000_000,
+            event,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn test_command_finish_notification_respects_focus_and_threshold() {
+        let event = CommandFinishedEvent {
+            exit_code: Some(1),
+            duration_ns: 8_000_000_000,
+        };
+        assert!(command_finish_notification(
+            true,
+            true,
+            config::NotifyOnCommandFinish::Unfocused,
+            true,
+            5_000_000_000,
+            event,
+        )
+        .is_none());
+        assert!(command_finish_notification(
+            true,
+            true,
+            config::NotifyOnCommandFinish::Always,
+            false,
+            8_000_000_000,
+            event,
+        )
+        .is_none());
+        let notification = command_finish_notification(
+            true,
+            true,
+            config::NotifyOnCommandFinish::Unfocused,
+            false,
+            5_000_000_000,
+            event,
+        )
+        .expect("notification should be emitted");
+        assert_eq!(notification.0, "Command Failed");
+        assert!(notification.1.contains("exited with code 1"));
+    }
+
+    #[test]
+    fn test_apply_text_input_event_tracks_preedit_and_commit() {
+        let mut preedit = String::new();
+        assert!(apply_text_input_event(
+            &mut preedit,
+            platform::TextInputEvent::Preedit("kana".to_string()),
+        )
+        .is_none());
+        assert_eq!(preedit, "kana");
+
+        let committed = apply_text_input_event(
+            &mut preedit,
+            platform::TextInputEvent::Commit("かな".to_string()),
+        );
+        match committed {
+            Some(TextInputAction::Commit(text)) => assert_eq!(text, "かな"),
+            _ => panic!("expected committed text"),
+        }
+        assert!(preedit.is_empty());
+
+        assert!(apply_text_input_event(&mut preedit, platform::TextInputEvent::PreeditClear).is_none());
+        assert!(preedit.is_empty());
+    }
+
+    #[test]
+    fn test_apply_text_input_event_forwards_text_commands() {
+        let mut preedit = String::from("kana");
+        let command = apply_text_input_event(
+            &mut preedit,
+            platform::TextInputEvent::Command(platform::TextInputCommand::Backspace),
+        );
+        assert_eq!(preedit, "kana");
+        match command {
+            Some(TextInputAction::Command(platform::TextInputCommand::Backspace)) => {}
+            _ => panic!("expected backspace command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_vt_keyspec_uses_portable_backspace_keycode() {
+        let (keycode, mods) = parse_vt_keyspec("backspace").expect("backspace should parse");
+        assert_eq!(keycode, 53);
+        assert_eq!(mods, 0);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_should_route_macos_vt_key_via_appkit_only_for_plain_text_keys() {
+        assert!(should_route_macos_vt_key_via_appkit(20, 0));
+        assert!(should_route_macos_vt_key_via_appkit(63, 0));
+        assert!(!should_route_macos_vt_key_via_appkit(53, 0));
+        assert!(!should_route_macos_vt_key_via_appkit(64, 0));
+        assert!(!should_route_macos_vt_key_via_appkit(58, 0));
+        assert!(!should_route_macos_vt_key_via_appkit(20, ffi::GHOSTTY_MODS_CTRL));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_native_keycode_mapping_keeps_bindings_and_vt_in_sync() {
+        assert!(matches!(
+            native_keycode_to_named_key(0x7B),
+            Some(bindings::NamedKey::ArrowLeft)
+        ));
+        assert!(matches!(
+            native_keycode_to_keyboard_key(0x33, None),
+            keyboard::Key::Named(keyboard::key::Named::Backspace)
+        ));
+        assert_eq!(crate::keymap::native_to_vt_keycode(0x33), Some(53));
+        assert_eq!(crate::keymap::native_to_vt_keycode(0x24), Some(58));
     }
 
     #[test]

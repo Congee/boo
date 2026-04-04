@@ -556,6 +556,13 @@ mod tests {
             font_size: None,
             background_opacity: None,
             background_opacity_cells: false,
+            desktop_notifications: true,
+            notify_on_command_finish: crate::config::NotifyOnCommandFinish::Never,
+            notify_on_command_finish_action: crate::config::NotifyOnCommandFinishAction {
+                bell: true,
+                notify: false,
+            },
+            notify_on_command_finish_after_ns: 5 * 1_000_000_000,
         };
         let mut b = Bindings::from_config(&config);
         b.mode = Mode::CopyMode;

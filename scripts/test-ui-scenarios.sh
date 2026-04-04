@@ -212,6 +212,50 @@ wait_terminal_run_matches() {
   terminal_run_matches "$path" "$text" "$predicate"
 }
 
+terminal_snapshot_matches() {
+  local path="$1"
+  local predicate="$2"
+  python3 - "$path" "$predicate" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+predicate = sys.argv[2]
+with open(path, "r", encoding="utf-8") as f:
+    payload = json.load(f)
+
+terminal = payload["snapshot"].get("terminal")
+if not terminal:
+    raise SystemExit("terminal snapshot missing")
+
+lines = []
+for row in terminal["rows_data"]:
+    line = "".join(cell["text"] or " " for cell in row["cells"]).rstrip()
+    lines.append(line)
+
+text = "\n".join(lines)
+env = {
+    "terminal": terminal,
+    "text": text,
+}
+if not eval(predicate, {"__builtins__": {}}, env):
+    raise SystemExit(f"assertion failed: {predicate}\nterminal={text!r}")
+PY
+}
+
+wait_terminal_snapshot_matches() {
+  local path="$1"
+  local predicate="$2"
+  for _ in $(seq 1 40); do
+    capture_snapshot "$path"
+    if terminal_snapshot_matches "$path" "$predicate" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  terminal_snapshot_matches "$path" "$predicate"
+}
+
 clipboard_matches() {
   local path="$1"
   local expected="$2"
@@ -255,6 +299,19 @@ fi
 python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" request send-text 'text=pwd\r' >/dev/null
 if [[ "$HAS_TERMINAL_SNAPSHOT" == "1" ]]; then
   wait_terminal_contains /tmp/boo-ui-after-pwd.json "$ROOT_DIR"
+fi
+
+python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" request send-text 'text=printf BOOX' >/dev/null
+if [[ "$HAS_TERMINAL_SNAPSHOT" == "1" ]]; then
+  wait_terminal_snapshot_matches /tmp/boo-ui-backspace-before.json '"BOOX" in text'
+fi
+python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" request send-key key=backspace >/tmp/boo-ui-backspace-response.json
+if [[ "$HAS_TERMINAL_SNAPSHOT" == "1" ]]; then
+  wait_terminal_snapshot_matches /tmp/boo-ui-backspace-after.json '"BOOX" not in text and "BOO" in text'
+fi
+python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" request send-text 'text=Y\r' >/dev/null
+if [[ "$HAS_TERMINAL_SNAPSHOT" == "1" ]]; then
+  wait_terminal_contains /tmp/boo-ui-after-backspace.json "BOOY"
 fi
 
 python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" request send-key key=ctrl+shift+t >/tmp/boo-ui-new-tab-response.json

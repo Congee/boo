@@ -82,6 +82,7 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=dylib=ghostty-vt");
     println!("cargo:include={}", include_dir.display());
+    println!("cargo:libdir={}", lib_dir.display());
 }
 
 fn workspace_ghostty_dir() -> Option<PathBuf> {

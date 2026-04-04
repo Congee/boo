@@ -1,156 +1,40 @@
+#![cfg(target_os = "macos")]
+
 use crate::control;
 use crate::ffi;
 use crate::pane::{self, PaneHandle};
 use crate::platform;
+use crate::vt_backend_core::{CellSnapshot, TerminalSnapshot, VtPane};
+use std::collections::HashMap;
 use std::ffi::{c_void, CStr};
-pub struct BackendPollResult {
-    pub exited_panes: Vec<pane::PaneId>,
-    pub active_title: Option<String>,
-    pub active_pwd: Option<String>,
-    pub active_scrollbar: Option<ffi::ghostty_action_scrollbar_s>,
-    pub running_commands: Vec<PaneRunningCommand>,
-    pub finished_commands: Vec<CommandFinished>,
+use std::os::unix::ffi::OsStrExt;
+
+pub struct MacVtBackend {
+    panes: HashMap<pane::PaneId, VtPane>,
+    snapshots: HashMap<pane::PaneId, TerminalSnapshot>,
 }
 
-#[derive(Clone)]
-pub struct PaneRunningCommand {
-    pub pane_id: pane::PaneId,
-    pub command: Option<String>,
-}
+impl MacVtBackend {
+    pub fn new() -> Self {
+        log::info!("macOS VT backend initialized");
+        Self {
+            panes: HashMap::new(),
+            snapshots: HashMap::new(),
+        }
+    }
 
-#[derive(Clone, Copy)]
-pub struct CommandFinished {
-    pub exit_code: Option<u8>,
-    pub duration_ns: u64,
-}
-
-pub trait TerminalBackend {
-    fn new(callback_userdata: *mut c_void) -> Self;
-    fn tick(&mut self);
-    fn set_app_focus(&mut self, focused: bool);
-    fn reload_config(&mut self);
-    fn apply_config_override(&mut self, focused_surface: ffi::ghostty_surface_t, key: &str, value: &str);
-    fn create_pane(
-        &mut self,
-        callback_userdata: *mut c_void,
-        parent_view: *mut c_void,
-        scale: f64,
-        frame: platform::Rect,
-        context: ffi::ghostty_surface_context_e,
-        command: Option<&CStr>,
-        working_directory: Option<&CStr>,
-        cell_width: f64,
-        cell_height: f64,
-    ) -> Option<PaneHandle>;
-    fn resize_pane(
-        &mut self,
-        pane: PaneHandle,
-        scale: f64,
-        width: u32,
-        height: u32,
-        cell_width: f64,
-        cell_height: f64,
-    );
-    fn free_pane(&mut self, pane: PaneHandle);
-    fn set_surface_focus(&self, _surface: ffi::ghostty_surface_t, _focused: bool);
-    fn surface_key_translation_mods(&self, _surface: ffi::ghostty_surface_t, mods: i32) -> i32;
-    fn surface_key(&mut self, focused_pane: PaneHandle, event: ffi::ghostty_input_key_s) -> bool;
-    fn surface_mouse_pos(&mut self, focused_pane: PaneHandle, x: f64, y: f64, mods: i32);
-    fn surface_mouse_button(
-        &mut self,
-        focused_pane: PaneHandle,
-        state: ffi::ghostty_input_mouse_state_e,
-        button: ffi::ghostty_input_mouse_button_e,
-        mods: i32,
-    );
-    fn surface_mouse_scroll(&mut self, focused_pane: PaneHandle, dx: f64, dy: f64, mods: i32);
-    fn ime_point(&self, focused_pane: PaneHandle) -> Option<(f64, f64, f64, f64)>;
-    fn binding_action(&mut self, focused_pane: PaneHandle, action: &str, scrollbar_len: u64);
-    fn read_selection_text(
-        &self,
-        focused_pane: PaneHandle,
-        selection: ffi::ghostty_selection_s,
-    ) -> Option<String>;
-    fn poll(
-        &mut self,
-        active_pane_ids: &[pane::PaneId],
-        active_id: pane::PaneId,
-        scrollbar_len: u64,
-        cell_width: f64,
-        cell_height: f64,
-    ) -> BackendPollResult;
-    fn ui_terminal_snapshot(&self, pane_id: pane::PaneId) -> Option<control::UiTerminalSnapshot>;
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn render_snapshot(&self, pane_id: pane::PaneId) -> Option<crate::vt_backend_core::TerminalSnapshot>;
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn forward_vt_key(
-        &mut self,
-        focused_pane: PaneHandle,
-        action: i32,
-        keycode: u32,
-        mods: crate::vt::GhosttyMods,
-        consumed_mods: crate::vt::GhosttyMods,
-        key_char: Option<char>,
-        text: &str,
-        composing: bool,
-        unshifted_codepoint: u32,
-    ) -> std::io::Result<()>;
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn send_mouse_input(
-        &mut self,
-        focused_pane: PaneHandle,
-        action: crate::vt::GhosttyMouseAction,
-        button: Option<crate::vt::GhosttyMouseButton>,
-        x: f32,
-        y: f32,
-        mods: crate::vt::GhosttyMods,
-    ) -> std::io::Result<()>;
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn scroll_viewport_delta(&mut self, focused_pane: PaneHandle, delta: isize) -> std::io::Result<()>;
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn scroll_viewport_top(&mut self, focused_pane: PaneHandle) -> std::io::Result<()>;
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn scroll_viewport_bottom(&mut self, focused_pane: PaneHandle) -> std::io::Result<()>;
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn write_input(&self, focused_pane: PaneHandle, bytes: &[u8]) -> std::io::Result<()>;
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn write_vt_bytes(&mut self, focused_pane: PaneHandle, bytes: &[u8]);
-}
-
-#[cfg(target_os = "macos")]
-pub type Backend = crate::macos_vt_backend::MacVtBackend;
-
-#[cfg(target_os = "linux")]
-pub type Backend = LinuxBackend;
-
-#[cfg(target_os = "linux")]
-pub struct LinuxBackend {
-    panes: std::collections::HashMap<pane::PaneId, crate::linux_vt_backend::LinuxVtPane>,
-    snapshots: std::collections::HashMap<pane::PaneId, crate::linux_vt_backend::TerminalSnapshot>,
-}
-
-#[cfg(target_os = "linux")]
-impl LinuxBackend {
-    fn pane_mut(
-        &mut self,
-        focused_pane: PaneHandle,
-    ) -> Option<&mut crate::linux_vt_backend::LinuxVtPane> {
+    fn pane_mut(&mut self, focused_pane: PaneHandle) -> Option<&mut VtPane> {
         self.panes.get_mut(&focused_pane.id())
     }
 
-    fn pane(&self, focused_pane: PaneHandle) -> Option<&crate::linux_vt_backend::LinuxVtPane> {
+    fn pane(&self, focused_pane: PaneHandle) -> Option<&VtPane> {
         self.panes.get(&focused_pane.id())
     }
 }
 
-#[cfg(target_os = "linux")]
-impl TerminalBackend for LinuxBackend {
+impl crate::backend::TerminalBackend for MacVtBackend {
     fn new(_callback_userdata: *mut c_void) -> Self {
-        Self {
-            panes: std::collections::HashMap::new(),
-            snapshots: std::collections::HashMap::new(),
-        }
+        Self::new()
     }
 
     fn tick(&mut self) {}
@@ -159,12 +43,18 @@ impl TerminalBackend for LinuxBackend {
 
     fn reload_config(&mut self) {}
 
-    fn apply_config_override(&mut self, _focused_surface: ffi::ghostty_surface_t, _key: &str, _value: &str) {}
+    fn apply_config_override(
+        &mut self,
+        _focused_surface: ffi::ghostty_surface_t,
+        _key: &str,
+        _value: &str,
+    ) {
+    }
 
     fn create_pane(
         &mut self,
         _callback_userdata: *mut c_void,
-        _parent_view: *mut c_void,
+        parent_view: *mut c_void,
         _scale: f64,
         frame: platform::Rect,
         _context: ffi::ghostty_surface_context_e,
@@ -173,15 +63,16 @@ impl TerminalBackend for LinuxBackend {
         cell_width: f64,
         cell_height: f64,
     ) -> Option<PaneHandle> {
-        use std::os::unix::ffi::OsStrExt;
-
         let cols = ((frame.size.width / cell_width).floor() as u16).max(2);
         let rows = ((frame.size.height / cell_height).floor() as u16).max(1);
         let cell_width_px = cell_width.max(1.0).round() as u32;
         let cell_height_px = cell_height.max(1.0).round() as u32;
-        let pane = PaneHandle::detached();
-        let wd_path = working_directory.map(|wd| std::path::Path::new(std::ffi::OsStr::from_bytes(wd.to_bytes())));
-        let backend = match crate::linux_vt_backend::LinuxVtPane::spawn(
+        let view = platform::create_focusable_child_view(parent_view, frame);
+        let pane = PaneHandle::new(std::ptr::null_mut(), view);
+        let wd_path = working_directory.map(|wd| {
+            std::path::Path::new(std::ffi::OsStr::from_bytes(wd.to_bytes()))
+        });
+        let backend = match VtPane::spawn(
             cols,
             rows,
             cell_width_px,
@@ -191,7 +82,7 @@ impl TerminalBackend for LinuxBackend {
         ) {
             Ok(backend) => backend,
             Err(error) => {
-                log::warn!("failed to spawn linux vt pane: {error}");
+                log::warn!("failed to spawn macOS VT pane: {error}");
                 return None;
             }
         };
@@ -203,7 +94,10 @@ impl TerminalBackend for LinuxBackend {
                     self.snapshots.insert(pane.id(), snapshot);
                 }
                 Err(error) => {
-                    log::warn!("initial linux vt snapshot failed for pane {}: {error}", pane.id());
+                    log::warn!(
+                        "initial macOS VT snapshot failed for pane {}: {error}",
+                        pane.id()
+                    );
                 }
             }
         }
@@ -238,8 +132,7 @@ impl TerminalBackend for LinuxBackend {
         platform::remove_view(pane.view());
     }
 
-    fn set_surface_focus(&self, _surface: ffi::ghostty_surface_t, _focused: bool) {
-    }
+    fn set_surface_focus(&self, _surface: ffi::ghostty_surface_t, _focused: bool) {}
 
     fn surface_key_translation_mods(&self, _surface: ffi::ghostty_surface_t, mods: i32) -> i32 {
         mods
@@ -249,8 +142,7 @@ impl TerminalBackend for LinuxBackend {
         false
     }
 
-    fn surface_mouse_pos(&mut self, _focused_pane: PaneHandle, _x: f64, _y: f64, _mods: i32) {
-    }
+    fn surface_mouse_pos(&mut self, _focused_pane: PaneHandle, _x: f64, _y: f64, _mods: i32) {}
 
     fn surface_mouse_button(
         &mut self,
@@ -261,11 +153,26 @@ impl TerminalBackend for LinuxBackend {
     ) {
     }
 
-    fn surface_mouse_scroll(&mut self, _focused_pane: PaneHandle, _dx: f64, _dy: f64, _mods: i32) {
+    fn surface_mouse_scroll(
+        &mut self,
+        _focused_pane: PaneHandle,
+        _dx: f64,
+        _dy: f64,
+        _mods: i32,
+    ) {
     }
 
-    fn ime_point(&self, _focused_pane: PaneHandle) -> Option<(f64, f64, f64, f64)> {
-        None
+    fn ime_point(&self, focused_pane: PaneHandle) -> Option<(f64, f64, f64, f64)> {
+        let snapshot = self.snapshots.get(&focused_pane.id())?;
+        let pane = self.pane(focused_pane)?;
+        let cell_width = pane.cell_width_px() as f64;
+        let cell_height = pane.cell_height_px() as f64;
+        Some((
+            snapshot.cursor.x as f64 * cell_width,
+            (snapshot.cursor.y as f64 + 1.0) * cell_height,
+            cell_width,
+            cell_height,
+        ))
     }
 
     fn binding_action(&mut self, focused_pane: PaneHandle, action: &str, scrollbar_len: u64) {
@@ -327,7 +234,7 @@ impl TerminalBackend for LinuxBackend {
         }
 
         let snapshot = self.snapshots.get(&focused_pane.id())?;
-        Some(linux_snapshot_selection_text(snapshot, selection))
+        Some(snapshot_selection_text(snapshot, selection))
     }
 
     fn poll(
@@ -337,8 +244,8 @@ impl TerminalBackend for LinuxBackend {
         _scrollbar_len: u64,
         _cell_width: f64,
         _cell_height: f64,
-    ) -> BackendPollResult {
-        let mut result = BackendPollResult {
+    ) -> crate::backend::BackendPollResult {
+        let mut result = crate::backend::BackendPollResult {
             exited_panes: Vec::new(),
             active_title: None,
             active_pwd: None,
@@ -346,6 +253,7 @@ impl TerminalBackend for LinuxBackend {
             running_commands: Vec::new(),
             finished_commands: Vec::new(),
         };
+
         for id in active_pane_ids {
             let Some(pane) = self.panes.get_mut(id) else {
                 continue;
@@ -354,7 +262,7 @@ impl TerminalBackend for LinuxBackend {
             let poll = match pane.poll_pty() {
                 Ok(poll) => poll,
                 Err(error) => {
-                    log::warn!("linux vt PTY poll failed for pane {id}: {error}");
+                    log::warn!("macOS VT PTY poll failed for pane {id}: {error}");
                     continue;
                 }
             };
@@ -363,7 +271,7 @@ impl TerminalBackend for LinuxBackend {
                 result.exited_panes.push(*id);
             }
             for finished in pane.take_finished_commands() {
-                result.finished_commands.push(CommandFinished {
+                result.finished_commands.push(crate::backend::CommandFinished {
                     exit_code: finished.exit_code,
                     duration_ns: finished.duration_ns,
                 });
@@ -385,7 +293,7 @@ impl TerminalBackend for LinuxBackend {
                             });
                         }
                         if let Some(running_command) = pane.running_command() {
-                            result.running_commands.push(PaneRunningCommand {
+                            result.running_commands.push(crate::backend::PaneRunningCommand {
                                 pane_id: *id,
                                 command: running_command.command.clone(),
                             });
@@ -393,18 +301,17 @@ impl TerminalBackend for LinuxBackend {
                         self.snapshots.insert(*id, snapshot);
                     }
                     Err(error) => {
-                        log::warn!("linux vt snapshot failed for pane {id}: {error}");
+                        log::warn!("macOS VT snapshot failed for pane {id}: {error}");
                     }
                 }
             }
         }
+
         result
     }
 
     fn ui_terminal_snapshot(&self, pane_id: pane::PaneId) -> Option<control::UiTerminalSnapshot> {
-        self.snapshots
-            .get(&pane_id)
-            .map(ui_terminal_snapshot_from_linux)
+        self.snapshots.get(&pane_id).map(ui_terminal_snapshot)
     }
 
     fn render_snapshot(&self, pane_id: pane::PaneId) -> Option<crate::vt_backend_core::TerminalSnapshot> {
@@ -475,7 +382,11 @@ impl TerminalBackend for LinuxBackend {
         pane.send_mouse_input(action, button, x, y, mods)
     }
 
-    fn scroll_viewport_delta(&mut self, focused_pane: PaneHandle, delta: isize) -> std::io::Result<()> {
+    fn scroll_viewport_delta(
+        &mut self,
+        focused_pane: PaneHandle,
+        delta: isize,
+    ) -> std::io::Result<()> {
         let Some(pane) = self.pane_mut(focused_pane) else {
             return Ok(());
         };
@@ -510,11 +421,7 @@ impl TerminalBackend for LinuxBackend {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn linux_snapshot_selection_text(
-    snapshot: &crate::linux_vt_backend::TerminalSnapshot,
-    selection: ffi::ghostty_selection_s,
-) -> String {
+fn snapshot_selection_text(snapshot: &TerminalSnapshot, selection: ffi::ghostty_selection_s) -> String {
     let start_row = selection.top_left.y.min(selection.bottom_right.y) as usize;
     let end_row = selection.top_left.y.max(selection.bottom_right.y) as usize;
     let start_col = selection.top_left.x.min(selection.bottom_right.x) as usize;
@@ -534,16 +441,15 @@ fn linux_snapshot_selection_text(
         } else {
             snapshot.cols.saturating_sub(1) as usize
         };
-        let text = linux_snapshot_row_text(row, line_start, line_end, selection.rectangle);
+        let text = snapshot_row_text(row, line_start, line_end, selection.rectangle);
         lines.push(text);
     }
 
     lines.join("\n")
 }
 
-#[cfg(target_os = "linux")]
-fn linux_snapshot_row_text(
-    row: &[crate::linux_vt_backend::CellSnapshot],
+fn snapshot_row_text(
+    row: &[CellSnapshot],
     start_col: usize,
     end_col: usize,
     preserve_trailing_spaces: bool,
@@ -569,10 +475,7 @@ fn linux_snapshot_row_text(
     }
 }
 
-#[cfg(target_os = "linux")]
-fn ui_terminal_snapshot_from_linux(
-    snapshot: &crate::linux_vt_backend::TerminalSnapshot,
-) -> control::UiTerminalSnapshot {
+fn ui_terminal_snapshot(snapshot: &TerminalSnapshot) -> control::UiTerminalSnapshot {
     control::UiTerminalSnapshot {
         cols: snapshot.cols,
         rows: snapshot.rows,

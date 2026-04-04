@@ -12,6 +12,12 @@ pub struct TabManager {
 pub struct Tab {
     tree: SplitTree,
     pub title: String,
+    running_command: Option<RunningCommand>,
+}
+
+#[derive(Clone)]
+pub struct RunningCommand {
+    pub command: Option<String>,
 }
 
 impl TabManager {
@@ -30,6 +36,7 @@ impl TabManager {
         self.tabs.push(Tab {
             tree,
             title: String::new(),
+            running_command: None,
         });
     }
 
@@ -45,6 +52,7 @@ impl TabManager {
         self.tabs.push(Tab {
             tree,
             title: String::new(),
+            running_command: None,
         });
         self.active = idx;
         idx
@@ -141,6 +149,64 @@ impl TabManager {
         }
     }
 
+    pub fn set_running_command_for_pane(
+        &mut self,
+        pane_id: crate::pane::PaneId,
+        running_command: Option<RunningCommand>,
+    ) {
+        for tab in &mut self.tabs {
+            if tab.tree.focused_pane().id() == pane_id {
+                tab.running_command = running_command.clone();
+            }
+        }
+    }
+
+    pub fn display_title(&self, index: usize, spinner: Option<&str>) -> String {
+        let Some(tab) = self.tabs.get(index) else {
+            return String::new();
+        };
+
+        let base = if let Some(command) = tab
+            .running_command
+            .as_ref()
+            .and_then(|running| running.command.as_deref())
+            .filter(|command| !command.is_empty())
+        {
+            command.to_string()
+        } else {
+            tab.title.clone()
+        };
+
+        match spinner {
+            Some(spinner) if !spinner.is_empty() => {
+                if base.is_empty() {
+                    spinner.to_string()
+                } else {
+                    format!("{spinner} {base}")
+                }
+            }
+            _ => base,
+        }
+    }
+
+    pub fn tab_info_with_spinner(&self, spinner_frame: usize) -> Vec<TabInfo> {
+        self.tabs
+            .iter()
+            .enumerate()
+            .map(|(i, tab)| TabInfo {
+                index: i,
+                active: i == self.active,
+                title: self.display_title(
+                    i,
+                    tab.running_command
+                        .as_ref()
+                        .map(|_| spinner_for(spinner_frame)),
+                ),
+                surfaces: tab.tree.len(),
+            })
+            .collect()
+    }
+
     pub fn tab_mut(&mut self, index: usize) -> Option<&mut Tab> {
         self.tabs.get_mut(index)
     }
@@ -150,16 +216,7 @@ impl TabManager {
     }
 
     pub fn tab_info(&self) -> Vec<TabInfo> {
-        self.tabs
-            .iter()
-            .enumerate()
-            .map(|(i, tab)| TabInfo {
-                index: i,
-                active: i == self.active,
-                title: tab.title.clone(),
-                surfaces: tab.tree.len(),
-            })
-            .collect()
+        self.tab_info_with_spinner(0)
     }
 
     pub fn all_panes(&self) -> Vec<PaneHandle> {
@@ -175,6 +232,11 @@ impl TabManager {
             .map(|t| t.layout(frame, scale))
             .unwrap_or_default()
     }
+}
+
+fn spinner_for(frame: usize) -> &'static str {
+    const FRAMES: [&str; 4] = ["-", "\\", "|", "/"];
+    FRAMES[frame % FRAMES.len()]
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -252,5 +314,39 @@ mod tests {
         assert!(!info[0].active);
         assert_eq!(info[1].title, "logs");
         assert!(info[1].active);
+    }
+
+    #[test]
+    fn tab_info_prefers_running_command_with_spinner() {
+        let mut tabs = TabManager::new();
+        let pane = PaneHandle::detached();
+        tabs.add_initial_tab(pane);
+        tabs.set_active_title("shell".to_string());
+        tabs.set_running_command_for_pane(
+            pane.id(),
+            Some(super::RunningCommand {
+                command: Some("cargo test".to_string()),
+            }),
+        );
+
+        let info = tabs.tab_info_with_spinner(1);
+
+        assert_eq!(info[0].title, "\\ cargo test");
+    }
+
+    #[test]
+    fn tab_info_falls_back_to_title_when_running_command_has_no_cmdline() {
+        let mut tabs = TabManager::new();
+        let pane = PaneHandle::detached();
+        tabs.add_initial_tab(pane);
+        tabs.set_active_title("shell".to_string());
+        tabs.set_running_command_for_pane(
+            pane.id(),
+            Some(super::RunningCommand { command: None }),
+        );
+
+        let info = tabs.tab_info_with_spinner(2);
+
+        assert_eq!(info[0].title, "| shell");
     }
 }

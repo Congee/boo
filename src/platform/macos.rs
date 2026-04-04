@@ -1,14 +1,47 @@
 //! macOS platform backend — AppKit + Core Animation + NSPasteboard.
 
-use super::{LayerHandle, Point, Rect, ScrollEvent, Size, ViewHandle};
-use crate::ffi;
+use super::{KeyEvent, LayerHandle, Point, Rect, ScrollEvent, Size, TextInputCommand, TextInputEvent, ViewHandle};
+use objc2::runtime::AnyObject;
 use objc2::rc::Retained;
-use objc2::{define_class, msg_send};
+use objc2::{define_class, msg_send, sel, ClassType};
 use objc2_app_kit::{
-    NSApplication, NSEvent, NSEventMask, NSView, NSWindow, NSWindowOrderingMode,
+    NSApplication, NSEvent, NSEventMask, NSResponder, NSView, NSWindow, NSWindowOrderingMode,
 };
-use objc2_foundation::{MainThreadMarker, NSRect, NSSize, NSString};
+use objc2_foundation::{NSArray, MainThreadMarker, NSAttributedString, NSObject, NSObjectProtocol, NSRange, NSRect, NSSize, NSString, NSNotFound};
 use std::ffi::c_void;
+
+static TEXT_INPUT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<TextInputEvent>> =
+    std::sync::OnceLock::new();
+static KEY_EVENT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<KeyEvent>> =
+    std::sync::OnceLock::new();
+static MARKED_TEXT: std::sync::OnceLock<std::sync::Mutex<String>> = std::sync::OnceLock::new();
+static IME_RECT: std::sync::OnceLock<std::sync::Mutex<Rect>> = std::sync::OnceLock::new();
+
+fn send_text_input_event(event: TextInputEvent) {
+    if let Some(tx) = TEXT_INPUT_TX.get() {
+        let _ = tx.send(event);
+    }
+}
+
+fn command_from_selector(selector: objc2::runtime::Sel) -> Option<TextInputCommand> {
+    if selector == sel!(deleteBackward:)
+        || selector == sel!(deleteBackwardByDecomposingPreviousCharacter:)
+    {
+        Some(TextInputCommand::Backspace)
+    } else if selector == sel!(deleteForward:) {
+        Some(TextInputCommand::DeleteForward)
+    } else if selector == sel!(insertNewline:)
+        || selector == sel!(insertLineBreak:)
+        || selector == sel!(insertParagraphSeparator:)
+        || selector == sel!(insertNewlineIgnoringFieldEditor:)
+    {
+        Some(TextInputCommand::InsertNewline)
+    } else if selector == sel!(insertTab:) {
+        Some(TextInputCommand::InsertTab)
+    } else {
+        None
+    }
+}
 
 // --- NSRect <-> Rect conversions ---
 
@@ -26,23 +59,202 @@ fn from_nsrect(r: NSRect) -> Rect {
     )
 }
 
-// --- Custom NSView subclass (refuses first responder) ---
-
 define_class!(
     #[unsafe(super(NSView))]
-    #[name = "BooPassthroughView"]
-    struct PassthroughView;
+    #[name = "BooFocusableView"]
+    struct FocusableView;
 
-    impl PassthroughView {
+    impl FocusableView {
         #[unsafe(method(acceptsFirstResponder))]
         fn _accepts_first_responder(&self) -> bool {
-            false
+            true
+        }
+
+        #[unsafe(method(keyDown:))]
+        fn _key_down(&self, event: &NSEvent) {
+            if should_send_raw_key_event(event) {
+                if let Some(tx) = KEY_EVENT_TX.get() {
+                    let _ = tx.send(KeyEvent {
+                        keycode: event.keyCode() as u32,
+                        mods: event_mods(event),
+                        repeat: event.isARepeat(),
+                    });
+                }
+                return;
+            }
+            let responder: &NSResponder = unsafe { &*(self as *const Self as *const NSResponder) };
+            let events = NSArray::from_slice(&[event]);
+            responder.interpretKeyEvents(&events);
+        }
+
+        #[unsafe(method(insertText:))]
+        fn _insert_text(&self, string: &AnyObject) {
+            let object: &NSObject = unsafe { &*(string as *const AnyObject as *const NSObject) };
+            let is_attributed = object.isKindOfClass(NSAttributedString::class());
+            let is_string = object.isKindOfClass(NSString::class());
+            let text = if is_attributed {
+                let string: *const AnyObject = string;
+                let string: *const NSAttributedString = string.cast();
+                unsafe { &*string }.string().to_string()
+            } else if is_string {
+                let string: *const AnyObject = string;
+                let string: *const NSString = string.cast();
+                unsafe { &*string }.to_string()
+            } else {
+                return;
+            };
+            send_text_input_event(TextInputEvent::Commit(text));
+        }
+
+        #[unsafe(method(hasMarkedText))]
+        fn _has_marked_text(&self) -> bool {
+            MARKED_TEXT
+                .get_or_init(|| std::sync::Mutex::new(String::new()))
+                .lock()
+                .map(|text| !text.is_empty())
+                .unwrap_or(false)
+        }
+
+        #[unsafe(method(markedRange))]
+        fn _marked_range(&self) -> NSRange {
+            let len = MARKED_TEXT
+                .get_or_init(|| std::sync::Mutex::new(String::new()))
+                .lock()
+                .map(|text| text.len())
+                .unwrap_or(0);
+            if len == 0 {
+                NSRange::new(NSNotFound as usize, 0)
+            } else {
+                NSRange::new(0, len)
+            }
+        }
+
+        #[unsafe(method(selectedRange))]
+        fn _selected_range(&self) -> NSRange {
+            NSRange::new(NSNotFound as usize, 0)
+        }
+
+        #[unsafe(method(setMarkedText:selectedRange:replacementRange:))]
+        fn _set_marked_text(
+            &self,
+            string: &AnyObject,
+            _selected_range: NSRange,
+            _replacement_range: NSRange,
+        ) {
+            let object: &NSObject = unsafe { &*(string as *const AnyObject as *const NSObject) };
+            let text = if object.isKindOfClass(NSAttributedString::class()) {
+                let string: *const AnyObject = string;
+                let string: *const NSAttributedString = string.cast();
+                unsafe { &*string }.string().to_string()
+            } else if object.isKindOfClass(NSString::class()) {
+                let string: *const AnyObject = string;
+                let string: *const NSString = string.cast();
+                unsafe { &*string }.to_string()
+            } else {
+                return;
+            };
+            if let Ok(mut marked) = MARKED_TEXT
+                .get_or_init(|| std::sync::Mutex::new(String::new()))
+                .lock()
+            {
+                *marked = text.clone();
+            }
+            send_text_input_event(TextInputEvent::Preedit(text));
+        }
+
+        #[unsafe(method(unmarkText))]
+        fn _unmark_text(&self) {
+            if let Ok(mut marked) = MARKED_TEXT
+                .get_or_init(|| std::sync::Mutex::new(String::new()))
+                .lock()
+            {
+                marked.clear();
+            }
+            if let Some(input_context) = self.inputContext() {
+                input_context.discardMarkedText();
+            }
+            send_text_input_event(TextInputEvent::PreeditClear);
+        }
+
+        #[unsafe(method(firstRectForCharacterRange:actualRange:))]
+        fn _first_rect_for_character_range(
+            &self,
+            _range: NSRange,
+            _actual_range: *mut NSRange,
+        ) -> NSRect {
+            let rect = IME_RECT
+                .get_or_init(|| std::sync::Mutex::new(Rect::default()))
+                .lock()
+                .map(|rect| *rect)
+                .unwrap_or_default();
+            let rect = to_nsrect(rect);
+            if let Some(window) = self.window() {
+                window.convertRectToScreen(self.convertRect_toView(rect, None))
+            } else {
+                rect
+            }
+        }
+
+        #[unsafe(method(doCommandBySelector:))]
+        fn _do_command_by_selector(&self, selector: objc2::runtime::Sel) {
+            if let Some(command) = command_from_selector(selector) {
+                send_text_input_event(TextInputEvent::Command(command));
+            }
+        }
+
+        #[unsafe(method(deleteBackward:))]
+        fn _delete_backward(&self, _sender: &AnyObject) {
+            send_text_input_event(TextInputEvent::Command(TextInputCommand::Backspace));
+        }
+
+        #[unsafe(method(deleteForward:))]
+        fn _delete_forward(&self, _sender: &AnyObject) {
+            send_text_input_event(TextInputEvent::Command(TextInputCommand::DeleteForward));
+        }
+
+        #[unsafe(method(insertNewline:))]
+        fn _insert_newline(&self, _sender: &AnyObject) {
+            send_text_input_event(TextInputEvent::Command(TextInputCommand::InsertNewline));
+        }
+
+        #[unsafe(method(insertTab:))]
+        fn _insert_tab(&self, _sender: &AnyObject) {
+            send_text_input_event(TextInputEvent::Command(TextInputCommand::InsertTab));
         }
     }
 );
 
 fn mtm() -> MainThreadMarker {
     unsafe { MainThreadMarker::new_unchecked() }
+}
+
+fn event_mods(event: &NSEvent) -> i32 {
+    let flags = event.modifierFlags();
+    let mut mods = 0;
+    if flags.contains(objc2_app_kit::NSEventModifierFlags::Shift) {
+        mods |= crate::ffi::GHOSTTY_MODS_SHIFT;
+    }
+    if flags.contains(objc2_app_kit::NSEventModifierFlags::Control) {
+        mods |= crate::ffi::GHOSTTY_MODS_CTRL;
+    }
+    if flags.contains(objc2_app_kit::NSEventModifierFlags::Option) {
+        mods |= crate::ffi::GHOSTTY_MODS_ALT;
+    }
+    if flags.contains(objc2_app_kit::NSEventModifierFlags::Command) {
+        mods |= crate::ffi::GHOSTTY_MODS_SUPER;
+    }
+    mods
+}
+
+fn should_send_raw_key_event(event: &NSEvent) -> bool {
+    let mods = event_mods(event);
+    if mods & (crate::ffi::GHOSTTY_MODS_CTRL | crate::ffi::GHOSTTY_MODS_SUPER) != 0 {
+        return true;
+    }
+    matches!(
+        event.keyCode() as u32,
+        0x35 | 0x7B | 0x7C | 0x7D | 0x7E | 0x73 | 0x77 | 0x74 | 0x79
+    )
 }
 
 fn main_window() -> Option<Retained<NSWindow>> {
@@ -78,12 +290,12 @@ pub fn set_window_transparent() {
     }
 }
 
-pub fn create_child_view(parent: ViewHandle, frame: Rect) -> ViewHandle {
+pub fn create_focusable_child_view(parent: ViewHandle, frame: Rect) -> ViewHandle {
     let ns_frame = to_nsrect(frame);
     unsafe {
         let parent_view = &*(parent as *const NSView);
-        let child: Retained<PassthroughView> =
-            msg_send![mtm().alloc::<PassthroughView>(), initWithFrame: ns_frame];
+        let child: Retained<FocusableView> =
+            msg_send![mtm().alloc::<FocusableView>(), initWithFrame: ns_frame];
         parent_view.addSubview_positioned_relativeTo(&child, NSWindowOrderingMode::Above, None);
         let ptr = Retained::as_ptr(&child) as *mut c_void;
         std::mem::forget(child);
@@ -111,19 +323,6 @@ pub fn set_view_frame(view: ViewHandle, frame: Rect) {
     }
 }
 
-pub fn set_window_title(title: &str) {
-    if let Some(window) = main_window() {
-        let ns_title = NSString::from_str(title);
-        window.setTitle(&ns_title);
-    }
-}
-
-pub fn set_resize_increments(width: f64, height: f64) {
-    if let Some(window) = main_window() {
-        window.setContentResizeIncrements(NSSize::new(width, height));
-    }
-}
-
 pub fn set_view_hidden(view: ViewHandle, hidden: bool) {
     if view.is_null() {
         return;
@@ -144,30 +343,38 @@ pub fn remove_view(view: ViewHandle) {
     }
 }
 
-pub fn set_view_layer_transparent(view: ViewHandle) {
+pub fn focus_view(view: ViewHandle) {
+    if view.is_null() {
+        return;
+    }
     unsafe {
         let view = &*(view as *const NSView);
-        if let Some(layer) = view.layer() {
-            layer.setOpaque(false);
-            layer.setBackgroundColor(None);
-            if let Some(sublayers) = layer.sublayers() {
-                for sublayer in sublayers.iter() {
-                    sublayer.setOpaque(false);
-                }
-            }
+        let responder: &NSResponder = &*(view as *const NSView as *const NSResponder);
+        let _ = responder.becomeFirstResponder();
+        if let Some(window) = view.window() {
+            let _ = window.makeFirstResponder(Some(responder));
         }
     }
 }
 
-pub fn request_redraw() {
-    if let Some(view) = content_view() {
-        view.setNeedsDisplay(true);
+pub fn set_text_input_cursor_rect(rect: Rect) {
+    if let Ok(mut current) = IME_RECT
+        .get_or_init(|| std::sync::Mutex::new(Rect::default()))
+        .lock()
+    {
+        *current = rect;
     }
 }
 
 // --- Event monitors ---
 
-pub fn install_event_monitors(scroll_tx: std::sync::mpsc::Sender<ScrollEvent>) {
+pub fn install_event_monitors(
+    scroll_tx: std::sync::mpsc::Sender<ScrollEvent>,
+    key_event_tx: std::sync::mpsc::Sender<KeyEvent>,
+    text_input_tx: std::sync::mpsc::Sender<TextInputEvent>,
+) {
+    let _ = KEY_EVENT_TX.set(key_event_tx);
+    let _ = TEXT_INPUT_TX.set(text_input_tx);
     install_cmd_drag_monitor();
     install_scroll_monitor(scroll_tx);
 }
@@ -337,24 +544,38 @@ pub fn clipboard_write(text: &str) {
     pb.writeObjects(&array);
 }
 
-/// Write clipboard from a background thread (dispatches to main thread).
-pub fn clipboard_write_from_thread(text: String) {
-    let block = block2::RcBlock::new(move || {
-        clipboard_write(&text);
+pub fn send_desktop_notification(title: &str, body: &str) {
+    let title = apple_script_literal(title);
+    let body = apple_script_literal(body);
+    std::thread::spawn(move || {
+        let script = format!("display notification {body} with title {title}");
+        let status = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .status();
+        if let Err(error) = status {
+            log::warn!("failed to send macOS notification: {}", error);
+        }
     });
-    unsafe {
-        objc2_foundation::NSOperationQueue::mainQueue().addOperationWithBlock(&block);
-    }
 }
 
-// --- Platform config for ghostty surface creation ---
-
-pub fn platform_tag() -> i32 {
-    ffi::ghostty_platform_e::GHOSTTY_PLATFORM_MACOS as i32
+fn apple_script_literal(text: &str) -> String {
+    let escaped = text
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n");
+    format!("\"{escaped}\"")
 }
 
-pub fn platform_config(view: ViewHandle) -> ffi::ghostty_platform_u {
-    ffi::ghostty_platform_u {
-        macos: ffi::ghostty_platform_macos_s { nsview: view },
+#[cfg(test)]
+mod tests {
+    use super::apple_script_literal;
+
+    #[test]
+    fn apple_script_literal_escapes_quotes_and_newlines() {
+        assert_eq!(
+            apple_script_literal("a\"b\nc\\d"),
+            "\"a\\\"b\\nc\\\\d\""
+        );
     }
 }
