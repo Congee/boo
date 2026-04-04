@@ -34,7 +34,6 @@ pub enum Request {
     PrevTab,
     FocusSurface { index: usize },
     SendKey { key: String },
-    SendNativeKey { keycode: u32, mods: i32, repeat: Option<bool> },
     DumpKeys { enabled: bool },
     Quit,
 }
@@ -187,7 +186,6 @@ pub enum ControlCmd {
     GetUiSnapshot { reply: mpsc::Sender<Response> },
     ExecuteCommand { input: String },
     SendKey { keyspec: String },
-    SendNativeKey { keycode: u32, mods: i32, repeat: bool },
     SendText { text: String },
     SendVt { text: String },
     NewSplit { direction: String },
@@ -278,14 +276,6 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
         }
         Request::SendKey { key } => {
             let _ = tx.send(ControlCmd::SendKey { keyspec: key });
-            Response::Ok { ok: true }
-        }
-        Request::SendNativeKey { keycode, mods, repeat } => {
-            let _ = tx.send(ControlCmd::SendNativeKey {
-                keycode,
-                mods,
-                repeat: repeat.unwrap_or(false),
-            });
             Response::Ok { ok: true }
         }
         Request::ExecuteCommand { input } => {
@@ -495,27 +485,6 @@ mod tests {
         assert!(matches!(
             rx.recv().unwrap(),
             ControlCmd::SendVt { text } if text == "\u{1b}[1mSTYLE\u{1b}[0m"
-        ));
-    }
-
-    #[test]
-    fn send_native_key_request_maps_to_control_command() {
-        let (tx, rx) = mpsc::channel();
-
-        let response = dispatch_request(
-            Request::SendNativeKey {
-                keycode: 0x02,
-                mods: crate::ffi::GHOSTTY_MODS_CTRL,
-                repeat: Some(true),
-            },
-            &tx,
-        );
-
-        assert!(matches!(response, Response::Ok { ok: true }));
-        assert!(matches!(
-            rx.recv().unwrap(),
-            ControlCmd::SendNativeKey { keycode, mods, repeat }
-                if keycode == 0x02 && mods == crate::ffi::GHOSTTY_MODS_CTRL && repeat
         ));
     }
 

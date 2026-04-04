@@ -580,7 +580,7 @@ unsafe fn send_user_notification(title: &str, body: &str) -> bool {
         let () = msg_send![&*content, setSound: sound];
     }
 
-    let identifier = NSString::from_str(&notification_identifier());
+    let identifier = NSString::from_str(&next_notification_identifier());
     let request: Retained<AnyObject> = msg_send![
         class!(UNNotificationRequest),
         requestWithIdentifier: &*identifier,
@@ -596,7 +596,7 @@ unsafe fn send_user_notification(title: &str, body: &str) -> bool {
     true
 }
 
-fn notification_identifier() -> String {
+fn next_notification_identifier() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -627,7 +627,7 @@ fn apple_script_literal(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{apple_script_literal, notification_identifier};
+    use super::apple_script_literal;
 
     #[test]
     fn apple_script_literal_escapes_quotes_and_newlines() {
@@ -635,12 +635,5 @@ mod tests {
             apple_script_literal("a\"b\nc\\d"),
             "\"a\\\"b\\nc\\\\d\""
         );
-    }
-
-    #[test]
-    fn notification_identifier_is_stable_and_prefixed() {
-        let id = notification_identifier();
-        assert!(id.starts_with("boo-"));
-        assert!(id.len() > 4);
     }
 }

@@ -199,7 +199,7 @@ nix develop
 - These scripts emit `OSC 133` prompt markers and `cmdline_url` command metadata for the tab spinner/title path
 
 ### Command Finish Notifications
-- Add `notify-on-command-finish` config with a minimum duration threshold, similar to Kitty
-- macOS currently delivers notifications through Notification Center; migrate the delivery path to `UNUserNotificationCenter`
+- `notify-on-command-finish` config and duration thresholds are implemented
+- macOS notifications use `UNUserNotificationCenter`, with an AppleScript fallback if the native path is unavailable
 - Linux backend: use the freedesktop desktop notification API (`org.freedesktop.Notifications` over D-Bus)
 - Optionally add Kitty-compatible `OSC 99` notification handling so scripts can request notifications directly through Boo

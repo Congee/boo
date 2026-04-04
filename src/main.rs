@@ -1469,12 +1469,6 @@ impl BooApp {
             control::ControlCmd::SendKey { keyspec } => {
                 self.inject_key(&keyspec);
             }
-            control::ControlCmd::SendNativeKey { keycode, mods, repeat } => {
-                #[cfg(target_os = "macos")]
-                self.handle_platform_key_event(platform::KeyEvent { keycode, mods, repeat });
-                #[cfg(not(target_os = "macos"))]
-                let _ = (keycode, mods, repeat);
-            }
         }
     }
 
