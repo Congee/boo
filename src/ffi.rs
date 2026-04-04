@@ -1,5 +1,5 @@
-//! Hand-written FFI bindings for libghostty's C API (ghostty.h).
-//! Covers the minimal surface needed for the iced prototype.
+//! Hand-written ABI-compatible structs/enums retained at Boo's app boundary.
+//! These mirror the action/config shapes Boo still uses internally.
 
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]

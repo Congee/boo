@@ -156,10 +156,10 @@ User input (key/mouse/scroll)
 | `session.rs` | Session file parser, layout templates, save/load |
 | `vt_backend_core.rs` | Shared VT pane runtime, snapshots, OSC 133 command state |
 | `macos_vt_backend.rs` | macOS VT backend and host-view integration |
-| `linux_vt_backend.rs` | Linux VT backend wrapper |
+| `backend.rs` | Platform backend selection and shared backend façade |
 | `vt_terminal_canvas.rs` | Shared snapshot renderer for VT panes |
 | `platform/macos.rs` | macOS AppKit host view, text input, clipboard, notifications |
-| `ffi.rs` | Remaining hand-written C FFI used around the app boundary |
+| `ffi.rs` | Hand-written ABI-compatible structs/enums kept at the app boundary |
 | `control.rs` | Unix domain socket IPC server |
 | `keymap.rs` | Physical key code → logical key mapping |
 | `tmux.rs` | tmux compatibility layer |
@@ -203,3 +203,8 @@ nix develop
 - macOS notifications use `UNUserNotificationCenter`, with an AppleScript fallback if the native path is unavailable
 - Linux backend: use the freedesktop desktop notification API (`org.freedesktop.Notifications` over D-Bus)
 - Optionally add Kitty-compatible `OSC 99` notification handling so scripts can request notifications directly through Boo
+
+### Headless Mode
+- Add a headless mode that runs the shared VT backend and control/socket surfaces without creating a GUI window
+- Support snapshot/query/control workflows against headless panes for automation, testing, and remote orchestration
+- Keep the terminal/runtime path identical to the GUI app so headless mode exercises the same pane/session/control logic

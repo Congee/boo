@@ -23,10 +23,10 @@ cargo build
 - `src/vt_backend_core.rs` — shared VT pane/runtime core
 - `src/main.rs` — iced application and shared app state
 - `src/platform/macos.rs` — macOS host integration
-- `build.rs` — links Boo against the vendored/native dependencies it needs
+- `build.rs` — links Boo against the native dependencies it needs
 
 ## Conventions
 
 - No bindgen — hand-write FFI for the ~30 functions we use
-- The shipped app depends on the vendored `libghostty-vt` crates, not the full Ghostty app runtime
+- The shipped app depends on the published `libghostty-vt` crates, not the full Ghostty app runtime
 - macOS and Linux share one VT architecture; platform code should stay thin
