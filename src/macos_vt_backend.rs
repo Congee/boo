@@ -256,6 +256,7 @@ impl crate::backend::TerminalBackend for MacVtBackend {
             active_scrollbar: None,
             running_commands: Vec::new(),
             finished_commands: Vec::new(),
+            desktop_notifications: Vec::new(),
         };
 
         for id in active_pane_ids {
@@ -278,6 +279,12 @@ impl crate::backend::TerminalBackend for MacVtBackend {
                 result.finished_commands.push(crate::backend::CommandFinished {
                     exit_code: finished.exit_code,
                     duration_ns: finished.duration_ns,
+                });
+            }
+            for notification in pane.take_desktop_notifications() {
+                result.desktop_notifications.push(crate::backend::DesktopNotification {
+                    title: notification.title,
+                    body: notification.body,
                 });
             }
 

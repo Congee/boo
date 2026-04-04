@@ -51,6 +51,7 @@ struct CommandFinishedEvent {
 
 
 static STARTUP_SESSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static STARTUP_CONTROL_SOCKET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 const DEFAULT_TERMINAL_FONT_SIZE: f32 = 14.0;
 const DEFAULT_BACKGROUND_OPACITY: f32 = 1.0;
 const HEADLESS_WIDTH: f32 = 1024.0;
@@ -147,6 +148,11 @@ fn main() {
     if let Some(pos) = args.iter().position(|a| a == "--session") {
         if let Some(name) = args.get(pos + 1) {
             STARTUP_SESSION.set(name.clone()).ok();
+        }
+    }
+    if let Some(pos) = args.iter().position(|a| a == "--socket") {
+        if let Some(path) = args.get(pos + 1) {
+            STARTUP_CONTROL_SOCKET.set(path.clone()).ok();
         }
     }
     let headless = args.iter().any(|a| a == "--headless");
@@ -432,7 +438,10 @@ impl BooApp {
     fn new_with_mode(headless: bool) -> (Self, Task<Message>) {
         let backend = <backend::Backend as backend::TerminalBackend>::new(ptr::null_mut());
 
-        let boo_config = config::Config::load();
+        let mut boo_config = config::Config::load();
+        if let Some(socket_path) = STARTUP_CONTROL_SOCKET.get() {
+            boo_config.control_socket = Some(socket_path.clone());
+        }
         let ctl_rx = control::start(boo_config.control_socket.as_deref());
         let bindings = bindings::Bindings::from_config(&boo_config);
         let appearance = Self::resolve_appearance_config(&boo_config);
@@ -862,6 +871,11 @@ impl BooApp {
                 exit_code: finished_command.exit_code,
                 duration_ns: finished_command.duration_ns,
             });
+        }
+        if self.desktop_notifications_enabled {
+            for notification in poll.desktop_notifications {
+                platform::send_desktop_notification(&notification.title, &notification.body);
+            }
         }
         if let Some(pwd) = poll.active_pwd {
             self.pwd = pwd;

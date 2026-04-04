@@ -10,6 +10,7 @@ pub struct BackendPollResult {
     pub active_scrollbar: Option<ffi::ghostty_action_scrollbar_s>,
     pub running_commands: Vec<PaneRunningCommand>,
     pub finished_commands: Vec<CommandFinished>,
+    pub desktop_notifications: Vec<DesktopNotification>,
 }
 
 #[derive(Clone)]
@@ -22,6 +23,12 @@ pub struct PaneRunningCommand {
 pub struct CommandFinished {
     pub exit_code: Option<u8>,
     pub duration_ns: u64,
+}
+
+#[derive(Clone)]
+pub struct DesktopNotification {
+    pub title: String,
+    pub body: String,
 }
 
 pub trait TerminalBackend {
@@ -342,6 +349,7 @@ impl TerminalBackend for LinuxBackend {
             active_scrollbar: None,
             running_commands: Vec::new(),
             finished_commands: Vec::new(),
+            desktop_notifications: Vec::new(),
         };
         for id in active_pane_ids {
             let Some(pane) = self.panes.get_mut(id) else {
@@ -363,6 +371,12 @@ impl TerminalBackend for LinuxBackend {
                 result.finished_commands.push(CommandFinished {
                     exit_code: finished.exit_code,
                     duration_ns: finished.duration_ns,
+                });
+            }
+            for notification in pane.take_desktop_notifications() {
+                result.desktop_notifications.push(DesktopNotification {
+                    title: notification.title,
+                    body: notification.body,
                 });
             }
 

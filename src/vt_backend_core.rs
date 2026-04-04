@@ -3,6 +3,7 @@
 
 use crate::unix_pty::{PtyProcess, PtySize};
 use crate::vt;
+use std::collections::HashMap;
 use std::ffi::{c_void, CStr};
 use std::io;
 use std::path::Path;
@@ -55,6 +56,8 @@ pub struct VtPane {
     osc_state: OscState,
     running_command: Option<RunningCommand>,
     finished_commands: Vec<CommandFinished>,
+    pending_notifications: HashMap<String, PendingNotification>,
+    completed_notifications: Vec<DesktopNotification>,
 }
 
 pub struct PollPtyResult {
@@ -91,6 +94,18 @@ pub struct RunningCommand {
 pub struct CommandFinished {
     pub exit_code: Option<u8>,
     pub duration_ns: u64,
+}
+
+#[derive(Clone)]
+pub struct DesktopNotification {
+    pub title: String,
+    pub body: String,
+}
+
+#[derive(Default)]
+struct PendingNotification {
+    title: String,
+    body: String,
 }
 
 impl VtPane {
@@ -156,6 +171,8 @@ impl VtPane {
             osc_state: OscState::default(),
             running_command: None,
             finished_commands: Vec::new(),
+            pending_notifications: HashMap::new(),
+            completed_notifications: Vec::new(),
         })
     }
 
@@ -169,6 +186,10 @@ impl VtPane {
 
     pub fn take_finished_commands(&mut self) -> Vec<CommandFinished> {
         std::mem::take(&mut self.finished_commands)
+    }
+
+    pub fn take_desktop_notifications(&mut self) -> Vec<DesktopNotification> {
+        std::mem::take(&mut self.completed_notifications)
     }
 
     pub fn poll_pty(&mut self) -> io::Result<PollPtyResult> {
@@ -438,10 +459,17 @@ impl VtPane {
     }
 
     fn handle_osc_payload(&mut self, payload: &str) {
-        let Some(rest) = payload.strip_prefix("133;") else {
+        if let Some(rest) = payload.strip_prefix("133;") {
+            self.handle_osc_133(rest);
             return;
-        };
+        }
 
+        if let Some(rest) = payload.strip_prefix("99;") {
+            self.handle_osc_99(rest);
+        }
+    }
+
+    fn handle_osc_133(&mut self, rest: &str) {
         if rest.starts_with('C') {
             self.running_command = Some(RunningCommand {
                 command: osc_133_command(rest),
@@ -461,6 +489,69 @@ impl VtPane {
             self.running_command = None;
         }
     }
+
+    fn handle_osc_99(&mut self, rest: &str) {
+        let Some((metadata, payload)) = rest.split_once(';') else {
+            return;
+        };
+
+        let meta = parse_osc_99_metadata(metadata);
+        if meta.base64 || matches!(meta.payload_type.as_deref(), Some("close" | "?" | "alive" | "icon" | "buttons")) {
+            return;
+        }
+
+        let id = meta.identifier.unwrap_or_else(|| "0".to_string());
+        let mut notification = self.pending_notifications.remove(&id).unwrap_or_default();
+        match meta.payload_type.as_deref().unwrap_or("title") {
+            "body" => notification.body.push_str(payload),
+            _ => notification.title.push_str(payload),
+        }
+
+        if meta.done {
+            let title = if notification.title.is_empty() {
+                notification.body.clone()
+            } else {
+                notification.title.clone()
+            };
+            if !title.is_empty() {
+                self.completed_notifications.push(DesktopNotification {
+                    title,
+                    body: notification.body,
+                });
+            }
+        } else {
+            self.pending_notifications.insert(id, notification);
+        }
+    }
+}
+
+struct Osc99Metadata {
+    payload_type: Option<String>,
+    identifier: Option<String>,
+    done: bool,
+    base64: bool,
+}
+
+fn parse_osc_99_metadata(metadata: &str) -> Osc99Metadata {
+    let mut meta = Osc99Metadata {
+        payload_type: None,
+        identifier: None,
+        done: true,
+        base64: false,
+    };
+    for entry in metadata.split(':').filter(|entry| !entry.is_empty()) {
+        let Some((key, value)) = entry.split_once('=') else {
+            continue;
+        };
+        match key {
+            "p" => meta.payload_type = Some(value.to_string()),
+            "i" => meta.identifier = Some(value.to_string()),
+            "d" => meta.done = value != "0",
+            "e" => meta.base64 = value == "1",
+            _ => {}
+        }
+    }
+    meta
 }
 
 fn osc_133_exit_code(rest: &str) -> Option<u8> {
@@ -676,5 +767,18 @@ mod tests {
         let finished = pane.take_finished_commands();
         assert_eq!(finished.len(), 1);
         assert_eq!(finished[0].exit_code, Some(0));
+    }
+
+    #[test]
+    fn osc_99_emits_desktop_notification() {
+        let mut pane = VtPane::spawn(2, 1, 8, 16, None, None).expect("pane");
+
+        pane.observe_control_sequences(b"\x1b]99;i=test:p=title:d=0;Build done\x07");
+        pane.observe_control_sequences(b"\x1b]99;i=test:p=body;All checks passed\x07");
+
+        let notifications = pane.take_desktop_notifications();
+        assert_eq!(notifications.len(), 1);
+        assert_eq!(notifications[0].title, "Build done");
+        assert_eq!(notifications[0].body, "All checks passed");
     }
 }

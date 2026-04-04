@@ -13,6 +13,7 @@ cargo build
 ## Architecture
 
 - `libghostty-vt` is the shared terminal runtime on macOS and Linux
+- `boo --headless` runs the same VT/runtime stack without starting the GUI
 - iced owns window chrome, terminal rendering, overlays, and pane layout
 - macOS host code handles native view focus, text input/IME, clipboard, and notifications
 - Linux host code provides platform glue while sharing the same VT core

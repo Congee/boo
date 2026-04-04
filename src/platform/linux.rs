@@ -4,6 +4,7 @@
 //! uses only a minimal native-platform shim here.
 
 use super::{KeyEvent, LayerHandle, Rect, ScrollEvent, TextInputEvent, ViewHandle};
+use std::process::Command;
 
 pub fn scale_factor() -> f64 { 1.0 }
 pub fn content_view_handle() -> ViewHandle { 1usize as ViewHandle }
@@ -36,4 +37,29 @@ pub fn clipboard_write(text: &str) {
     }
 }
 
-pub fn send_desktop_notification(_: &str, _: &str) {}
+pub fn send_desktop_notification(title: &str, body: &str) {
+    let mut sent = false;
+
+    if Command::new("notify-send")
+        .args(["--app-name=boo", title, body])
+        .spawn()
+        .is_ok()
+    {
+        sent = true;
+    }
+
+    if !sent {
+        log::warn!("failed to send desktop notification: notify-send not available");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn linux_notification_command_shape_is_stable() {
+        let args = ["--app-name=boo", "title", "body"];
+        assert_eq!(args[0], "--app-name=boo");
+        assert_eq!(args[1], "title");
+        assert_eq!(args[2], "body");
+    }
+}

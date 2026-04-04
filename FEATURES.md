@@ -87,6 +87,7 @@ chrome, layout, and VT rendering path.
 
 ### Headless Mode
 - `boo --headless` runs the shared VT backend and control socket without creating a GUI window
+- `boo --headless --socket /path/to.sock` overrides the control-socket path at startup
 - Headless mode exposes the same snapshot/query/control surface as the GUI app
 - Tabs, splits, sessions, PTYs, and terminal snapshots stay on the same runtime path as the GUI build
 
@@ -206,5 +207,4 @@ nix develop
 ### Command Finish Notifications
 - `notify-on-command-finish` config and duration thresholds are implemented
 - macOS notifications use `UNUserNotificationCenter`, with an AppleScript fallback if the native path is unavailable
-- Linux backend: use the freedesktop desktop notification API (`org.freedesktop.Notifications` over D-Bus)
-- Optionally add Kitty-compatible `OSC 99` notification handling so scripts can request notifications directly through Boo
+- Linux notifications are delivered through the desktop notification client path (`notify-send`) with the same Boo policy controls
