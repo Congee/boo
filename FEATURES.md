@@ -85,6 +85,11 @@ chrome, layout, and VT rendering path.
 - Unix domain socket IPC at configurable path (default `/tmp/boo.sock`)
 - External programs can send actions to a running boo instance
 
+### Headless Mode
+- `boo --headless` runs the shared VT backend and control socket without creating a GUI window
+- Headless mode exposes the same snapshot/query/control surface as the GUI app
+- Tabs, splits, sessions, PTYs, and terminal snapshots stay on the same runtime path as the GUI build
+
 ---
 
 ## Architecture
@@ -203,8 +208,3 @@ nix develop
 - macOS notifications use `UNUserNotificationCenter`, with an AppleScript fallback if the native path is unavailable
 - Linux backend: use the freedesktop desktop notification API (`org.freedesktop.Notifications` over D-Bus)
 - Optionally add Kitty-compatible `OSC 99` notification handling so scripts can request notifications directly through Boo
-
-### Headless Mode
-- Add a headless mode that runs the shared VT backend and control/socket surfaces without creating a GUI window
-- Support snapshot/query/control workflows against headless panes for automation, testing, and remote orchestration
-- Keep the terminal/runtime path identical to the GUI app so headless mode exercises the same pane/session/control logic

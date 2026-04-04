@@ -51,9 +51,10 @@ struct CommandFinishedEvent {
 
 
 static STARTUP_SESSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-
 const DEFAULT_TERMINAL_FONT_SIZE: f32 = 14.0;
 const DEFAULT_BACKGROUND_OPACITY: f32 = 1.0;
+const HEADLESS_WIDTH: f32 = 1024.0;
+const HEADLESS_HEIGHT: f32 = 768.0;
 
 #[derive(Debug)]
 struct ResolvedAppearance {
@@ -141,12 +142,17 @@ fn configured_font(family: Option<&'static str>) -> Font {
 fn main() {
     env_logger::init();
 
-    // Parse --session <name> from CLI args
+    // Parse supported CLI flags.
     let args: Vec<String> = std::env::args().collect();
     if let Some(pos) = args.iter().position(|a| a == "--session") {
         if let Some(name) = args.get(pos + 1) {
             STARTUP_SESSION.set(name.clone()).ok();
         }
+    }
+    let headless = args.iter().any(|a| a == "--headless");
+    if headless {
+        run_headless();
+        return;
     }
 
     let (scroll_tx, scroll_rx) = std::sync::mpsc::channel();
@@ -169,8 +175,17 @@ fn main() {
         .unwrap();
 }
 
+fn run_headless() {
+    let mut app = BooApp::new_headless();
+    loop {
+        let _ = app.update(Message::Frame);
+        std::thread::sleep(std::time::Duration::from_millis(16));
+    }
+}
+
 struct BooApp {
     backend: backend::Backend,
+    headless: bool,
     tabs: tabs::TabManager,
     parent_view: *mut c_void,
     ctl_rx: std::sync::mpsc::Receiver<control::ControlCmd>,
@@ -407,6 +422,14 @@ impl BooApp {
     }
 
     fn new() -> (Self, Task<Message>) {
+        Self::new_with_mode(false)
+    }
+
+    fn new_headless() -> Self {
+        Self::new_with_mode(true).0
+    }
+
+    fn new_with_mode(headless: bool) -> (Self, Task<Message>) {
         let backend = <backend::Backend as backend::TerminalBackend>::new(ptr::null_mut());
 
         let boo_config = config::Config::load();
@@ -420,6 +443,7 @@ impl BooApp {
             (
                 Self {
                     backend,
+                    headless,
                     tabs: tabs::TabManager::new(),
                     parent_view: ptr::null_mut(),
                     ctl_rx,
@@ -450,7 +474,11 @@ impl BooApp {
                     bindings,
                     socket_path: boo_config.control_socket.clone(),
                     dump_keys: std::env::args().any(|a| a == "--dump-keys"),
-                    last_size: Size::new(0.0, 0.0),
+                    last_size: if headless {
+                        Size::new(HEADLESS_WIDTH, HEADLESS_HEIGHT)
+                    } else {
+                        Size::new(0.0, 0.0)
+                    },
                     last_mouse_pos: (0.0, 0.0),
                     divider_drag: None,
                     scrollbar_drag: false,
@@ -489,6 +517,7 @@ impl BooApp {
             (
                 Self {
                     backend,
+                    headless,
                     tabs: tabs::TabManager::new(),
                     parent_view: ptr::null_mut(),
                     ctl_rx,
@@ -519,7 +548,11 @@ impl BooApp {
                     bindings,
                     socket_path: boo_config.control_socket.clone(),
                     dump_keys: std::env::args().any(|a| a == "--dump-keys"),
-                    last_size: Size::new(0.0, 0.0),
+                    last_size: if headless {
+                        Size::new(HEADLESS_WIDTH, HEADLESS_HEIGHT)
+                    } else {
+                        Size::new(0.0, 0.0)
+                    },
                     last_mouse_pos: (0.0, 0.0),
                     divider_drag: None,
                     scrollbar_drag: false,
@@ -3005,7 +3038,20 @@ impl BooApp {
     }
 
     fn scale_factor(&self) -> f64 {
+        if self.headless {
+            return 1.0;
+        }
         platform::scale_factor()
+    }
+
+    fn pane_parent_frame(&self) -> Option<platform::Rect> {
+        if self.headless {
+            return Some(self.terminal_frame());
+        }
+        if self.parent_view.is_null() {
+            return None;
+        }
+        Some(platform::view_bounds(self.parent_view))
     }
 
 
@@ -3018,20 +3064,28 @@ impl BooApp {
         if !self.tabs.is_empty() {
             return;
         }
-        let cv = platform::content_view_handle();
-        if cv.is_null() {
-            log::debug!("init_surface: content view not ready");
-            return;
-        }
-        self.parent_view = cv;
-        platform::set_window_transparent();
-        self.scrollbar_layer = platform::create_scrollbar_layer();
-        let bounds = platform::view_bounds(cv);
-        if (self.last_size.width <= 1.0 || self.last_size.height <= 1.0)
-            && bounds.size.width > 1.0
-            && bounds.size.height > 1.0
-        {
-            self.last_size = Size::new(bounds.size.width as f32, bounds.size.height as f32);
+        if self.headless {
+            self.parent_view = ptr::null_mut();
+            self.scrollbar_layer = ptr::null_mut();
+            if self.last_size.width <= 1.0 || self.last_size.height <= 1.0 {
+                self.last_size = Size::new(HEADLESS_WIDTH, HEADLESS_HEIGHT);
+            }
+        } else {
+            let cv = platform::content_view_handle();
+            if cv.is_null() {
+                log::debug!("init_surface: content view not ready");
+                return;
+            }
+            self.parent_view = cv;
+            platform::set_window_transparent();
+            self.scrollbar_layer = platform::create_scrollbar_layer();
+            let bounds = platform::view_bounds(cv);
+            if (self.last_size.width <= 1.0 || self.last_size.height <= 1.0)
+                && bounds.size.width > 1.0
+                && bounds.size.height > 1.0
+            {
+                self.last_size = Size::new(bounds.size.width as f32, bounds.size.height as f32);
+            }
         }
         let frame = self.terminal_frame();
         if frame.size.width <= 1.0 || frame.size.height <= 1.0 {
@@ -3093,10 +3147,12 @@ impl BooApp {
     }
 
     fn create_split(&mut self, direction: bindings::SplitDirection) {
-        if self.parent_view.is_null() || self.tabs.is_empty() {
+        if self.tabs.is_empty() {
             return;
         }
-        let parent_bounds = platform::view_bounds(self.parent_view);
+        let Some(parent_bounds) = self.pane_parent_frame() else {
+            return;
+        };
         let split_dir = match direction {
             bindings::SplitDirection::Right | bindings::SplitDirection::Left => {
                 splits::Direction::Horizontal
@@ -3192,10 +3248,9 @@ impl BooApp {
     }
 
     fn new_tab(&mut self) {
-        if self.parent_view.is_null() {
+        let Some(frame) = self.pane_parent_frame() else {
             return;
-        }
-        let frame = platform::view_bounds(self.parent_view);
+        };
         let Some(pane) = self.create_pane(
             frame,
             ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_TAB,
@@ -3215,10 +3270,9 @@ impl BooApp {
             return;
         };
         log::info!("loading session: {} ({} tabs)", layout.name, layout.tabs.len());
-        if self.parent_view.is_null() {
+        let Some(frame) = self.pane_parent_frame() else {
             return;
-        }
-        let frame = platform::view_bounds(self.parent_view);
+        };
 
         for (tab_idx, session_tab) in layout.tabs.iter().enumerate() {
             // For named layouts, compute the split sequence automatically

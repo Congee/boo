@@ -67,7 +67,11 @@ impl crate::backend::TerminalBackend for MacVtBackend {
         let rows = ((frame.size.height / cell_height).floor() as u16).max(1);
         let cell_width_px = cell_width.max(1.0).round() as u32;
         let cell_height_px = cell_height.max(1.0).round() as u32;
-        let view = platform::create_focusable_child_view(parent_view, frame);
+        let view = if parent_view.is_null() {
+            std::ptr::null_mut()
+        } else {
+            platform::create_focusable_child_view(parent_view, frame)
+        };
         let pane = PaneHandle::new(std::ptr::null_mut(), view);
         let wd_path = working_directory.map(|wd| {
             std::path::Path::new(std::ffi::OsStr::from_bytes(wd.to_bytes()))
