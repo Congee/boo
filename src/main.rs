@@ -6,12 +6,12 @@ mod ffi;
 mod keymap;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vt_terminal_canvas;
-#[cfg(target_os = "linux")]
-mod linux_vt_backend;
 #[cfg(target_os = "macos")]
 mod macos_vt_backend;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vt_backend_core;
+#[cfg(target_os = "linux")]
+mod vt_snapshot;
 mod pane;
 mod platform;
 mod session;
@@ -3972,65 +3972,6 @@ fn iced_button_to_vt(button: mouse::Button) -> vt::GhosttyMouseButton {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn linux_snapshot_selection_text(
-    snapshot: &linux_vt_backend::TerminalSnapshot,
-    selection: ffi::ghostty_selection_s,
-) -> String {
-    let start_row = selection.top_left.y.min(selection.bottom_right.y) as usize;
-    let end_row = selection.top_left.y.max(selection.bottom_right.y) as usize;
-    let start_col = selection.top_left.x.min(selection.bottom_right.x) as usize;
-    let end_col = selection.top_left.x.max(selection.bottom_right.x) as usize;
-    let max_row = snapshot.rows_data.len().saturating_sub(1);
-
-    let mut lines = Vec::new();
-    for row_index in start_row.min(max_row)..=end_row.min(max_row) {
-        let row = snapshot.rows_data.get(row_index).map(Vec::as_slice).unwrap_or(&[]);
-        let line_start = if selection.rectangle || row_index == start_row {
-            start_col
-        } else {
-            0
-        };
-        let line_end = if selection.rectangle || row_index == end_row {
-            end_col
-        } else {
-            snapshot.cols.saturating_sub(1) as usize
-        };
-        let text = linux_snapshot_row_text(row, line_start, line_end, selection.rectangle);
-        lines.push(text);
-    }
-
-    lines.join("\n")
-}
-
-#[cfg(target_os = "linux")]
-fn linux_snapshot_row_text(
-    row: &[linux_vt_backend::CellSnapshot],
-    start_col: usize,
-    end_col: usize,
-    preserve_trailing_spaces: bool,
-) -> String {
-    if row.is_empty() || start_col > end_col {
-        return String::new();
-    }
-
-    let mut out = String::new();
-    for col in start_col..=end_col {
-        let text = row
-            .get(col)
-            .map(|cell| cell.text.as_str())
-            .filter(|text| !text.is_empty() && *text != "\0")
-            .unwrap_or(" ");
-        out.push_str(text);
-    }
-
-    if preserve_trailing_spaces {
-        out
-    } else {
-        out.trim_end_matches(' ').to_string()
-    }
-}
-
 fn split_direction_name(direction: splits::Direction) -> &'static str {
     match direction {
         splits::Direction::Horizontal => "horizontal",
@@ -4049,42 +3990,6 @@ fn selection_mode_name(selection: SelectionMode) -> &'static str {
 
 fn ui_rect_snapshot(x: f64, y: f64, width: f64, height: f64) -> control::UiRectSnapshot {
     control::UiRectSnapshot { x, y, width, height }
-}
-
-#[cfg(target_os = "linux")]
-fn ui_terminal_snapshot_from_linux(
-    snapshot: &linux_vt_backend::TerminalSnapshot,
-) -> control::UiTerminalSnapshot {
-    control::UiTerminalSnapshot {
-        cols: snapshot.cols,
-        rows: snapshot.rows,
-        title: snapshot.title.clone(),
-        pwd: snapshot.pwd.clone(),
-        cursor: control::UiCursorSnapshot {
-            visible: snapshot.cursor.visible,
-            x: snapshot.cursor.x,
-            y: snapshot.cursor.y,
-            style: snapshot.cursor.style,
-        },
-        rows_data: snapshot
-            .rows_data
-            .iter()
-            .map(|row| control::UiTerminalRowSnapshot {
-                cells: row
-                    .iter()
-                    .map(|cell| control::UiTerminalCellSnapshot {
-                        text: cell.text.clone(),
-                        display_width: cell.display_width,
-                        fg: [cell.fg.r, cell.fg.g, cell.fg.b],
-                        bg: [cell.bg.r, cell.bg.g, cell.bg.b],
-                        bold: cell.bold,
-                        italic: cell.italic,
-                        underline: cell.underline,
-                    })
-                    .collect(),
-            })
-            .collect(),
-    }
 }
 
 fn format_command_finished_message(exit_code: Option<u8>, duration_ns: u64) -> String {
@@ -4443,19 +4348,19 @@ pub mod main_tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn test_ui_terminal_snapshot_from_linux_preserves_cells_and_cursor() {
-        let snapshot = linux_vt_backend::TerminalSnapshot {
+        let snapshot = vt_backend_core::TerminalSnapshot {
             cols: 2,
             rows: 1,
             title: "shell".to_string(),
             pwd: "/tmp".to_string(),
-            cursor: linux_vt_backend::CursorSnapshot {
+            cursor: vt_backend_core::CursorSnapshot {
                 visible: true,
                 x: 1,
                 y: 0,
                 style: 2,
             },
             rows_data: vec![vec![
-                linux_vt_backend::CellSnapshot {
+                vt_backend_core::CellSnapshot {
                     text: "a".to_string(),
                     display_width: 1,
                     fg: vt::GhosttyColorRgb { r: 1, g: 2, b: 3 },
@@ -4464,7 +4369,7 @@ pub mod main_tests {
                     italic: false,
                     underline: 1,
                 },
-                linux_vt_backend::CellSnapshot {
+                vt_backend_core::CellSnapshot {
                     text: "b".to_string(),
                     display_width: 1,
                     fg: vt::GhosttyColorRgb { r: 7, g: 8, b: 9 },
@@ -4482,7 +4387,7 @@ pub mod main_tests {
             colors: vt::GhosttyRenderStateColors::default(),
         };
 
-        let ui = ui_terminal_snapshot_from_linux(&snapshot);
+        let ui = vt_snapshot::ui_terminal_snapshot(&snapshot);
 
         assert_eq!(ui.cols, 2);
         assert_eq!(ui.rows, 1);
@@ -4497,31 +4402,31 @@ pub mod main_tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn test_linux_snapshot_selection_text_trims_non_rectangular_lines() {
-        let snapshot = linux_vt_backend::TerminalSnapshot {
+        let snapshot = vt_backend_core::TerminalSnapshot {
             cols: 4,
             rows: 2,
             title: String::new(),
             pwd: String::new(),
-            cursor: linux_vt_backend::CursorSnapshot::default(),
+            cursor: vt_backend_core::CursorSnapshot::default(),
             rows_data: vec![
                 vec![
-                    linux_vt_backend::CellSnapshot { text: "a".into(), ..Default::default() },
-                    linux_vt_backend::CellSnapshot { text: "b".into(), ..Default::default() },
-                    linux_vt_backend::CellSnapshot::default(),
-                    linux_vt_backend::CellSnapshot::default(),
+                    vt_backend_core::CellSnapshot { text: "a".into(), ..Default::default() },
+                    vt_backend_core::CellSnapshot { text: "b".into(), ..Default::default() },
+                    vt_backend_core::CellSnapshot::default(),
+                    vt_backend_core::CellSnapshot::default(),
                 ],
                 vec![
-                    linux_vt_backend::CellSnapshot { text: "c".into(), ..Default::default() },
-                    linux_vt_backend::CellSnapshot::default(),
-                    linux_vt_backend::CellSnapshot::default(),
-                    linux_vt_backend::CellSnapshot { text: "d".into(), ..Default::default() },
+                    vt_backend_core::CellSnapshot { text: "c".into(), ..Default::default() },
+                    vt_backend_core::CellSnapshot::default(),
+                    vt_backend_core::CellSnapshot::default(),
+                    vt_backend_core::CellSnapshot { text: "d".into(), ..Default::default() },
                 ],
             ],
             scrollbar: vt::GhosttyTerminalScrollbar::default(),
             colors: vt::GhosttyRenderStateColors::default(),
         };
 
-        let text = linux_snapshot_selection_text(
+        let text = vt_snapshot::selection_text(
             &snapshot,
             ffi::ghostty_selection_s {
                 top_left: ffi::ghostty_point_s {
@@ -4546,29 +4451,29 @@ pub mod main_tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn test_linux_snapshot_selection_text_preserves_rectangle_width() {
-        let snapshot = linux_vt_backend::TerminalSnapshot {
+        let snapshot = vt_backend_core::TerminalSnapshot {
             cols: 3,
             rows: 2,
             title: String::new(),
             pwd: String::new(),
-            cursor: linux_vt_backend::CursorSnapshot::default(),
+            cursor: vt_backend_core::CursorSnapshot::default(),
             rows_data: vec![
                 vec![
-                    linux_vt_backend::CellSnapshot { text: "a".into(), ..Default::default() },
-                    linux_vt_backend::CellSnapshot::default(),
-                    linux_vt_backend::CellSnapshot { text: "b".into(), ..Default::default() },
+                    vt_backend_core::CellSnapshot { text: "a".into(), ..Default::default() },
+                    vt_backend_core::CellSnapshot::default(),
+                    vt_backend_core::CellSnapshot { text: "b".into(), ..Default::default() },
                 ],
                 vec![
-                    linux_vt_backend::CellSnapshot::default(),
-                    linux_vt_backend::CellSnapshot { text: "c".into(), ..Default::default() },
-                    linux_vt_backend::CellSnapshot::default(),
+                    vt_backend_core::CellSnapshot::default(),
+                    vt_backend_core::CellSnapshot { text: "c".into(), ..Default::default() },
+                    vt_backend_core::CellSnapshot::default(),
                 ],
             ],
             scrollbar: vt::GhosttyTerminalScrollbar::default(),
             colors: vt::GhosttyRenderStateColors::default(),
         };
 
-        let text = linux_snapshot_selection_text(
+        let text = vt_snapshot::selection_text(
             &snapshot,
             ffi::ghostty_selection_s {
                 top_left: ffi::ghostty_point_s {
