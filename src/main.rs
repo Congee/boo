@@ -607,6 +607,73 @@ impl BooApp {
         }
     }
 
+    fn dispatch_binding_result(&mut self, result: bindings::KeyResult) -> bool {
+        match result {
+            bindings::KeyResult::Consumed(action) => {
+                if let Some(action) = action {
+                    self.dispatch_binding_action(action);
+                }
+                true
+            }
+            bindings::KeyResult::CopyMode(action) => {
+                self.dispatch_copy_mode_action(action);
+                true
+            }
+            bindings::KeyResult::Forward => false,
+        }
+    }
+
+    fn route_app_key(
+        &mut self,
+        key_char: Option<char>,
+        keycode: u32,
+        mods: i32,
+        named_key: Option<bindings::NamedKey>,
+        keyboard_key: keyboard::Key,
+    ) -> bool {
+        let text = key_char.map(|ch| ch.to_string());
+        let iced_mods = ghostty_mods_to_iced(mods);
+
+        if self.command_prompt.active {
+            self.handle_command_key(&keyboard_key, &text, &iced_mods);
+            return true;
+        }
+
+        if self.search_active {
+            self.handle_search_key(&keyboard_key, &text, &iced_mods);
+            return true;
+        }
+
+        let result = self.bindings.handle_key(key_char, keycode, mods, named_key);
+        self.dispatch_binding_result(result)
+    }
+
+    fn handle_committed_text(&mut self, committed: String) {
+        if self.command_prompt.active {
+            let key = keyboard::Key::Character(committed.clone().into());
+            self.handle_command_key(&key, &Some(committed), &keyboard::Modifiers::default());
+            return;
+        }
+
+        if self.search_active {
+            let key = keyboard::Key::Character(committed.clone().into());
+            self.handle_search_key(&key, &Some(committed), &keyboard::Modifiers::default());
+            return;
+        }
+
+        if self.bindings.is_prefix_mode() || self.bindings.is_copy_mode() {
+            for ch in committed.chars() {
+                let result = self.bindings.handle_key(Some(ch), 0, 0, None);
+                let _ = self.dispatch_binding_result(result);
+            }
+            return;
+        }
+
+        let _ = self
+            .backend
+            .write_input(self.tabs.focused_pane(), committed.as_bytes());
+    }
+
     #[cfg(target_os = "macos")]
     fn handle_platform_key_event(&mut self, event: platform::KeyEvent) {
         let keycode = event.keycode;
@@ -615,30 +682,8 @@ impl BooApp {
         let named_key = native_keycode_to_named_key(keycode);
         let keyboard_key = native_keycode_to_keyboard_key(keycode, key_char);
 
-        if self.command_prompt.active {
-            let text = key_char.map(|ch| ch.to_string());
-            self.handle_command_key(&keyboard_key, &text, &ghostty_mods_to_iced(mods));
+        if self.route_app_key(key_char, keycode, mods, named_key, keyboard_key) {
             return;
-        }
-
-        if self.search_active {
-            let text = key_char.map(|ch| ch.to_string());
-            self.handle_search_key(&keyboard_key, &text, &ghostty_mods_to_iced(mods));
-            return;
-        }
-
-        match self.bindings.handle_key(key_char, keycode, mods, named_key) {
-            bindings::KeyResult::Consumed(action) => {
-                if let Some(action) = action {
-                    self.dispatch_binding_action(action);
-                }
-                return;
-            }
-            bindings::KeyResult::CopyMode(action) => {
-                self.dispatch_copy_mode_action(action);
-                return;
-            }
-            bindings::KeyResult::Forward => {}
         }
 
         let Some(vt_keycode) = keymap::native_to_vt_keycode(keycode) else {
@@ -1067,47 +1112,7 @@ impl BooApp {
                 continue;
             }
             match apply_text_input_event(&mut self.preedit_text, event) {
-                Some(TextInputAction::Commit(committed)) => {
-                    if self.command_prompt.active {
-                        let key = keyboard::Key::Character(committed.clone().into());
-                        self.handle_command_key(&key, &Some(committed), &keyboard::Modifiers::default());
-                    } else if self.search_active {
-                        let key = keyboard::Key::Character(committed.clone().into());
-                        self.handle_search_key(&key, &Some(committed), &keyboard::Modifiers::default());
-                    } else if self.bindings.is_prefix_mode() {
-                        for ch in committed.chars() {
-                            match self.bindings.handle_key(Some(ch), 0, 0, None) {
-                                bindings::KeyResult::Consumed(action) => {
-                                    if let Some(action) = action {
-                                        self.dispatch_binding_action(action);
-                                    }
-                                }
-                                bindings::KeyResult::CopyMode(action) => {
-                                    self.dispatch_copy_mode_action(action);
-                                }
-                                bindings::KeyResult::Forward => {}
-                            }
-                        }
-                    } else if self.bindings.is_copy_mode() {
-                        for ch in committed.chars() {
-                            match self.bindings.handle_key(Some(ch), 0, 0, None) {
-                                bindings::KeyResult::CopyMode(action) => {
-                                    self.dispatch_copy_mode_action(action);
-                                }
-                                bindings::KeyResult::Consumed(action) => {
-                                    if let Some(action) = action {
-                                        self.dispatch_binding_action(action);
-                                    }
-                                }
-                                bindings::KeyResult::Forward => {}
-                            }
-                        }
-                    } else {
-                        let _ = self
-                            .backend
-                            .write_input(self.tabs.focused_pane(), committed.as_bytes());
-                    }
-                }
+                Some(TextInputAction::Commit(committed)) => self.handle_committed_text(committed),
                 Some(TextInputAction::Command(command)) => {
                     self.forward_text_input_command(command);
                 }
@@ -1464,6 +1469,12 @@ impl BooApp {
             control::ControlCmd::SendKey { keyspec } => {
                 self.inject_key(&keyspec);
             }
+            control::ControlCmd::SendNativeKey { keycode, mods, repeat } => {
+                #[cfg(target_os = "macos")]
+                self.handle_platform_key_event(platform::KeyEvent { keycode, mods, repeat });
+                #[cfg(not(target_os = "macos"))]
+                let _ = (keycode, mods, repeat);
+            }
         }
     }
 
@@ -1495,19 +1506,9 @@ impl BooApp {
         }
 
         // Route through boo's binding system first (prefix key, etc.)
-        match self.bindings.handle_key(key_char, keycode, mods, None) {
-            bindings::KeyResult::Consumed(action) => {
-                log::info!("ctl key consumed by boo: {action:?}");
-                if let Some(action) = action {
-                    self.dispatch_binding_action(action);
-                }
-                return;
-            }
-            bindings::KeyResult::CopyMode(action) => {
-                self.dispatch_copy_mode_action(action);
-                return;
-            }
-            bindings::KeyResult::Forward => {}
+        let result = self.bindings.handle_key(key_char, keycode, mods, None);
+        if self.dispatch_binding_result(result) {
+            return;
         }
 
         let text_str = if key_char.is_some() && mods & ffi::GHOSTTY_MODS_CTRL == 0 {
