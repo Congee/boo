@@ -51,6 +51,15 @@ pub struct ClientApp {
 }
 
 impl ClientApp {
+    fn has_paintable_terminal(&self) -> bool {
+        self.stream_snapshot.is_some()
+            || self
+                .snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.terminal.as_ref())
+                .is_some()
+    }
+
     fn stream_ready_for_terminal_io(&self) -> bool {
         self.stream_tx.is_some() && self.stream_state.is_some()
     }
@@ -94,6 +103,7 @@ impl ClientApp {
             Message::Frame => self.on_tick(),
             Message::StreamReady(tx) => {
                 self.stream_tx = Some(tx);
+                self.refresh_snapshot();
                 self.send_stream_command(StreamCommand::ListSessions);
             }
             Message::StreamEvent(event) => self.handle_stream_event(event),
@@ -113,7 +123,7 @@ impl ClientApp {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        let mut main_col = column![];
+        let mut main_col = column![].width(Length::Fill).height(Length::Fill);
 
         if let Some(snapshot) = self.snapshot.as_ref() {
             if let Some(stream_snapshot) = self.stream_snapshot.as_ref() {
@@ -208,7 +218,16 @@ impl ClientApp {
             );
         }
 
-        main_col.into()
+        container(main_col)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_: &Theme| container::Style {
+                background: Some(iced::Background::Color(Color::from_rgb(
+                    0.05, 0.05, 0.05,
+                ))),
+                ..Default::default()
+            })
+            .into()
     }
 
     pub fn theme(&self) -> Theme {
@@ -225,7 +244,7 @@ impl ClientApp {
 
     pub fn window_style(&self) -> iced::theme::Style {
         iced::theme::Style {
-            background_color: Color::TRANSPARENT,
+            background_color: Color::from_rgb(0.05, 0.05, 0.05),
             text_color: Color::WHITE,
         }
     }
@@ -250,7 +269,7 @@ impl ClientApp {
 
     fn on_tick(&mut self) {
         self.tick_counter = self.tick_counter.wrapping_add(1);
-        let refresh_ticks = if self.snapshot.is_none() || self.stream_tx.is_none() {
+        let refresh_ticks = if !self.stream_ready_for_terminal_io() || !self.has_paintable_terminal() {
             SNAPSHOT_RETRY_TICKS
         } else {
             SNAPSHOT_KEEPALIVE_TICKS
@@ -270,6 +289,7 @@ impl ClientApp {
             self.send_stream_command(StreamCommand::Resize { cols, rows });
         } else {
             let _ = self.client.send(&control::Request::ResizeFocused { cols, rows });
+            self.refresh_snapshot();
         }
     }
 
@@ -295,6 +315,7 @@ impl ClientApp {
                 });
             } else {
                 let _ = self.client.send(&control::Request::SendText { text: committed });
+                self.refresh_snapshot();
             }
             return;
         }
@@ -305,6 +326,7 @@ impl ClientApp {
                 self.send_stream_command(StreamCommand::Key { input_seq, keyspec });
             } else {
                 let _ = self.client.send(&control::Request::SendKey { key: keyspec });
+                self.refresh_snapshot();
             }
         }
     }
