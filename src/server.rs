@@ -1,5 +1,6 @@
 use crate::control;
 use crate::remote;
+use crate::tabs;
 use std::sync::mpsc;
 
 #[derive(Debug)]
@@ -70,6 +71,43 @@ pub enum Command {
         client_id: u64,
         session_id: Option<u32>,
     },
+}
+
+pub struct State {
+    pub tabs: tabs::TabManager,
+    pub remote_server: Option<remote::RemoteServer>,
+    pub remote_rx: mpsc::Receiver<remote::RemoteCmd>,
+}
+
+impl State {
+    pub fn new(remote_port: Option<u16>, remote_auth_key: Option<String>) -> Self {
+        let (remote_server, remote_rx) = if let Some(port) = remote_port {
+            match remote::RemoteServer::start(remote::RemoteConfig {
+                port,
+                auth_key: remote_auth_key,
+                service_name: "boo".to_string(),
+            }) {
+                Ok((server, rx)) => {
+                    log::info!("remote daemon listening on tcp/{port}");
+                    (Some(server), rx)
+                }
+                Err(error) => {
+                    log::error!("failed to start remote daemon on tcp/{port}: {error}");
+                    let (_tx, rx) = mpsc::channel();
+                    (None, rx)
+                }
+            }
+        } else {
+            let (_tx, rx) = mpsc::channel();
+            (None, rx)
+        };
+
+        Self {
+            tabs: tabs::TabManager::new(),
+            remote_server,
+            remote_rx,
+        }
+    }
 }
 
 impl From<control::ControlCmd> for Command {

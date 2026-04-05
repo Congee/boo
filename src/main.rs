@@ -212,7 +212,7 @@ fn run_headless() {
 struct BooApp {
     backend: backend::Backend,
     headless: bool,
-    tabs: tabs::TabManager,
+    server: server::State,
     parent_view: *mut c_void,
     ctl_rx: std::sync::mpsc::Receiver<control::ControlCmd>,
     scroll_rx: std::sync::mpsc::Receiver<platform::ScrollEvent>,
@@ -220,8 +220,6 @@ struct BooApp {
     text_input_rx: std::sync::mpsc::Receiver<platform::TextInputEvent>,
     bindings: bindings::Bindings,
     socket_path: Option<String>,
-    remote_server: Option<remote::RemoteServer>,
-    remote_rx: std::sync::mpsc::Receiver<remote::RemoteCmd>,
     dump_keys: bool,
     last_size: Size,
     last_mouse_pos: (f64, f64),
@@ -599,26 +597,7 @@ impl BooApp {
             boo_config.remote_auth_key = Some(key.clone());
         }
         let ctl_rx = control::start(boo_config.control_socket.as_deref());
-        let (remote_server, remote_rx) = if let Some(port) = boo_config.remote_port {
-            match remote::RemoteServer::start(remote::RemoteConfig {
-                port,
-                auth_key: boo_config.remote_auth_key.clone(),
-                service_name: "boo".to_string(),
-            }) {
-                Ok((server, rx)) => {
-                    log::info!("remote daemon listening on tcp/{port}");
-                    (Some(server), rx)
-                }
-                Err(error) => {
-                    log::error!("failed to start remote daemon on tcp/{port}: {error}");
-                    let (_tx, rx) = std::sync::mpsc::channel();
-                    (None, rx)
-                }
-            }
-        } else {
-            let (_tx, rx) = std::sync::mpsc::channel();
-            (None, rx)
-        };
+        let server = server::State::new(boo_config.remote_port, boo_config.remote_auth_key.clone());
         let bindings = bindings::Bindings::from_config(&boo_config);
         let appearance = Self::resolve_appearance_config(&boo_config);
         let (cell_width, cell_height) = terminal_metrics(appearance.font_size);
@@ -629,11 +608,9 @@ impl BooApp {
                 Self {
                     backend,
                     headless,
-                    tabs: tabs::TabManager::new(),
+                    server,
                     parent_view: ptr::null_mut(),
                     ctl_rx,
-                    remote_server,
-                    remote_rx,
                     scroll_rx: SCROLL_RX
                         .get()
                         .and_then(|m| m.lock().ok())
@@ -709,11 +686,9 @@ impl BooApp {
                 Self {
                     backend,
                     headless,
-                    tabs: tabs::TabManager::new(),
+                    server,
                     parent_view: ptr::null_mut(),
                     ctl_rx,
-                    remote_server,
-                    remote_rx,
                     scroll_rx: SCROLL_RX
                         .get()
                         .and_then(|m| m.lock().ok())
@@ -784,7 +759,7 @@ impl BooApp {
     }
 
     fn focused_surface(&self) -> ffi::ghostty_surface_t {
-        self.tabs.focused_pane().surface()
+        self.server.tabs.focused_pane().surface()
     }
 
     fn set_pane_focus(&self, pane: PaneHandle, focused: bool) {
@@ -813,7 +788,7 @@ impl BooApp {
         {
             let (keycode, unshifted_codepoint) = text_input_command_key(command);
             let _ = self.backend.forward_vt_key(
-                self.tabs.focused_pane(),
+                self.server.tabs.focused_pane(),
                 vt::GHOSTTY_KEY_ACTION_PRESS,
                 keycode,
                 ffi::GHOSTTY_MODS_NONE as vt::GhosttyMods,
@@ -890,7 +865,7 @@ impl BooApp {
 
         let _ = self
             .backend
-            .write_input(self.tabs.focused_pane(), committed.as_bytes());
+            .write_input(self.server.tabs.focused_pane(), committed.as_bytes());
     }
 
     #[cfg(target_os = "macos")]
@@ -910,7 +885,7 @@ impl BooApp {
         };
         let unshifted_codepoint = shifted_codepoint_vt(vt_keycode, 0);
         let _ = self.backend.forward_vt_key(
-            self.tabs.focused_pane(),
+            self.server.tabs.focused_pane(),
             if event.repeat {
                 vt::GHOSTTY_KEY_ACTION_REPEAT
             } else {
@@ -946,12 +921,13 @@ impl BooApp {
     }
 
     fn forward_surface_key(&mut self, event: ffi::ghostty_input_key_s) -> bool {
-        self.backend.surface_key(self.tabs.focused_pane(), event)
+        self.backend
+            .surface_key(self.server.tabs.focused_pane(), event)
     }
 
     fn forward_surface_mouse_pos(&mut self, x: f64, y: f64, mods: i32) {
         self.backend
-            .surface_mouse_pos(self.tabs.focused_pane(), x, y, mods);
+            .surface_mouse_pos(self.server.tabs.focused_pane(), x, y, mods);
     }
 
     fn forward_surface_mouse_button(
@@ -961,12 +937,12 @@ impl BooApp {
         mods: i32,
     ) {
         self.backend
-            .surface_mouse_button(self.tabs.focused_pane(), state, button, mods);
+            .surface_mouse_button(self.server.tabs.focused_pane(), state, button, mods);
     }
 
     fn forward_surface_mouse_scroll(&mut self, dx: f64, dy: f64, mods: i32) {
         self.backend
-            .surface_mouse_scroll(self.tabs.focused_pane(), dx, dy, mods);
+            .surface_mouse_scroll(self.server.tabs.focused_pane(), dx, dy, mods);
     }
 
     fn focused_cursor_cell_position(&self) -> Option<(u32, i64, f64)> {
@@ -976,7 +952,7 @@ impl BooApp {
         if self.focused_surface().is_null() {
             return self
                 .backend
-                .render_snapshot(self.tabs.focused_pane().id())
+                .render_snapshot(self.server.tabs.focused_pane().id())
                 .map(|snapshot| {
                     (
                         snapshot.cursor.x as u32,
@@ -985,7 +961,7 @@ impl BooApp {
                     )
                 });
         }
-        let focused_pane = self.tabs.focused_pane();
+        let focused_pane = self.server.tabs.focused_pane();
         if let Some((x, y, _, h)) = self.backend.ime_point(focused_pane) {
             if h > 0.0 {
                 cell_h_pts = h;
@@ -1003,7 +979,7 @@ impl BooApp {
             Some((col, row, cell_h_pts))
         } else {
             self.backend
-                .render_snapshot(self.tabs.focused_pane().id())
+                .render_snapshot(self.server.tabs.focused_pane().id())
                 .map(|snapshot| {
                     (
                         snapshot.cursor.x as u32,
@@ -1019,7 +995,7 @@ impl BooApp {
         {
             let rect = if self.focused_surface().is_null() {
                 self.backend
-                    .ime_point(self.tabs.focused_pane())
+                    .ime_point(self.server.tabs.focused_pane())
                     .map(|(x, y, w, h)| {
                         platform::Rect::new(
                             platform::Point::new(x, y - h),
@@ -1035,8 +1011,9 @@ impl BooApp {
     }
 
     fn poll_backend(&mut self) {
-        let active_id = self.tabs.focused_pane().id();
+        let active_id = self.server.tabs.focused_pane().id();
         let active_pane_ids: Vec<pane::PaneId> = self
+            .server
             .tabs
             .active_tree()
             .map(|tree| tree.all_panes().into_iter().map(|pane| pane.id()).collect())
@@ -1049,7 +1026,7 @@ impl BooApp {
             self.cell_height,
         );
         for running_command in poll.running_commands.iter().cloned() {
-            self.tabs.set_running_command_for_pane(
+            self.server.tabs.set_running_command_for_pane(
                 running_command.pane_id,
                 Some(tabs::RunningCommand {
                     command: running_command.command,
@@ -1062,7 +1039,9 @@ impl BooApp {
                 .iter()
                 .any(|running| running.pane_id == *pane_id)
             {
-                self.tabs.set_running_command_for_pane(*pane_id, None);
+                self.server
+                    .tabs
+                    .set_running_command_for_pane(*pane_id, None);
             }
         }
         for finished_command in poll.finished_commands {
@@ -1080,7 +1059,7 @@ impl BooApp {
             self.pwd = pwd;
         }
         if let Some(title) = poll.active_title {
-            self.tabs.set_active_title(title);
+            self.server.tabs.set_active_title(title);
         }
         if let Some(scrollbar) = poll.active_scrollbar {
             self.scrollbar = scrollbar;
@@ -1137,7 +1116,7 @@ impl BooApp {
     }
 
     fn close_active_pane_by_id(&mut self, pane_id: pane::PaneId) {
-        let Some(tree) = self.tabs.active_tree_mut() else {
+        let Some(tree) = self.server.tabs.active_tree_mut() else {
             return;
         };
         let Some(leaf_id) = tree
@@ -1153,9 +1132,10 @@ impl BooApp {
     }
 
     fn ui_snapshot(&self) -> control::UiSnapshot {
-        let focused_pane = self.tabs.focused_pane();
+        let focused_pane = self.server.tabs.focused_pane();
         let terminal_frame = self.terminal_frame();
         let visible_panes = self
+            .server
             .tabs
             .active_tree()
             .map(|tree| {
@@ -1235,6 +1215,7 @@ impl BooApp {
         );
 
         let tabs = self
+            .server
             .tabs
             .tab_info()
             .into_iter()
@@ -1262,7 +1243,7 @@ impl BooApp {
         let terminal = { self.backend.ui_terminal_snapshot(focused_pane.id()) };
 
         control::UiSnapshot {
-            active_tab: self.tabs.active_index(),
+            active_tab: self.server.tabs.active_index(),
             focused_pane: focused_pane.id(),
             appearance: control::UiAppearanceSnapshot {
                 font_family: self.terminal_font_family.map(str::to_string),
@@ -1304,7 +1285,7 @@ impl BooApp {
         if let Ok(cmd) = self.ctl_rx.try_recv() {
             self.handle_server_cmd(cmd.into());
         }
-        while let Ok(cmd) = self.remote_rx.try_recv() {
+        while let Ok(cmd) = self.server.remote_rx.try_recv() {
             self.handle_server_cmd(cmd.into());
         }
         self.publish_remote_state();
@@ -1336,7 +1317,7 @@ impl BooApp {
                     };
                     let _ = self
                         .backend
-                        .scroll_viewport_delta(self.tabs.focused_pane(), line_delta);
+                        .scroll_viewport_delta(self.server.tabs.focused_pane(), line_delta);
                 }
             }
         }
@@ -1361,7 +1342,7 @@ impl BooApp {
             }
         }
 
-        if self.tabs.is_empty() {
+        if self.server.tabs.is_empty() {
             self.init_surface();
             return Task::none();
         }
@@ -1392,12 +1373,12 @@ impl BooApp {
             }
             Event::Window(window::Event::Focused) => {
                 self.app_focused = true;
-                self.set_pane_focus(self.tabs.focused_pane(), true);
+                self.set_pane_focus(self.server.tabs.focused_pane(), true);
                 self.backend.set_app_focus(true);
             }
             Event::Window(window::Event::Unfocused) => {
                 self.app_focused = false;
-                self.set_pane_focus(self.tabs.focused_pane(), false);
+                self.set_pane_focus(self.server.tabs.focused_pane(), false);
                 self.backend.set_app_focus(false);
             }
             _ => {}
@@ -1540,7 +1521,7 @@ impl BooApp {
                         return;
                     }
                     let _ = self.backend.forward_vt_key(
-                        self.tabs.focused_pane(),
+                        self.server.tabs.focused_pane(),
                         if repeat {
                             vt::GHOSTTY_KEY_ACTION_REPEAT
                         } else {
@@ -1607,7 +1588,7 @@ impl BooApp {
                         return;
                     }
                     let _ = self.backend.forward_vt_key(
-                        self.tabs.focused_pane(),
+                        self.server.tabs.focused_pane(),
                         vt::GHOSTTY_KEY_ACTION_RELEASE,
                         vt_keycode,
                         iced_mods_to_ghostty(&modifiers) as vt::GhosttyMods,
@@ -1639,7 +1620,7 @@ impl BooApp {
             server::Command::DumpKeys(enabled) => self.dump_keys = enabled,
             server::Command::Quit => self.terminate(0),
             server::Command::ListSurfaces { reply } => {
-                let info = if let Some(tree) = self.tabs.active_tree() {
+                let info = if let Some(tree) = self.server.tabs.active_tree() {
                     tree.surface_info()
                         .into_iter()
                         .map(|(id, focused)| control::SurfaceInfo { index: id, focused })
@@ -1653,11 +1634,11 @@ impl BooApp {
                 self.create_split(Self::split_direction_from_str(&direction));
             }
             server::Command::FocusSurface { index } => {
-                let old = self.tabs.focused_pane();
-                if let Some(tree) = self.tabs.active_tree_mut() {
+                let old = self.server.tabs.focused_pane();
+                if let Some(tree) = self.server.tabs.active_tree_mut() {
                     tree.set_focus(index);
                 }
-                let new = self.tabs.focused_pane();
+                let new = self.server.tabs.focused_pane();
                 if old != new {
                     self.set_pane_focus(old, false);
                     self.set_pane_focus(new, true);
@@ -1665,7 +1646,7 @@ impl BooApp {
             }
             server::Command::ListTabs { reply } => {
                 let _ = reply.send(control::Response::Tabs {
-                    tabs: self.tabs.tab_info(),
+                    tabs: self.server.tabs.tab_info(),
                 });
             }
             server::Command::GetClipboard { reply } => {
@@ -1690,36 +1671,36 @@ impl BooApp {
                 {
                     let _ = self
                         .backend
-                        .write_input(self.tabs.focused_pane(), text.as_bytes());
+                        .write_input(self.server.tabs.focused_pane(), text.as_bytes());
                 }
             }
             server::Command::SendVt { text } => {
                 #[cfg(any(target_os = "linux", target_os = "macos"))]
                 {
                     self.backend
-                        .write_vt_bytes(self.tabs.focused_pane(), text.as_bytes());
+                        .write_vt_bytes(self.server.tabs.focused_pane(), text.as_bytes());
                 }
             }
             server::Command::NewTab => {
                 let _ = self.new_tab();
             }
             server::Command::GotoTab { index } => {
-                self.tabs.goto_tab(index);
+                self.server.tabs.goto_tab(index);
                 self.sync_after_tab_change();
             }
             server::Command::NextTab => {
-                self.tabs.next_tab();
+                self.server.tabs.next_tab();
                 self.sync_after_tab_change();
             }
             server::Command::PrevTab => {
-                self.tabs.prev_tab();
+                self.server.tabs.prev_tab();
                 self.sync_after_tab_change();
             }
             server::Command::SendKey { keyspec } => {
                 self.inject_key(&keyspec);
             }
             server::Command::RemoteListSessions { client_id } => {
-                if let Some(server) = self.remote_server.as_ref() {
+                if let Some(server) = self.server.remote_server.as_ref() {
                     server.send_session_list(client_id, &self.remote_sessions());
                 }
             }
@@ -1728,16 +1709,16 @@ impl BooApp {
                 session_id,
             } => {
                 if self.pane_for_session(session_id).is_some() {
-                    if let Some(server) = self.remote_server.as_ref() {
+                    if let Some(server) = self.server.remote_server.as_ref() {
                         server.send_attached(client_id, session_id);
                     }
                     self.publish_remote_session(session_id);
-                } else if let Some(server) = self.remote_server.as_ref() {
+                } else if let Some(server) = self.server.remote_server.as_ref() {
                     server.send_error(client_id, "unknown session");
                 }
             }
             server::Command::RemoteDetach { client_id } => {
-                if let Some(server) = self.remote_server.as_ref() {
+                if let Some(server) = self.server.remote_server.as_ref() {
                     server.send_detached(client_id);
                 }
             }
@@ -1748,7 +1729,7 @@ impl BooApp {
             } => {
                 let created = self.new_tab();
                 let Some(session_id) = created else {
-                    if let Some(server) = self.remote_server.as_ref() {
+                    if let Some(server) = self.server.remote_server.as_ref() {
                         server.send_error(client_id, "failed to create session");
                     }
                     return;
@@ -1757,23 +1738,24 @@ impl BooApp {
                     let (width, height) = self.session_size_pixels(cols, rows);
                     self.resize_pane_backend(pane, self.scale_factor(), width, height);
                 }
-                if let Some(server) = self.remote_server.as_ref() {
+                if let Some(server) = self.server.remote_server.as_ref() {
                     server.send_session_created(client_id, session_id);
                 }
             }
             server::Command::RemoteInput { client_id, bytes } => {
                 let Some(session_id) = self
+                    .server
                     .remote_server
                     .as_ref()
                     .and_then(|server| server.client_session(client_id))
                 else {
-                    if let Some(server) = self.remote_server.as_ref() {
+                    if let Some(server) = self.server.remote_server.as_ref() {
                         server.send_error(client_id, "not attached");
                     }
                     return;
                 };
                 let Some(pane) = self.pane_for_session(session_id) else {
-                    if let Some(server) = self.remote_server.as_ref() {
+                    if let Some(server) = self.server.remote_server.as_ref() {
                         server.send_session_exited(session_id);
                     }
                     return;
@@ -1786,17 +1768,18 @@ impl BooApp {
                 rows,
             } => {
                 let Some(session_id) = self
+                    .server
                     .remote_server
                     .as_ref()
                     .and_then(|server| server.client_session(client_id))
                 else {
-                    if let Some(server) = self.remote_server.as_ref() {
+                    if let Some(server) = self.server.remote_server.as_ref() {
                         server.send_error(client_id, "not attached");
                     }
                     return;
                 };
                 let Some(pane) = self.pane_for_session(session_id) else {
-                    if let Some(server) = self.remote_server.as_ref() {
+                    if let Some(server) = self.server.remote_server.as_ref() {
                         server.send_session_exited(session_id);
                     }
                     return;
@@ -1809,37 +1792,38 @@ impl BooApp {
                 session_id,
             } => {
                 let target = session_id.or_else(|| {
-                    self.remote_server
+                    self.server
+                        .remote_server
                         .as_ref()
                         .and_then(|server| server.client_session(client_id))
                 });
                 let Some(target) = target else {
-                    if let Some(server) = self.remote_server.as_ref() {
+                    if let Some(server) = self.server.remote_server.as_ref() {
                         server.send_error(client_id, "unknown session");
                     }
                     return;
                 };
-                let Some(tab_index) = self.tabs.find_index_by_session_id(target) else {
-                    if let Some(server) = self.remote_server.as_ref() {
+                let Some(tab_index) = self.server.tabs.find_index_by_session_id(target) else {
+                    if let Some(server) = self.server.remote_server.as_ref() {
                         server.send_session_exited(target);
                     }
                     return;
                 };
-                if self.tabs.len() <= 1 {
-                    if let Some(server) = self.remote_server.as_ref() {
+                if self.server.tabs.len() <= 1 {
+                    if let Some(server) = self.server.remote_server.as_ref() {
                         server.send_error(client_id, "cannot destroy last session");
                     }
                     return;
                 }
-                let was_active = tab_index == self.tabs.active_index();
-                let panes = self.tabs.remove_tab(tab_index);
+                let was_active = tab_index == self.server.tabs.active_index();
+                let panes = self.server.tabs.remove_tab(tab_index);
                 for pane in panes {
                     self.backend.free_pane(pane);
                 }
-                if was_active && !self.tabs.is_empty() {
+                if was_active && !self.server.tabs.is_empty() {
                     self.sync_after_tab_change();
                 }
-                if let Some(server) = self.remote_server.as_ref() {
+                if let Some(server) = self.server.remote_server.as_ref() {
                     server.send_session_exited(target);
                 }
             }
@@ -1847,11 +1831,13 @@ impl BooApp {
     }
 
     fn remote_sessions(&self) -> Vec<remote::RemoteSessionInfo> {
-        self.tabs
+        self.server
+            .tabs
             .tab_session_info()
             .into_iter()
             .map(|tab| {
                 let pane = self
+                    .server
                     .tabs
                     .tab_tree(tab.index)
                     .map(|tree| tree.focused_pane())
@@ -1866,6 +1852,7 @@ impl BooApp {
                         .map(|snapshot| snapshot.pwd.clone())
                         .unwrap_or_default(),
                     attached: self
+                        .server
                         .remote_server
                         .as_ref()
                         .is_some_and(|server| server.attached_to_session(tab.id)),
@@ -1876,8 +1863,9 @@ impl BooApp {
     }
 
     fn pane_for_session(&self, session_id: u32) -> Option<PaneHandle> {
-        let tab_index = self.tabs.find_index_by_session_id(session_id)?;
-        self.tabs
+        let tab_index = self.server.tabs.find_index_by_session_id(session_id)?;
+        self.server
+            .tabs
             .tab_tree(tab_index)
             .map(|tree| tree.focused_pane())
     }
@@ -1889,7 +1877,7 @@ impl BooApp {
     }
 
     fn publish_remote_session(&self, session_id: u32) {
-        let Some(server) = self.remote_server.as_ref() else {
+        let Some(server) = self.server.remote_server.as_ref() else {
             return;
         };
         let Some(pane) = self.pane_for_session(session_id) else {
@@ -1905,7 +1893,7 @@ impl BooApp {
     }
 
     fn publish_remote_state(&self) {
-        let Some(server) = self.remote_server.as_ref() else {
+        let Some(server) = self.server.remote_server.as_ref() else {
             return;
         };
         for session_id in server.attached_sessions() {
@@ -1968,7 +1956,7 @@ impl BooApp {
                     ffi::GHOSTTY_MODS_NONE
                 };
                 let _ = self.backend.forward_vt_key(
-                    self.tabs.focused_pane(),
+                    self.server.tabs.focused_pane(),
                     vt::GHOSTTY_KEY_ACTION_PRESS,
                     vt_keycode,
                     mods as vt::GhosttyMods,
@@ -3008,7 +2996,7 @@ impl BooApp {
                     bindings::Direction::Down => (splits::Direction::Vertical, 1.0),
                     bindings::Direction::Up => (splits::Direction::Vertical, -1.0),
                 };
-                if let Some(tree) = self.tabs.active_tree_mut() {
+                if let Some(tree) = self.server.tabs.active_tree_mut() {
                     tree.resize_focused(axis, delta * sign);
                 }
                 self.relayout();
@@ -3018,19 +3006,19 @@ impl BooApp {
                 let _ = self.new_tab();
             }
             bindings::Action::NextTab => {
-                self.tabs.next_tab();
+                self.server.tabs.next_tab();
                 self.sync_after_tab_change();
             }
             bindings::Action::PrevTab => {
-                self.tabs.prev_tab();
+                self.server.tabs.prev_tab();
                 self.sync_after_tab_change();
             }
             bindings::Action::CloseTab => {
-                if self.tabs.len() <= 1 {
+                if self.server.tabs.len() <= 1 {
                     self.terminate(0);
                 }
-                let active = self.tabs.active_index();
-                let panes = self.tabs.remove_tab(active);
+                let active = self.server.tabs.active_index();
+                let panes = self.server.tabs.remove_tab(active);
                 for pane in panes {
                     self.free_pane_backend(pane);
                 }
@@ -3039,9 +3027,9 @@ impl BooApp {
             bindings::Action::GotoTab(target) => {
                 let idx = match target {
                     bindings::TabTarget::Index(i) => i,
-                    bindings::TabTarget::Last => self.tabs.len().saturating_sub(1),
+                    bindings::TabTarget::Last => self.server.tabs.len().saturating_sub(1),
                 };
-                self.tabs.goto_tab(idx);
+                self.server.tabs.goto_tab(idx);
                 self.sync_after_tab_change();
             }
             bindings::Action::Search => {
@@ -3062,22 +3050,22 @@ impl BooApp {
                 self.relayout();
             }
             bindings::Action::NextPane => {
-                if let Some(tree) = self.tabs.active_tree_mut() {
+                if let Some(tree) = self.server.tabs.active_tree_mut() {
                     tree.focus_next();
                 }
-                let new = self.tabs.focused_pane();
+                let new = self.server.tabs.focused_pane();
                 self.set_pane_focus(new, true);
             }
             bindings::Action::PreviousPane => {
-                if let Some(tree) = self.tabs.active_tree_mut() {
+                if let Some(tree) = self.server.tabs.active_tree_mut() {
                     tree.focus_prev();
                 }
-                let new = self.tabs.focused_pane();
+                let new = self.server.tabs.focused_pane();
                 self.set_pane_focus(new, true);
             }
             bindings::Action::PreviousTab => {
-                let prev = self.tabs.previous_active();
-                self.tabs.goto_tab(prev);
+                let prev = self.server.tabs.previous_active();
+                self.server.tabs.goto_tab(prev);
                 self.sync_after_tab_change();
             }
             bindings::Action::ReloadConfig => {
@@ -3398,19 +3386,19 @@ impl BooApp {
     }
 
     fn sync_after_tab_change(&mut self) {
-        let focused = self.tabs.focused_pane();
+        let focused = self.server.tabs.focused_pane();
         self.set_pane_focus(focused, true);
         self.relayout();
     }
 
     fn read_surface_selection_text(&self, selection: ffi::ghostty_selection_s) -> Option<String> {
         self.backend
-            .read_selection_text(self.tabs.focused_pane(), selection)
+            .read_selection_text(self.server.tabs.focused_pane(), selection)
     }
 
     fn ghostty_binding_action(&mut self, action: &str) {
         self.backend
-            .binding_action(self.tabs.focused_pane(), action, self.scrollbar.len);
+            .binding_action(self.server.tabs.focused_pane(), action, self.scrollbar.len);
     }
 
     fn send_search(&mut self) {
@@ -3434,13 +3422,14 @@ impl BooApp {
         {
             let delta = target_row as i64 - self.scrollbar.offset as i64;
             let _ = if target_row == 0 {
-                self.backend.scroll_viewport_top(self.tabs.focused_pane())
+                self.backend
+                    .scroll_viewport_top(self.server.tabs.focused_pane())
             } else if target_row >= max_offset {
                 self.backend
-                    .scroll_viewport_bottom(self.tabs.focused_pane())
+                    .scroll_viewport_bottom(self.server.tabs.focused_pane())
             } else {
                 self.backend
-                    .scroll_viewport_delta(self.tabs.focused_pane(), delta as isize)
+                    .scroll_viewport_delta(self.server.tabs.focused_pane(), delta as isize)
             };
         }
     }
@@ -3467,7 +3456,7 @@ impl BooApp {
                 if let Some(dir) = self.divider_drag {
                     let frame = self.terminal_frame();
                     let point = (position.x as f64, position.y as f64);
-                    if let Some(tree) = self.tabs.active_tree_mut() {
+                    if let Some(tree) = self.server.tabs.active_tree_mut() {
                         tree.resize_drag(frame, dir, point);
                     }
                     self.relayout();
@@ -3480,7 +3469,7 @@ impl BooApp {
                 #[cfg(any(target_os = "linux", target_os = "macos"))]
                 if self.focused_surface().is_null() {
                     let _ = self.backend.send_mouse_input(
-                        self.tabs.focused_pane(),
+                        self.server.tabs.focused_pane(),
                         vt::GHOSTTY_MOUSE_ACTION_MOTION,
                         None,
                         position.x,
@@ -3510,7 +3499,7 @@ impl BooApp {
                     // Check split dividers
                     let frame = self.terminal_frame();
                     let point = (mx, my);
-                    if let Some(tree) = self.tabs.active_tree() {
+                    if let Some(tree) = self.server.tabs.active_tree() {
                         if let Some(dir) = tree.divider_at(frame, point) {
                             self.divider_drag = Some(dir);
                             return;
@@ -3518,10 +3507,10 @@ impl BooApp {
                     }
 
                     // Click to focus split pane
-                    let old = self.tabs.focused_pane();
-                    if let Some(tree) = self.tabs.active_tree_mut() {
+                    let old = self.server.tabs.focused_pane();
+                    if let Some(tree) = self.server.tabs.active_tree_mut() {
                         if tree.focus_at(frame, point) {
-                            let new = self.tabs.focused_pane();
+                            let new = self.server.tabs.focused_pane();
                             self.set_pane_focus(old, false);
                             self.set_pane_focus(new, true);
                         }
@@ -3531,7 +3520,7 @@ impl BooApp {
                 if self.focused_surface().is_null() {
                     let (mx, my) = self.last_mouse_pos;
                     let _ = self.backend.send_mouse_input(
-                        self.tabs.focused_pane(),
+                        self.server.tabs.focused_pane(),
                         vt::GHOSTTY_MOUSE_ACTION_PRESS,
                         Some(iced_button_to_vt(button)),
                         mx as f32,
@@ -3561,7 +3550,7 @@ impl BooApp {
                 if self.focused_surface().is_null() {
                     let (mx, my) = self.last_mouse_pos;
                     let _ = self.backend.send_mouse_input(
-                        self.tabs.focused_pane(),
+                        self.server.tabs.focused_pane(),
                         vt::GHOSTTY_MOUSE_ACTION_RELEASE,
                         Some(iced_button_to_vt(button)),
                         mx as f32,
@@ -3601,7 +3590,7 @@ impl BooApp {
                         };
                         let _ = self
                             .backend
-                            .scroll_viewport_delta(self.tabs.focused_pane(), line_delta);
+                            .scroll_viewport_delta(self.server.tabs.focused_pane(), line_delta);
                     }
                 }
             }
@@ -3632,7 +3621,7 @@ impl BooApp {
     }
 
     fn init_surface(&mut self) {
-        if !self.tabs.is_empty() {
+        if !self.server.tabs.is_empty() {
             return;
         }
         if self.headless {
@@ -3669,7 +3658,7 @@ impl BooApp {
         ) else {
             return;
         };
-        self.tabs.add_initial_tab(pane);
+        self.server.tabs.add_initial_tab(pane);
         self.set_pane_focus(pane, true);
 
         // Tell ghostty the initial surface size so it starts rendering.
@@ -3723,7 +3712,7 @@ impl BooApp {
     }
 
     fn create_split(&mut self, direction: bindings::SplitDirection) {
-        if self.tabs.is_empty() {
+        if self.server.tabs.is_empty() {
             return;
         }
         let Some(parent_bounds) = self.pane_parent_frame() else {
@@ -3742,8 +3731,8 @@ impl BooApp {
         ) else {
             return;
         };
-        let old_focused = self.tabs.focused_pane();
-        if let Some(tree) = self.tabs.active_tree_mut() {
+        let old_focused = self.server.tabs.focused_pane();
+        if let Some(tree) = self.server.tabs.active_tree_mut() {
             tree.split_focused(split_dir, pane);
         }
 
@@ -3755,14 +3744,14 @@ impl BooApp {
     }
 
     fn switch_focus(&mut self, dir: bindings::PaneFocusDirection) {
-        let old = self.tabs.focused_pane();
-        if let Some(tree) = self.tabs.active_tree_mut() {
+        let old = self.server.tabs.focused_pane();
+        if let Some(tree) = self.server.tabs.active_tree_mut() {
             match dir {
                 bindings::PaneFocusDirection::Next => tree.focus_next(),
                 bindings::PaneFocusDirection::Previous => tree.focus_prev(),
             }
         }
-        let new = self.tabs.focused_pane();
+        let new = self.server.tabs.focused_pane();
         if old != new {
             self.set_pane_focus(old, false);
             self.set_pane_focus(new, true);
@@ -3770,12 +3759,12 @@ impl BooApp {
     }
 
     fn relayout(&mut self) {
-        if self.tabs.is_empty() || self.last_size.width == 0.0 {
+        if self.server.tabs.is_empty() || self.last_size.width == 0.0 {
             return;
         }
         let scale = self.scale_factor();
         let frame = self.terminal_frame();
-        let surfaces = self.tabs.layout_active(frame, scale);
+        let surfaces = self.server.tabs.layout_active(frame, scale);
         for (pane, w, h) in surfaces {
             self.resize_pane_backend(pane, scale, w, h);
         }
@@ -3783,7 +3772,7 @@ impl BooApp {
 
     fn handle_surface_closed(&mut self) {
         // Remove just the focused leaf from the split tree
-        let removed = if let Some(tree) = self.tabs.active_tree_mut() {
+        let removed = if let Some(tree) = self.server.tabs.active_tree_mut() {
             tree.remove_focused().map(|pane| (pane, tree.len() == 0))
         } else {
             None
@@ -3793,34 +3782,34 @@ impl BooApp {
 
             if tab_empty {
                 // Tab is empty — remove it or exit
-                if self.tabs.len() <= 1 {
+                if self.server.tabs.len() <= 1 {
                     self.terminate(0);
                 }
-                let active = self.tabs.active_index();
-                self.tabs.remove_tab(active);
+                let active = self.server.tabs.active_index();
+                self.server.tabs.remove_tab(active);
             }
 
-            let focused = self.tabs.focused_pane();
+            let focused = self.server.tabs.focused_pane();
             self.set_pane_focus(focused, true);
             self.relayout();
             log::info!(
                 "surface closed, {} surfaces in tab, {} tabs",
-                self.tabs.active_tree().map(|t| t.len()).unwrap_or(0),
-                self.tabs.len()
+                self.server.tabs.active_tree().map(|t| t.len()).unwrap_or(0),
+                self.server.tabs.len()
             );
             return;
         }
 
         // Fallback: no active tree or focused leaf not found
-        if self.tabs.len() <= 1 {
+        if self.server.tabs.len() <= 1 {
             self.terminate(0);
         }
-        let active = self.tabs.active_index();
-        let panes = self.tabs.remove_tab(active);
+        let active = self.server.tabs.active_index();
+        let panes = self.server.tabs.remove_tab(active);
         for pane in panes {
             self.free_pane_backend(pane);
         }
-        let focused = self.tabs.focused_pane();
+        let focused = self.server.tabs.focused_pane();
         self.set_pane_focus(focused, true);
         self.relayout();
     }
@@ -3835,14 +3824,14 @@ impl BooApp {
         ) else {
             return None;
         };
-        let old = self.tabs.focused_pane();
+        let old = self.server.tabs.focused_pane();
         self.set_pane_focus(old, false);
 
-        let idx = self.tabs.new_tab(pane);
+        let idx = self.server.tabs.new_tab(pane);
         self.set_pane_focus(pane, true);
         self.relayout();
-        log::info!("new tab {idx} (total: {})", self.tabs.len());
-        self.tabs.session_id_for_index(idx)
+        log::info!("new tab {idx} (total: {})", self.server.tabs.len());
+        self.server.tabs.session_id_for_index(idx)
     }
 
     fn load_session(&mut self, name: &str) {
@@ -3881,7 +3870,7 @@ impl BooApp {
                     // First pane → create a new tab
                     let Some(pane) = self.create_pane_with(
                         frame,
-                        if self.tabs.is_empty() && tab_idx == 0 {
+                        if self.server.tabs.is_empty() && tab_idx == 0 {
                             ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_WINDOW
                         } else {
                             ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_TAB
@@ -3891,9 +3880,9 @@ impl BooApp {
                     ) else {
                         continue;
                     };
-                    let old = self.tabs.focused_pane();
+                    let old = self.server.tabs.focused_pane();
                     self.set_pane_focus(old, false);
-                    self.tabs.new_tab(pane);
+                    self.server.tabs.new_tab(pane);
                     self.set_pane_focus(pane, true);
                 } else {
                     // Determine split direction and ratio
@@ -3924,7 +3913,7 @@ impl BooApp {
                     ) else {
                         continue;
                     };
-                    if let Some(tree) = self.tabs.active_tree_mut() {
+                    if let Some(tree) = self.server.tabs.active_tree_mut() {
                         tree.split_focused_with_ratio(split_dir, pane, ratio);
                     }
                     self.set_pane_focus(pane, true);
@@ -3932,7 +3921,7 @@ impl BooApp {
             }
             // Set tab title
             if !session_tab.title.is_empty() {
-                if let Some(tab) = self.tabs.tab_mut(tab_idx) {
+                if let Some(tab) = self.server.tabs.tab_mut(tab_idx) {
                     tab.title = session_tab.title.clone();
                 }
             }
@@ -3942,11 +3931,11 @@ impl BooApp {
     }
 
     fn save_current_session(&self, name: &str) {
-        let tab_infos = self.tabs.tab_info();
+        let tab_infos = self.server.tabs.tab_info();
         let tabs: Vec<session::SessionTab> = tab_infos
             .iter()
             .map(|info| {
-                let panes = if let Some(tree) = self.tabs.tab_tree(info.index) {
+                let panes = if let Some(tree) = self.server.tabs.tab_tree(info.index) {
                     tree.export_panes()
                         .into_iter()
                         .map(|ep| {
@@ -4035,7 +4024,10 @@ impl BooApp {
         }
         // Terminal area
         if self.focused_surface().is_null() {
-            if let Some(snapshot) = self.backend.render_snapshot(self.tabs.focused_pane().id()) {
+            if let Some(snapshot) = self
+                .backend
+                .render_snapshot(self.server.tabs.focused_pane().id())
+            {
                 let selection_rects = self
                     .copy_mode
                     .as_ref()
@@ -4208,7 +4200,7 @@ impl BooApp {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| (duration.as_millis() / 125) as usize)
             .unwrap_or(0);
-        let tabs = self.tabs.tab_info_with_spinner(spinner_frame);
+        let tabs = self.server.tabs.tab_info_with_spinner(spinner_frame);
         let mut parts = Vec::new();
         for tab in &tabs {
             let display_idx = tab.index + 1;
@@ -4223,7 +4215,7 @@ impl BooApp {
 
         // Right: pane count + mode
         let mut right_parts = Vec::new();
-        let active_surfaces = self.tabs.active_tree().map(|t| t.len()).unwrap_or(0);
+        let active_surfaces = self.server.tabs.active_tree().map(|t| t.len()).unwrap_or(0);
         if active_surfaces > 1 {
             right_parts.push(format!("{active_surfaces} panes"));
         }
@@ -4279,7 +4271,7 @@ impl BooApp {
 
 impl Drop for BooApp {
     fn drop(&mut self) {
-        for pane in self.tabs.all_panes() {
+        for pane in self.server.tabs.all_panes() {
             self.free_pane_backend(pane);
         }
         control::cleanup(self.socket_path.as_deref());
