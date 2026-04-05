@@ -181,6 +181,14 @@ impl TerminalCanvas {
                     cursor_bg,
                 ),
                 _ => {
+                    frame.fill_rectangle(
+                        Point::new(x, y),
+                        Size::new(self.cell_width, self.cell_height),
+                        Color {
+                            a: 0.18,
+                            ..cursor_bg
+                        },
+                    );
                     let thickness = 1.5;
                     frame.fill_rectangle(Point::new(x, y), Size::new(self.cell_width, thickness), cursor_bg);
                     frame.fill_rectangle(

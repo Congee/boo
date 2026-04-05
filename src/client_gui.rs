@@ -42,6 +42,7 @@ pub struct ClientApp {
     render_revision: u64,
     next_input_seq: u64,
     pending_input_latencies: HashMap<u64, Instant>,
+    should_exit: bool,
 }
 
 impl ClientApp {
@@ -76,6 +77,7 @@ impl ClientApp {
                 render_revision: 1,
                 next_input_seq: 1,
                 pending_input_latencies: HashMap::new(),
+                should_exit: false,
             },
             Task::none(),
         )
@@ -93,7 +95,11 @@ impl ClientApp {
                 _ => {}
             },
         }
-        Task::none()
+        if self.should_exit {
+            iced::exit()
+        } else {
+            Task::none()
+        }
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -301,13 +307,13 @@ impl ClientApp {
         while let Some(event) = self.stream_client.as_ref().and_then(|stream_client| stream_client.try_recv()) {
             match event {
                 LocalStreamEvent::SessionList(sessions) => {
-                    if let Some(session) = sessions
-                        .get(self.active_tab_index)
-                        .or_else(|| sessions.first())
-                    {
+                    if let Some(session) = sessions.get(self.active_tab_index).or_else(|| sessions.first()) {
+                        self.should_exit = false;
                         if let Some(stream_client) = self.stream_client.as_ref() {
                             stream_client.attach(session.id);
                         }
+                    } else {
+                        self.should_exit = true;
                     }
                 }
                 LocalStreamEvent::Attached(session_id) => {
