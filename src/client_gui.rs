@@ -50,6 +50,10 @@ pub struct ClientApp {
 }
 
 impl ClientApp {
+    fn stream_ready_for_terminal_io(&self) -> bool {
+        self.stream_tx.is_some() && self.stream_state.is_some()
+    }
+
     pub fn new(socket_path: String) -> (Self, Task<Message>) {
         let client = control::Client::connect(socket_path.clone());
         let snapshot = client.get_ui_snapshot().ok();
@@ -261,7 +265,7 @@ impl ClientApp {
         let rows = (((size.height as f64 - STATUS_BAR_HEIGHT).max(1.0) / self.cell_height).floor()
             as u16)
             .max(1);
-        if self.stream_tx.is_some() {
+        if self.stream_ready_for_terminal_io() {
             self.send_stream_command(StreamCommand::Resize { cols, rows });
         } else {
             let _ = self.client.send(&control::Request::ResizeFocused { cols, rows });
@@ -279,7 +283,7 @@ impl ClientApp {
             .filter(|text| !text.is_empty())
             .filter(|_| !(modifiers.control() || modifiers.alt() || modifiers.logo()))
         {
-            if self.stream_tx.is_some() {
+            if self.stream_ready_for_terminal_io() {
                 let input_seq = self.record_pending_input();
                 self.send_stream_command(StreamCommand::Input {
                     input_seq,
@@ -292,7 +296,7 @@ impl ClientApp {
         }
 
         if let Some(keyspec) = keyspec_from_key(&key, modifiers, text.as_deref()) {
-            if self.stream_tx.is_some() {
+            if self.stream_ready_for_terminal_io() {
                 let input_seq = self.record_pending_input();
                 self.send_stream_command(StreamCommand::Key { input_seq, keyspec });
             } else {
