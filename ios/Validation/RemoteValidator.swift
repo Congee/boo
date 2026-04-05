@@ -35,7 +35,7 @@ final class RemoteValidator {
 
     private var connected = false
     private var authenticated = false
-    private var sessions: [ValidationSessionInfo] = []
+    private var sessions: [DecodedWireSessionInfo] = []
     private var attachedSessionId: UInt32?
     private var createdSessionId: UInt32?
     private var lastScreenText = ""

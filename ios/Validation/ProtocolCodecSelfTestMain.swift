@@ -7,7 +7,7 @@ struct ProtocolCodecSelfTestMain {
         assertEqual(sessions.count, 1, "session list count")
         assertEqual(
             sessions[0],
-            ValidationSessionInfo(
+            DecodedWireSessionInfo(
                 id: 7,
                 name: "Tab 1",
                 title: "shell",

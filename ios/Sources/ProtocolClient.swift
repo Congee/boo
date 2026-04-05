@@ -345,74 +345,38 @@ final class GSPClient: ObservableObject {
     }
 
     private func parseSessionList(_ data: Data) {
-        guard data.count >= 4 else { return }
-        let count = data.withUnsafeBytes { UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self)) }
-        var offset = 4
-        var items: [SessionInfo] = []
-        func readString(_ data: Data, _ offset: inout Int) -> String {
-            guard offset + 2 <= data.count else { return "" }
-            let len = data.withUnsafeBytes { Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt16.self))) }
-            offset += 2
-            guard offset + len <= data.count else { return "" }
-            let value = String(data: data[offset..<(offset + len)], encoding: .utf8) ?? ""
-            offset += len
-            return value
+        sessions = WireCodec.decodeSessionList(data).map {
+            SessionInfo(
+                id: $0.id,
+                name: $0.name,
+                title: $0.title,
+                pwd: $0.pwd,
+                attached: $0.attached,
+                childExited: $0.childExited
+            )
         }
-        for _ in 0..<count {
-            guard offset + 4 <= data.count else { break }
-            let id = data.withUnsafeBytes { UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt32.self)) }
-            offset += 4
-            let name = readString(data, &offset)
-            let title = readString(data, &offset)
-            let pwd = readString(data, &offset)
-            guard offset < data.count else { break }
-            let flags = data[offset]
-            offset += 1
-            items.append(SessionInfo(
-                id: id,
-                name: name,
-                title: title,
-                pwd: pwd,
-                attached: (flags & 0x01) != 0,
-                childExited: (flags & 0x02) != 0
-            ))
-        }
-        sessions = items
     }
 
     private func applyFullState(_ data: Data) {
-        guard data.count >= 12 else { return }
-        let rows = data.withUnsafeBytes { UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt16.self)) }
-        let cols = data.withUnsafeBytes { UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 2, as: UInt16.self)) }
-        let cursorX = data.withUnsafeBytes { UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 4, as: UInt16.self)) }
-        let cursorY = data.withUnsafeBytes { UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 6, as: UInt16.self)) }
-        let cursorVisible = data[8] != 0
-        let cellCount = Int(rows) * Int(cols)
-        let expected = 12 + cellCount * 12
-        guard data.count >= expected else { return }
-        var cells = [WireCell](repeating: WireCell(), count: cellCount)
-        data.withUnsafeBytes { buf in
-            for i in 0..<cellCount {
-                let base = 12 + (i * 12)
-                cells[i] = WireCell(
-                    codepoint: UInt32(littleEndian: buf.loadUnaligned(fromByteOffset: base, as: UInt32.self)),
-                    fg_r: buf[base + 4],
-                    fg_g: buf[base + 5],
-                    fg_b: buf[base + 6],
-                    bg_r: buf[base + 7],
-                    bg_g: buf[base + 8],
-                    bg_b: buf[base + 9],
-                    styleFlags: buf[base + 10],
-                    wide: buf[base + 11]
-                )
-            }
+        guard let decoded = WireCodec.decodeFullState(data) else { return }
+        screen.rows = decoded.rows
+        screen.cols = decoded.cols
+        screen.cells = decoded.cells.map {
+            WireCell(
+                codepoint: $0.codepoint,
+                fg_r: $0.fg_r,
+                fg_g: $0.fg_g,
+                fg_b: $0.fg_b,
+                bg_r: $0.bg_r,
+                bg_g: $0.bg_g,
+                bg_b: $0.bg_b,
+                styleFlags: $0.styleFlags,
+                wide: $0.wide
+            )
         }
-        screen.rows = rows
-        screen.cols = cols
-        screen.cells = cells
-        screen.cursorX = cursorX
-        screen.cursorY = cursorY
-        screen.cursorVisible = cursorVisible
+        screen.cursorX = decoded.cursorX
+        screen.cursorY = decoded.cursorY
+        screen.cursorVisible = decoded.cursorVisible
     }
 
     private func applyDelta(_ data: Data) {

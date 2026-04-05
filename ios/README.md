@@ -26,6 +26,8 @@ This directory contains the Boo iOS remote viewer app.
 
 Automated validation now exists in [`scripts/test-ios-remote-view.sh`](/Users/example/dev/boo/scripts/test-ios-remote-view.sh).
 
+The Swift app client and the validator now share the same wire-codec implementation in [`ios/Sources/WireCodec.swift`](/Users/example/dev/boo/ios/Sources/WireCodec.swift), so the protocol smoke test and the shipped app decode the same session and full-state payloads.
+
 It verifies:
 
 - Bonjour discovery on `_boo._tcp`

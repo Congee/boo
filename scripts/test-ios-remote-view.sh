@@ -30,7 +30,7 @@ SERVER_PID=$!
 sleep 1
 
 swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
-  ios/Validation/WireCodec.swift \
+  ios/Sources/WireCodec.swift \
   ios/Validation/RemoteValidator.swift \
   ios/Validation/RemoteValidatorMain.swift \
   -emit-executable \
@@ -42,7 +42,7 @@ swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
   --check-discovery
 
 swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
-  ios/Validation/WireCodec.swift \
+  ios/Sources/WireCodec.swift \
   ios/Validation/ProtocolCodecSelfTest.swift \
   ios/Validation/ProtocolCodecSelfTestMain.swift \
   -emit-executable \

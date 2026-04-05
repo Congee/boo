@@ -1,6 +1,6 @@
 import Foundation
 
-struct ValidationSessionInfo: Equatable {
+struct DecodedWireSessionInfo: Equatable {
     let id: UInt32
     let name: String
     let title: String
@@ -9,7 +9,7 @@ struct ValidationSessionInfo: Equatable {
     let childExited: Bool
 }
 
-struct ValidationWireCell: Equatable {
+struct DecodedWireCell: Equatable {
     var codepoint: UInt32 = 0
     var fg_r: UInt8 = 0
     var fg_g: UInt8 = 0
@@ -21,23 +21,23 @@ struct ValidationWireCell: Equatable {
     var wide: UInt8 = 0
 }
 
-struct ValidationScreenState: Equatable {
+struct DecodedWireScreenState: Equatable {
     var rows: UInt16
     var cols: UInt16
-    var cells: [ValidationWireCell]
+    var cells: [DecodedWireCell]
     var cursorX: UInt16
     var cursorY: UInt16
     var cursorVisible: Bool
 }
 
 enum WireCodec {
-    static func decodeSessionList(_ data: Data) -> [ValidationSessionInfo] {
+    static func decodeSessionList(_ data: Data) -> [DecodedWireSessionInfo] {
         guard data.count >= 4 else { return [] }
         let count = data.withUnsafeBytes {
             Int(UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self)))
         }
         var offset = 4
-        var items: [ValidationSessionInfo] = []
+        var items: [DecodedWireSessionInfo] = []
         func readString() -> String {
             guard offset + 2 <= data.count else { return "" }
             let len = data.withUnsafeBytes {
@@ -62,7 +62,7 @@ enum WireCodec {
             let flags = data[offset]
             offset += 1
             items.append(
-                ValidationSessionInfo(
+                DecodedWireSessionInfo(
                     id: id,
                     name: name,
                     title: title,
@@ -75,7 +75,7 @@ enum WireCodec {
         return items
     }
 
-    static func decodeFullState(_ data: Data) -> ValidationScreenState? {
+    static func decodeFullState(_ data: Data) -> DecodedWireScreenState? {
         guard data.count >= 12 else { return nil }
         let rows = data.withUnsafeBytes {
             UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt16.self))
@@ -93,11 +93,11 @@ enum WireCodec {
         let cellCount = Int(rows) * Int(cols)
         let expected = 12 + cellCount * 12
         guard data.count >= expected else { return nil }
-        var cells = [ValidationWireCell](repeating: ValidationWireCell(), count: cellCount)
+        var cells = [DecodedWireCell](repeating: DecodedWireCell(), count: cellCount)
         data.withUnsafeBytes { buf in
             for i in 0..<cellCount {
                 let base = 12 + (i * 12)
-                cells[i] = ValidationWireCell(
+                cells[i] = DecodedWireCell(
                     codepoint: UInt32(littleEndian: buf.loadUnaligned(fromByteOffset: base, as: UInt32.self)),
                     fg_r: buf[base + 4],
                     fg_g: buf[base + 5],
@@ -110,7 +110,7 @@ enum WireCodec {
                 )
             }
         }
-        return ValidationScreenState(
+        return DecodedWireScreenState(
             rows: rows,
             cols: cols,
             cells: cells,
@@ -120,7 +120,7 @@ enum WireCodec {
         )
     }
 
-    static func screenText(from state: ValidationScreenState) -> String {
+    static func screenText(from state: DecodedWireScreenState) -> String {
         var text = ""
         for row in 0..<Int(state.rows) {
             for col in 0..<Int(state.cols) {
