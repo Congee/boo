@@ -303,6 +303,11 @@ impl ClientApp {
                 LocalStreamEvent::FullState(state) => {
                     self.stream_state = Some(state);
                 }
+                LocalStreamEvent::Delta(delta) => {
+                    if let Some(state) = self.stream_state.as_mut() {
+                        apply_remote_delta(state, &delta);
+                    }
+                }
                 LocalStreamEvent::Error(error) => {
                     self.last_error = Some(error);
                 }
@@ -413,7 +418,15 @@ enum LocalStreamEvent {
     Detached,
     SessionExited(u32),
     FullState(remote::RemoteFullState),
+    Delta(RemoteDelta),
     Error(String),
+}
+
+struct RemoteDelta {
+    cursor_x: u16,
+    cursor_y: u16,
+    cursor_visible: bool,
+    changed_rows: Vec<(u16, Vec<remote::RemoteCell>)>,
 }
 
 struct LocalStreamClient {
@@ -477,6 +490,7 @@ fn read_local_stream_loop(mut read: UnixStream, tx: mpsc::Sender<LocalStreamEven
             remote::MessageType::FullState => {
                 decode_remote_full_state(&payload).map(LocalStreamEvent::FullState)
             }
+            remote::MessageType::Delta => decode_remote_delta(&payload).map(LocalStreamEvent::Delta),
             remote::MessageType::ErrorMsg => {
                 Some(LocalStreamEvent::Error(String::from_utf8_lossy(&payload).to_string()))
             }
@@ -582,6 +596,66 @@ fn decode_remote_full_state(payload: &[u8]) -> Option<remote::RemoteFullState> {
         cursor_visible,
         cells,
     })
+}
+
+fn decode_remote_delta(payload: &[u8]) -> Option<RemoteDelta> {
+    if payload.len() < 8 {
+        return None;
+    }
+    let row_count = u16::from_le_bytes([payload[0], payload[1]]) as usize;
+    let cursor_x = u16::from_le_bytes([payload[2], payload[3]]);
+    let cursor_y = u16::from_le_bytes([payload[4], payload[5]]);
+    let cursor_visible = payload[6] != 0;
+    let mut offset = 8usize;
+    let mut changed_rows = Vec::with_capacity(row_count);
+    for _ in 0..row_count {
+        if offset + 4 > payload.len() {
+            return None;
+        }
+        let row = u16::from_le_bytes([payload[offset], payload[offset + 1]]);
+        let cols = u16::from_le_bytes([payload[offset + 2], payload[offset + 3]]) as usize;
+        offset += 4;
+        let mut cells = Vec::with_capacity(cols);
+        for _ in 0..cols {
+            if offset + 12 > payload.len() {
+                return None;
+            }
+            cells.push(remote::RemoteCell {
+                codepoint: u32::from_le_bytes([
+                    payload[offset],
+                    payload[offset + 1],
+                    payload[offset + 2],
+                    payload[offset + 3],
+                ]),
+                fg: [payload[offset + 4], payload[offset + 5], payload[offset + 6]],
+                bg: [payload[offset + 7], payload[offset + 8], payload[offset + 9]],
+                style_flags: payload[offset + 10],
+                wide: payload[offset + 11] != 0,
+            });
+            offset += 12;
+        }
+        changed_rows.push((row, cells));
+    }
+    Some(RemoteDelta {
+        cursor_x,
+        cursor_y,
+        cursor_visible,
+        changed_rows,
+    })
+}
+
+fn apply_remote_delta(state: &mut remote::RemoteFullState, delta: &RemoteDelta) {
+    state.cursor_x = delta.cursor_x;
+    state.cursor_y = delta.cursor_y;
+    state.cursor_visible = delta.cursor_visible;
+    let cols = state.cols as usize;
+    for (row, row_cells) in &delta.changed_rows {
+        let start = *row as usize * cols;
+        let end = start + row_cells.len().min(cols);
+        if end <= state.cells.len() {
+            state.cells[start..end].clone_from_slice(&row_cells[..(end - start)]);
+        }
+    }
 }
 
 fn build_status(snapshot: &control::UiSnapshot) -> (String, String) {

@@ -152,6 +152,7 @@ struct ClientState {
     authenticated: bool,
     challenge: Option<[u8; 32]>,
     attached_session: Option<u32>,
+    last_state: Option<RemoteFullState>,
 }
 
 struct State {
@@ -205,6 +206,7 @@ impl RemoteServer {
                             authenticated,
                             challenge: None,
                             attached_session: None,
+                            last_state: None,
                         },
                     );
                     (client_id, outbound_rx)
@@ -265,6 +267,7 @@ impl RemoteServer {
                             authenticated: true,
                             challenge: None,
                             attached_session: None,
+                            last_state: None,
                         },
                     );
                     (client_id, outbound_rx)
@@ -336,13 +339,17 @@ impl RemoteServer {
     pub fn send_attached(&self, client_id: u64, session_id: u32) {
         let payload = session_id.to_le_bytes().to_vec();
         self.update_client(client_id, |client| {
-            client.attached_session = Some(session_id)
+            client.attached_session = Some(session_id);
+            client.last_state = None;
         });
         self.send_to_client(client_id, MessageType::Attached, payload);
     }
 
     pub fn send_detached(&self, client_id: u64) {
-        self.update_client(client_id, |client| client.attached_session = None);
+        self.update_client(client_id, |client| {
+            client.attached_session = None;
+            client.last_state = None;
+        });
         self.send_to_client(client_id, MessageType::Detached, Vec::new());
     }
 
@@ -363,10 +370,9 @@ impl RemoteServer {
     }
 
     pub fn send_full_state_to_attached(&self, session_id: u32, state: &RemoteFullState) {
-        let payload = encode_full_state(state);
         let client_ids = self.clients_for_session(session_id);
         for client_id in client_ids {
-            self.send_to_client(client_id, MessageType::FullState, payload.clone());
+            self.send_state_to_client(client_id, state);
         }
     }
 
@@ -378,7 +384,10 @@ impl RemoteServer {
                 MessageType::SessionExited,
                 session_id.to_le_bytes().to_vec(),
             );
-            self.update_client(client_id, |client| client.attached_session = None);
+            self.update_client(client_id, |client| {
+                client.attached_session = None;
+                client.last_state = None;
+            });
         }
     }
 
@@ -406,6 +415,26 @@ impl RemoteServer {
         if let Some(client) = state.clients.get(&client_id) {
             let _ = client.outbound.send(frame);
         }
+    }
+
+    fn send_state_to_client(&self, client_id: u64, state: &RemoteFullState) {
+        let (ty, payload) = {
+            let mut guard = self.state.lock().expect("remote server state poisoned");
+            let Some(client) = guard.clients.get_mut(&client_id) else {
+                return;
+            };
+            let encoded = match client
+                .last_state
+                .as_ref()
+                .and_then(|previous| encode_delta(previous, state))
+            {
+                Some(delta) => (MessageType::Delta, delta),
+                None => (MessageType::FullState, encode_full_state(state)),
+            };
+            client.last_state = Some(state.clone());
+            encoded
+        };
+        self.send_to_client(client_id, ty, payload);
     }
 }
 
@@ -636,6 +665,67 @@ pub fn encode_full_state(state: &RemoteFullState) -> Vec<u8> {
         payload.push(u8::from(cell.wide));
     }
     payload
+}
+
+fn encode_delta(previous: &RemoteFullState, current: &RemoteFullState) -> Option<Vec<u8>> {
+    if previous.rows != current.rows || previous.cols != current.cols {
+        return None;
+    }
+    if previous == current {
+        let mut payload = Vec::with_capacity(8);
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.extend_from_slice(&current.cursor_x.to_le_bytes());
+        payload.extend_from_slice(&current.cursor_y.to_le_bytes());
+        payload.push(u8::from(current.cursor_visible));
+        payload.push(0);
+        return Some(payload);
+    }
+
+    let cols = current.cols as usize;
+    let rows = current.rows as usize;
+    let mut changed_rows = Vec::new();
+    for row in 0..rows {
+        let start = row * cols;
+        let end = start + cols;
+        if previous.cells[start..end] != current.cells[start..end] {
+            changed_rows.push(row as u16);
+        }
+    }
+
+    if changed_rows.is_empty() {
+        let mut payload = Vec::with_capacity(8);
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.extend_from_slice(&current.cursor_x.to_le_bytes());
+        payload.extend_from_slice(&current.cursor_y.to_le_bytes());
+        payload.push(u8::from(current.cursor_visible));
+        payload.push(0);
+        return Some(payload);
+    }
+
+    if changed_rows.len() == rows {
+        return None;
+    }
+
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&(changed_rows.len() as u16).to_le_bytes());
+    payload.extend_from_slice(&current.cursor_x.to_le_bytes());
+    payload.extend_from_slice(&current.cursor_y.to_le_bytes());
+    payload.push(u8::from(current.cursor_visible));
+    payload.push(0);
+    for row in changed_rows {
+        payload.extend_from_slice(&row.to_le_bytes());
+        payload.extend_from_slice(&current.cols.to_le_bytes());
+        let start = row as usize * cols;
+        let end = start + cols;
+        for cell in &current.cells[start..end] {
+            payload.extend_from_slice(&cell.codepoint.to_le_bytes());
+            payload.extend_from_slice(&cell.fg);
+            payload.extend_from_slice(&cell.bg);
+            payload.push(cell.style_flags);
+            payload.push(u8::from(cell.wide));
+        }
+    }
+    Some(payload)
 }
 
 fn push_string(payload: &mut Vec<u8>, text: &str) {
