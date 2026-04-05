@@ -313,30 +313,25 @@ final class GSPClient: ObservableObject {
         case .authChallenge:
             handleAuthChallenge(payload)
         case .authOk:
-            authenticated = true
-            lastError = nil
-            listSessions()
+            applyReducedMessage(.authOk, payload: payload)
         case .authFail:
-            lastError = "Authentication failed"
+            applyReducedMessage(.authFail, payload: payload)
         case .sessionList:
-            parseSessionList(payload)
+            applyReducedMessage(.sessionList, payload: payload)
         case .attached:
-            guard payload.count >= 4 else { break }
-            attachedSessionId = payload.withUnsafeBytes {
-                UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
-            }
+            applyReducedMessage(.attached, payload: payload)
         case .sessionCreated:
-            guard payload.count >= 4 else { break }
-            let sessionId = payload.withUnsafeBytes { UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self)) }
-            attach(sessionId: sessionId)
+            applyReducedMessage(.sessionCreated, payload: payload)
         case .fullState:
-            applyFullState(payload)
+            applyReducedMessage(.fullState, payload: payload)
         case .delta:
-            applyDelta(payload)
-        case .detached, .sessionExited:
-            attachedSessionId = nil
+            applyReducedMessage(.delta, payload: payload)
+        case .detached:
+            applyReducedMessage(.detached, payload: payload)
+        case .sessionExited:
+            applyReducedMessage(.sessionExited, payload: payload)
         case .errorMsg:
-            lastError = String(data: payload, encoding: .utf8) ?? "Remote error"
+            applyReducedMessage(.errorMsg, payload: payload)
         case .clipboard:
             handleClipboard(payload)
         default:
@@ -344,8 +339,8 @@ final class GSPClient: ObservableObject {
         }
     }
 
-    private func parseSessionList(_ data: Data) {
-        sessions = WireCodec.decodeSessionList(data).map {
+    private func applyDecodedSessions(_ decodedSessions: [DecodedWireSessionInfo]) {
+        sessions = decodedSessions.map {
             SessionInfo(
                 id: $0.id,
                 name: $0.name,
@@ -357,8 +352,7 @@ final class GSPClient: ObservableObject {
         }
     }
 
-    private func applyFullState(_ data: Data) {
-        guard let decoded = WireCodec.decodeFullState(data) else { return }
+    private func applyDecodedScreen(_ decoded: DecodedWireScreenState) {
         screen.rows = decoded.rows
         screen.cols = decoded.cols
         screen.cells = decoded.cells.map {
@@ -379,45 +373,59 @@ final class GSPClient: ObservableObject {
         screen.cursorVisible = decoded.cursorVisible
     }
 
-    private func applyDelta(_ data: Data) {
-        var decoded = DecodedWireScreenState(
-            rows: screen.rows,
-            cols: screen.cols,
-            cells: screen.cells.map {
-                DecodedWireCell(
-                    codepoint: $0.codepoint,
-                    fg_r: $0.fg_r,
-                    fg_g: $0.fg_g,
-                    fg_b: $0.fg_b,
-                    bg_r: $0.bg_r,
-                    bg_g: $0.bg_g,
-                    bg_b: $0.bg_b,
-                    styleFlags: $0.styleFlags,
-                    wide: $0.wide
+    private func applyReducedMessage(_ message: ClientWireMessageType, payload: Data) {
+        var state = ClientWireState(
+            authenticated: authenticated,
+            sessions: sessions.map {
+                DecodedWireSessionInfo(
+                    id: $0.id,
+                    name: $0.name,
+                    title: $0.title,
+                    pwd: $0.pwd,
+                    attached: $0.attached,
+                    childExited: $0.childExited
                 )
             },
-            cursorX: screen.cursorX,
-            cursorY: screen.cursorY,
-            cursorVisible: screen.cursorVisible
+            screen: DecodedWireScreenState(
+                rows: screen.rows,
+                cols: screen.cols,
+                cells: screen.cells.map {
+                    DecodedWireCell(
+                        codepoint: $0.codepoint,
+                        fg_r: $0.fg_r,
+                        fg_g: $0.fg_g,
+                        fg_b: $0.fg_b,
+                        bg_r: $0.bg_r,
+                        bg_g: $0.bg_g,
+                        bg_b: $0.bg_b,
+                        styleFlags: $0.styleFlags,
+                        wide: $0.wide
+                    )
+                },
+                cursorX: screen.cursorX,
+                cursorY: screen.cursorY,
+                cursorVisible: screen.cursorVisible
+            ),
+            attachedSessionId: attachedSessionId,
+            lastError: lastError
         )
-        guard WireCodec.applyDelta(data, to: &decoded) else { return }
-        screen.cells = decoded.cells.map {
-            WireCell(
-                codepoint: $0.codepoint,
-                fg_r: $0.fg_r,
-                fg_g: $0.fg_g,
-                fg_b: $0.fg_b,
-                bg_r: $0.bg_r,
-                bg_g: $0.bg_g,
-                bg_b: $0.bg_b,
-                styleFlags: $0.styleFlags,
-                wide: $0.wide
-            )
+        let effect = ClientWireReducer.reduce(message: message, payload: payload, state: &state)
+        authenticated = state.authenticated
+        lastError = state.lastError
+        attachedSessionId = state.attachedSessionId
+        applyDecodedSessions(state.sessions)
+        if let decodedScreen = state.screen {
+            applyDecodedScreen(decodedScreen)
+            screen.objectWillChange.send()
         }
-        screen.cursorX = decoded.cursorX
-        screen.cursorY = decoded.cursorY
-        screen.cursorVisible = decoded.cursorVisible
-        screen.objectWillChange.send()
+        switch effect {
+        case .none:
+            break
+        case .listSessions:
+            listSessions()
+        case .attach(let sessionId):
+            attach(sessionId: sessionId)
+        }
     }
 
     private func handleClipboard(_ data: Data) {

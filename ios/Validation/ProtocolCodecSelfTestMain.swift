@@ -38,6 +38,32 @@ struct ProtocolCodecSelfTestMain {
         assertEqual(deltaState.cursorVisible, true, "delta cursor visible decode")
         assertEqual(WireCodec.screenText(from: deltaState), "BC", "delta screen text decoding")
 
+        var clientState = ClientWireState()
+        let authEffect = ClientWireReducer.reduce(message: .authOk, payload: Data(), state: &clientState)
+        assertEqual(authEffect, .listSessions, "auth ok triggers session refresh")
+        assertEqual(clientState.authenticated, true, "auth ok sets authenticated")
+
+        let listEffect = ClientWireReducer.reduce(message: .sessionList, payload: makeSessionListPayload(), state: &clientState)
+        assertEqual(listEffect, .none, "session list has no side effect")
+        assertEqual(clientState.sessions, sessions, "session list reducer decode")
+
+        let createdPayload = UInt32(42).littleEndianBytes
+        let createdEffect = ClientWireReducer.reduce(message: .sessionCreated, payload: Data(createdPayload), state: &clientState)
+        assertEqual(createdEffect, .attach(42), "session created triggers attach")
+
+        let attachedEffect = ClientWireReducer.reduce(message: .attached, payload: Data(createdPayload), state: &clientState)
+        assertEqual(attachedEffect, .none, "attached has no side effect")
+        assertEqual(clientState.attachedSessionId, 42, "attached stores session id")
+
+        clientState.screen = state
+        let deltaEffect = ClientWireReducer.reduce(message: .delta, payload: makeDeltaPayload(), state: &clientState)
+        assertEqual(deltaEffect, .none, "delta has no side effect")
+        assertEqual(clientState.screen.map(WireCodec.screenText(from:)), "BC", "delta reducer applies screen update")
+
+        let detachedEffect = ClientWireReducer.reduce(message: .detached, payload: Data(), state: &clientState)
+        assertEqual(detachedEffect, .none, "detached has no side effect")
+        assertEqual(clientState.attachedSessionId, nil, "detached clears attached session")
+
         print("iOS wire codec self-test passed")
     }
 }

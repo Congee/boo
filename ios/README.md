@@ -37,6 +37,7 @@ It verifies:
 - resize
 - terminal-state publishing with a real shell command round-trip
 - wire-codec decoding for full-state and delta updates with a standalone Swift self-test
+- client message-state transitions for auth, attach, detach, session creation, and delta application
 
 Run it with:
 

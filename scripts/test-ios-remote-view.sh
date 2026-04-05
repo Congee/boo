@@ -42,6 +42,7 @@ swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
   --check-discovery
 
 swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
+  ios/Sources/ClientWireState.swift \
   ios/Sources/WireCodec.swift \
   ios/Validation/ProtocolCodecSelfTest.swift \
   ios/Validation/ProtocolCodecSelfTestMain.swift \
