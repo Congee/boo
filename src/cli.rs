@@ -8,6 +8,7 @@ const CLI_SUBCOMMANDS: &[(&str, &str)] = &[
     ("kill-server", "stop the local Boo server"),
     ("ls", "list live sessions on the local Boo server"),
     ("new-session", "create a new live session on the local Boo server"),
+    ("quit-server", "stop the local Boo server"),
     ("server", "run the Boo session server without a GUI"),
 ];
 
@@ -193,7 +194,7 @@ where
             }
             Outcome::Exit(0)
         }
-        "kill-server" => {
+        "kill-server" | "quit-server" => {
             let client = control::Client::connect(socket_path);
             if let Err(error) = client.send(&control::Request::Quit) {
                 eprintln!("{error}");
@@ -228,6 +229,7 @@ mod tests {
         for script in [bash, zsh, fish] {
             assert!(script.contains("new-session"));
             assert!(script.contains("kill-server"));
+            assert!(script.contains("quit-server"));
             assert!(script.contains("completions"));
         }
     }
