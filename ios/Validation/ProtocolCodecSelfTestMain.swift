@@ -30,6 +30,14 @@ struct ProtocolCodecSelfTestMain {
         assertEqual(state.cells.count, 2, "cell count decode")
         assertEqual(WireCodec.screenText(from: state), "A好", "screen text decoding")
 
+        var deltaState = state
+        let applied = WireCodec.applyDelta(makeDeltaPayload(), to: &deltaState)
+        assertEqual(applied, true, "delta apply succeeds")
+        assertEqual(deltaState.cursorX, 0, "delta cursorX decode")
+        assertEqual(deltaState.cursorY, 0, "delta cursorY decode")
+        assertEqual(deltaState.cursorVisible, true, "delta cursor visible decode")
+        assertEqual(WireCodec.screenText(from: deltaState), "BC", "delta screen text decoding")
+
         print("iOS wire codec self-test passed")
     }
 }

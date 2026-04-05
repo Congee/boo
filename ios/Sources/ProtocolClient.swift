@@ -380,41 +380,43 @@ final class GSPClient: ObservableObject {
     }
 
     private func applyDelta(_ data: Data) {
-        guard data.count >= 8 else { return }
-        let numRows = data.withUnsafeBytes { UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt16.self)) }
-        screen.cursorX = data.withUnsafeBytes { UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 2, as: UInt16.self)) }
-        screen.cursorY = data.withUnsafeBytes { UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 4, as: UInt16.self)) }
-        screen.cursorVisible = data[6] != 0
-        var offset = 8
-        for _ in 0..<numRows {
-            guard offset + 4 <= data.count else { break }
-            let rowIndex = data.withUnsafeBytes { Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt16.self))) }
-            let numCols = data.withUnsafeBytes { Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: offset + 2, as: UInt16.self))) }
-            offset += 4
-            let rowBytes = numCols * 12
-            guard offset + rowBytes <= data.count, rowIndex < screen.rows, numCols <= screen.cols else {
-                offset += rowBytes
-                continue
-            }
-            let dstStart = rowIndex * Int(screen.cols)
-            data.withUnsafeBytes { buf in
-                for c in 0..<numCols {
-                    let base = offset + (c * 12)
-                    screen.cells[dstStart + c] = WireCell(
-                        codepoint: UInt32(littleEndian: buf.loadUnaligned(fromByteOffset: base, as: UInt32.self)),
-                        fg_r: buf[base + 4],
-                        fg_g: buf[base + 5],
-                        fg_b: buf[base + 6],
-                        bg_r: buf[base + 7],
-                        bg_g: buf[base + 8],
-                        bg_b: buf[base + 9],
-                        styleFlags: buf[base + 10],
-                        wide: buf[base + 11]
-                    )
-                }
-            }
-            offset += rowBytes
+        var decoded = DecodedWireScreenState(
+            rows: screen.rows,
+            cols: screen.cols,
+            cells: screen.cells.map {
+                DecodedWireCell(
+                    codepoint: $0.codepoint,
+                    fg_r: $0.fg_r,
+                    fg_g: $0.fg_g,
+                    fg_b: $0.fg_b,
+                    bg_r: $0.bg_r,
+                    bg_g: $0.bg_g,
+                    bg_b: $0.bg_b,
+                    styleFlags: $0.styleFlags,
+                    wide: $0.wide
+                )
+            },
+            cursorX: screen.cursorX,
+            cursorY: screen.cursorY,
+            cursorVisible: screen.cursorVisible
+        )
+        guard WireCodec.applyDelta(data, to: &decoded) else { return }
+        screen.cells = decoded.cells.map {
+            WireCell(
+                codepoint: $0.codepoint,
+                fg_r: $0.fg_r,
+                fg_g: $0.fg_g,
+                fg_b: $0.fg_b,
+                bg_r: $0.bg_r,
+                bg_g: $0.bg_g,
+                bg_b: $0.bg_b,
+                styleFlags: $0.styleFlags,
+                wide: $0.wide
+            )
         }
+        screen.cursorX = decoded.cursorX
+        screen.cursorY = decoded.cursorY
+        screen.cursorVisible = decoded.cursorVisible
         screen.objectWillChange.send()
     }
 

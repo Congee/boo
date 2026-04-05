@@ -38,6 +38,24 @@ func makeFullStatePayload() -> Data {
     return data
 }
 
+func makeDeltaPayload() -> Data {
+    var data = Data()
+    data.append(contentsOf: UInt16(1).littleEndianBytes)
+    data.append(contentsOf: UInt16(0).littleEndianBytes)
+    data.append(contentsOf: UInt16(0).littleEndianBytes)
+    data.append(1)
+    data.append(contentsOf: [0])
+    data.append(contentsOf: UInt16(0).littleEndianBytes)
+    data.append(contentsOf: UInt16(2).littleEndianBytes)
+
+    data.append(contentsOf: UInt32(Character("B").unicodeScalars.first!.value).littleEndianBytes)
+    data.append(contentsOf: [13, 14, 15, 16, 17, 18, 0x11, 0])
+
+    data.append(contentsOf: UInt32(Character("C").unicodeScalars.first!.value).littleEndianBytes)
+    data.append(contentsOf: [19, 20, 21, 22, 23, 24, 0x12, 0])
+    return data
+}
+
 extension FixedWidthInteger {
     var littleEndianBytes: [UInt8] {
         withUnsafeBytes(of: self.littleEndian, Array.init)
