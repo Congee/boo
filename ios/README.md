@@ -5,7 +5,7 @@ This directory contains the Boo iOS remote viewer app.
 ## Current Scope
 
 - SwiftUI iOS app with bundle identifier `me.congee.boo`
-- Connects to a compatible remote daemon using the existing GSP wire protocol
+- Connects to the Boo remote daemon using the existing GSP-compatible wire protocol
 - Discovers Bonjour services on `_boo._tcp`
 - Supports:
   - manual connect
@@ -18,7 +18,8 @@ This directory contains the Boo iOS remote viewer app.
 ## Notes
 
 - The iOS app is Boo-owned code. The older Ghostty iOS app was used only as a reference during implementation.
-- The daemon/service side in the main Boo Rust app does not exist yet. This client currently targets the Boo remote protocol surface and expects Boo-native service discovery.
+- The Boo Rust app now exposes the matching TCP daemon when `remote-port` is configured, for example `boo --headless --remote-port 7337`.
+- Optional challenge/response auth is enabled by configuring `remote-auth-key` on the Boo daemon side and entering the same key in the iOS client.
 - iOS local-network discovery requires `NSLocalNetworkUsageDescription` and `NSBonjourServices`; both are configured in the Xcode project.
 
 ## Verification

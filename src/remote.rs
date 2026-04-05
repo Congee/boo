@@ -1,0 +1,767 @@
+use crate::control;
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
+use std::collections::HashMap;
+use std::io::{self, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex, mpsc};
+
+type HmacSha256 = Hmac<Sha256>;
+
+const MAGIC: [u8; 2] = [0x47, 0x53];
+const HEADER_LEN: usize = 7;
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageType {
+    Auth = 0x01,
+    ListSessions = 0x02,
+    Attach = 0x03,
+    Detach = 0x04,
+    Create = 0x05,
+    Input = 0x06,
+    Resize = 0x07,
+    Destroy = 0x08,
+    AuthChallenge = 0x09,
+    Scroll = 0x0a,
+
+    AuthOk = 0x80,
+    AuthFail = 0x81,
+    SessionList = 0x82,
+    FullState = 0x83,
+    Delta = 0x84,
+    Attached = 0x85,
+    Detached = 0x86,
+    ErrorMsg = 0x87,
+    SessionCreated = 0x88,
+    SessionExited = 0x89,
+    ScrollData = 0x8a,
+    Clipboard = 0x8b,
+    Image = 0x8c,
+}
+
+impl TryFrom<u8> for MessageType {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        let message = match value {
+            0x01 => Self::Auth,
+            0x02 => Self::ListSessions,
+            0x03 => Self::Attach,
+            0x04 => Self::Detach,
+            0x05 => Self::Create,
+            0x06 => Self::Input,
+            0x07 => Self::Resize,
+            0x08 => Self::Destroy,
+            0x09 => Self::AuthChallenge,
+            0x0a => Self::Scroll,
+            0x80 => Self::AuthOk,
+            0x81 => Self::AuthFail,
+            0x82 => Self::SessionList,
+            0x83 => Self::FullState,
+            0x84 => Self::Delta,
+            0x85 => Self::Attached,
+            0x86 => Self::Detached,
+            0x87 => Self::ErrorMsg,
+            0x88 => Self::SessionCreated,
+            0x89 => Self::SessionExited,
+            0x8a => Self::ScrollData,
+            0x8b => Self::Clipboard,
+            0x8c => Self::Image,
+            _ => return Err(()),
+        };
+        Ok(message)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RemoteConfig {
+    pub port: u16,
+    pub auth_key: Option<String>,
+    pub service_name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteSessionInfo {
+    pub id: u32,
+    pub name: String,
+    pub title: String,
+    pub pwd: String,
+    pub attached: bool,
+    pub child_exited: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteCell {
+    pub codepoint: u32,
+    pub fg: [u8; 3],
+    pub bg: [u8; 3],
+    pub style_flags: u8,
+    pub wide: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteFullState {
+    pub rows: u16,
+    pub cols: u16,
+    pub cursor_x: u16,
+    pub cursor_y: u16,
+    pub cursor_visible: bool,
+    pub cells: Vec<RemoteCell>,
+}
+
+#[derive(Debug)]
+pub enum RemoteCmd {
+    ListSessions {
+        client_id: u64,
+    },
+    Attach {
+        client_id: u64,
+        session_id: u32,
+    },
+    Detach {
+        client_id: u64,
+    },
+    Create {
+        client_id: u64,
+        cols: u16,
+        rows: u16,
+    },
+    Input {
+        client_id: u64,
+        bytes: Vec<u8>,
+    },
+    Resize {
+        client_id: u64,
+        cols: u16,
+        rows: u16,
+    },
+    Destroy {
+        client_id: u64,
+        session_id: Option<u32>,
+    },
+}
+
+struct ClientState {
+    outbound: mpsc::Sender<Vec<u8>>,
+    authenticated: bool,
+    challenge: Option<[u8; 32]>,
+    attached_session: Option<u32>,
+}
+
+struct State {
+    clients: HashMap<u64, ClientState>,
+    next_client_id: u64,
+    auth_key: Option<Vec<u8>>,
+}
+
+pub struct RemoteServer {
+    state: Arc<Mutex<State>>,
+    _listener: std::thread::JoinHandle<()>,
+    _advertiser: Option<ServiceAdvertiser>,
+}
+
+struct ServiceAdvertiser {
+    child: Child,
+}
+
+impl Drop for ServiceAdvertiser {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl RemoteServer {
+    pub fn start(config: RemoteConfig) -> io::Result<(Self, mpsc::Receiver<RemoteCmd>)> {
+        let listener = TcpListener::bind(("0.0.0.0", config.port))?;
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::new(),
+            next_client_id: 1,
+            auth_key: config.auth_key.map(|key| key.into_bytes()),
+        }));
+        let state_for_listener = Arc::clone(&state);
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let listener_thread = std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else {
+                    continue;
+                };
+                let (client_id, outbound_rx) = {
+                    let mut state = state_for_listener
+                        .lock()
+                        .expect("remote server state poisoned");
+                    let client_id = state.next_client_id;
+                    state.next_client_id += 1;
+                    let (outbound_tx, outbound_rx) = mpsc::channel();
+                    let authenticated = state.auth_key.is_none();
+                    state.clients.insert(
+                        client_id,
+                        ClientState {
+                            outbound: outbound_tx,
+                            authenticated,
+                            challenge: None,
+                            attached_session: None,
+                        },
+                    );
+                    (client_id, outbound_rx)
+                };
+
+                let Ok(writer_stream) = stream.try_clone() else {
+                    let mut state = state_for_listener
+                        .lock()
+                        .expect("remote server state poisoned");
+                    state.clients.remove(&client_id);
+                    continue;
+                };
+                std::thread::spawn(move || writer_loop(writer_stream, outbound_rx));
+
+                let cmd_tx = cmd_tx.clone();
+                let state = Arc::clone(&state_for_listener);
+                std::thread::spawn(move || read_loop(stream, client_id, state, cmd_tx));
+            }
+        });
+
+        let advertiser = ServiceAdvertiser::spawn(&config.service_name, config.port);
+        Ok((
+            Self {
+                state,
+                _listener: listener_thread,
+                _advertiser: advertiser,
+            },
+            cmd_rx,
+        ))
+    }
+
+    pub fn attached_sessions(&self) -> Vec<u32> {
+        let state = self.state.lock().expect("remote server state poisoned");
+        let mut sessions = Vec::new();
+        for client in state.clients.values() {
+            if let Some(session_id) = client.attached_session {
+                if !sessions.contains(&session_id) {
+                    sessions.push(session_id);
+                }
+            }
+        }
+        sessions
+    }
+
+    pub fn attached_to_session(&self, session_id: u32) -> bool {
+        let state = self.state.lock().expect("remote server state poisoned");
+        state
+            .clients
+            .values()
+            .any(|client| client.attached_session == Some(session_id))
+    }
+
+    pub fn client_session(&self, client_id: u64) -> Option<u32> {
+        let state = self.state.lock().expect("remote server state poisoned");
+        state
+            .clients
+            .get(&client_id)
+            .and_then(|client| client.attached_session)
+    }
+
+    pub fn send_session_list(&self, client_id: u64, sessions: &[RemoteSessionInfo]) {
+        self.send_to_client(
+            client_id,
+            MessageType::SessionList,
+            encode_session_list(sessions),
+        );
+    }
+
+    pub fn send_attached(&self, client_id: u64, session_id: u32) {
+        let payload = session_id.to_le_bytes().to_vec();
+        self.update_client(client_id, |client| {
+            client.attached_session = Some(session_id)
+        });
+        self.send_to_client(client_id, MessageType::Attached, payload);
+    }
+
+    pub fn send_detached(&self, client_id: u64) {
+        self.update_client(client_id, |client| client.attached_session = None);
+        self.send_to_client(client_id, MessageType::Detached, Vec::new());
+    }
+
+    pub fn send_session_created(&self, client_id: u64, session_id: u32) {
+        self.send_to_client(
+            client_id,
+            MessageType::SessionCreated,
+            session_id.to_le_bytes().to_vec(),
+        );
+    }
+
+    pub fn send_error(&self, client_id: u64, message: &str) {
+        self.send_to_client(
+            client_id,
+            MessageType::ErrorMsg,
+            message.as_bytes().to_vec(),
+        );
+    }
+
+    pub fn send_full_state_to_attached(&self, session_id: u32, state: &RemoteFullState) {
+        let payload = encode_full_state(state);
+        let client_ids = self.clients_for_session(session_id);
+        for client_id in client_ids {
+            self.send_to_client(client_id, MessageType::FullState, payload.clone());
+        }
+    }
+
+    pub fn send_session_exited(&self, session_id: u32) {
+        let client_ids = self.clients_for_session(session_id);
+        for client_id in client_ids {
+            self.send_to_client(
+                client_id,
+                MessageType::SessionExited,
+                session_id.to_le_bytes().to_vec(),
+            );
+            self.update_client(client_id, |client| client.attached_session = None);
+        }
+    }
+
+    fn clients_for_session(&self, session_id: u32) -> Vec<u64> {
+        let state = self.state.lock().expect("remote server state poisoned");
+        state
+            .clients
+            .iter()
+            .filter_map(|(client_id, client)| {
+                (client.attached_session == Some(session_id)).then_some(*client_id)
+            })
+            .collect()
+    }
+
+    fn update_client(&self, client_id: u64, mut update: impl FnMut(&mut ClientState)) {
+        let mut state = self.state.lock().expect("remote server state poisoned");
+        if let Some(client) = state.clients.get_mut(&client_id) {
+            update(client);
+        }
+    }
+
+    fn send_to_client(&self, client_id: u64, ty: MessageType, payload: Vec<u8>) {
+        let frame = encode_message(ty, &payload);
+        let state = self.state.lock().expect("remote server state poisoned");
+        if let Some(client) = state.clients.get(&client_id) {
+            let _ = client.outbound.send(frame);
+        }
+    }
+}
+
+fn writer_loop(mut stream: TcpStream, outbound_rx: mpsc::Receiver<Vec<u8>>) {
+    for frame in outbound_rx {
+        if stream.write_all(&frame).is_err() {
+            break;
+        }
+        if stream.flush().is_err() {
+            break;
+        }
+    }
+}
+
+fn read_loop(
+    mut stream: TcpStream,
+    client_id: u64,
+    state: Arc<Mutex<State>>,
+    cmd_tx: mpsc::Sender<RemoteCmd>,
+) {
+    while let Ok((ty, payload)) = read_message(&mut stream) {
+        let authenticated = {
+            let state = state.lock().expect("remote server state poisoned");
+            state
+                .clients
+                .get(&client_id)
+                .map(|client| client.authenticated)
+                .unwrap_or(false)
+        };
+
+        if matches!(ty, MessageType::Auth) {
+            handle_auth_message(client_id, &payload, &state);
+            continue;
+        }
+
+        if !authenticated {
+            send_direct_error(&state, client_id, "authentication required");
+            continue;
+        }
+
+        let command = match ty {
+            MessageType::ListSessions => Some(RemoteCmd::ListSessions { client_id }),
+            MessageType::Attach => parse_session_id(&payload).map(|session_id| RemoteCmd::Attach {
+                client_id,
+                session_id,
+            }),
+            MessageType::Detach => Some(RemoteCmd::Detach { client_id }),
+            MessageType::Create => parse_resize(&payload).map(|(cols, rows)| RemoteCmd::Create {
+                client_id,
+                cols,
+                rows,
+            }),
+            MessageType::Input => Some(RemoteCmd::Input {
+                client_id,
+                bytes: payload,
+            }),
+            MessageType::Resize => parse_resize(&payload).map(|(cols, rows)| RemoteCmd::Resize {
+                client_id,
+                cols,
+                rows,
+            }),
+            MessageType::Destroy => Some(RemoteCmd::Destroy {
+                client_id,
+                session_id: parse_session_id(&payload),
+            }),
+            _ => None,
+        };
+
+        if let Some(command) = command {
+            if cmd_tx.send(command).is_err() {
+                break;
+            }
+        } else {
+            send_direct_error(&state, client_id, "invalid payload");
+        }
+    }
+
+    let mut state = state.lock().expect("remote server state poisoned");
+    state.clients.remove(&client_id);
+}
+
+fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>) {
+    let mut state = state.lock().expect("remote server state poisoned");
+    let auth_key = state.auth_key.clone();
+    let Some(client) = state.clients.get_mut(&client_id) else {
+        return;
+    };
+
+    if auth_key.is_none() {
+        client.authenticated = true;
+        let _ = client
+            .outbound
+            .send(encode_message(MessageType::AuthOk, &[]));
+        return;
+    }
+
+    if payload.is_empty() {
+        let challenge = random_challenge();
+        client.challenge = Some(challenge);
+        let _ = client
+            .outbound
+            .send(encode_message(MessageType::AuthChallenge, &challenge));
+        return;
+    }
+
+    let Some(challenge) = client.challenge.take() else {
+        let _ = client
+            .outbound
+            .send(encode_message(MessageType::AuthFail, &[]));
+        return;
+    };
+    let Some(key) = auth_key else {
+        let _ = client
+            .outbound
+            .send(encode_message(MessageType::AuthFail, &[]));
+        return;
+    };
+
+    let mut mac = HmacSha256::new_from_slice(&key).expect("valid HMAC key");
+    mac.update(&challenge);
+    match mac.verify_slice(payload) {
+        Ok(()) => {
+            client.authenticated = true;
+            let _ = client
+                .outbound
+                .send(encode_message(MessageType::AuthOk, &[]));
+        }
+        Err(_) => {
+            let _ = client
+                .outbound
+                .send(encode_message(MessageType::AuthFail, &[]));
+        }
+    }
+}
+
+fn send_direct_error(state: &Arc<Mutex<State>>, client_id: u64, message: &str) {
+    let state = state.lock().expect("remote server state poisoned");
+    if let Some(client) = state.clients.get(&client_id) {
+        let _ = client
+            .outbound
+            .send(encode_message(MessageType::ErrorMsg, message.as_bytes()));
+    }
+}
+
+fn read_message(stream: &mut TcpStream) -> io::Result<(MessageType, Vec<u8>)> {
+    let mut header = [0u8; HEADER_LEN];
+    stream.read_exact(&mut header)?;
+    if header[..2] != MAGIC {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid remote magic",
+        ));
+    }
+    let ty = MessageType::try_from(header[2])
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "unknown remote message"))?;
+    let payload_len = u32::from_le_bytes([header[3], header[4], header[5], header[6]]) as usize;
+    let mut payload = vec![0u8; payload_len];
+    if payload_len > 0 {
+        stream.read_exact(&mut payload)?;
+    }
+    Ok((ty, payload))
+}
+
+fn parse_session_id(payload: &[u8]) -> Option<u32> {
+    (payload.len() >= 4)
+        .then(|| u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]))
+}
+
+fn parse_resize(payload: &[u8]) -> Option<(u16, u16)> {
+    (payload.len() >= 4).then(|| {
+        (
+            u16::from_le_bytes([payload[0], payload[1]]),
+            u16::from_le_bytes([payload[2], payload[3]]),
+        )
+    })
+}
+
+fn encode_message(ty: MessageType, payload: &[u8]) -> Vec<u8> {
+    let mut frame = Vec::with_capacity(HEADER_LEN + payload.len());
+    frame.extend_from_slice(&MAGIC);
+    frame.push(ty as u8);
+    frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    frame.extend_from_slice(payload);
+    frame
+}
+
+pub fn encode_session_list(sessions: &[RemoteSessionInfo]) -> Vec<u8> {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&(sessions.len() as u32).to_le_bytes());
+    for session in sessions {
+        payload.extend_from_slice(&session.id.to_le_bytes());
+        push_string(&mut payload, &session.name);
+        push_string(&mut payload, &session.title);
+        push_string(&mut payload, &session.pwd);
+        let mut flags = 0u8;
+        if session.attached {
+            flags |= 0x01;
+        }
+        if session.child_exited {
+            flags |= 0x02;
+        }
+        payload.push(flags);
+    }
+    payload
+}
+
+pub fn encode_full_state(state: &RemoteFullState) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(12 + state.cells.len() * 12);
+    payload.extend_from_slice(&state.rows.to_le_bytes());
+    payload.extend_from_slice(&state.cols.to_le_bytes());
+    payload.extend_from_slice(&state.cursor_x.to_le_bytes());
+    payload.extend_from_slice(&state.cursor_y.to_le_bytes());
+    payload.push(u8::from(state.cursor_visible));
+    payload.extend_from_slice(&[0, 0, 0]);
+    for cell in &state.cells {
+        payload.extend_from_slice(&cell.codepoint.to_le_bytes());
+        payload.extend_from_slice(&cell.fg);
+        payload.extend_from_slice(&cell.bg);
+        payload.push(cell.style_flags);
+        payload.push(u8::from(cell.wide));
+    }
+    payload
+}
+
+fn push_string(payload: &mut Vec<u8>, text: &str) {
+    let bytes = text.as_bytes();
+    let len = bytes.len().min(u16::MAX as usize);
+    payload.extend_from_slice(&(len as u16).to_le_bytes());
+    payload.extend_from_slice(&bytes[..len]);
+}
+
+fn random_challenge() -> [u8; 32] {
+    let mut challenge = [0u8; 32];
+    if let Ok(mut file) = std::fs::File::open("/dev/urandom") {
+        let _ = file.read_exact(&mut challenge);
+        if challenge.iter().any(|byte| *byte != 0) {
+            return challenge;
+        }
+    }
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    for (idx, byte) in challenge.iter_mut().enumerate() {
+        *byte = (seed.wrapping_shr((idx % 8) as u32) as u8) ^ (idx as u8).wrapping_mul(17);
+    }
+    challenge
+}
+
+impl ServiceAdvertiser {
+    fn spawn(service_name: &str, port: u16) -> Option<Self> {
+        #[cfg(target_os = "macos")]
+        let mut command = {
+            let mut command = Command::new("dns-sd");
+            command
+                .args(["-R", service_name, "_boo._tcp", "local", &port.to_string()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            command
+        };
+
+        #[cfg(target_os = "linux")]
+        let mut command = {
+            let mut command = Command::new("avahi-publish-service");
+            command
+                .args([service_name, "_boo._tcp", &port.to_string()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            command
+        };
+
+        command.spawn().ok().map(|child| Self { child })
+    }
+}
+
+pub fn full_state_from_ui(snapshot: &control::UiTerminalSnapshot) -> RemoteFullState {
+    let cells = snapshot
+        .rows_data
+        .iter()
+        .flat_map(|row| row.cells.iter())
+        .map(|cell| {
+            let mut style_flags = 0u8;
+            if cell.bold {
+                style_flags |= 0x01;
+            }
+            if cell.italic {
+                style_flags |= 0x02;
+            }
+            if cell.fg != [0, 0, 0] {
+                style_flags |= 0x20;
+            }
+            if cell.bg != [0, 0, 0] {
+                style_flags |= 0x40;
+            }
+            RemoteCell {
+                codepoint: cell.text.chars().next().map(u32::from).unwrap_or(0),
+                fg: cell.fg,
+                bg: cell.bg,
+                style_flags,
+                wide: cell.display_width > 1,
+            }
+        })
+        .collect();
+    RemoteFullState {
+        rows: snapshot.rows,
+        cols: snapshot.cols,
+        cursor_x: snapshot.cursor.x,
+        cursor_y: snapshot.cursor.y,
+        cursor_visible: snapshot.cursor.visible,
+        cells,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_list_encoding_matches_client_layout() {
+        let payload = encode_session_list(&[RemoteSessionInfo {
+            id: 7,
+            name: "Tab 1".to_string(),
+            title: "shell".to_string(),
+            pwd: "/tmp".to_string(),
+            attached: true,
+            child_exited: false,
+        }]);
+        assert_eq!(u32::from_le_bytes(payload[0..4].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(payload[4..8].try_into().unwrap()), 7);
+        assert_eq!(u16::from_le_bytes(payload[8..10].try_into().unwrap()), 5);
+        assert_eq!(&payload[10..15], b"Tab 1");
+        assert_eq!(*payload.last().unwrap(), 0x01);
+    }
+
+    #[test]
+    fn full_state_encoding_uses_12_byte_cells() {
+        let payload = encode_full_state(&RemoteFullState {
+            rows: 1,
+            cols: 2,
+            cursor_x: 1,
+            cursor_y: 0,
+            cursor_visible: true,
+            cells: vec![
+                RemoteCell {
+                    codepoint: u32::from('A'),
+                    fg: [1, 2, 3],
+                    bg: [4, 5, 6],
+                    style_flags: 0x21,
+                    wide: false,
+                },
+                RemoteCell {
+                    codepoint: u32::from('好'),
+                    fg: [7, 8, 9],
+                    bg: [10, 11, 12],
+                    style_flags: 0x42,
+                    wide: true,
+                },
+            ],
+        });
+        assert_eq!(payload.len(), 12 + 2 * 12);
+        assert_eq!(u16::from_le_bytes(payload[0..2].try_into().unwrap()), 1);
+        assert_eq!(u16::from_le_bytes(payload[2..4].try_into().unwrap()), 2);
+        assert_eq!(
+            u32::from_le_bytes(payload[12..16].try_into().unwrap()),
+            u32::from('A')
+        );
+        assert_eq!(payload[22], 0x21);
+        assert_eq!(payload[23], 0);
+        assert_eq!(
+            u32::from_le_bytes(payload[24..28].try_into().unwrap()),
+            u32::from('好')
+        );
+        assert_eq!(payload[34], 0x42);
+        assert_eq!(payload[35], 1);
+    }
+
+    #[test]
+    fn full_state_from_ui_snapshot_flattens_rows() {
+        let snapshot = control::UiTerminalSnapshot {
+            cols: 2,
+            rows: 1,
+            title: String::new(),
+            pwd: String::new(),
+            cursor: control::UiCursorSnapshot {
+                visible: true,
+                x: 1,
+                y: 0,
+                style: 0,
+            },
+            rows_data: vec![control::UiTerminalRowSnapshot {
+                cells: vec![
+                    control::UiTerminalCellSnapshot {
+                        text: "a".to_string(),
+                        display_width: 1,
+                        fg: [1, 1, 1],
+                        bg: [0, 0, 0],
+                        bold: false,
+                        italic: false,
+                        underline: 0,
+                    },
+                    control::UiTerminalCellSnapshot {
+                        text: "界".to_string(),
+                        display_width: 2,
+                        fg: [2, 2, 2],
+                        bg: [3, 3, 3],
+                        bold: true,
+                        italic: true,
+                        underline: 0,
+                    },
+                ],
+            }],
+        };
+        let state = full_state_from_ui(&snapshot);
+        assert_eq!(state.cells.len(), 2);
+        assert_eq!(state.cells[0].codepoint, u32::from('a'));
+        assert!(!state.cells[0].wide);
+        assert_eq!(state.cells[1].codepoint, u32::from('界'));
+        assert!(state.cells[1].wide);
+        assert_eq!(state.cells[1].style_flags & 0x03, 0x03);
+    }
+}

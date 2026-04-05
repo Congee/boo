@@ -4,31 +4,32 @@ mod config;
 mod control;
 mod ffi;
 mod keymap;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod vt_terminal_canvas;
 #[cfg(target_os = "macos")]
 mod macos_vt_backend;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod vt_backend_core;
-#[cfg(target_os = "linux")]
-mod vt_snapshot;
 mod pane;
 mod platform;
+mod remote;
 mod session;
 mod splits;
 mod tabs;
 mod tmux;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+mod unix_pty;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vt;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-mod unix_pty;
+mod vt_backend_core;
+#[cfg(target_os = "linux")]
+mod vt_snapshot;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod vt_terminal_canvas;
 
+use backend::TerminalBackend;
 use iced::widget::{column, container, row, text};
 use iced::window;
-use iced::{keyboard, mouse, Color, Element, Event, Font, Length, Size, Subscription, Task, Theme};
-use backend::TerminalBackend;
+use iced::{Color, Element, Event, Font, Length, Size, Subscription, Task, Theme, keyboard, mouse};
 use pane::PaneHandle;
-use std::ffi::{c_void, CStr, CString};
+use std::ffi::{CStr, CString, c_void};
 #[cfg(target_os = "linux")]
 use std::process::Command;
 use std::ptr;
@@ -36,12 +37,15 @@ use std::ptr;
 /// Status bar height in points.
 const STATUS_BAR_HEIGHT: f64 = 20.0;
 
-static SCROLL_RX: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Receiver<platform::ScrollEvent>>> =
-    std::sync::OnceLock::new();
-static KEY_EVENT_RX: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Receiver<platform::KeyEvent>>> =
-    std::sync::OnceLock::new();
-static TEXT_INPUT_RX: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Receiver<platform::TextInputEvent>>> =
-    std::sync::OnceLock::new();
+static SCROLL_RX: std::sync::OnceLock<
+    std::sync::Mutex<std::sync::mpsc::Receiver<platform::ScrollEvent>>,
+> = std::sync::OnceLock::new();
+static KEY_EVENT_RX: std::sync::OnceLock<
+    std::sync::Mutex<std::sync::mpsc::Receiver<platform::KeyEvent>>,
+> = std::sync::OnceLock::new();
+static TEXT_INPUT_RX: std::sync::OnceLock<
+    std::sync::Mutex<std::sync::mpsc::Receiver<platform::TextInputEvent>>,
+> = std::sync::OnceLock::new();
 
 #[derive(Clone, Copy)]
 struct CommandFinishedEvent {
@@ -49,9 +53,10 @@ struct CommandFinishedEvent {
     duration_ns: u64,
 }
 
-
 static STARTUP_SESSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static STARTUP_CONTROL_SOCKET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static STARTUP_REMOTE_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+static STARTUP_REMOTE_AUTH_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 const DEFAULT_TERMINAL_FONT_SIZE: f32 = 14.0;
 const DEFAULT_BACKGROUND_OPACITY: f32 = 1.0;
 const HEADLESS_WIDTH: f32 = 1024.0;
@@ -155,6 +160,19 @@ fn main() {
             STARTUP_CONTROL_SOCKET.set(path.clone()).ok();
         }
     }
+    if let Some(pos) = args.iter().position(|a| a == "--remote-port") {
+        if let Some(port) = args
+            .get(pos + 1)
+            .and_then(|value| value.parse::<u16>().ok())
+        {
+            STARTUP_REMOTE_PORT.set(port).ok();
+        }
+    }
+    if let Some(pos) = args.iter().position(|a| a == "--remote-auth-key") {
+        if let Some(key) = args.get(pos + 1) {
+            STARTUP_REMOTE_AUTH_KEY.set(key.clone()).ok();
+        }
+    }
     let headless = args.iter().any(|a| a == "--headless");
     if headless {
         run_headless();
@@ -200,6 +218,8 @@ struct BooApp {
     text_input_rx: std::sync::mpsc::Receiver<platform::TextInputEvent>,
     bindings: bindings::Bindings,
     socket_path: Option<String>,
+    remote_server: Option<remote::RemoteServer>,
+    remote_rx: std::sync::mpsc::Receiver<remote::RemoteCmd>,
     dump_keys: bool,
     last_size: Size,
     last_mouse_pos: (f64, f64),
@@ -251,8 +271,12 @@ enum JumpKind {
 
 #[derive(Debug, Clone, Copy)]
 enum WordMoveKind {
-    NextWord, PrevWord, EndWord,
-    NextBigWord, PrevBigWord, EndBigWord,
+    NextWord,
+    PrevWord,
+    EndWord,
+    NextBigWord,
+    PrevBigWord,
+    EndBigWord,
 }
 
 struct CopyModeState {
@@ -280,34 +304,146 @@ struct CommandDef {
 }
 
 const COMMANDS: &[CommandDef] = &[
-    CommandDef { name: "split-right", description: "vertical split", args: "" },
-    CommandDef { name: "split-down", description: "horizontal split", args: "" },
-    CommandDef { name: "split-left", description: "vertical split (left)", args: "" },
-    CommandDef { name: "split-up", description: "horizontal split (up)", args: "" },
-    CommandDef { name: "resize-left", description: "resize pane left", args: "<n>" },
-    CommandDef { name: "resize-right", description: "resize pane right", args: "<n>" },
-    CommandDef { name: "resize-up", description: "resize pane up", args: "<n>" },
-    CommandDef { name: "resize-down", description: "resize pane down", args: "<n>" },
-    CommandDef { name: "close-pane", description: "close focused pane", args: "" },
-    CommandDef { name: "new-tab", description: "create new tab", args: "" },
-    CommandDef { name: "next-tab", description: "switch to next tab", args: "" },
-    CommandDef { name: "prev-tab", description: "switch to previous tab", args: "" },
-    CommandDef { name: "close-tab", description: "close current tab", args: "" },
-    CommandDef { name: "goto-tab", description: "go to tab number", args: "<n>" },
-    CommandDef { name: "last-tab", description: "go to last tab", args: "" },
-    CommandDef { name: "next-pane", description: "focus next pane", args: "" },
-    CommandDef { name: "prev-pane", description: "focus previous pane", args: "" },
-    CommandDef { name: "copy-mode", description: "enter copy mode", args: "" },
-    CommandDef { name: "command-prompt", description: "open command prompt", args: "" },
-    CommandDef { name: "search", description: "open search", args: "" },
-    CommandDef { name: "paste", description: "paste from clipboard", args: "" },
-    CommandDef { name: "zoom", description: "toggle pane zoom", args: "" },
-    CommandDef { name: "reload-config", description: "reload configuration", args: "" },
-    CommandDef { name: "goto-line", description: "jump to line (copy mode)", args: "<n>" },
-    CommandDef { name: "set", description: "set ghostty config value", args: "<key> <value>" },
-    CommandDef { name: "load-session", description: "load a session layout", args: "<name>" },
-    CommandDef { name: "save-session", description: "save current layout", args: "<name>" },
-    CommandDef { name: "list-sessions", description: "list available sessions", args: "" },
+    CommandDef {
+        name: "split-right",
+        description: "vertical split",
+        args: "",
+    },
+    CommandDef {
+        name: "split-down",
+        description: "horizontal split",
+        args: "",
+    },
+    CommandDef {
+        name: "split-left",
+        description: "vertical split (left)",
+        args: "",
+    },
+    CommandDef {
+        name: "split-up",
+        description: "horizontal split (up)",
+        args: "",
+    },
+    CommandDef {
+        name: "resize-left",
+        description: "resize pane left",
+        args: "<n>",
+    },
+    CommandDef {
+        name: "resize-right",
+        description: "resize pane right",
+        args: "<n>",
+    },
+    CommandDef {
+        name: "resize-up",
+        description: "resize pane up",
+        args: "<n>",
+    },
+    CommandDef {
+        name: "resize-down",
+        description: "resize pane down",
+        args: "<n>",
+    },
+    CommandDef {
+        name: "close-pane",
+        description: "close focused pane",
+        args: "",
+    },
+    CommandDef {
+        name: "new-tab",
+        description: "create new tab",
+        args: "",
+    },
+    CommandDef {
+        name: "next-tab",
+        description: "switch to next tab",
+        args: "",
+    },
+    CommandDef {
+        name: "prev-tab",
+        description: "switch to previous tab",
+        args: "",
+    },
+    CommandDef {
+        name: "close-tab",
+        description: "close current tab",
+        args: "",
+    },
+    CommandDef {
+        name: "goto-tab",
+        description: "go to tab number",
+        args: "<n>",
+    },
+    CommandDef {
+        name: "last-tab",
+        description: "go to last tab",
+        args: "",
+    },
+    CommandDef {
+        name: "next-pane",
+        description: "focus next pane",
+        args: "",
+    },
+    CommandDef {
+        name: "prev-pane",
+        description: "focus previous pane",
+        args: "",
+    },
+    CommandDef {
+        name: "copy-mode",
+        description: "enter copy mode",
+        args: "",
+    },
+    CommandDef {
+        name: "command-prompt",
+        description: "open command prompt",
+        args: "",
+    },
+    CommandDef {
+        name: "search",
+        description: "open search",
+        args: "",
+    },
+    CommandDef {
+        name: "paste",
+        description: "paste from clipboard",
+        args: "",
+    },
+    CommandDef {
+        name: "zoom",
+        description: "toggle pane zoom",
+        args: "",
+    },
+    CommandDef {
+        name: "reload-config",
+        description: "reload configuration",
+        args: "",
+    },
+    CommandDef {
+        name: "goto-line",
+        description: "jump to line (copy mode)",
+        args: "<n>",
+    },
+    CommandDef {
+        name: "set",
+        description: "set ghostty config value",
+        args: "<key> <value>",
+    },
+    CommandDef {
+        name: "load-session",
+        description: "load a session layout",
+        args: "<name>",
+    },
+    CommandDef {
+        name: "save-session",
+        description: "save current layout",
+        args: "<name>",
+    },
+    CommandDef {
+        name: "list-sessions",
+        description: "list available sessions",
+        args: "",
+    },
 ];
 
 struct CommandPrompt {
@@ -336,7 +472,9 @@ impl CommandPrompt {
         if query.is_empty() {
             self.suggestions = (0..COMMANDS.len()).collect();
         } else {
-            let mut scored: Vec<(usize, i32)> = COMMANDS.iter().enumerate()
+            let mut scored: Vec<(usize, i32)> = COMMANDS
+                .iter()
+                .enumerate()
                 .filter_map(|(i, cmd)| {
                     let score = fuzzy_score(query, cmd.name);
                     if score > 0 { Some((i, score)) } else { None }
@@ -349,17 +487,23 @@ impl CommandPrompt {
     }
 
     fn selected_command(&self) -> Option<&'static CommandDef> {
-        self.suggestions.get(self.selected_suggestion).map(|&i| &COMMANDS[i])
+        self.suggestions
+            .get(self.selected_suggestion)
+            .map(|&i| &COMMANDS[i])
     }
 }
 
 fn fuzzy_score(query: &str, target: &str) -> i32 {
-    if query.is_empty() { return 1; }
+    if query.is_empty() {
+        return 1;
+    }
     let ql = query.to_lowercase();
     let tl = target.to_lowercase();
 
     // Exact prefix
-    if tl.starts_with(&ql) { return 100 + (100 - target.len() as i32); }
+    if tl.starts_with(&ql) {
+        return 100 + (100 - target.len() as i32);
+    }
 
     // Word-initial match: "sr" matches "split-right" via s...r...
     let parts: Vec<&str> = tl.split('-').collect();
@@ -370,7 +514,9 @@ fn fuzzy_score(query: &str, target: &str) -> i32 {
             qi += 1;
         }
     }
-    if qi == qchars.len() { return 50 + (100 - target.len() as i32); }
+    if qi == qchars.len() {
+        return 50 + (100 - target.len() as i32);
+    }
 
     // Subsequence match
     let mut qi = 0;
@@ -379,7 +525,9 @@ fn fuzzy_score(query: &str, target: &str) -> i32 {
             qi += 1;
         }
     }
-    if qi == qchars.len() { return 10 + (100 - target.len() as i32); }
+    if qi == qchars.len() {
+        return 10 + (100 - target.len() as i32);
+    }
 
     0
 }
@@ -442,7 +590,33 @@ impl BooApp {
         if let Some(socket_path) = STARTUP_CONTROL_SOCKET.get() {
             boo_config.control_socket = Some(socket_path.clone());
         }
+        if let Some(port) = STARTUP_REMOTE_PORT.get() {
+            boo_config.remote_port = Some(*port);
+        }
+        if let Some(key) = STARTUP_REMOTE_AUTH_KEY.get() {
+            boo_config.remote_auth_key = Some(key.clone());
+        }
         let ctl_rx = control::start(boo_config.control_socket.as_deref());
+        let (remote_server, remote_rx) = if let Some(port) = boo_config.remote_port {
+            match remote::RemoteServer::start(remote::RemoteConfig {
+                port,
+                auth_key: boo_config.remote_auth_key.clone(),
+                service_name: "boo".to_string(),
+            }) {
+                Ok((server, rx)) => {
+                    log::info!("remote daemon listening on tcp/{port}");
+                    (Some(server), rx)
+                }
+                Err(error) => {
+                    log::error!("failed to start remote daemon on tcp/{port}: {error}");
+                    let (_tx, rx) = std::sync::mpsc::channel();
+                    (None, rx)
+                }
+            }
+        } else {
+            let (_tx, rx) = std::sync::mpsc::channel();
+            (None, rx)
+        };
         let bindings = bindings::Bindings::from_config(&boo_config);
         let appearance = Self::resolve_appearance_config(&boo_config);
         let (cell_width, cell_height) = terminal_metrics(appearance.font_size);
@@ -456,6 +630,8 @@ impl BooApp {
                     tabs: tabs::TabManager::new(),
                     parent_view: ptr::null_mut(),
                     ctl_rx,
+                    remote_server,
+                    remote_rx,
                     scroll_rx: SCROLL_RX
                         .get()
                         .and_then(|m| m.lock().ok())
@@ -494,7 +670,11 @@ impl BooApp {
                     scrollbar_opacity: 0.0,
                     cell_width,
                     cell_height,
-                    scrollbar: ffi::ghostty_action_scrollbar_s { total: 0, offset: 0, len: 0 },
+                    scrollbar: ffi::ghostty_action_scrollbar_s {
+                        total: 0,
+                        offset: 0,
+                        len: 0,
+                    },
                     scrollbar_layer: ptr::null_mut(),
                     search_active: false,
                     search_query: String::new(),
@@ -530,6 +710,8 @@ impl BooApp {
                     tabs: tabs::TabManager::new(),
                     parent_view: ptr::null_mut(),
                     ctl_rx,
+                    remote_server,
+                    remote_rx,
                     scroll_rx: SCROLL_RX
                         .get()
                         .and_then(|m| m.lock().ok())
@@ -568,7 +750,11 @@ impl BooApp {
                     scrollbar_opacity: 0.0,
                     cell_width,
                     cell_height,
-                    scrollbar: ffi::ghostty_action_scrollbar_s { total: 0, offset: 0, len: 0 },
+                    scrollbar: ffi::ghostty_action_scrollbar_s {
+                        total: 0,
+                        offset: 0,
+                        len: 0,
+                    },
                     scrollbar_layer: ptr::null_mut(),
                     search_active: false,
                     search_query: String::new(),
@@ -739,19 +925,21 @@ impl BooApp {
     }
 
     fn resize_pane_backend(&mut self, pane: PaneHandle, scale: f64, width: u32, height: u32) {
-        self.backend
-            .resize_pane(pane, scale, width, height, self.cell_width, self.cell_height);
+        self.backend.resize_pane(
+            pane,
+            scale,
+            width,
+            height,
+            self.cell_width,
+            self.cell_height,
+        );
     }
 
     fn free_pane_backend(&mut self, pane: PaneHandle) {
         self.backend.free_pane(pane);
     }
 
-    fn surface_key_translation_mods(
-        &self,
-        surface: ffi::ghostty_surface_t,
-        mods: i32,
-    ) -> i32 {
+    fn surface_key_translation_mods(&self, surface: ffi::ghostty_surface_t, mods: i32) -> i32 {
         self.backend.surface_key_translation_mods(surface, mods)
     }
 
@@ -784,13 +972,16 @@ impl BooApp {
         let cell_w_pts = self.cell_width / scale;
         let mut cell_h_pts = self.cell_height / scale;
         if self.focused_surface().is_null() {
-            return self.backend.render_snapshot(self.tabs.focused_pane().id()).map(|snapshot| {
-                (
-                    snapshot.cursor.x as u32,
-                    self.scrollbar.offset as i64 + snapshot.cursor.y as i64,
-                    cell_h_pts,
-                )
-            });
+            return self
+                .backend
+                .render_snapshot(self.tabs.focused_pane().id())
+                .map(|snapshot| {
+                    (
+                        snapshot.cursor.x as u32,
+                        self.scrollbar.offset as i64 + snapshot.cursor.y as i64,
+                        cell_h_pts,
+                    )
+                });
         }
         let focused_pane = self.tabs.focused_pane();
         if let Some((x, y, _, h)) = self.backend.ime_point(focused_pane) {
@@ -809,13 +1000,15 @@ impl BooApp {
             };
             Some((col, row, cell_h_pts))
         } else {
-            self.backend.render_snapshot(self.tabs.focused_pane().id()).map(|snapshot| {
-                (
-                    snapshot.cursor.x as u32,
-                    self.scrollbar.offset as i64 + snapshot.cursor.y as i64,
-                    cell_h_pts,
-                )
-            })
+            self.backend
+                .render_snapshot(self.tabs.focused_pane().id())
+                .map(|snapshot| {
+                    (
+                        snapshot.cursor.x as u32,
+                        self.scrollbar.offset as i64 + snapshot.cursor.y as i64,
+                        cell_h_pts,
+                    )
+                })
         }
     }
 
@@ -862,7 +1055,11 @@ impl BooApp {
             );
         }
         for pane_id in &active_pane_ids {
-            if !poll.running_commands.iter().any(|running| running.pane_id == *pane_id) {
+            if !poll
+                .running_commands
+                .iter()
+                .any(|running| running.pane_id == *pane_id)
+            {
                 self.tabs.set_running_command_for_pane(*pane_id, None);
             }
         }
@@ -968,15 +1165,19 @@ impl BooApp {
                         leaf_id: pane.leaf_id,
                         pane_id: pane.pane.id(),
                         focused: pane.pane.id() == focused_pane.id(),
-                        frame: pane.frame.map_or(ui_rect_snapshot(0.0, 0.0, 0.0, 0.0), |frame| {
-                            ui_rect_snapshot(
-                                frame.origin.x,
-                                frame.origin.y,
-                                frame.size.width,
-                                frame.size.height,
-                            )
-                        }),
-                        split_direction: pane.split.map(|(direction, _)| split_direction_name(direction).to_string()),
+                        frame: pane
+                            .frame
+                            .map_or(ui_rect_snapshot(0.0, 0.0, 0.0, 0.0), |frame| {
+                                ui_rect_snapshot(
+                                    frame.origin.x,
+                                    frame.origin.y,
+                                    frame.size.width,
+                                    frame.size.height,
+                                )
+                            }),
+                        split_direction: pane
+                            .split
+                            .map(|(direction, _)| split_direction_name(direction).to_string()),
                         split_ratio: pane.split.map(|(_, ratio)| ratio),
                     })
                     .collect()
@@ -1056,9 +1257,7 @@ impl BooApp {
                 .collect(),
         };
 
-        let terminal = {
-            self.backend.ui_terminal_snapshot(focused_pane.id())
-        };
+        let terminal = { self.backend.ui_terminal_snapshot(focused_pane.id()) };
 
         control::UiSnapshot {
             active_tab: self.tabs.active_index(),
@@ -1103,6 +1302,10 @@ impl BooApp {
         if let Ok(cmd) = self.ctl_rx.try_recv() {
             self.handle_control_cmd(cmd);
         }
+        while let Ok(cmd) = self.remote_rx.try_recv() {
+            self.handle_remote_cmd(cmd);
+        }
+        self.publish_remote_state();
 
         // Process native scroll events (with precision + momentum)
         while let Ok(scroll) = self.scroll_rx.try_recv() {
@@ -1322,8 +1525,8 @@ impl BooApp {
 
                 // consumed_mods: from translation_mods, strip Ctrl and Cmd
                 // (matching Swift: translationMods.subtracting([.control, .command]))
-                let consumed_mods = translation_mods
-                    & !(ffi::GHOSTTY_MODS_CTRL | ffi::GHOSTTY_MODS_SUPER);
+                let consumed_mods =
+                    translation_mods & !(ffi::GHOSTTY_MODS_CTRL | ffi::GHOSTTY_MODS_SUPER);
 
                 #[cfg(any(target_os = "linux", target_os = "macos"))]
                 if surface.is_null() {
@@ -1336,7 +1539,11 @@ impl BooApp {
                     }
                     let _ = self.backend.forward_vt_key(
                         self.tabs.focused_pane(),
-                        if repeat { vt::GHOSTTY_KEY_ACTION_REPEAT } else { vt::GHOSTTY_KEY_ACTION_PRESS },
+                        if repeat {
+                            vt::GHOSTTY_KEY_ACTION_REPEAT
+                        } else {
+                            vt::GHOSTTY_KEY_ACTION_PRESS
+                        },
                         vt_keycode,
                         mods as vt::GhosttyMods,
                         consumed_mods as vt::GhosttyMods,
@@ -1393,7 +1600,8 @@ impl BooApp {
                     if should_route_macos_vt_key_via_appkit(
                         vt_keycode,
                         iced_mods_to_ghostty(&modifiers),
-                    ) && self.preedit_text.is_empty() {
+                    ) && self.preedit_text.is_empty()
+                    {
                         return;
                     }
                     let _ = self.backend.forward_vt_key(
@@ -1479,7 +1687,9 @@ impl BooApp {
             control::ControlCmd::SendText { text } => {
                 #[cfg(any(target_os = "linux", target_os = "macos"))]
                 {
-                    let _ = self.backend.write_input(self.tabs.focused_pane(), text.as_bytes());
+                    let _ = self
+                        .backend
+                        .write_input(self.tabs.focused_pane(), text.as_bytes());
                 }
             }
             control::ControlCmd::SendVt { text } => {
@@ -1489,7 +1699,9 @@ impl BooApp {
                         .write_vt_bytes(self.tabs.focused_pane(), text.as_bytes());
                 }
             }
-            control::ControlCmd::NewTab => self.new_tab(),
+            control::ControlCmd::NewTab => {
+                let _ = self.new_tab();
+            }
             control::ControlCmd::GotoTab { index } => {
                 self.tabs.goto_tab(index);
                 self.sync_after_tab_change();
@@ -1505,6 +1717,209 @@ impl BooApp {
             control::ControlCmd::SendKey { keyspec } => {
                 self.inject_key(&keyspec);
             }
+        }
+    }
+
+    fn remote_sessions(&self) -> Vec<remote::RemoteSessionInfo> {
+        self.tabs
+            .tab_session_info()
+            .into_iter()
+            .map(|tab| {
+                let pane = self
+                    .tabs
+                    .tab_tree(tab.index)
+                    .map(|tree| tree.focused_pane())
+                    .unwrap_or(PaneHandle::null());
+                let terminal = self.backend.ui_terminal_snapshot(pane.id());
+                remote::RemoteSessionInfo {
+                    id: tab.id,
+                    name: format!("Tab {}", tab.index + 1),
+                    title: tab.title,
+                    pwd: terminal
+                        .as_ref()
+                        .map(|snapshot| snapshot.pwd.clone())
+                        .unwrap_or_default(),
+                    attached: self
+                        .remote_server
+                        .as_ref()
+                        .is_some_and(|server| server.attached_to_session(tab.id)),
+                    child_exited: pane.id() == 0 || terminal.is_none(),
+                }
+            })
+            .collect()
+    }
+
+    fn pane_for_session(&self, session_id: u32) -> Option<PaneHandle> {
+        let tab_index = self.tabs.find_index_by_session_id(session_id)?;
+        self.tabs
+            .tab_tree(tab_index)
+            .map(|tree| tree.focused_pane())
+    }
+
+    fn session_size_pixels(&self, cols: u16, rows: u16) -> (u32, u32) {
+        let width = (cols as f64 * self.cell_width).round().max(1.0) as u32;
+        let height = (rows as f64 * self.cell_height).round().max(1.0) as u32;
+        (width, height)
+    }
+
+    fn handle_remote_cmd(&mut self, cmd: remote::RemoteCmd) {
+        if self.remote_server.is_none() {
+            return;
+        }
+
+        match cmd {
+            remote::RemoteCmd::ListSessions { client_id } => {
+                if let Some(server) = self.remote_server.as_ref() {
+                    server.send_session_list(client_id, &self.remote_sessions());
+                }
+            }
+            remote::RemoteCmd::Attach {
+                client_id,
+                session_id,
+            } => {
+                if self.pane_for_session(session_id).is_some() {
+                    if let Some(server) = self.remote_server.as_ref() {
+                        server.send_attached(client_id, session_id);
+                    }
+                    self.publish_remote_session(session_id);
+                } else {
+                    if let Some(server) = self.remote_server.as_ref() {
+                        server.send_error(client_id, "unknown session");
+                    }
+                }
+            }
+            remote::RemoteCmd::Detach { client_id } => {
+                if let Some(server) = self.remote_server.as_ref() {
+                    server.send_detached(client_id);
+                }
+            }
+            remote::RemoteCmd::Create {
+                client_id,
+                cols,
+                rows,
+            } => {
+                let created = self.new_tab();
+                let Some(session_id) = created else {
+                    if let Some(server) = self.remote_server.as_ref() {
+                        server.send_error(client_id, "failed to create session");
+                    }
+                    return;
+                };
+                if let Some(pane) = self.pane_for_session(session_id) {
+                    let (width, height) = self.session_size_pixels(cols, rows);
+                    self.resize_pane_backend(pane, self.scale_factor(), width, height);
+                }
+                if let Some(server) = self.remote_server.as_ref() {
+                    server.send_session_created(client_id, session_id);
+                }
+            }
+            remote::RemoteCmd::Input { client_id, bytes } => {
+                let Some(session_id) = self
+                    .remote_server
+                    .as_ref()
+                    .and_then(|server| server.client_session(client_id))
+                else {
+                    if let Some(server) = self.remote_server.as_ref() {
+                        server.send_error(client_id, "not attached");
+                    }
+                    return;
+                };
+                let Some(pane) = self.pane_for_session(session_id) else {
+                    if let Some(server) = self.remote_server.as_ref() {
+                        server.send_session_exited(session_id);
+                    }
+                    return;
+                };
+                let _ = self.backend.write_input(pane, &bytes);
+            }
+            remote::RemoteCmd::Resize {
+                client_id,
+                cols,
+                rows,
+            } => {
+                let Some(session_id) = self
+                    .remote_server
+                    .as_ref()
+                    .and_then(|server| server.client_session(client_id))
+                else {
+                    if let Some(server) = self.remote_server.as_ref() {
+                        server.send_error(client_id, "not attached");
+                    }
+                    return;
+                };
+                let Some(pane) = self.pane_for_session(session_id) else {
+                    if let Some(server) = self.remote_server.as_ref() {
+                        server.send_session_exited(session_id);
+                    }
+                    return;
+                };
+                let (width, height) = self.session_size_pixels(cols, rows);
+                self.resize_pane_backend(pane, self.scale_factor(), width, height);
+            }
+            remote::RemoteCmd::Destroy {
+                client_id,
+                session_id,
+            } => {
+                let target = session_id.or_else(|| {
+                    self.remote_server
+                        .as_ref()
+                        .and_then(|server| server.client_session(client_id))
+                });
+                let Some(target) = target else {
+                    if let Some(server) = self.remote_server.as_ref() {
+                        server.send_error(client_id, "unknown session");
+                    }
+                    return;
+                };
+                let Some(tab_index) = self.tabs.find_index_by_session_id(target) else {
+                    if let Some(server) = self.remote_server.as_ref() {
+                        server.send_session_exited(target);
+                    }
+                    return;
+                };
+                if self.tabs.len() <= 1 {
+                    if let Some(server) = self.remote_server.as_ref() {
+                        server.send_error(client_id, "cannot destroy last session");
+                    }
+                    return;
+                }
+                let was_active = tab_index == self.tabs.active_index();
+                let panes = self.tabs.remove_tab(tab_index);
+                for pane in panes {
+                    self.backend.free_pane(pane);
+                }
+                if was_active && !self.tabs.is_empty() {
+                    self.sync_after_tab_change();
+                }
+                if let Some(server) = self.remote_server.as_ref() {
+                    server.send_session_exited(target);
+                }
+            }
+        }
+    }
+
+    fn publish_remote_session(&self, session_id: u32) {
+        let Some(server) = self.remote_server.as_ref() else {
+            return;
+        };
+        let Some(pane) = self.pane_for_session(session_id) else {
+            server.send_session_exited(session_id);
+            return;
+        };
+        let Some(snapshot) = self.backend.ui_terminal_snapshot(pane.id()) else {
+            server.send_session_exited(session_id);
+            return;
+        };
+        let state = remote::full_state_from_ui(&snapshot);
+        server.send_full_state_to_attached(session_id, &state);
+    }
+
+    fn publish_remote_state(&self) {
+        let Some(server) = self.remote_server.as_ref() else {
+            return;
+        };
+        for session_id in server.attached_sessions() {
+            self.publish_remote_session(session_id);
         }
     }
 
@@ -1576,7 +1991,9 @@ impl BooApp {
             }
             return;
         }
-        let ctext = text_str.as_ref().and_then(|t| CString::new(t.as_str()).ok());
+        let ctext = text_str
+            .as_ref()
+            .and_then(|t| CString::new(t.as_str()).ok());
         let text_ptr = ctext.as_ref().map(|c| c.as_ptr()).unwrap_or(ptr::null());
         let consumed_mods = if mods & ffi::GHOSTTY_MODS_SHIFT != 0 {
             ffi::GHOSTTY_MODS_SHIFT
@@ -1594,7 +2011,9 @@ impl BooApp {
         };
         let consumed = self.forward_surface_key(ev);
         if self.dump_keys {
-            log::info!("ctl key: keycode=0x{keycode:02x} mods={mods:#x} cp=0x{unshifted:02x} text={text_str:?} consumed={consumed}");
+            log::info!(
+                "ctl key: keycode=0x{keycode:02x} mods={mods:#x} cp=0x{unshifted:02x} text={text_str:?} consumed={consumed}"
+            );
         }
     }
 
@@ -1865,7 +2284,10 @@ impl BooApp {
                 self.relayout();
             }
             SearchAgain => {
-                let forward = self.copy_mode.as_ref().map_or(true, |cm| cm.last_search_forward);
+                let forward = self
+                    .copy_mode
+                    .as_ref()
+                    .map_or(true, |cm| cm.last_search_forward);
                 if forward {
                     self.ghostty_binding_action("navigate_search:next");
                 } else {
@@ -1873,7 +2295,10 @@ impl BooApp {
                 }
             }
             SearchReverse => {
-                let forward = self.copy_mode.as_ref().map_or(true, |cm| cm.last_search_forward);
+                let forward = self
+                    .copy_mode
+                    .as_ref()
+                    .map_or(true, |cm| cm.last_search_forward);
                 if forward {
                     self.ghostty_binding_action("navigate_search:previous");
                 } else {
@@ -1946,7 +2371,9 @@ impl BooApp {
     }
 
     fn copy_mode_move(&mut self, dir: bindings::Direction) {
-        let Some(ref mut cm) = self.copy_mode else { return };
+        let Some(ref mut cm) = self.copy_mode else {
+            return;
+        };
         match dir {
             bindings::Direction::Up => cm.cursor_row -= 1,
             bindings::Direction::Down => cm.cursor_row += 1,
@@ -2014,14 +2441,22 @@ impl BooApp {
     }
 
     fn copy_mode_word_move(&mut self, kind: WordMoveKind) {
-        let Some(line) = self.read_viewport_line_for_cursor() else { return };
-        let Some(ref mut cm) = self.copy_mode else { return };
+        let Some(line) = self.read_viewport_line_for_cursor() else {
+            return;
+        };
+        let Some(ref mut cm) = self.copy_mode else {
+            return;
+        };
         let chars: Vec<char> = line.chars().collect();
         let col = cm.cursor_col as usize;
         let len = chars.len();
 
         let is_word = |c: char, big: bool| -> bool {
-            if big { !c.is_whitespace() } else { c.is_alphanumeric() || c == '_' }
+            if big {
+                !c.is_whitespace()
+            } else {
+                c.is_alphanumeric() || c == '_'
+            }
         };
         let is_sep = |c: char| -> bool { !c.is_alphanumeric() && c != '_' && !c.is_whitespace() };
 
@@ -2031,42 +2466,64 @@ impl BooApp {
                 let mut i = col;
                 // Skip current word/punct chars
                 if i < len && is_word(chars[i], big) {
-                    while i < len && is_word(chars[i], big) { i += 1; }
+                    while i < len && is_word(chars[i], big) {
+                        i += 1;
+                    }
                 } else if !big && i < len && is_sep(chars[i]) {
-                    while i < len && is_sep(chars[i]) { i += 1; }
+                    while i < len && is_sep(chars[i]) {
+                        i += 1;
+                    }
                 } else {
                     i += 1;
                 }
                 // Skip whitespace
-                while i < len && chars[i].is_whitespace() { i += 1; }
+                while i < len && chars[i].is_whitespace() {
+                    i += 1;
+                }
                 if i >= len { col } else { i }
             }
             WordMoveKind::PrevWord | WordMoveKind::PrevBigWord => {
                 let big = matches!(kind, WordMoveKind::PrevBigWord);
-                if col == 0 { 0 } else {
+                if col == 0 {
+                    0
+                } else {
                     let mut i = col - 1;
                     // Skip whitespace backwards
-                    while i > 0 && chars[i].is_whitespace() { i -= 1; }
+                    while i > 0 && chars[i].is_whitespace() {
+                        i -= 1;
+                    }
                     // Skip word/punct chars backwards
                     if is_word(chars[i], big) {
-                        while i > 0 && is_word(chars[i - 1], big) { i -= 1; }
+                        while i > 0 && is_word(chars[i - 1], big) {
+                            i -= 1;
+                        }
                     } else if !big && is_sep(chars[i]) {
-                        while i > 0 && is_sep(chars[i - 1]) { i -= 1; }
+                        while i > 0 && is_sep(chars[i - 1]) {
+                            i -= 1;
+                        }
                     }
                     i
                 }
             }
             WordMoveKind::EndWord | WordMoveKind::EndBigWord => {
                 let big = matches!(kind, WordMoveKind::EndBigWord);
-                if col + 1 >= len { col } else {
+                if col + 1 >= len {
+                    col
+                } else {
                     let mut i = col + 1;
                     // Skip whitespace
-                    while i < len && chars[i].is_whitespace() { i += 1; }
+                    while i < len && chars[i].is_whitespace() {
+                        i += 1;
+                    }
                     // Advance through word/punct chars
                     if i < len && is_word(chars[i], big) {
-                        while i + 1 < len && is_word(chars[i + 1], big) { i += 1; }
+                        while i + 1 < len && is_word(chars[i + 1], big) {
+                            i += 1;
+                        }
                     } else if !big && i < len && is_sep(chars[i]) {
-                        while i + 1 < len && is_sep(chars[i + 1]) { i += 1; }
+                        while i + 1 < len && is_sep(chars[i + 1]) {
+                            i += 1;
+                        }
                     }
                     i
                 }
@@ -2079,24 +2536,42 @@ impl BooApp {
     }
 
     fn copy_mode_execute_jump(&mut self, target: char, kind: JumpKind) {
-        let Some(line) = self.read_viewport_line_for_cursor() else { return };
-        let Some(ref mut cm) = self.copy_mode else { return };
+        let Some(line) = self.read_viewport_line_for_cursor() else {
+            return;
+        };
+        let Some(ref mut cm) = self.copy_mode else {
+            return;
+        };
         let col = cm.cursor_col as usize;
         let chars: Vec<char> = line.chars().collect();
 
         let new_col = match kind {
-            JumpKind::Forward => {
-                chars.iter().enumerate().skip(col + 1).find(|(_, c)| **c == target).map(|(i, _)| i)
-            }
-            JumpKind::Backward => {
-                chars.iter().enumerate().take(col).rev().find(|(_, c)| **c == target).map(|(i, _)| i)
-            }
-            JumpKind::ToForward => {
-                chars.iter().enumerate().skip(col + 1).find(|(_, c)| **c == target).map(|(i, _)| i.saturating_sub(1).max(col + 1))
-            }
-            JumpKind::ToBackward => {
-                chars.iter().enumerate().take(col).rev().find(|(_, c)| **c == target).map(|(i, _)| (i + 1).min(col.saturating_sub(1)))
-            }
+            JumpKind::Forward => chars
+                .iter()
+                .enumerate()
+                .skip(col + 1)
+                .find(|(_, c)| **c == target)
+                .map(|(i, _)| i),
+            JumpKind::Backward => chars
+                .iter()
+                .enumerate()
+                .take(col)
+                .rev()
+                .find(|(_, c)| **c == target)
+                .map(|(i, _)| i),
+            JumpKind::ToForward => chars
+                .iter()
+                .enumerate()
+                .skip(col + 1)
+                .find(|(_, c)| **c == target)
+                .map(|(i, _)| i.saturating_sub(1).max(col + 1)),
+            JumpKind::ToBackward => chars
+                .iter()
+                .enumerate()
+                .take(col)
+                .rev()
+                .find(|(_, c)| **c == target)
+                .map(|(i, _)| (i + 1).min(col.saturating_sub(1))),
         };
 
         if let Some(nc) = new_col {
@@ -2107,7 +2582,9 @@ impl BooApp {
 
     fn copy_mode_jump_repeat(&mut self, reverse: bool) {
         let Some(ref cm) = self.copy_mode else { return };
-        let Some((target, kind)) = cm.last_jump else { return };
+        let Some((target, kind)) = cm.last_jump else {
+            return;
+        };
         let kind = if reverse {
             match kind {
                 JumpKind::Forward => JumpKind::Backward,
@@ -2122,7 +2599,9 @@ impl BooApp {
     }
 
     fn copy_mode_paragraph(&mut self, forward: bool) {
-        let Some(ref mut cm) = self.copy_mode else { return };
+        let Some(ref mut cm) = self.copy_mode else {
+            return;
+        };
         let offset = self.scrollbar.offset as i64;
         let max_row = self.scrollbar.total as i64;
 
@@ -2166,8 +2645,12 @@ impl BooApp {
     }
 
     fn copy_mode_matching_bracket(&mut self) {
-        let Some(line) = self.read_viewport_line_for_cursor() else { return };
-        let Some(ref mut cm) = self.copy_mode else { return };
+        let Some(line) = self.read_viewport_line_for_cursor() else {
+            return;
+        };
+        let Some(ref mut cm) = self.copy_mode else {
+            return;
+        };
         let chars: Vec<char> = line.chars().collect();
         let col = cm.cursor_col as usize;
 
@@ -2184,16 +2667,24 @@ impl BooApp {
                     break;
                 }
             }
-            if found.is_some() { break; }
+            if found.is_some() {
+                break;
+            }
         }
 
-        let Some((pos, open, close, is_open)) = found else { return };
+        let Some((pos, open, close, is_open)) = found else {
+            return;
+        };
         // Simple single-line bracket matching
         let mut depth = 0i32;
         if is_open {
             for i in pos..chars.len() {
-                if chars[i] == open { depth += 1; }
-                if chars[i] == close { depth -= 1; }
+                if chars[i] == open {
+                    depth += 1;
+                }
+                if chars[i] == close {
+                    depth -= 1;
+                }
                 if depth == 0 {
                     cm.cursor_col = i as u32;
                     break;
@@ -2201,8 +2692,12 @@ impl BooApp {
             }
         } else {
             for i in (0..=pos).rev() {
-                if chars[i] == close { depth += 1; }
-                if chars[i] == open { depth -= 1; }
+                if chars[i] == close {
+                    depth += 1;
+                }
+                if chars[i] == open {
+                    depth -= 1;
+                }
                 if depth == 0 {
                     cm.cursor_col = i as u32;
                     break;
@@ -2217,15 +2712,23 @@ impl BooApp {
         let cm = self.copy_mode.as_ref()?;
         let chars: Vec<char> = line.chars().collect();
         let col = cm.cursor_col as usize;
-        if col >= chars.len() { return None; }
+        if col >= chars.len() {
+            return None;
+        }
 
         let is_word = |c: char| c.is_alphanumeric() || c == '_';
-        if !is_word(chars[col]) { return None; }
+        if !is_word(chars[col]) {
+            return None;
+        }
 
         let mut start = col;
-        while start > 0 && is_word(chars[start - 1]) { start -= 1; }
+        while start > 0 && is_word(chars[start - 1]) {
+            start -= 1;
+        }
         let mut end = col;
-        while end + 1 < chars.len() && is_word(chars[end + 1]) { end += 1; }
+        while end + 1 < chars.len() && is_word(chars[end + 1]) {
+            end += 1;
+        }
 
         Some(chars[start..=end].iter().collect())
     }
@@ -2238,7 +2741,9 @@ impl BooApp {
         };
 
         let Some(ref cm) = self.copy_mode else { return };
-        let Some((anchor_row, anchor_col)) = cm.sel_anchor else { return };
+        let Some((anchor_row, anchor_col)) = cm.sel_anchor else {
+            return;
+        };
 
         let (r1, c1, r2, c2) = if anchor_row < cm.cursor_row
             || (anchor_row == cm.cursor_row && anchor_col <= cm.cursor_col)
@@ -2249,7 +2754,9 @@ impl BooApp {
         };
         let (c1, c2) = if cm.selection == SelectionMode::Line {
             (0u32, cm.viewport_cols.saturating_sub(1))
-        } else { (c1, c2) };
+        } else {
+            (c1, c2)
+        };
 
         let sel = ffi::ghostty_selection_s {
             top_left: ffi::ghostty_point_s {
@@ -2346,9 +2853,16 @@ impl BooApp {
         let rects = if cm.selection != SelectionMode::None {
             if let Some((anchor_row, anchor_col)) = cm.sel_anchor {
                 Self::compute_selection_rects_static(
-                    cm.selection, cm.cursor_row, cm.cursor_col,
-                    anchor_row, anchor_col, offset,
-                    cm.viewport_cols, cm.cell_width, cm.cell_height, term_y,
+                    cm.selection,
+                    cm.cursor_row,
+                    cm.cursor_col,
+                    anchor_row,
+                    anchor_col,
+                    offset,
+                    cm.viewport_cols,
+                    cm.cell_width,
+                    cm.cell_height,
+                    term_y,
                 )
             } else {
                 vec![]
@@ -2368,26 +2882,36 @@ impl BooApp {
         }
         // Hide unused layers
         for i in rects.len()..cm.highlight_layers.len() {
-            platform::update_highlight_layer(cm.highlight_layers[i], 0.0, 0.0, 0.0, 0.0, false, true);
+            platform::update_highlight_layer(
+                cm.highlight_layers[i],
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                false,
+                true,
+            );
         }
     }
 
     fn compute_selection_rects_static(
         selection: SelectionMode,
-        cursor_row: i64, cursor_col: u32,
-        anchor_row: i64, anchor_col: u32,
+        cursor_row: i64,
+        cursor_col: u32,
+        anchor_row: i64,
+        anchor_col: u32,
         offset: i64,
         viewport_cols: u32,
-        cell_width: f64, cell_height: f64,
+        cell_width: f64,
+        cell_height: f64,
         term_y: f64,
     ) -> Vec<(f64, f64, f64, f64)> {
-        let (r1, c1, r2, c2) = if anchor_row < cursor_row
-            || (anchor_row == cursor_row && anchor_col <= cursor_col)
-        {
-            (anchor_row, anchor_col, cursor_row, cursor_col)
-        } else {
-            (cursor_row, cursor_col, anchor_row, anchor_col)
-        };
+        let (r1, c1, r2, c2) =
+            if anchor_row < cursor_row || (anchor_row == cursor_row && anchor_col <= cursor_col) {
+                (anchor_row, anchor_col, cursor_row, cursor_col)
+            } else {
+                (cursor_row, cursor_col, anchor_row, anchor_col)
+            };
         let full_w = viewport_cols as f64 * cell_width;
 
         match selection {
@@ -2400,7 +2924,12 @@ impl BooApp {
                 } else {
                     let mut rects = Vec::new();
                     let y1 = term_y + (r1 - offset) as f64 * cell_height;
-                    rects.push((c1 as f64 * cell_width, y1, full_w - c1 as f64 * cell_width, cell_height));
+                    rects.push((
+                        c1 as f64 * cell_width,
+                        y1,
+                        full_w - c1 as f64 * cell_width,
+                        cell_height,
+                    ));
                     for r in (r1 + 1)..r2 {
                         let y = term_y + (r - offset) as f64 * cell_height;
                         rects.push((0.0, y, full_w, cell_height));
@@ -2410,21 +2939,23 @@ impl BooApp {
                     rects
                 }
             }
-            SelectionMode::Line => {
-                (r1..=r2).map(|r| {
+            SelectionMode::Line => (r1..=r2)
+                .map(|r| {
                     let y = term_y + (r - offset) as f64 * cell_height;
                     (0.0, y, full_w, cell_height)
-                }).collect()
-            }
+                })
+                .collect(),
             SelectionMode::Rectangle => {
                 let min_c = c1.min(c2);
                 let max_c = c1.max(c2);
                 let x = min_c as f64 * cell_width;
                 let w = (max_c as f64 - min_c as f64 + 1.0) * cell_width;
-                (r1..=r2).map(|r| {
-                    let y = term_y + (r - offset) as f64 * cell_height;
-                    (x, y, w, cell_height)
-                }).collect()
+                (r1..=r2)
+                    .map(|r| {
+                        let y = term_y + (r - offset) as f64 * cell_height;
+                        (x, y, w, cell_height)
+                    })
+                    .collect()
             }
             SelectionMode::None => vec![],
         }
@@ -2432,7 +2963,9 @@ impl BooApp {
 
     fn copy_mode_copy(&mut self) {
         let Some(ref cm) = self.copy_mode else { return };
-        let Some((anchor_row, anchor_col)) = cm.sel_anchor else { return };
+        let Some((anchor_row, anchor_col)) = cm.sel_anchor else {
+            return;
+        };
 
         let (r1, c1, r2, c2) = if anchor_row < cm.cursor_row
             || (anchor_row == cm.cursor_row && anchor_col <= cm.cursor_col)
@@ -2491,7 +3024,9 @@ impl BooApp {
                 self.relayout();
             }
             bindings::Action::CloseSurface => self.handle_surface_closed(),
-            bindings::Action::NewTab => self.new_tab(),
+            bindings::Action::NewTab => {
+                let _ = self.new_tab();
+            }
             bindings::Action::NextTab => {
                 self.tabs.next_tab();
                 self.sync_after_tab_change();
@@ -2627,7 +3162,9 @@ impl BooApp {
                     // History navigation
                     let hist_len = self.command_prompt.history.len();
                     if hist_len > 0 {
-                        let idx = self.command_prompt.history_idx
+                        let idx = self
+                            .command_prompt
+                            .history_idx
                             .map(|i| i.saturating_sub(1))
                             .unwrap_or(hist_len - 1);
                         self.command_prompt.history_idx = Some(idx);
@@ -2637,7 +3174,9 @@ impl BooApp {
             }
             keyboard::Key::Named(Named::ArrowDown) => {
                 if !self.command_prompt.suggestions.is_empty() {
-                    if self.command_prompt.selected_suggestion + 1 < self.command_prompt.suggestions.len() {
+                    if self.command_prompt.selected_suggestion + 1
+                        < self.command_prompt.suggestions.len()
+                    {
                         self.command_prompt.selected_suggestion += 1;
                     }
                 } else {
@@ -2645,7 +3184,8 @@ impl BooApp {
                     if let Some(idx) = self.command_prompt.history_idx {
                         if idx + 1 < self.command_prompt.history.len() {
                             self.command_prompt.history_idx = Some(idx + 1);
-                            self.command_prompt.input = self.command_prompt.history[idx + 1].clone();
+                            self.command_prompt.input =
+                                self.command_prompt.history[idx + 1].clone();
                         } else {
                             self.command_prompt.history_idx = None;
                             self.command_prompt.input.clear();
@@ -2675,31 +3215,52 @@ impl BooApp {
 
     fn execute_command(&mut self, input: &str) {
         let parts: Vec<&str> = input.split_whitespace().collect();
-        if parts.is_empty() { return; }
+        if parts.is_empty() {
+            return;
+        }
 
         let cmd = parts[0];
         let arg1 = parts.get(1).copied();
 
         match cmd {
-            "split-right" => self.dispatch_binding_action(bindings::Action::NewSplit(bindings::SplitDirection::Right)),
-            "split-down" => self.dispatch_binding_action(bindings::Action::NewSplit(bindings::SplitDirection::Down)),
-            "split-left" => self.dispatch_binding_action(bindings::Action::NewSplit(bindings::SplitDirection::Left)),
-            "split-up" => self.dispatch_binding_action(bindings::Action::NewSplit(bindings::SplitDirection::Up)),
+            "split-right" => self.dispatch_binding_action(bindings::Action::NewSplit(
+                bindings::SplitDirection::Right,
+            )),
+            "split-down" => self.dispatch_binding_action(bindings::Action::NewSplit(
+                bindings::SplitDirection::Down,
+            )),
+            "split-left" => self.dispatch_binding_action(bindings::Action::NewSplit(
+                bindings::SplitDirection::Left,
+            )),
+            "split-up" => self
+                .dispatch_binding_action(bindings::Action::NewSplit(bindings::SplitDirection::Up)),
             "resize-left" => {
                 let n: u16 = arg1.and_then(|s| s.parse().ok()).unwrap_or(10);
-                self.dispatch_binding_action(bindings::Action::ResizeSplit(bindings::Direction::Left, n));
+                self.dispatch_binding_action(bindings::Action::ResizeSplit(
+                    bindings::Direction::Left,
+                    n,
+                ));
             }
             "resize-right" => {
                 let n: u16 = arg1.and_then(|s| s.parse().ok()).unwrap_or(10);
-                self.dispatch_binding_action(bindings::Action::ResizeSplit(bindings::Direction::Right, n));
+                self.dispatch_binding_action(bindings::Action::ResizeSplit(
+                    bindings::Direction::Right,
+                    n,
+                ));
             }
             "resize-up" => {
                 let n: u16 = arg1.and_then(|s| s.parse().ok()).unwrap_or(10);
-                self.dispatch_binding_action(bindings::Action::ResizeSplit(bindings::Direction::Up, n));
+                self.dispatch_binding_action(bindings::Action::ResizeSplit(
+                    bindings::Direction::Up,
+                    n,
+                ));
             }
             "resize-down" => {
                 let n: u16 = arg1.and_then(|s| s.parse().ok()).unwrap_or(10);
-                self.dispatch_binding_action(bindings::Action::ResizeSplit(bindings::Direction::Down, n));
+                self.dispatch_binding_action(bindings::Action::ResizeSplit(
+                    bindings::Direction::Down,
+                    n,
+                ));
             }
             "close-pane" => self.dispatch_binding_action(bindings::Action::CloseSurface),
             "new-tab" => self.dispatch_binding_action(bindings::Action::NewTab),
@@ -2708,10 +3269,14 @@ impl BooApp {
             "close-tab" => self.dispatch_binding_action(bindings::Action::CloseTab),
             "goto-tab" => {
                 if let Some(n) = arg1.and_then(|s| s.parse::<usize>().ok()) {
-                    self.dispatch_binding_action(bindings::Action::GotoTab(bindings::TabTarget::Index(n.saturating_sub(1))));
+                    self.dispatch_binding_action(bindings::Action::GotoTab(
+                        bindings::TabTarget::Index(n.saturating_sub(1)),
+                    ));
                 }
             }
-            "last-tab" => self.dispatch_binding_action(bindings::Action::GotoTab(bindings::TabTarget::Last)),
+            "last-tab" => {
+                self.dispatch_binding_action(bindings::Action::GotoTab(bindings::TabTarget::Last))
+            }
             "next-pane" => self.dispatch_binding_action(bindings::Action::NextPane),
             "prev-pane" => self.dispatch_binding_action(bindings::Action::PreviousPane),
             "copy-mode" => self.dispatch_binding_action(bindings::Action::EnterCopyMode),
@@ -2881,7 +3446,8 @@ impl BooApp {
             let _ = if target_row == 0 {
                 self.backend.scroll_viewport_top(self.tabs.focused_pane())
             } else if target_row >= max_offset {
-                self.backend.scroll_viewport_bottom(self.tabs.focused_pane())
+                self.backend
+                    .scroll_viewport_bottom(self.tabs.focused_pane())
             } else {
                 self.backend
                     .scroll_viewport_delta(self.tabs.focused_pane(), delta as isize)
@@ -2890,7 +3456,11 @@ impl BooApp {
     }
 
     fn terminal_frame(&self) -> platform::Rect {
-        let search_offset = if self.search_active { STATUS_BAR_HEIGHT } else { 0.0 };
+        let search_offset = if self.search_active {
+            STATUS_BAR_HEIGHT
+        } else {
+            0.0
+        };
         platform::Rect::new(
             platform::Point::new(0.0, search_offset),
             platform::Size::new(
@@ -2940,9 +3510,7 @@ impl BooApp {
                     // Check scrollbar area (rightmost 10px)
                     let (mx, my) = self.last_mouse_pos;
                     let terminal_h = self.last_size.height as f64 - STATUS_BAR_HEIGHT;
-                    if mx >= self.last_size.width as f64 - 10.0
-                        && my < terminal_h
-                    {
+                    if mx >= self.last_size.width as f64 - 10.0 && my < terminal_h {
                         self.scrollbar_drag = true;
                         self.scrollbar_opacity = 1.0;
                         self.scroll_to_mouse_y(my);
@@ -3068,7 +3636,6 @@ impl BooApp {
         Some(platform::view_bounds(self.parent_view))
     }
 
-
     fn handle_resize(&mut self, size: Size) {
         self.last_size = size;
         self.relayout();
@@ -3109,7 +3676,9 @@ impl BooApp {
         let Some(pane) = self.create_pane(
             frame,
             ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_WINDOW,
-        ) else { return };
+        ) else {
+            return;
+        };
         self.tabs.add_initial_tab(pane);
         self.set_pane_focus(pane, true);
 
@@ -3117,7 +3686,10 @@ impl BooApp {
         {
             let scale = self.scale_factor();
             let (w, h) = if frame.size.width > 0.0 && frame.size.height > 0.0 {
-                ((frame.size.width * scale) as u32, (frame.size.height * scale) as u32)
+                (
+                    (frame.size.width * scale) as u32,
+                    (frame.size.height * scale) as u32,
+                )
             } else {
                 (800, 600) // default until first resize
             };
@@ -3177,7 +3749,9 @@ impl BooApp {
         let Some(pane) = self.create_pane(
             parent_bounds,
             ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_SPLIT,
-        ) else { return };
+        ) else {
+            return;
+        };
         let old_focused = self.tabs.focused_pane();
         if let Some(tree) = self.tabs.active_tree_mut() {
             tree.split_focused(split_dir, pane);
@@ -3261,14 +3835,16 @@ impl BooApp {
         self.relayout();
     }
 
-    fn new_tab(&mut self) {
+    fn new_tab(&mut self) -> Option<u32> {
         let Some(frame) = self.pane_parent_frame() else {
-            return;
+            return None;
         };
         let Some(pane) = self.create_pane(
             frame,
             ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_TAB,
-        ) else { return };
+        ) else {
+            return None;
+        };
         let old = self.tabs.focused_pane();
         self.set_pane_focus(old, false);
 
@@ -3276,6 +3852,7 @@ impl BooApp {
         self.set_pane_focus(pane, true);
         self.relayout();
         log::info!("new tab {idx} (total: {})", self.tabs.len());
+        self.tabs.session_id_for_index(idx)
     }
 
     fn load_session(&mut self, name: &str) {
@@ -3283,7 +3860,11 @@ impl BooApp {
             log::warn!("session not found: {name}");
             return;
         };
-        log::info!("loading session: {} ({} tabs)", layout.name, layout.tabs.len());
+        log::info!(
+            "loading session: {} ({} tabs)",
+            layout.name,
+            layout.tabs.len()
+        );
         let Some(frame) = self.pane_parent_frame() else {
             return;
         };
@@ -3297,8 +3878,14 @@ impl BooApp {
             };
 
             for (pane_idx, pane) in session_tab.panes.iter().enumerate() {
-                let cmd_cstr = pane.command.as_ref().map(|c| CString::new(c.as_str()).unwrap());
-                let wd_cstr = pane.working_directory.as_ref().map(|w| CString::new(w.as_str()).unwrap());
+                let cmd_cstr = pane
+                    .command
+                    .as_ref()
+                    .map(|c| CString::new(c.as_str()).unwrap());
+                let wd_cstr = pane
+                    .working_directory
+                    .as_ref()
+                    .map(|w| CString::new(w.as_str()).unwrap());
 
                 if pane_idx == 0 {
                     // First pane → create a new tab
@@ -3311,7 +3898,9 @@ impl BooApp {
                         },
                         cmd_cstr.as_deref(),
                         wd_cstr.as_deref(),
-                    ) else { continue };
+                    ) else {
+                        continue;
+                    };
                     let old = self.tabs.focused_pane();
                     self.set_pane_focus(old, false);
                     self.tabs.new_tab(pane);
@@ -3342,13 +3931,11 @@ impl BooApp {
                         ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_SPLIT,
                         cmd_cstr.as_deref(),
                         wd_cstr.as_deref(),
-                    ) else { continue };
+                    ) else {
+                        continue;
+                    };
                     if let Some(tree) = self.tabs.active_tree_mut() {
-                        tree.split_focused_with_ratio(
-                            split_dir,
-                            pane,
-                            ratio,
-                        );
+                        tree.split_focused_with_ratio(split_dir, pane, ratio);
                     }
                     self.set_pane_focus(pane, true);
                 }
@@ -3366,33 +3953,46 @@ impl BooApp {
 
     fn save_current_session(&self, name: &str) {
         let tab_infos = self.tabs.tab_info();
-        let tabs: Vec<session::SessionTab> = tab_infos.iter().map(|info| {
-            let panes = if let Some(tree) = self.tabs.tab_tree(info.index) {
-                tree.export_panes().into_iter().map(|ep| {
-                    let split = ep.split.map(|(dir, ratio)| session::SplitSpec {
-                        direction: match dir {
-                            splits::Direction::Horizontal => session::SplitDir::Right,
-                            splits::Direction::Vertical => session::SplitDir::Down,
-                        },
-                        ratio,
-                    });
-                    session::SessionPane {
-                        command: None, // can't read running command from ghostty
+        let tabs: Vec<session::SessionTab> = tab_infos
+            .iter()
+            .map(|info| {
+                let panes = if let Some(tree) = self.tabs.tab_tree(info.index) {
+                    tree.export_panes()
+                        .into_iter()
+                        .map(|ep| {
+                            let split = ep.split.map(|(dir, ratio)| session::SplitSpec {
+                                direction: match dir {
+                                    splits::Direction::Horizontal => session::SplitDir::Right,
+                                    splits::Direction::Vertical => session::SplitDir::Down,
+                                },
+                                ratio,
+                            });
+                            session::SessionPane {
+                                command: None, // can't read running command from ghostty
+                                working_directory: None,
+                                split,
+                            }
+                        })
+                        .collect()
+                } else {
+                    vec![session::SessionPane {
+                        command: None,
                         working_directory: None,
-                        split,
-                    }
-                }).collect()
-            } else {
-                vec![session::SessionPane { command: None, working_directory: None, split: None }]
-            };
-            session::SessionTab {
-                title: info.title.clone(),
-                layout: session::TabLayout::Manual,
-                panes,
-            }
-        }).collect();
+                        split: None,
+                    }]
+                };
+                session::SessionTab {
+                    title: info.title.clone(),
+                    layout: session::TabLayout::Manual,
+                    panes,
+                }
+            })
+            .collect();
 
-        let layout = session::SessionLayout { name: name.to_string(), tabs };
+        let layout = session::SessionLayout {
+            name: name.to_string(),
+            tabs,
+        };
         if let Err(e) = session::save_session(&layout) {
             log::error!("failed to save session: {e}");
         }
@@ -3423,7 +4023,10 @@ impl BooApp {
                 )
                 .style(|_: &Theme| container::Style {
                     background: Some(iced::Background::Color(Color::from_rgba(
-                        0.15, 0.15, 0.15, self.panel_alpha(0.95),
+                        0.15,
+                        0.15,
+                        0.15,
+                        self.panel_alpha(0.95),
                     ))),
                     ..Default::default()
                 })
@@ -3464,12 +4067,14 @@ impl BooApp {
                     })
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|(x, y, width, height)| vt_terminal_canvas::TerminalSelectionRect {
-                        x: x as f32,
-                        y: y as f32,
-                        width: width as f32,
-                        height: height as f32,
-                    })
+                    .map(
+                        |(x, y, width, height)| vt_terminal_canvas::TerminalSelectionRect {
+                            x: x as f32,
+                            y: y as f32,
+                            width: width as f32,
+                            height: height as f32,
+                        },
+                    )
                     .collect::<Vec<_>>();
 
                 let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
@@ -3493,16 +4098,22 @@ impl BooApp {
                     )
                     .width(Length::Fill)
                     .height(Length::Fill)
-                    .style(|_: &Theme| container::Style { ..Default::default() }),
+                    .style(|_: &Theme| container::Style {
+                        ..Default::default()
+                    }),
                 );
             } else {
                 main_col = main_col.push(
-                    iced::widget::Space::new().width(Length::Fill).height(Length::Fill),
+                    iced::widget::Space::new()
+                        .width(Length::Fill)
+                        .height(Length::Fill),
                 );
             }
         } else {
             main_col = main_col.push(
-                iced::widget::Space::new().width(Length::Fill).height(Length::Fill),
+                iced::widget::Space::new()
+                    .width(Length::Fill)
+                    .height(Length::Fill),
             );
         }
 
@@ -3530,16 +4141,14 @@ impl BooApp {
                         Color::from_rgba(0.1, 0.1, 0.1, 0.9)
                     };
                     suggestion_col = suggestion_col.push(
-                        container(
-                            text(label).font(ui_font).size(13).color(fg),
-                        )
-                        .style(move |_: &Theme| container::Style {
-                            background: Some(iced::Background::Color(bg)),
-                            ..Default::default()
-                        })
-                        .width(Length::Fill)
-                        .height(Length::Fixed(STATUS_BAR_HEIGHT as f32))
-                        .padding([2, 6]),
+                        container(text(label).font(ui_font).size(13).color(fg))
+                            .style(move |_: &Theme| container::Style {
+                                background: Some(iced::Background::Color(bg)),
+                                ..Default::default()
+                            })
+                            .width(Length::Fill)
+                            .height(Length::Fixed(STATUS_BAR_HEIGHT as f32))
+                            .padding([2, 6]),
                     );
                 }
                 main_col = main_col.push(suggestion_col);
@@ -3556,7 +4165,10 @@ impl BooApp {
                 )
                 .style(|_: &Theme| container::Style {
                     background: Some(iced::Background::Color(Color::from_rgba(
-                        0.15, 0.15, 0.15, self.panel_alpha(0.95),
+                        0.15,
+                        0.15,
+                        0.15,
+                        self.panel_alpha(0.95),
                     ))),
                     ..Default::default()
                 })
@@ -3621,11 +4233,7 @@ impl BooApp {
 
         // Right: pane count + mode
         let mut right_parts = Vec::new();
-        let active_surfaces = self
-            .tabs
-            .active_tree()
-            .map(|t| t.len())
-            .unwrap_or(0);
+        let active_surfaces = self.tabs.active_tree().map(|t| t.len()).unwrap_or(0);
         if active_surfaces > 1 {
             right_parts.push(format!("{active_surfaces} panes"));
         }
@@ -3693,33 +4301,182 @@ fn shifted_codepoint(keycode: u32, mods: i32) -> u32 {
     let has_shift = mods & ffi::GHOSTTY_MODS_SHIFT != 0;
     #[cfg(target_os = "macos")]
     let base = match keycode {
-        0x00 => 'a', 0x01 => 's', 0x02 => 'd', 0x03 => 'f', 0x04 => 'h',
-        0x05 => 'g', 0x06 => 'z', 0x07 => 'x', 0x08 => 'c', 0x09 => 'v',
-        0x0B => 'b', 0x0C => 'q', 0x0D => 'w', 0x0E => 'e', 0x0F => 'r',
-        0x10 => 'y', 0x11 => 't', 0x20 => 'u', 0x22 => 'i', 0x1F => 'o',
-        0x23 => 'p', 0x25 => 'l', 0x26 => 'j', 0x28 => 'k', 0x2D => 'n',
-        0x2E => 'm', 0x31 => ' ', 0x24 => '\r', 0x30 => '\t',
-        0x12 => if has_shift { '!' } else { '1' },
-        0x13 => if has_shift { '@' } else { '2' },
-        0x14 => if has_shift { '#' } else { '3' },
-        0x15 => if has_shift { '$' } else { '4' },
-        0x17 => if has_shift { '%' } else { '5' },
-        0x16 => if has_shift { '^' } else { '6' },
-        0x1A => if has_shift { '&' } else { '7' },
-        0x1C => if has_shift { '*' } else { '8' },
-        0x19 => if has_shift { '(' } else { '9' },
-        0x1D => if has_shift { ')' } else { '0' },
-        0x27 => if has_shift { '"' } else { '\'' },
-        0x2A => if has_shift { '|' } else { '\\' },
-        0x2B => if has_shift { '<' } else { ',' },
-        0x2F => if has_shift { '>' } else { '.' },
-        0x2C => if has_shift { '?' } else { '/' },
-        0x29 => if has_shift { ':' } else { ';' },
-        0x1B => if has_shift { '_' } else { '-' },
-        0x18 => if has_shift { '+' } else { '=' },
-        0x21 => if has_shift { '{' } else { '[' },
-        0x1E => if has_shift { '}' } else { ']' },
-        0x32 => if has_shift { '~' } else { '`' },
+        0x00 => 'a',
+        0x01 => 's',
+        0x02 => 'd',
+        0x03 => 'f',
+        0x04 => 'h',
+        0x05 => 'g',
+        0x06 => 'z',
+        0x07 => 'x',
+        0x08 => 'c',
+        0x09 => 'v',
+        0x0B => 'b',
+        0x0C => 'q',
+        0x0D => 'w',
+        0x0E => 'e',
+        0x0F => 'r',
+        0x10 => 'y',
+        0x11 => 't',
+        0x20 => 'u',
+        0x22 => 'i',
+        0x1F => 'o',
+        0x23 => 'p',
+        0x25 => 'l',
+        0x26 => 'j',
+        0x28 => 'k',
+        0x2D => 'n',
+        0x2E => 'm',
+        0x31 => ' ',
+        0x24 => '\r',
+        0x30 => '\t',
+        0x12 => {
+            if has_shift {
+                '!'
+            } else {
+                '1'
+            }
+        }
+        0x13 => {
+            if has_shift {
+                '@'
+            } else {
+                '2'
+            }
+        }
+        0x14 => {
+            if has_shift {
+                '#'
+            } else {
+                '3'
+            }
+        }
+        0x15 => {
+            if has_shift {
+                '$'
+            } else {
+                '4'
+            }
+        }
+        0x17 => {
+            if has_shift {
+                '%'
+            } else {
+                '5'
+            }
+        }
+        0x16 => {
+            if has_shift {
+                '^'
+            } else {
+                '6'
+            }
+        }
+        0x1A => {
+            if has_shift {
+                '&'
+            } else {
+                '7'
+            }
+        }
+        0x1C => {
+            if has_shift {
+                '*'
+            } else {
+                '8'
+            }
+        }
+        0x19 => {
+            if has_shift {
+                '('
+            } else {
+                '9'
+            }
+        }
+        0x1D => {
+            if has_shift {
+                ')'
+            } else {
+                '0'
+            }
+        }
+        0x27 => {
+            if has_shift {
+                '"'
+            } else {
+                '\''
+            }
+        }
+        0x2A => {
+            if has_shift {
+                '|'
+            } else {
+                '\\'
+            }
+        }
+        0x2B => {
+            if has_shift {
+                '<'
+            } else {
+                ','
+            }
+        }
+        0x2F => {
+            if has_shift {
+                '>'
+            } else {
+                '.'
+            }
+        }
+        0x2C => {
+            if has_shift {
+                '?'
+            } else {
+                '/'
+            }
+        }
+        0x29 => {
+            if has_shift {
+                ':'
+            } else {
+                ';'
+            }
+        }
+        0x1B => {
+            if has_shift {
+                '_'
+            } else {
+                '-'
+            }
+        }
+        0x18 => {
+            if has_shift {
+                '+'
+            } else {
+                '='
+            }
+        }
+        0x21 => {
+            if has_shift {
+                '{'
+            } else {
+                '['
+            }
+        }
+        0x1E => {
+            if has_shift {
+                '}'
+            } else {
+                ']'
+            }
+        }
+        0x32 => {
+            if has_shift {
+                '~'
+            } else {
+                '`'
+            }
+        }
         _ => return 0,
     };
     #[cfg(target_os = "linux")]
@@ -3735,33 +4492,182 @@ fn shifted_codepoint(keycode: u32, mods: i32) -> u32 {
 fn shifted_codepoint_vt(keycode: u32, mods: i32) -> u32 {
     let has_shift = mods & ffi::GHOSTTY_MODS_SHIFT != 0;
     let base = match keycode {
-        20 => 'a', 21 => 'b', 22 => 'c', 23 => 'd', 24 => 'e',
-        25 => 'f', 26 => 'g', 27 => 'h', 28 => 'i', 29 => 'j',
-        30 => 'k', 31 => 'l', 32 => 'm', 33 => 'n', 34 => 'o',
-        35 => 'p', 36 => 'q', 37 => 'r', 38 => 's', 39 => 't',
-        40 => 'u', 41 => 'v', 42 => 'w', 43 => 'x', 44 => 'y',
-        45 => 'z', 63 => ' ', 58 => '\r', 64 => '\t',
-        7 => if has_shift { '!' } else { '1' },
-        8 => if has_shift { '@' } else { '2' },
-        9 => if has_shift { '#' } else { '3' },
-        10 => if has_shift { '$' } else { '4' },
-        11 => if has_shift { '%' } else { '5' },
-        12 => if has_shift { '^' } else { '6' },
-        13 => if has_shift { '&' } else { '7' },
-        14 => if has_shift { '*' } else { '8' },
-        15 => if has_shift { '(' } else { '9' },
-        6 => if has_shift { ')' } else { '0' },
-        48 => if has_shift { '"' } else { '\'' },
-        2 => if has_shift { '|' } else { '\\' },
-        5 => if has_shift { '<' } else { ',' },
-        47 => if has_shift { '>' } else { '.' },
-        50 => if has_shift { '?' } else { '/' },
-        49 => if has_shift { ':' } else { ';' },
-        46 => if has_shift { '_' } else { '-' },
-        16 => if has_shift { '+' } else { '=' },
-        3 => if has_shift { '{' } else { '[' },
-        4 => if has_shift { '}' } else { ']' },
-        1 => if has_shift { '~' } else { '`' },
+        20 => 'a',
+        21 => 'b',
+        22 => 'c',
+        23 => 'd',
+        24 => 'e',
+        25 => 'f',
+        26 => 'g',
+        27 => 'h',
+        28 => 'i',
+        29 => 'j',
+        30 => 'k',
+        31 => 'l',
+        32 => 'm',
+        33 => 'n',
+        34 => 'o',
+        35 => 'p',
+        36 => 'q',
+        37 => 'r',
+        38 => 's',
+        39 => 't',
+        40 => 'u',
+        41 => 'v',
+        42 => 'w',
+        43 => 'x',
+        44 => 'y',
+        45 => 'z',
+        63 => ' ',
+        58 => '\r',
+        64 => '\t',
+        7 => {
+            if has_shift {
+                '!'
+            } else {
+                '1'
+            }
+        }
+        8 => {
+            if has_shift {
+                '@'
+            } else {
+                '2'
+            }
+        }
+        9 => {
+            if has_shift {
+                '#'
+            } else {
+                '3'
+            }
+        }
+        10 => {
+            if has_shift {
+                '$'
+            } else {
+                '4'
+            }
+        }
+        11 => {
+            if has_shift {
+                '%'
+            } else {
+                '5'
+            }
+        }
+        12 => {
+            if has_shift {
+                '^'
+            } else {
+                '6'
+            }
+        }
+        13 => {
+            if has_shift {
+                '&'
+            } else {
+                '7'
+            }
+        }
+        14 => {
+            if has_shift {
+                '*'
+            } else {
+                '8'
+            }
+        }
+        15 => {
+            if has_shift {
+                '('
+            } else {
+                '9'
+            }
+        }
+        6 => {
+            if has_shift {
+                ')'
+            } else {
+                '0'
+            }
+        }
+        48 => {
+            if has_shift {
+                '"'
+            } else {
+                '\''
+            }
+        }
+        2 => {
+            if has_shift {
+                '|'
+            } else {
+                '\\'
+            }
+        }
+        5 => {
+            if has_shift {
+                '<'
+            } else {
+                ','
+            }
+        }
+        47 => {
+            if has_shift {
+                '>'
+            } else {
+                '.'
+            }
+        }
+        50 => {
+            if has_shift {
+                '?'
+            } else {
+                '/'
+            }
+        }
+        49 => {
+            if has_shift {
+                ':'
+            } else {
+                ';'
+            }
+        }
+        46 => {
+            if has_shift {
+                '_'
+            } else {
+                '-'
+            }
+        }
+        16 => {
+            if has_shift {
+                '+'
+            } else {
+                '='
+            }
+        }
+        3 => {
+            if has_shift {
+                '{'
+            } else {
+                '['
+            }
+        }
+        4 => {
+            if has_shift {
+                '}'
+            } else {
+                ']'
+            }
+        }
+        1 => {
+            if has_shift {
+                '~'
+            } else {
+                '`'
+            }
+        }
         _ => return 0,
     };
     if has_shift && base.is_ascii_lowercase() {
@@ -3802,41 +4708,84 @@ fn parse_keyspec(spec: &str) -> Option<(u32, i32)> {
     }
     #[cfg(target_os = "macos")]
     let keycode = match key_part {
-        "a" => 0x00, "s" => 0x01, "d" => 0x02, "f" => 0x03,
-        "h" => 0x04, "g" => 0x05, "z" => 0x06, "x" => 0x07,
-        "c" => 0x08, "v" => 0x09, "b" => 0x0B, "q" => 0x0C,
-        "w" => 0x0D, "e" => 0x0E, "r" => 0x0F, "y" => 0x10,
-        "t" => 0x11, "u" => 0x20, "i" => 0x22, "o" => 0x1F,
-        "p" => 0x23, "l" => 0x25, "j" => 0x26, "k" => 0x28,
-        "n" => 0x2D, "m" => 0x2E,
+        "a" => 0x00,
+        "s" => 0x01,
+        "d" => 0x02,
+        "f" => 0x03,
+        "h" => 0x04,
+        "g" => 0x05,
+        "z" => 0x06,
+        "x" => 0x07,
+        "c" => 0x08,
+        "v" => 0x09,
+        "b" => 0x0B,
+        "q" => 0x0C,
+        "w" => 0x0D,
+        "e" => 0x0E,
+        "r" => 0x0F,
+        "y" => 0x10,
+        "t" => 0x11,
+        "u" => 0x20,
+        "i" => 0x22,
+        "o" => 0x1F,
+        "p" => 0x23,
+        "l" => 0x25,
+        "j" => 0x26,
+        "k" => 0x28,
+        "n" => 0x2D,
+        "m" => 0x2E,
         "enter" | "return" => 0x24,
-        "tab" => 0x30, "space" => 0x31, "escape" | "esc" => 0x35,
+        "tab" => 0x30,
+        "space" => 0x31,
+        "escape" | "esc" => 0x35,
         "backspace" => 0x33,
-        _ if key_part.starts_with("0x") => {
-            u32::from_str_radix(&key_part[2..], 16).ok()?
-        }
+        _ if key_part.starts_with("0x") => u32::from_str_radix(&key_part[2..], 16).ok()?,
         _ => return None,
     };
     #[cfg(target_os = "linux")]
     let keycode = match key_part {
-        "a" => 20, "b" => 21, "c" => 22, "d" => 23,
-        "e" => 24, "f" => 25, "g" => 26, "h" => 27,
-        "i" => 28, "j" => 29, "k" => 30, "l" => 31,
-        "m" => 32, "n" => 33, "o" => 34, "p" => 35,
-        "q" => 36, "r" => 37, "s" => 38, "t" => 39,
-        "u" => 40, "v" => 41, "w" => 42, "x" => 43,
-        "y" => 44, "z" => 45,
-        "0" => 6, "1" => 7, "2" => 8, "3" => 9,
-        "4" => 10, "5" => 11, "6" => 12, "7" => 13,
-        "8" => 14, "9" => 15,
+        "a" => 20,
+        "b" => 21,
+        "c" => 22,
+        "d" => 23,
+        "e" => 24,
+        "f" => 25,
+        "g" => 26,
+        "h" => 27,
+        "i" => 28,
+        "j" => 29,
+        "k" => 30,
+        "l" => 31,
+        "m" => 32,
+        "n" => 33,
+        "o" => 34,
+        "p" => 35,
+        "q" => 36,
+        "r" => 37,
+        "s" => 38,
+        "t" => 39,
+        "u" => 40,
+        "v" => 41,
+        "w" => 42,
+        "x" => 43,
+        "y" => 44,
+        "z" => 45,
+        "0" => 6,
+        "1" => 7,
+        "2" => 8,
+        "3" => 9,
+        "4" => 10,
+        "5" => 11,
+        "6" => 12,
+        "7" => 13,
+        "8" => 14,
+        "9" => 15,
         "enter" | "return" => 58,
         "tab" => 64,
         "space" => 63,
         "escape" | "esc" => 120,
         "backspace" => 53,
-        _ if key_part.starts_with("0x") => {
-            u32::from_str_radix(&key_part[2..], 16).ok()?
-        }
+        _ if key_part.starts_with("0x") => u32::from_str_radix(&key_part[2..], 16).ok()?,
         _ => return None,
     };
     Some((keycode, mods))
@@ -3864,25 +4813,49 @@ fn parse_vt_keyspec(spec: &str) -> Option<(u32, i32)> {
         }
     }
     let keycode = match key_part {
-        "a" => 20, "b" => 21, "c" => 22, "d" => 23,
-        "e" => 24, "f" => 25, "g" => 26, "h" => 27,
-        "i" => 28, "j" => 29, "k" => 30, "l" => 31,
-        "m" => 32, "n" => 33, "o" => 34, "p" => 35,
-        "q" => 36, "r" => 37, "s" => 38, "t" => 39,
-        "u" => 40, "v" => 41, "w" => 42, "x" => 43,
-        "y" => 44, "z" => 45,
-        "0" => 6, "1" => 7, "2" => 8, "3" => 9,
-        "4" => 10, "5" => 11, "6" => 12, "7" => 13,
-        "8" => 14, "9" => 15,
+        "a" => 20,
+        "b" => 21,
+        "c" => 22,
+        "d" => 23,
+        "e" => 24,
+        "f" => 25,
+        "g" => 26,
+        "h" => 27,
+        "i" => 28,
+        "j" => 29,
+        "k" => 30,
+        "l" => 31,
+        "m" => 32,
+        "n" => 33,
+        "o" => 34,
+        "p" => 35,
+        "q" => 36,
+        "r" => 37,
+        "s" => 38,
+        "t" => 39,
+        "u" => 40,
+        "v" => 41,
+        "w" => 42,
+        "x" => 43,
+        "y" => 44,
+        "z" => 45,
+        "0" => 6,
+        "1" => 7,
+        "2" => 8,
+        "3" => 9,
+        "4" => 10,
+        "5" => 11,
+        "6" => 12,
+        "7" => 13,
+        "8" => 14,
+        "9" => 15,
         "enter" | "return" => 58,
         "tab" => 64,
         "space" => 63,
         "escape" | "esc" => 120,
         "backspace" => 53,
         "delete" => 68,
-        _ if key_part.starts_with("0x") => {
-            u32::from_str_radix(&key_part[2..], 16).ok()?
-        }
+        _ if key_part.starts_with("0x") => u32::from_str_radix(&key_part[2..], 16).ok()?,
         _ => return None,
     };
     Some((keycode, mods))
@@ -3891,10 +4864,7 @@ fn parse_vt_keyspec(spec: &str) -> Option<(u32, i32)> {
 fn control_key_to_keyboard_key(spec: &str, key_char: Option<char>) -> keyboard::Key {
     use keyboard::key::Named;
 
-    let key_name = spec
-        .rsplit_once('+')
-        .map(|(_, key)| key)
-        .unwrap_or(spec);
+    let key_name = spec.rsplit_once('+').map(|(_, key)| key).unwrap_or(spec);
 
     match key_name {
         "enter" | "return" => keyboard::Key::Named(Named::Enter),
@@ -4046,7 +5016,12 @@ fn selection_mode_name(selection: SelectionMode) -> &'static str {
 }
 
 fn ui_rect_snapshot(x: f64, y: f64, width: f64, height: f64) -> control::UiRectSnapshot {
-    control::UiRectSnapshot { x, y, width, height }
+    control::UiRectSnapshot {
+        x,
+        y,
+        width,
+        height,
+    }
 }
 
 fn format_command_finished_message(exit_code: Option<u8>, duration_ns: u64) -> String {
@@ -4092,7 +5067,10 @@ fn command_finish_notification(
         Some(_) => "Command Failed",
         None => "Command Finished",
     };
-    Some((title, format_command_finished_message(event.exit_code, event.duration_ns)))
+    Some((
+        title,
+        format_command_finished_message(event.exit_code, event.duration_ns),
+    ))
 }
 
 enum TextInputAction {
@@ -4136,17 +5114,27 @@ pub mod main_tests {
 
     pub fn compute_rects(
         selection: SelectionMode,
-        cursor_row: i64, cursor_col: u32,
-        anchor_row: i64, anchor_col: u32,
+        cursor_row: i64,
+        cursor_col: u32,
+        anchor_row: i64,
+        anchor_col: u32,
         offset: i64,
         viewport_cols: u32,
-        cell_width: f64, cell_height: f64,
+        cell_width: f64,
+        cell_height: f64,
         term_y: f64,
     ) -> Vec<(f64, f64, f64, f64)> {
         BooApp::compute_selection_rects_static(
-            selection, cursor_row, cursor_col,
-            anchor_row, anchor_col, offset,
-            viewport_cols, cell_width, cell_height, term_y,
+            selection,
+            cursor_row,
+            cursor_col,
+            anchor_row,
+            anchor_col,
+            offset,
+            viewport_cols,
+            cell_width,
+            cell_height,
+            term_y,
         )
     }
 
@@ -4186,33 +5174,39 @@ pub mod main_tests {
             exit_code: Some(0),
             duration_ns: 10_000_000_000,
         };
-        assert!(command_finish_notification(
-            false,
-            true,
-            config::NotifyOnCommandFinish::Always,
-            false,
-            5_000_000_000,
-            event,
-        )
-        .is_none());
-        assert!(command_finish_notification(
-            true,
-            false,
-            config::NotifyOnCommandFinish::Always,
-            false,
-            5_000_000_000,
-            event,
-        )
-        .is_none());
-        assert!(command_finish_notification(
-            true,
-            true,
-            config::NotifyOnCommandFinish::Never,
-            false,
-            5_000_000_000,
-            event,
-        )
-        .is_none());
+        assert!(
+            command_finish_notification(
+                false,
+                true,
+                config::NotifyOnCommandFinish::Always,
+                false,
+                5_000_000_000,
+                event,
+            )
+            .is_none()
+        );
+        assert!(
+            command_finish_notification(
+                true,
+                false,
+                config::NotifyOnCommandFinish::Always,
+                false,
+                5_000_000_000,
+                event,
+            )
+            .is_none()
+        );
+        assert!(
+            command_finish_notification(
+                true,
+                true,
+                config::NotifyOnCommandFinish::Never,
+                false,
+                5_000_000_000,
+                event,
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -4221,24 +5215,28 @@ pub mod main_tests {
             exit_code: Some(1),
             duration_ns: 8_000_000_000,
         };
-        assert!(command_finish_notification(
-            true,
-            true,
-            config::NotifyOnCommandFinish::Unfocused,
-            true,
-            5_000_000_000,
-            event,
-        )
-        .is_none());
-        assert!(command_finish_notification(
-            true,
-            true,
-            config::NotifyOnCommandFinish::Always,
-            false,
-            8_000_000_000,
-            event,
-        )
-        .is_none());
+        assert!(
+            command_finish_notification(
+                true,
+                true,
+                config::NotifyOnCommandFinish::Unfocused,
+                true,
+                5_000_000_000,
+                event,
+            )
+            .is_none()
+        );
+        assert!(
+            command_finish_notification(
+                true,
+                true,
+                config::NotifyOnCommandFinish::Always,
+                false,
+                8_000_000_000,
+                event,
+            )
+            .is_none()
+        );
         let notification = command_finish_notification(
             true,
             true,
@@ -4255,11 +5253,13 @@ pub mod main_tests {
     #[test]
     fn test_apply_text_input_event_tracks_preedit_and_commit() {
         let mut preedit = String::new();
-        assert!(apply_text_input_event(
-            &mut preedit,
-            platform::TextInputEvent::Preedit("kana".to_string()),
-        )
-        .is_none());
+        assert!(
+            apply_text_input_event(
+                &mut preedit,
+                platform::TextInputEvent::Preedit("kana".to_string()),
+            )
+            .is_none()
+        );
         assert_eq!(preedit, "kana");
 
         let committed = apply_text_input_event(
@@ -4272,7 +5272,9 @@ pub mod main_tests {
         }
         assert!(preedit.is_empty());
 
-        assert!(apply_text_input_event(&mut preedit, platform::TextInputEvent::PreeditClear).is_none());
+        assert!(
+            apply_text_input_event(&mut preedit, platform::TextInputEvent::PreeditClear).is_none()
+        );
         assert!(preedit.is_empty());
     }
 
@@ -4305,7 +5307,10 @@ pub mod main_tests {
         assert!(!should_route_macos_vt_key_via_appkit(53, 0));
         assert!(!should_route_macos_vt_key_via_appkit(64, 0));
         assert!(!should_route_macos_vt_key_via_appkit(58, 0));
-        assert!(!should_route_macos_vt_key_via_appkit(20, ffi::GHOSTTY_MODS_CTRL));
+        assert!(!should_route_macos_vt_key_via_appkit(
+            20,
+            ffi::GHOSTTY_MODS_CTRL
+        ));
     }
 
     #[cfg(target_os = "macos")]
@@ -4430,7 +5435,11 @@ pub mod main_tests {
                     text: "b".to_string(),
                     display_width: 1,
                     fg: vt::GhosttyColorRgb { r: 7, g: 8, b: 9 },
-                    bg: vt::GhosttyColorRgb { r: 10, g: 11, b: 12 },
+                    bg: vt::GhosttyColorRgb {
+                        r: 10,
+                        g: 11,
+                        b: 12,
+                    },
                     bold: false,
                     italic: true,
                     underline: 0,
@@ -4467,16 +5476,28 @@ pub mod main_tests {
             cursor: vt_backend_core::CursorSnapshot::default(),
             rows_data: vec![
                 vec![
-                    vt_backend_core::CellSnapshot { text: "a".into(), ..Default::default() },
-                    vt_backend_core::CellSnapshot { text: "b".into(), ..Default::default() },
+                    vt_backend_core::CellSnapshot {
+                        text: "a".into(),
+                        ..Default::default()
+                    },
+                    vt_backend_core::CellSnapshot {
+                        text: "b".into(),
+                        ..Default::default()
+                    },
                     vt_backend_core::CellSnapshot::default(),
                     vt_backend_core::CellSnapshot::default(),
                 ],
                 vec![
-                    vt_backend_core::CellSnapshot { text: "c".into(), ..Default::default() },
+                    vt_backend_core::CellSnapshot {
+                        text: "c".into(),
+                        ..Default::default()
+                    },
                     vt_backend_core::CellSnapshot::default(),
                     vt_backend_core::CellSnapshot::default(),
-                    vt_backend_core::CellSnapshot { text: "d".into(), ..Default::default() },
+                    vt_backend_core::CellSnapshot {
+                        text: "d".into(),
+                        ..Default::default()
+                    },
                 ],
             ],
             scrollbar: vt::GhosttyTerminalScrollbar::default(),
@@ -4516,13 +5537,22 @@ pub mod main_tests {
             cursor: vt_backend_core::CursorSnapshot::default(),
             rows_data: vec![
                 vec![
-                    vt_backend_core::CellSnapshot { text: "a".into(), ..Default::default() },
+                    vt_backend_core::CellSnapshot {
+                        text: "a".into(),
+                        ..Default::default()
+                    },
                     vt_backend_core::CellSnapshot::default(),
-                    vt_backend_core::CellSnapshot { text: "b".into(), ..Default::default() },
+                    vt_backend_core::CellSnapshot {
+                        text: "b".into(),
+                        ..Default::default()
+                    },
                 ],
                 vec![
                     vt_backend_core::CellSnapshot::default(),
-                    vt_backend_core::CellSnapshot { text: "c".into(), ..Default::default() },
+                    vt_backend_core::CellSnapshot {
+                        text: "c".into(),
+                        ..Default::default()
+                    },
                     vt_backend_core::CellSnapshot::default(),
                 ],
             ],

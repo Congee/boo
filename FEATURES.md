@@ -55,7 +55,7 @@ chrome, layout, and VT rendering path.
 ### Configuration
 - Single config file: `~/.config/boo/config.boo` (respects `XDG_CONFIG_HOME`)
 - Key=value format with `#` comments
-- Boo-specific keys: `prefix-key`, `control-socket`, `keybind`
+- Boo-specific keys: `prefix-key`, `control-socket`, `remote-port`, `remote-auth-key`, `keybind`
 - Shared terminal/UI keys: `font-family`, `font-size`, `background-opacity`, `background-opacity-cells`
 - Runtime config reload via `reload_config` action
 
@@ -88,8 +88,16 @@ chrome, layout, and VT rendering path.
 ### Headless Mode
 - `boo --headless` runs the shared VT backend and control socket without creating a GUI window
 - `boo --headless --socket /path/to.sock` overrides the control-socket path at startup
+- `boo --headless --remote-port 7337` starts the Boo TCP remote daemon alongside the headless runtime
 - Headless mode exposes the same snapshot/query/control surface as the GUI app
 - Tabs, splits, sessions, PTYs, and terminal snapshots stay on the same runtime path as the GUI build
+
+### Remote Daemon
+- Optional Boo-native TCP daemon for the iOS remote viewer and other LAN clients
+- Bonjour advertisement on `_boo._tcp`
+- Uses the Boo GSP-compatible framing already consumed by the iOS client
+- Supports session listing, attach/detach, create, resize, destroy, text input, and full terminal-state publishing
+- Can require HMAC-SHA256 challenge/response auth when `remote-auth-key` is configured
 
 ### iOS Remote Viewer
 - A native SwiftUI iOS app lives under [`ios/`](/Users/example/dev/boo/ios)
@@ -98,7 +106,6 @@ chrome, layout, and VT rendering path.
 - Browses `_boo._tcp` Bonjour services
 - Includes manual host/auth-key entry, saved nodes, connection history, session listing, and a VT cell-grid viewer
 - Uses iOS local-network permissions via `NSLocalNetworkUsageDescription` and `NSBonjourServices`
-- Follow-up task: implement the Boo daemon/service side that advertises `_boo._tcp` and speaks the Boo remote protocol directly
 
 ---
 

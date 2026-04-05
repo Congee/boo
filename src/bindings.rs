@@ -64,33 +64,62 @@ pub enum CopyModeAction {
     // Cursor
     Move(Direction),
     // Word
-    WordNext, WordBack, WordEnd,
-    BigWordNext, BigWordBack, BigWordEnd,
+    WordNext,
+    WordBack,
+    WordEnd,
+    BigWordNext,
+    BigWordBack,
+    BigWordEnd,
     // Line position
-    LineStart, LineEnd, FirstNonBlank,
+    LineStart,
+    LineEnd,
+    FirstNonBlank,
     // Screen position
-    ScreenTop, ScreenMiddle, ScreenBottom,
+    ScreenTop,
+    ScreenMiddle,
+    ScreenBottom,
     // Scrollback
-    HistoryTop, HistoryBottom,
+    HistoryTop,
+    HistoryBottom,
     // Page/scroll
-    PageUp, PageDown, HalfPageUp, HalfPageDown,
-    ScrollUp, ScrollDown, ScrollMiddle,
+    PageUp,
+    PageDown,
+    HalfPageUp,
+    HalfPageDown,
+    ScrollUp,
+    ScrollDown,
+    ScrollMiddle,
     // Selection
-    StartCharSelect, StartLineSelect, StartRectSelect,
-    ClearSelection, SwapAnchor,
+    StartCharSelect,
+    StartLineSelect,
+    StartRectSelect,
+    ClearSelection,
+    SwapAnchor,
     // In-line jump
-    JumpForward, JumpBackward, JumpToForward, JumpToBackward,
-    JumpAgain, JumpReverse,
+    JumpForward,
+    JumpBackward,
+    JumpToForward,
+    JumpToBackward,
+    JumpAgain,
+    JumpReverse,
     // Paragraph/bracket
-    NextParagraph, PreviousParagraph, MatchingBracket,
+    NextParagraph,
+    PreviousParagraph,
+    MatchingBracket,
     // Marks
-    SetMark, JumpToMark,
+    SetMark,
+    JumpToMark,
     // Search
-    SearchForward, SearchBackward,
-    SearchAgain, SearchReverse,
-    SearchWordForward, SearchWordBackward,
+    SearchForward,
+    SearchBackward,
+    SearchAgain,
+    SearchReverse,
+    SearchWordForward,
+    SearchWordBackward,
     // Copy
-    CopyAndExit, CopyToEndOfLine, AppendAndCancel,
+    CopyAndExit,
+    CopyToEndOfLine,
+    AppendAndCancel,
     // Other
     OpenPrompt,
     RefreshFromPane,
@@ -310,7 +339,7 @@ impl Bindings {
         if let Some(ch) = key_char {
             let action = match ch {
                 // Cursor
-                'h' | '\x08' => Some(Move(Direction::Left)),  // h, Backspace
+                'h' | '\x08' => Some(Move(Direction::Left)), // h, Backspace
                 'j' => Some(Move(Direction::Down)),
                 'k' => Some(Move(Direction::Up)),
                 'l' => Some(Move(Direction::Right)),
@@ -452,16 +481,42 @@ fn single_char_to_keycode(key: &str) -> Option<u32> {
     #[cfg(target_os = "macos")]
     {
         Some(match key {
-            "a" => 0x00, "s" => 0x01, "d" => 0x02, "f" => 0x03,
-            "h" => 0x04, "g" => 0x05, "z" => 0x06, "x" => 0x07,
-            "c" => 0x08, "v" => 0x09, "b" => 0x0B, "q" => 0x0C,
-            "w" => 0x0D, "e" => 0x0E, "r" => 0x0F, "y" => 0x10,
-            "t" => 0x11, "u" => 0x20, "i" => 0x22, "o" => 0x1F,
-            "p" => 0x23, "l" => 0x25, "j" => 0x26, "k" => 0x28,
-            "n" => 0x2D, "m" => 0x2E,
-            "1" => 0x12, "2" => 0x13, "3" => 0x14, "4" => 0x15,
-            "5" => 0x17, "6" => 0x16, "7" => 0x1A, "8" => 0x1C,
-            "9" => 0x19, "0" => 0x1D,
+            "a" => 0x00,
+            "s" => 0x01,
+            "d" => 0x02,
+            "f" => 0x03,
+            "h" => 0x04,
+            "g" => 0x05,
+            "z" => 0x06,
+            "x" => 0x07,
+            "c" => 0x08,
+            "v" => 0x09,
+            "b" => 0x0B,
+            "q" => 0x0C,
+            "w" => 0x0D,
+            "e" => 0x0E,
+            "r" => 0x0F,
+            "y" => 0x10,
+            "t" => 0x11,
+            "u" => 0x20,
+            "i" => 0x22,
+            "o" => 0x1F,
+            "p" => 0x23,
+            "l" => 0x25,
+            "j" => 0x26,
+            "k" => 0x28,
+            "n" => 0x2D,
+            "m" => 0x2E,
+            "1" => 0x12,
+            "2" => 0x13,
+            "3" => 0x14,
+            "4" => 0x15,
+            "5" => 0x17,
+            "6" => 0x16,
+            "7" => 0x1A,
+            "8" => 0x1C,
+            "9" => 0x19,
+            "0" => 0x1D,
             "space" => 0x31,
             "enter" => 0x24,
             "tab" => 0x30,
@@ -474,16 +529,42 @@ fn single_char_to_keycode(key: &str) -> Option<u32> {
     {
         // ghostty_input_key_e enum values (W3C key codes)
         Some(match key {
-            "a" => 20, "b" => 21, "c" => 22, "d" => 23,
-            "e" => 24, "f" => 25, "g" => 26, "h" => 27,
-            "i" => 28, "j" => 29, "k" => 30, "l" => 31,
-            "m" => 32, "n" => 33, "o" => 34, "p" => 35,
-            "q" => 36, "r" => 37, "s" => 38, "t" => 39,
-            "u" => 40, "v" => 41, "w" => 42, "x" => 43,
-            "y" => 44, "z" => 45,
-            "0" => 6, "1" => 7, "2" => 8, "3" => 9,
-            "4" => 10, "5" => 11, "6" => 12, "7" => 13,
-            "8" => 14, "9" => 15,
+            "a" => 20,
+            "b" => 21,
+            "c" => 22,
+            "d" => 23,
+            "e" => 24,
+            "f" => 25,
+            "g" => 26,
+            "h" => 27,
+            "i" => 28,
+            "j" => 29,
+            "k" => 30,
+            "l" => 31,
+            "m" => 32,
+            "n" => 33,
+            "o" => 34,
+            "p" => 35,
+            "q" => 36,
+            "r" => 37,
+            "s" => 38,
+            "t" => 39,
+            "u" => 40,
+            "v" => 41,
+            "w" => 42,
+            "x" => 43,
+            "y" => 44,
+            "z" => 45,
+            "0" => 6,
+            "1" => 7,
+            "2" => 8,
+            "3" => 9,
+            "4" => 10,
+            "5" => 11,
+            "6" => 12,
+            "7" => 13,
+            "8" => 14,
+            "9" => 15,
             "space" => 63,
             "enter" => 58,
             "tab" => 64,
@@ -513,9 +594,7 @@ fn parse_action(s: &str) -> Option<Action> {
         "previous_pane" => Some(Action::PreviousPane),
         "previous_tab" => Some(Action::PreviousTab),
         "goto_split:left" => Some(Action::GotoSplit(Previous)),
-        "goto_split:right" | "goto_split:bottom" => {
-            Some(Action::GotoSplit(Next))
-        }
+        "goto_split:right" | "goto_split:bottom" => Some(Action::GotoSplit(Next)),
         "goto_split:top" => Some(Action::GotoSplit(Previous)),
         "new_split:right" => Some(Action::NewSplit(Right)),
         "new_split:down" => Some(Action::NewSplit(Down)),
@@ -552,6 +631,8 @@ mod tests {
             prefix_key: Some("ctrl+s".to_string()),
             keybinds: Default::default(),
             control_socket: None,
+            remote_port: None,
+            remote_auth_key: None,
             font_family: None,
             font_size: None,
             background_opacity: None,
@@ -589,8 +670,10 @@ mod tests {
         match result {
             KeyResult::CopyMode(action) => {
                 let actual = format!("{action:?}");
-                assert!(actual.contains(expected),
-                    "expected CopyMode action containing '{expected}', got '{actual}'");
+                assert!(
+                    actual.contains(expected),
+                    "expected CopyMode action containing '{expected}', got '{actual}'"
+                );
             }
             KeyResult::Consumed(_) => panic!("expected CopyMode, got Consumed"),
             KeyResult::Forward => panic!("expected CopyMode, got Forward"),
@@ -834,11 +917,26 @@ mod tests {
     #[test]
     fn test_parse_action() {
         assert!(matches!(parse_action("new_tab"), Some(Action::NewTab)));
-        assert!(matches!(parse_action("close_surface"), Some(Action::CloseSurface)));
-        assert!(matches!(parse_action("enter_copy_mode"), Some(Action::EnterCopyMode)));
-        assert!(matches!(parse_action("goto_tab:3"), Some(Action::GotoTab(TabTarget::Index(2)))));
-        assert!(matches!(parse_action("goto_tab:last"), Some(Action::GotoTab(TabTarget::Last))));
-        assert!(matches!(parse_action("resize_split:left,10"), Some(Action::ResizeSplit(Direction::Left, 10))));
+        assert!(matches!(
+            parse_action("close_surface"),
+            Some(Action::CloseSurface)
+        ));
+        assert!(matches!(
+            parse_action("enter_copy_mode"),
+            Some(Action::EnterCopyMode)
+        ));
+        assert!(matches!(
+            parse_action("goto_tab:3"),
+            Some(Action::GotoTab(TabTarget::Index(2)))
+        ));
+        assert!(matches!(
+            parse_action("goto_tab:last"),
+            Some(Action::GotoTab(TabTarget::Last))
+        ));
+        assert!(matches!(
+            parse_action("resize_split:left,10"),
+            Some(Action::ResizeSplit(Direction::Left, 10))
+        ));
         assert!(parse_action("nonexistent").is_none());
     }
 
@@ -853,7 +951,10 @@ mod tests {
         assert_eq!(pk.mods_mask, ffi::GHOSTTY_MODS_CTRL);
 
         let pk = parse_prefix_key("ctrl+shift+a").unwrap();
-        assert_eq!(pk.mods_mask, ffi::GHOSTTY_MODS_CTRL | ffi::GHOSTTY_MODS_SHIFT);
+        assert_eq!(
+            pk.mods_mask,
+            ffi::GHOSTTY_MODS_CTRL | ffi::GHOSTTY_MODS_SHIFT
+        );
 
         assert!(parse_prefix_key("ctrl+unknown").is_none());
     }
@@ -867,11 +968,21 @@ mod tests {
         let mut bindings = Bindings::from_config(&config);
 
         assert!(matches!(
-            bindings.handle_key(Some('a'), single_char_to_keycode("a").unwrap(), ffi::GHOSTTY_MODS_CTRL, None),
+            bindings.handle_key(
+                Some('a'),
+                single_char_to_keycode("a").unwrap(),
+                ffi::GHOSTTY_MODS_CTRL,
+                None
+            ),
             KeyResult::Consumed(None)
         ));
         assert!(matches!(
-            bindings.handle_key(Some('c'), single_char_to_keycode("c").unwrap(), ffi::GHOSTTY_MODS_NONE, None),
+            bindings.handle_key(
+                Some('c'),
+                single_char_to_keycode("c").unwrap(),
+                ffi::GHOSTTY_MODS_NONE,
+                None
+            ),
             KeyResult::Consumed(Some(Action::NewTab))
         ));
     }

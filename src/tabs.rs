@@ -7,9 +7,11 @@ pub struct TabManager {
     tabs: Vec<Tab>,
     active: usize,
     prev_active: usize,
+    next_tab_id: u32,
 }
 
 pub struct Tab {
+    id: u32,
     tree: SplitTree,
     pub title: String,
     running_command: Option<RunningCommand>,
@@ -20,20 +22,36 @@ pub struct RunningCommand {
     pub command: Option<String>,
 }
 
+#[derive(Clone)]
+pub struct TabSessionInfo {
+    pub id: u32,
+    pub index: usize,
+    pub title: String,
+}
+
 impl TabManager {
     pub fn new() -> Self {
         Self {
             tabs: Vec::new(),
             active: 0,
             prev_active: 0,
+            next_tab_id: 1,
         }
+    }
+
+    fn allocate_tab_id(&mut self) -> u32 {
+        let id = self.next_tab_id;
+        self.next_tab_id += 1;
+        id
     }
 
     /// Add the first tab with a root pane.
     pub fn add_initial_tab(&mut self, pane: PaneHandle) {
         let mut tree = SplitTree::new();
         tree.add_root(pane);
+        let id = self.allocate_tab_id();
         self.tabs.push(Tab {
+            id,
             tree,
             title: String::new(),
             running_command: None,
@@ -49,7 +67,9 @@ impl TabManager {
         let mut tree = SplitTree::new();
         tree.add_root(pane);
         let idx = self.tabs.len();
+        let id = self.allocate_tab_id();
         self.tabs.push(Tab {
+            id,
             tree,
             title: String::new(),
             running_command: None,
@@ -215,6 +235,26 @@ impl TabManager {
         self.tabs.get(index).map(|t| &t.tree)
     }
 
+    pub fn tab_session_info(&self) -> Vec<TabSessionInfo> {
+        self.tabs
+            .iter()
+            .enumerate()
+            .map(|(index, tab)| TabSessionInfo {
+                id: tab.id,
+                index,
+                title: self.display_title(index, None),
+            })
+            .collect()
+    }
+
+    pub fn session_id_for_index(&self, index: usize) -> Option<u32> {
+        self.tabs.get(index).map(|tab| tab.id)
+    }
+
+    pub fn find_index_by_session_id(&self, session_id: u32) -> Option<usize> {
+        self.tabs.iter().position(|tab| tab.id == session_id)
+    }
+
     pub fn tab_info(&self) -> Vec<TabInfo> {
         self.tab_info_with_spinner(0)
     }
@@ -340,10 +380,7 @@ mod tests {
         let pane = PaneHandle::detached();
         tabs.add_initial_tab(pane);
         tabs.set_active_title("shell".to_string());
-        tabs.set_running_command_for_pane(
-            pane.id(),
-            Some(super::RunningCommand { command: None }),
-        );
+        tabs.set_running_command_for_pane(pane.id(), Some(super::RunningCommand { command: None }));
 
         let info = tabs.tab_info_with_spinner(2);
 

@@ -10,6 +10,8 @@ use std::path::PathBuf;
 pub struct Config {
     pub prefix_key: Option<String>,
     pub control_socket: Option<String>,
+    pub remote_port: Option<u16>,
+    pub remote_auth_key: Option<String>,
     pub keybinds: HashMap<String, String>,
     pub font_family: Option<String>,
     pub font_size: Option<f32>,
@@ -58,12 +60,24 @@ impl Config {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let Some((key, value)) = line.split_once('=') else { continue };
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
             let key = key.trim();
             let value = strip_quotes(value.trim());
             match key {
                 "prefix-key" => config.prefix_key = Some(value.to_string()),
                 "control-socket" => config.control_socket = Some(value.to_string()),
+                "remote-port" => {
+                    if let Ok(port) = value.parse::<u16>() {
+                        config.remote_port = Some(port);
+                    }
+                }
+                "remote-auth-key" => {
+                    if !value.is_empty() {
+                        config.remote_auth_key = Some(value.to_string());
+                    }
+                }
                 "font-family" => {
                     if !value.is_empty() {
                         config.font_family = Some(value.to_string());
@@ -124,6 +138,8 @@ impl Default for Config {
         Config {
             prefix_key: None,
             control_socket: None,
+            remote_port: None,
+            remote_auth_key: None,
             keybinds: HashMap::new(),
             font_family: None,
             font_size: None,
@@ -161,7 +177,11 @@ fn parse_notify_on_command_finish_action(value: &str) -> NotifyOnCommandFinishAc
         bell: true,
         notify: false,
     };
-    for entry in value.split(',').map(str::trim).filter(|entry| !entry.is_empty()) {
+    for entry in value
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
         match entry {
             "bell" => action.bell = true,
             "no-bell" => action.bell = false,
@@ -237,6 +257,8 @@ background-opacity-cells = true
 # boo settings
 prefix-key = ctrl+s
 control-socket = /tmp/boo.sock
+remote-port = 7337
+remote-auth-key = "secret"
 
 keybind = " = new_split:right
 keybind = % = new_split:down
@@ -245,14 +267,25 @@ keybind = super+1 = goto_tab:1
         let config = Config::parse(content);
         assert_eq!(config.prefix_key.as_deref(), Some("ctrl+s"));
         assert_eq!(config.control_socket.as_deref(), Some("/tmp/boo.sock"));
+        assert_eq!(config.remote_port, Some(7337));
+        assert_eq!(config.remote_auth_key.as_deref(), Some("secret"));
         assert_eq!(config.font_family.as_deref(), Some("Fira Code"));
         assert_eq!(config.font_size, Some(14.0));
         assert_eq!(config.background_opacity, Some(0.9));
         assert!(config.background_opacity_cells);
         assert_eq!(config.keybinds.len(), 3);
-        assert_eq!(config.keybinds.get("\"").map(|s| s.as_str()), Some("new_split:right"));
-        assert_eq!(config.keybinds.get("%").map(|s| s.as_str()), Some("new_split:down"));
-        assert_eq!(config.keybinds.get("super+1").map(|s| s.as_str()), Some("goto_tab:1"));
+        assert_eq!(
+            config.keybinds.get("\"").map(|s| s.as_str()),
+            Some("new_split:right")
+        );
+        assert_eq!(
+            config.keybinds.get("%").map(|s| s.as_str()),
+            Some("new_split:down")
+        );
+        assert_eq!(
+            config.keybinds.get("super+1").map(|s| s.as_str()),
+            Some("goto_tab:1")
+        );
     }
 
     #[test]
@@ -294,7 +327,10 @@ keybind = super+1 = goto_tab:1
         let config = Config::parse(
             "notify-on-command-finish = always\nnotify-on-command-finish-action = no-bell,notify\nnotify-on-command-finish-after = 1m30s\n",
         );
-        assert_eq!(config.notify_on_command_finish, NotifyOnCommandFinish::Always);
+        assert_eq!(
+            config.notify_on_command_finish,
+            NotifyOnCommandFinish::Always
+        );
         assert!(!config.notify_on_command_finish_action.bell);
         assert!(config.notify_on_command_finish_action.notify);
         assert_eq!(config.notify_on_command_finish_after_ns, 90_000_000_000);
