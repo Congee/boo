@@ -332,11 +332,11 @@ impl BooApp {
                 server.send_session_exited(session_id);
                 continue;
             };
-            let Some(snapshot) = self.backend.ui_terminal_snapshot(pane.id()) else {
+            let Some(snapshot) = self.backend.render_snapshot(pane.id()) else {
                 server.send_session_exited(session_id);
                 continue;
             };
-            let state = remote::full_state_from_ui(&snapshot);
+            let state = remote::full_state_from_terminal(&snapshot);
             server.send_full_state_to_attached(session_id, &state);
         }
         if !sent {

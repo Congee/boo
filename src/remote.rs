@@ -1,4 +1,3 @@
-use crate::control;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::collections::HashMap;
@@ -901,7 +900,8 @@ impl ServiceAdvertiser {
     }
 }
 
-pub fn full_state_from_ui(snapshot: &control::UiTerminalSnapshot) -> RemoteFullState {
+#[cfg(test)]
+pub fn full_state_from_ui(snapshot: &crate::control::UiTerminalSnapshot) -> RemoteFullState {
     let cells = snapshot
         .rows_data
         .iter()
@@ -939,9 +939,54 @@ pub fn full_state_from_ui(snapshot: &control::UiTerminalSnapshot) -> RemoteFullS
     }
 }
 
+pub fn full_state_from_terminal(snapshot: &crate::vt_backend_core::TerminalSnapshot) -> RemoteFullState {
+    let cells = snapshot
+        .rows_data
+        .iter()
+        .flat_map(|row| row.iter())
+        .map(|cell| {
+            let mut style_flags = 0u8;
+            if cell.bold {
+                style_flags |= 0x01;
+            }
+            if cell.italic {
+                style_flags |= 0x02;
+            }
+            let has_explicit_fg = cell.fg.r != snapshot.colors.foreground.r
+                || cell.fg.g != snapshot.colors.foreground.g
+                || cell.fg.b != snapshot.colors.foreground.b;
+            let has_explicit_bg = cell.bg.r != snapshot.colors.background.r
+                || cell.bg.g != snapshot.colors.background.g
+                || cell.bg.b != snapshot.colors.background.b;
+            if has_explicit_fg {
+                style_flags |= 0x20;
+            }
+            if has_explicit_bg {
+                style_flags |= 0x40;
+            }
+            RemoteCell {
+                codepoint: cell.text.chars().next().map(u32::from).unwrap_or(0),
+                fg: [cell.fg.r, cell.fg.g, cell.fg.b],
+                bg: [cell.bg.r, cell.bg.g, cell.bg.b],
+                style_flags,
+                wide: cell.display_width > 1,
+            }
+        })
+        .collect();
+    RemoteFullState {
+        rows: snapshot.rows,
+        cols: snapshot.cols,
+        cursor_x: snapshot.cursor.x,
+        cursor_y: snapshot.cursor.y,
+        cursor_visible: snapshot.cursor.visible,
+        cells,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::control;
 
     #[test]
     fn session_list_encoding_matches_client_layout() {
@@ -1074,6 +1119,54 @@ mod tests {
         assert_eq!(state.cells[1].codepoint, u32::from('界'));
         assert!(state.cells[1].wide);
         assert_eq!(state.cells[1].style_flags & 0x03, 0x03);
+    }
+
+    #[test]
+    fn full_state_from_terminal_snapshot_flattens_rows() {
+        let snapshot = crate::vt_backend_core::TerminalSnapshot {
+            cols: 2,
+            rows: 1,
+            cursor: crate::vt_backend_core::CursorSnapshot {
+                visible: true,
+                x: 1,
+                y: 0,
+                style: 0,
+            },
+            rows_data: vec![vec![
+                crate::vt_backend_core::CellSnapshot {
+                    text: "a".to_string(),
+                    display_width: 1,
+                    fg: crate::vt::GhosttyColorRgb { r: 1, g: 1, b: 1 },
+                    bg: crate::vt::GhosttyColorRgb { r: 0, g: 0, b: 0 },
+                    bold: false,
+                    italic: false,
+                    underline: 0,
+                },
+                crate::vt_backend_core::CellSnapshot {
+                    text: "界".to_string(),
+                    display_width: 2,
+                    fg: crate::vt::GhosttyColorRgb { r: 2, g: 2, b: 2 },
+                    bg: crate::vt::GhosttyColorRgb { r: 3, g: 3, b: 3 },
+                    bold: true,
+                    italic: true,
+                    underline: 0,
+                },
+            ]],
+            colors: crate::vt::GhosttyRenderStateColors {
+                foreground: crate::vt::GhosttyColorRgb { r: 1, g: 1, b: 1 },
+                background: crate::vt::GhosttyColorRgb { r: 0, g: 0, b: 0 },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let state = full_state_from_terminal(&snapshot);
+        assert_eq!(state.cells.len(), 2);
+        assert_eq!(state.cells[0].codepoint, u32::from('a'));
+        assert!(!state.cells[0].wide);
+        assert_eq!(state.cells[1].codepoint, u32::from('界'));
+        assert!(state.cells[1].wide);
+        assert_eq!(state.cells[1].style_flags & 0x03, 0x03);
+        assert_eq!(state.cells[1].style_flags & 0x60, 0x60);
     }
 
     #[test]
