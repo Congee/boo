@@ -4,10 +4,12 @@ use crate::vt_backend_core;
 use crate::vt_terminal_canvas;
 use iced::widget::{column, container, row, text};
 use iced::window;
-use iced::{keyboard, Color, Element, Event, Font, Length, Size, Subscription, Task, Theme};
+use iced::{keyboard, time, Color, Element, Event, Font, Length, Size, Subscription, Task, Theme};
+use std::time::Duration;
 
 const STATUS_BAR_HEIGHT: f64 = 20.0;
 const DEFAULT_FONT_SIZE: f32 = 14.0;
+const SNAPSHOT_POLL_INTERVAL: Duration = Duration::from_millis(33);
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -144,7 +146,7 @@ impl ClientApp {
 
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
-            window::frames().map(|_| Message::Frame),
+            time::every(SNAPSHOT_POLL_INTERVAL).map(|_| Message::Frame),
             iced::event::listen().map(Message::IcedEvent),
         ])
     }
