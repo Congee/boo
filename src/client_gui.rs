@@ -343,6 +343,12 @@ impl ClientApp {
                         stream_client.list_sessions();
                     }
                 }
+                LocalStreamEvent::Disconnected => {
+                    self.stream_state = None;
+                    self.pending_input_latencies.clear();
+                    self.last_error = Some("boo server disconnected".to_string());
+                    self.should_exit = true;
+                }
                 LocalStreamEvent::FullState { ack_input_seq, state } => {
                     self.stream_state = Some(state);
                     self.render_revision = self.render_revision.wrapping_add(1);
@@ -535,6 +541,7 @@ enum LocalStreamEvent {
     Attached(u32),
     Detached,
     SessionExited(u32),
+    Disconnected,
     FullState {
         ack_input_seq: Option<u64>,
         state: remote::RemoteFullState,
@@ -635,6 +642,7 @@ fn read_local_stream_loop(mut read: UnixStream, tx: mpsc::Sender<LocalStreamEven
             let _ = tx.send(event);
         }
     }
+    let _ = tx.send(LocalStreamEvent::Disconnected);
 }
 
 fn decode_u32(payload: &[u8]) -> Option<u32> {
