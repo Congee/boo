@@ -14,6 +14,7 @@ const PADDING_Y: f32 = 2.0;
 #[derive(Debug)]
 pub struct TerminalCanvas {
     pub snapshot: vt_backend_core::TerminalSnapshot,
+    pub content_revision: u64,
     pub cell_width: f32,
     pub cell_height: f32,
     pub font_size: f32,
@@ -37,6 +38,7 @@ pub struct TerminalSelectionRect {
 impl TerminalCanvas {
     pub fn new(
         snapshot: vt_backend_core::TerminalSnapshot,
+        content_revision: u64,
         cell_width: f32,
         cell_height: f32,
         font_size: f32,
@@ -50,6 +52,7 @@ impl TerminalCanvas {
     ) -> Self {
         Self {
             snapshot,
+            content_revision,
             cell_width,
             cell_height,
             font_size,
@@ -126,7 +129,8 @@ impl TerminalCanvas {
                     let fg = if is_cursor {
                         default_bg
                     } else {
-                        cell.map(|cell| color_from_rgb(cell.fg, 1.0)).unwrap_or(default_fg)
+                        cell.map(|cell| color_from_rgb(cell.fg, 1.0))
+                            .unwrap_or(default_fg)
                     };
                     let font = cell
                         .map(|cell| font_for_cell(cell, self.font_family))
@@ -140,7 +144,9 @@ impl TerminalCanvas {
                         position: Point::new(x, y),
                         color: fg,
                         size: Pixels(self.font_size),
-                        line_height: iced::widget::text::LineHeight::Absolute(Pixels(self.cell_height)),
+                        line_height: iced::widget::text::LineHeight::Absolute(Pixels(
+                            self.cell_height,
+                        )),
                         font,
                         align_x: iced::widget::text::Alignment::Left,
                         align_y: alignment::Vertical::Top,
@@ -287,6 +293,7 @@ impl TerminalCanvas {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.snapshot.cols.hash(&mut hasher);
         self.snapshot.rows.hash(&mut hasher);
+        self.content_revision.hash(&mut hasher);
         self.snapshot.cursor.visible.hash(&mut hasher);
         self.snapshot.cursor.x.hash(&mut hasher);
         self.snapshot.cursor.y.hash(&mut hasher);
@@ -310,19 +317,21 @@ impl TerminalCanvas {
             rect.width.to_bits().hash(&mut hasher);
             rect.height.to_bits().hash(&mut hasher);
         }
-        for row in &self.snapshot.rows_data {
-            for cell in row {
-                cell.text.hash(&mut hasher);
-                cell.display_width.hash(&mut hasher);
-                cell.fg.r.hash(&mut hasher);
-                cell.fg.g.hash(&mut hasher);
-                cell.fg.b.hash(&mut hasher);
-                cell.bg.r.hash(&mut hasher);
-                cell.bg.g.hash(&mut hasher);
-                cell.bg.b.hash(&mut hasher);
-                cell.bold.hash(&mut hasher);
-                cell.italic.hash(&mut hasher);
-                cell.underline.hash(&mut hasher);
+        if self.content_revision == 0 {
+            for row in &self.snapshot.rows_data {
+                for cell in row {
+                    cell.text.hash(&mut hasher);
+                    cell.display_width.hash(&mut hasher);
+                    cell.fg.r.hash(&mut hasher);
+                    cell.fg.g.hash(&mut hasher);
+                    cell.fg.b.hash(&mut hasher);
+                    cell.bg.r.hash(&mut hasher);
+                    cell.bg.g.hash(&mut hasher);
+                    cell.bg.b.hash(&mut hasher);
+                    cell.bold.hash(&mut hasher);
+                    cell.italic.hash(&mut hasher);
+                    cell.underline.hash(&mut hasher);
+                }
             }
         }
         hasher.finish()
@@ -336,6 +345,7 @@ mod tests {
     fn sample_canvas(revision: u64) -> TerminalCanvas {
         TerminalCanvas::new(
             vt_backend_core::TerminalSnapshot::default(),
+            0,
             8.0,
             16.0,
             14.0,

@@ -37,6 +37,7 @@ pub struct ClientApp {
     tick_counter: u8,
     fast_poll_ticks_remaining: u8,
     active_tab_index: usize,
+    render_revision: u64,
 }
 
 impl ClientApp {
@@ -68,6 +69,7 @@ impl ClientApp {
                 tick_counter: 0,
                 fast_poll_ticks_remaining: FAST_POLL_BURST_TICKS,
                 active_tab_index,
+                render_revision: 1,
             },
             Task::none(),
         )
@@ -95,6 +97,7 @@ impl ClientApp {
             if let Some(stream_state) = self.stream_state.as_ref() {
                 let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
                     remote_full_state_to_vt_snapshot(stream_state),
+                    self.render_revision,
                     self.cell_width as f32,
                     self.cell_height as f32,
                     self.font_size,
@@ -118,6 +121,7 @@ impl ClientApp {
             } else if let Some(terminal) = snapshot.terminal.as_ref() {
                 let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
                     ui_terminal_to_vt_snapshot(terminal),
+                    self.render_revision,
                     self.cell_width as f32,
                     self.cell_height as f32,
                     self.font_size,
@@ -219,6 +223,7 @@ impl ClientApp {
                 self.background_opacity_cells = snapshot.appearance.background_opacity_cells;
                 (self.cell_width, self.cell_height) = terminal_metrics(self.font_size);
                 self.snapshot = Some(snapshot);
+                self.render_revision = self.render_revision.wrapping_add(1);
                 self.last_error = None;
             }
             Err(error) => {
@@ -299,20 +304,24 @@ impl ClientApp {
                 }
                 LocalStreamEvent::Detached => {
                     self.stream_state = None;
+                    self.render_revision = self.render_revision.wrapping_add(1);
                     stream_client.list_sessions();
                 }
                 LocalStreamEvent::SessionExited(session_id) => {
                     let _ = session_id;
                     self.stream_state = None;
+                    self.render_revision = self.render_revision.wrapping_add(1);
                     stream_client.list_sessions();
                 }
                 LocalStreamEvent::FullState(state) => {
                     self.stream_state = Some(state);
+                    self.render_revision = self.render_revision.wrapping_add(1);
                     self.fast_poll_ticks_remaining = FAST_POLL_BURST_TICKS;
                 }
                 LocalStreamEvent::Delta(delta) => {
                     if let Some(state) = self.stream_state.as_mut() {
                         apply_remote_delta(state, &delta);
+                        self.render_revision = self.render_revision.wrapping_add(1);
                     }
                     self.fast_poll_ticks_remaining = FAST_POLL_BURST_TICKS;
                 }
