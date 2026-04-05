@@ -277,10 +277,13 @@ impl ClientApp {
             return;
         };
 
-        if let Some(committed) = text
+        let committed = text
             .as_ref()
             .map(ToString::to_string)
             .filter(|text| !text.is_empty())
+            .or_else(|| committed_text_from_key(&key, modifiers));
+
+        if let Some(committed) = committed
             .filter(|_| !(modifiers.control() || modifiers.alt() || modifiers.logo()))
         {
             if self.stream_ready_for_terminal_io() {
@@ -943,6 +946,24 @@ mod tests {
         assert_eq!((snapshot.fg.r, snapshot.fg.g, snapshot.fg.b), (1, 2, 3));
         assert_eq!((snapshot.bg.r, snapshot.bg.g, snapshot.bg.b), (4, 5, 6));
     }
+
+    #[test]
+    fn committed_text_from_character_key_without_text_payload() {
+        let key = keyboard::Key::Character("a".into());
+        assert_eq!(
+            committed_text_from_key(&key, keyboard::Modifiers::default()),
+            Some("a".to_string())
+        );
+    }
+
+    #[test]
+    fn committed_text_from_key_ignores_control_modified_input() {
+        let key = keyboard::Key::Character("d".into());
+        assert_eq!(
+            committed_text_from_key(&key, keyboard::Modifiers::CTRL),
+            None
+        );
+    }
 }
 
 fn keyspec_from_key(
@@ -991,4 +1012,17 @@ fn keyspec_from_key(
 
     parts.push(base.as_str());
     Some(parts.join("+"))
+}
+
+fn committed_text_from_key(
+    key: &keyboard::Key,
+    modifiers: keyboard::Modifiers,
+) -> Option<String> {
+    if modifiers.control() || modifiers.alt() || modifiers.logo() {
+        return None;
+    }
+    match key {
+        keyboard::Key::Character(chars) if !chars.is_empty() => Some(chars.to_string()),
+        _ => None,
+    }
 }
