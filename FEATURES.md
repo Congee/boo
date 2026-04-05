@@ -80,6 +80,7 @@ chrome, layout, and VT rendering path.
 - Status bar (20pt height)
 - Search overlay for in-terminal find
 - Background transparency support
+- Remaining UI task: configurable cursor shape and optional blinking cursor
 
 ### Control Socket
 - Unix domain socket IPC at configurable path (default `/tmp/boo.sock`)

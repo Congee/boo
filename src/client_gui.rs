@@ -221,12 +221,6 @@ impl ClientApp {
         container(main_col)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(|_: &Theme| container::Style {
-                background: Some(iced::Background::Color(Color::from_rgb(
-                    0.05, 0.05, 0.05,
-                ))),
-                ..Default::default()
-            })
             .into()
     }
 
@@ -244,7 +238,7 @@ impl ClientApp {
 
     pub fn window_style(&self) -> iced::theme::Style {
         iced::theme::Style {
-            background_color: Color::from_rgb(0.05, 0.05, 0.05),
+            background_color: Color::TRANSPARENT,
             text_color: Color::WHITE,
         }
     }

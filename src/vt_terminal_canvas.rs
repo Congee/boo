@@ -9,9 +9,11 @@ use iced::{Color, Font, Pixels, Point, Rectangle, Renderer, Size, Theme};
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 const PADDING_X: f32 = 4.0;
 const PADDING_Y: f32 = 2.0;
+
 #[derive(Debug)]
 pub struct TerminalCanvas {
     pub snapshot: Arc<vt_backend_core::TerminalSnapshot>,
@@ -70,77 +72,47 @@ impl TerminalCanvas {
     }
 
     fn draw_row(&self, frame: &mut Frame<Renderer>, row_index: usize) {
-        let default_fg = color_from_rgb(self.snapshot.colors.foreground, 1.0);
-        let default_bg = color_from_rgb(self.snapshot.colors.background, self.background_opacity);
         let Some(row) = self.snapshot.rows_data.get(row_index) else {
             return;
         };
         let y = PADDING_Y + row_index as f32 * self.cell_height;
+        for span in build_background_spans(
+            row,
+            self.snapshot.cols as usize,
+            self.snapshot.colors.background,
+            self.background_opacity,
+            self.background_opacity_cells,
+        ) {
+            frame.fill_rectangle(
+                Point::new(PADDING_X + span.start_col as f32 * self.cell_width, y),
+                Size::new(span.width_cols as f32 * self.cell_width, self.cell_height),
+                span.color,
+            );
+        }
 
-        for col_index in 0..self.snapshot.cols as usize {
-            let x = PADDING_X + col_index as f32 * self.cell_width;
-            let cell = row.get(col_index);
-            let bg = cell
-                .map(|cell| {
-                    let is_default_bg = cell.bg.r == self.snapshot.colors.background.r
-                        && cell.bg.g == self.snapshot.colors.background.g
-                        && cell.bg.b == self.snapshot.colors.background.b;
-                    color_from_rgb(
-                        cell.bg,
-                        if self.background_opacity_cells || is_default_bg {
-                            self.background_opacity
-                        } else {
-                            1.0
-                        },
-                    )
-                })
-                .unwrap_or(default_bg);
-            if bg != default_bg {
+        for run in build_text_runs(row, self.snapshot.cols as usize, self.font_family) {
+            let x = PADDING_X + run.start_col as f32 * self.cell_width;
+            let draw_width = run.width_cols as f32 * self.cell_width;
+            frame.fill_text(canvas::Text {
+                content: run.text,
+                position: Point::new(x, y),
+                color: run.fg,
+                size: Pixels(self.font_size),
+                line_height: iced::widget::text::LineHeight::Absolute(Pixels(self.cell_height)),
+                font: run.font,
+                align_x: iced::widget::text::Alignment::Left,
+                align_y: alignment::Vertical::Top,
+                shaping: iced::widget::text::Shaping::Advanced,
+                max_width: draw_width,
+            });
+
+            if run.underline {
+                let underline_y = y + self.cell_height - 2.0;
                 frame.fill_rectangle(
-                    Point::new(x, y),
-                    Size::new(self.cell_width, self.cell_height),
-                    bg,
+                    Point::new(x, underline_y),
+                    Size::new(draw_width, 1.5),
+                    run.fg,
                 );
-            }
-
-            let content = cell
-                .map(|cell| cell.text.as_str())
-                .filter(|text| !text.is_empty() && *text != "\0");
-
-            if let Some(content) = content {
-                let fg = cell
-                    .map(|cell| color_from_rgb(cell.fg, 1.0))
-                    .unwrap_or(default_fg);
-                let font = cell
-                    .map(|cell| font_for_cell(cell, self.font_family))
-                    .unwrap_or_else(|| configured_font(self.font_family));
-
-                let draw_width = cell
-                    .map(|cell| self.cell_width * f32::from(cell.display_width.max(1)))
-                    .unwrap_or(self.cell_width);
-                frame.fill_text(canvas::Text {
-                    content: content.to_string(),
-                    position: Point::new(x, y),
-                    color: fg,
-                    size: Pixels(self.font_size),
-                    line_height: iced::widget::text::LineHeight::Absolute(Pixels(
-                        self.cell_height,
-                    )),
-                    font,
-                    align_x: iced::widget::text::Alignment::Left,
-                    align_y: alignment::Vertical::Top,
-                    shaping: iced::widget::text::Shaping::Advanced,
-                    max_width: draw_width,
-                });
-
-                if cell.is_some_and(|cell| cell.underline != 0) {
-                    let underline_y = y + self.cell_height - 2.0;
-                    frame.fill_rectangle(
-                        Point::new(x, underline_y),
-                        Size::new(draw_width, 1.5),
-                        fg,
-                    );
-                }
             }
         }
     }
@@ -274,6 +246,7 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry<Renderer>> {
+        let started_at = render_debug_enabled().then(Instant::now);
         let base_fingerprint = self.base_fingerprint();
         {
             let mut cached = state.base_fingerprint.borrow_mut();
@@ -322,8 +295,159 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
             self.draw_overlay(frame);
         }));
 
+        if let Some(started_at) = started_at {
+            let elapsed = started_at.elapsed();
+            if elapsed >= Duration::from_millis(4) {
+                eprintln!(
+                    "boo_render draw_ms={} rows={} cols={}",
+                    elapsed.as_secs_f64() * 1000.0,
+                    self.snapshot.rows,
+                    self.snapshot.cols
+                );
+            }
+        }
+
         geometries
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct BackgroundSpan {
+    start_col: usize,
+    width_cols: usize,
+    color: Color,
+}
+
+#[derive(Debug, Clone)]
+struct TextRun {
+    start_col: usize,
+    width_cols: usize,
+    text: String,
+    fg: Color,
+    font: Font,
+    underline: bool,
+}
+
+fn build_background_spans(
+    row: &[vt_backend_core::CellSnapshot],
+    cols: usize,
+    default_background: crate::vt::GhosttyColorRgb,
+    background_opacity: f32,
+    background_opacity_cells: bool,
+) -> Vec<BackgroundSpan> {
+    let default_bg = color_from_rgb(default_background, background_opacity);
+    let mut spans = Vec::new();
+    let mut current: Option<BackgroundSpan> = None;
+
+    for col_index in 0..cols {
+        let bg = row
+            .get(col_index)
+            .map(|cell| {
+                let is_default_bg = cell.bg.r == default_background.r
+                    && cell.bg.g == default_background.g
+                    && cell.bg.b == default_background.b;
+                color_from_rgb(
+                    cell.bg,
+                    if background_opacity_cells || is_default_bg {
+                        background_opacity
+                    } else {
+                        1.0
+                    },
+                )
+            })
+            .unwrap_or(default_bg);
+
+        if bg == default_bg {
+            if let Some(span) = current.take() {
+                spans.push(span);
+            }
+            continue;
+        }
+
+        match current.as_mut() {
+            Some(span) if span.color == bg && span.start_col + span.width_cols == col_index => {
+                span.width_cols += 1;
+            }
+            _ => {
+                if let Some(span) = current.take() {
+                    spans.push(span);
+                }
+                current = Some(BackgroundSpan {
+                    start_col: col_index,
+                    width_cols: 1,
+                    color: bg,
+                });
+            }
+        }
+    }
+
+    if let Some(span) = current {
+        spans.push(span);
+    }
+
+    spans
+}
+
+fn build_text_runs(
+    row: &[vt_backend_core::CellSnapshot],
+    cols: usize,
+    font_family: Option<&'static str>,
+) -> Vec<TextRun> {
+    let mut runs = Vec::new();
+    let mut current: Option<TextRun> = None;
+
+    for col_index in 0..cols {
+        let Some(cell) = row.get(col_index) else {
+            if let Some(run) = current.take() {
+                runs.push(run);
+            }
+            continue;
+        };
+
+        let content = cell.text.as_str();
+        if content.is_empty() || content == "\0" {
+            if let Some(run) = current.take() {
+                runs.push(run);
+            }
+            continue;
+        }
+
+        let fg = color_from_rgb(cell.fg, 1.0);
+        let font = font_for_cell(cell, font_family);
+        let underline = cell.underline != 0;
+        let width_cols = usize::from(cell.display_width.max(1));
+
+        match current.as_mut() {
+            Some(run)
+                if run.fg == fg
+                    && run.font == font
+                    && run.underline == underline
+                    && run.start_col + run.width_cols == col_index =>
+            {
+                run.text.push_str(content);
+                run.width_cols += width_cols;
+            }
+            _ => {
+                if let Some(run) = current.take() {
+                    runs.push(run);
+                }
+                current = Some(TextRun {
+                    start_col: col_index,
+                    width_cols,
+                    text: content.to_string(),
+                    fg,
+                    font,
+                    underline,
+                });
+            }
+        }
+    }
+
+    if let Some(run) = current {
+        runs.push(run);
+    }
+
+    runs
 }
 
 fn font_for_cell(cell: &vt_backend_core::CellSnapshot, family: Option<&'static str>) -> Font {
@@ -350,6 +474,11 @@ fn configured_font(family: Option<&'static str>) -> Font {
 
 fn color_from_rgb(color: crate::vt::GhosttyColorRgb, alpha: f32) -> Color {
     Color::from_rgba8(color.r, color.g, color.b, alpha.clamp(0.0, 1.0))
+}
+
+fn render_debug_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("BOO_RENDER_DEBUG").is_some())
 }
 
 impl TerminalCanvas {
@@ -510,5 +639,61 @@ mod tests {
             ..(*before.snapshot).clone()
         });
         assert_ne!(before.row_fingerprint(0), after.row_fingerprint(0));
+    }
+
+    #[test]
+    fn text_runs_coalesce_adjacent_cells_with_same_style() {
+        let row = vec![
+            vt_backend_core::CellSnapshot {
+                text: "a".to_string(),
+                ..Default::default()
+            },
+            vt_backend_core::CellSnapshot {
+                text: "b".to_string(),
+                ..Default::default()
+            },
+            vt_backend_core::CellSnapshot {
+                text: "c".to_string(),
+                bold: true,
+                ..Default::default()
+            },
+        ];
+        let runs = build_text_runs(&row, row.len(), None);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].text, "ab");
+        assert_eq!(runs[0].start_col, 0);
+        assert_eq!(runs[0].width_cols, 2);
+        assert_eq!(runs[1].text, "c");
+        assert_eq!(runs[1].start_col, 2);
+    }
+
+    #[test]
+    fn background_spans_coalesce_adjacent_non_default_cells() {
+        let highlight = crate::vt::GhosttyColorRgb {
+            r: 10,
+            g: 20,
+            b: 30,
+        };
+        let row = vec![
+            vt_backend_core::CellSnapshot {
+                bg: highlight,
+                ..Default::default()
+            },
+            vt_backend_core::CellSnapshot {
+                bg: highlight,
+                ..Default::default()
+            },
+            vt_backend_core::CellSnapshot::default(),
+        ];
+        let spans = build_background_spans(
+            &row,
+            row.len(),
+            crate::vt::GhosttyColorRgb::default(),
+            0.8,
+            false,
+        );
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].start_col, 0);
+        assert_eq!(spans[0].width_cols, 2);
     }
 }
