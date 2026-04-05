@@ -6,10 +6,11 @@ use crate::vt_terminal_canvas;
 use iced::widget::{column, container, row, text};
 use iced::window;
 use iced::{keyboard, time, Color, Element, Event, Font, Length, Size, Subscription, Task, Theme};
+use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const STATUS_BAR_HEIGHT: f64 = 20.0;
 const DEFAULT_FONT_SIZE: f32 = 14.0;
@@ -38,6 +39,8 @@ pub struct ClientApp {
     fast_poll_ticks_remaining: u8,
     active_tab_index: usize,
     render_revision: u64,
+    next_input_seq: u64,
+    pending_input_latencies: HashMap<u64, Instant>,
 }
 
 impl ClientApp {
@@ -70,6 +73,8 @@ impl ClientApp {
                 fast_poll_ticks_remaining: FAST_POLL_BURST_TICKS,
                 active_tab_index,
                 render_revision: 1,
+                next_input_seq: 1,
+                pending_input_latencies: HashMap::new(),
             },
             Task::none(),
         )
@@ -266,8 +271,10 @@ impl ClientApp {
             .filter(|text| !text.is_empty())
             .filter(|_| !(modifiers.control() || modifiers.alt() || modifiers.logo()))
         {
-            if let Some(stream_client) = self.stream_client.as_ref() {
-                stream_client.send_input(committed.into_bytes());
+            if self.stream_client.is_some() {
+                let input_seq = self.record_pending_input();
+                let stream_client = self.stream_client.as_ref().expect("stream client present");
+                stream_client.send_input(input_seq, committed.into_bytes());
             } else {
                 let _ = self.client.send(&control::Request::SendText { text: committed });
             }
@@ -276,8 +283,10 @@ impl ClientApp {
         }
 
         if let Some(keyspec) = keyspec_from_key(&key, modifiers, text.as_deref()) {
-            if let Some(stream_client) = self.stream_client.as_ref() {
-                stream_client.send_key(keyspec);
+            if self.stream_client.is_some() {
+                let input_seq = self.record_pending_input();
+                let stream_client = self.stream_client.as_ref().expect("stream client present");
+                stream_client.send_key(input_seq, keyspec);
             } else {
                 let _ = self.client.send(&control::Request::SendKey { key: keyspec });
             }
@@ -286,17 +295,16 @@ impl ClientApp {
     }
 
     fn drain_stream_events(&mut self) {
-        let Some(stream_client) = self.stream_client.as_ref() else {
-            return;
-        };
-        while let Some(event) = stream_client.try_recv() {
+        while let Some(event) = self.stream_client.as_ref().and_then(|stream_client| stream_client.try_recv()) {
             match event {
                 LocalStreamEvent::SessionList(sessions) => {
                     if let Some(session) = sessions
                         .get(self.active_tab_index)
                         .or_else(|| sessions.first())
                     {
-                        stream_client.attach(session.id);
+                        if let Some(stream_client) = self.stream_client.as_ref() {
+                            stream_client.attach(session.id);
+                        }
                     }
                 }
                 LocalStreamEvent::Attached(session_id) => {
@@ -304,31 +312,65 @@ impl ClientApp {
                 }
                 LocalStreamEvent::Detached => {
                     self.stream_state = None;
+                    self.pending_input_latencies.clear();
                     self.render_revision = self.render_revision.wrapping_add(1);
-                    stream_client.list_sessions();
+                    if let Some(stream_client) = self.stream_client.as_ref() {
+                        stream_client.list_sessions();
+                    }
                 }
                 LocalStreamEvent::SessionExited(session_id) => {
                     let _ = session_id;
                     self.stream_state = None;
+                    self.pending_input_latencies.clear();
                     self.render_revision = self.render_revision.wrapping_add(1);
-                    stream_client.list_sessions();
+                    if let Some(stream_client) = self.stream_client.as_ref() {
+                        stream_client.list_sessions();
+                    }
                 }
-                LocalStreamEvent::FullState(state) => {
+                LocalStreamEvent::FullState { ack_input_seq, state } => {
                     self.stream_state = Some(state);
                     self.render_revision = self.render_revision.wrapping_add(1);
+                    self.acknowledge_input_latency("stream_full_state", ack_input_seq);
                     self.fast_poll_ticks_remaining = FAST_POLL_BURST_TICKS;
                 }
-                LocalStreamEvent::Delta(delta) => {
+                LocalStreamEvent::Delta { ack_input_seq, delta } => {
                     if let Some(state) = self.stream_state.as_mut() {
                         apply_remote_delta(state, &delta);
                         self.render_revision = self.render_revision.wrapping_add(1);
                     }
+                    self.acknowledge_input_latency("stream_delta", ack_input_seq);
                     self.fast_poll_ticks_remaining = FAST_POLL_BURST_TICKS;
                 }
                 LocalStreamEvent::Error(error) => {
                     self.last_error = Some(error);
                 }
             }
+        }
+    }
+
+    fn record_pending_input(&mut self) -> u64 {
+        let input_seq = self.next_input_seq;
+        self.next_input_seq = self.next_input_seq.wrapping_add(1);
+        self.pending_input_latencies
+            .insert(input_seq, Instant::now());
+        input_seq
+    }
+
+    fn acknowledge_input_latency(&mut self, stage: &str, ack_input_seq: Option<u64>) {
+        let Some(ack_input_seq) = ack_input_seq else {
+            return;
+        };
+        let mut completed = None;
+        self.pending_input_latencies.retain(|seq, started_at| {
+            if *seq <= ack_input_seq {
+                completed = Some((*seq, *started_at));
+                false
+            } else {
+                true
+            }
+        });
+        if let Some((input_seq, started_at)) = completed {
+            log_client_latency(stage, input_seq, started_at);
         }
     }
 }
@@ -338,6 +380,21 @@ fn terminal_metrics(font_size: f32) -> (f64, f64) {
     let cell_width = (size * 0.62).max(6.0).ceil();
     let cell_height = (size * 1.35).max(12.0).ceil();
     (cell_width, cell_height)
+}
+
+fn latency_debug_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("BOO_LATENCY_DEBUG").is_some())
+}
+
+fn log_client_latency(stage: &str, input_seq: u64, started_at: Instant) {
+    if !latency_debug_enabled() {
+        return;
+    }
+    log::info!(
+        "boo_latency stage={stage} seq={input_seq} ms={:.3}",
+        started_at.elapsed().as_secs_f64() * 1000.0
+    );
 }
 
 fn remote_full_state_to_vt_snapshot(state: &remote::RemoteFullState) -> vt_backend_core::TerminalSnapshot {
@@ -434,8 +491,14 @@ enum LocalStreamEvent {
     Attached(u32),
     Detached,
     SessionExited(u32),
-    FullState(remote::RemoteFullState),
-    Delta(RemoteDelta),
+    FullState {
+        ack_input_seq: Option<u64>,
+        state: remote::RemoteFullState,
+    },
+    Delta {
+        ack_input_seq: Option<u64>,
+        delta: RemoteDelta,
+    },
     Error(String),
 }
 
@@ -477,12 +540,18 @@ impl LocalStreamClient {
         self.send_message(remote::MessageType::Attach, &session_id.to_le_bytes());
     }
 
-    fn send_input(&self, bytes: Vec<u8>) {
-        self.send_message(remote::MessageType::Input, &bytes);
+    fn send_input(&self, input_seq: u64, bytes: Vec<u8>) {
+        let mut payload = Vec::with_capacity(8 + bytes.len());
+        payload.extend_from_slice(&input_seq.to_le_bytes());
+        payload.extend_from_slice(&bytes);
+        self.send_message(remote::MessageType::Input, &payload);
     }
 
-    fn send_key(&self, keyspec: String) {
-        self.send_message(remote::MessageType::Key, keyspec.as_bytes());
+    fn send_key(&self, input_seq: u64, keyspec: String) {
+        let mut payload = Vec::with_capacity(8 + keyspec.len());
+        payload.extend_from_slice(&input_seq.to_le_bytes());
+        payload.extend_from_slice(keyspec.as_bytes());
+        self.send_message(remote::MessageType::Key, &payload);
     }
 
     fn send_resize(&self, cols: u16, rows: u16) {
@@ -508,10 +577,11 @@ fn read_local_stream_loop(mut read: UnixStream, tx: mpsc::Sender<LocalStreamEven
             remote::MessageType::SessionExited => {
                 decode_u32(&payload).map(LocalStreamEvent::SessionExited)
             }
-            remote::MessageType::FullState => {
-                decode_remote_full_state(&payload).map(LocalStreamEvent::FullState)
-            }
-            remote::MessageType::Delta => decode_remote_delta(&payload).map(LocalStreamEvent::Delta),
+            remote::MessageType::FullState => decode_remote_full_state(&payload).map(
+                |(ack_input_seq, state)| LocalStreamEvent::FullState { ack_input_seq, state },
+            ),
+            remote::MessageType::Delta => decode_remote_delta(&payload)
+                .map(|(ack_input_seq, delta)| LocalStreamEvent::Delta { ack_input_seq, delta }),
             remote::MessageType::ErrorMsg => {
                 Some(LocalStreamEvent::Error(String::from_utf8_lossy(&payload).to_string()))
             }
@@ -579,21 +649,22 @@ fn decode_remote_string(payload: &[u8], offset: &mut usize) -> Option<String> {
     Some(value)
 }
 
-fn decode_remote_full_state(payload: &[u8]) -> Option<remote::RemoteFullState> {
-    if payload.len() < 12 {
+fn decode_remote_full_state(payload: &[u8]) -> Option<(Option<u64>, remote::RemoteFullState)> {
+    if payload.len() < 20 {
         return None;
     }
-    let rows = u16::from_le_bytes([payload[0], payload[1]]);
-    let cols = u16::from_le_bytes([payload[2], payload[3]]);
-    let cursor_x = u16::from_le_bytes([payload[4], payload[5]]);
-    let cursor_y = u16::from_le_bytes([payload[6], payload[7]]);
-    let cursor_visible = payload[8] != 0;
+    let ack_input_seq = u64::from_le_bytes(payload[..8].try_into().ok()?);
+    let rows = u16::from_le_bytes([payload[8], payload[9]]);
+    let cols = u16::from_le_bytes([payload[10], payload[11]]);
+    let cursor_x = u16::from_le_bytes([payload[12], payload[13]]);
+    let cursor_y = u16::from_le_bytes([payload[14], payload[15]]);
+    let cursor_visible = payload[16] != 0;
     let cell_count = rows as usize * cols as usize;
-    if payload.len() < 12 + cell_count * 12 {
+    if payload.len() < 20 + cell_count * 12 {
         return None;
     }
     let mut cells = Vec::with_capacity(cell_count);
-    let mut offset = 12usize;
+    let mut offset = 20usize;
     for _ in 0..cell_count {
         cells.push(remote::RemoteCell {
             codepoint: u32::from_le_bytes([
@@ -609,25 +680,29 @@ fn decode_remote_full_state(payload: &[u8]) -> Option<remote::RemoteFullState> {
         });
         offset += 12;
     }
-    Some(remote::RemoteFullState {
-        rows,
-        cols,
-        cursor_x,
-        cursor_y,
-        cursor_visible,
-        cells,
-    })
+    Some((
+        (ack_input_seq != 0).then_some(ack_input_seq),
+        remote::RemoteFullState {
+            rows,
+            cols,
+            cursor_x,
+            cursor_y,
+            cursor_visible,
+            cells,
+        },
+    ))
 }
 
-fn decode_remote_delta(payload: &[u8]) -> Option<RemoteDelta> {
-    if payload.len() < 8 {
+fn decode_remote_delta(payload: &[u8]) -> Option<(Option<u64>, RemoteDelta)> {
+    if payload.len() < 16 {
         return None;
     }
-    let row_count = u16::from_le_bytes([payload[0], payload[1]]) as usize;
-    let cursor_x = u16::from_le_bytes([payload[2], payload[3]]);
-    let cursor_y = u16::from_le_bytes([payload[4], payload[5]]);
-    let cursor_visible = payload[6] != 0;
-    let mut offset = 8usize;
+    let ack_input_seq = u64::from_le_bytes(payload[..8].try_into().ok()?);
+    let row_count = u16::from_le_bytes([payload[8], payload[9]]) as usize;
+    let cursor_x = u16::from_le_bytes([payload[10], payload[11]]);
+    let cursor_y = u16::from_le_bytes([payload[12], payload[13]]);
+    let cursor_visible = payload[14] != 0;
+    let mut offset = 16usize;
     let mut changed_rows = Vec::with_capacity(row_count);
     for _ in 0..row_count {
         if offset + 4 > payload.len() {
@@ -657,12 +732,15 @@ fn decode_remote_delta(payload: &[u8]) -> Option<RemoteDelta> {
         }
         changed_rows.push((row, cells));
     }
-    Some(RemoteDelta {
-        cursor_x,
-        cursor_y,
-        cursor_visible,
-        changed_rows,
-    })
+    Some((
+        (ack_input_seq != 0).then_some(ack_input_seq),
+        RemoteDelta {
+            cursor_x,
+            cursor_y,
+            cursor_visible,
+            changed_rows,
+        },
+    ))
 }
 
 fn apply_remote_delta(state: &mut remote::RemoteFullState, delta: &RemoteDelta) {

@@ -1,4 +1,19 @@
 use super::*;
+use std::time::Instant;
+
+fn latency_debug_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("BOO_LATENCY_DEBUG").is_some())
+}
+
+fn log_server_latency(stage: &str, started_at: Instant) {
+    if latency_debug_enabled() {
+        log::info!(
+            "boo_latency_server stage={stage} ms={:.3}",
+            started_at.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+}
 
 impl BooApp {
     fn remote_servers(&self) -> impl Iterator<Item = &remote::RemoteServer> {
@@ -139,7 +154,12 @@ impl BooApp {
                     server.send_session_created(client_id, session_id);
                 }
             }
-            server::Command::RemoteInput { client_id, bytes } => {
+            server::Command::RemoteInput {
+                client_id,
+                bytes,
+                input_seq,
+            } => {
+                let started_at = Instant::now();
                 let Some(session_id) = self
                     .remote_server_for_client(client_id)
                     .and_then(|server| server.client_session(client_id))
@@ -155,9 +175,18 @@ impl BooApp {
                     }
                     return;
                 };
+                if let Some(server) = self.remote_server_for_client(client_id) {
+                    server.record_input_seq(client_id, input_seq);
+                }
                 let _ = self.backend.write_input(pane, &bytes);
+                log_server_latency("remote_input_applied", started_at);
             }
-            server::Command::RemoteKey { client_id, keyspec } => {
+            server::Command::RemoteKey {
+                client_id,
+                keyspec,
+                input_seq,
+            } => {
+                let started_at = Instant::now();
                 let Some(session_id) = self
                     .remote_server_for_client(client_id)
                     .and_then(|server| server.client_session(client_id))
@@ -180,7 +209,11 @@ impl BooApp {
                     self.set_pane_focus(old, false);
                     self.set_pane_focus(new, true);
                 }
+                if let Some(server) = self.remote_server_for_client(client_id) {
+                    server.record_input_seq(client_id, input_seq);
+                }
                 self.inject_key(&keyspec);
+                log_server_latency("remote_key_applied", started_at);
             }
             server::Command::RemoteResize {
                 client_id,
@@ -291,6 +324,7 @@ impl BooApp {
     }
 
     pub(crate) fn publish_remote_session(&self, session_id: u32) {
+        let started_at = Instant::now();
         let mut sent = false;
         for server in self.remote_servers() {
             sent = true;
@@ -308,6 +342,7 @@ impl BooApp {
         if !sent {
             return;
         }
+        log_server_latency("publish_remote_session", started_at);
     }
 
     pub(crate) fn publish_remote_state(&self) {

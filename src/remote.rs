@@ -137,10 +137,12 @@ pub enum RemoteCmd {
     Input {
         client_id: u64,
         bytes: Vec<u8>,
+        input_seq: Option<u64>,
     },
     Key {
         client_id: u64,
         keyspec: String,
+        input_seq: Option<u64>,
     },
     Resize {
         client_id: u64,
@@ -159,6 +161,8 @@ struct ClientState {
     challenge: Option<[u8; 32]>,
     attached_session: Option<u32>,
     last_state: Option<RemoteFullState>,
+    latest_input_seq: Option<u64>,
+    is_local: bool,
 }
 
 struct State {
@@ -213,6 +217,8 @@ impl RemoteServer {
                             challenge: None,
                             attached_session: None,
                             last_state: None,
+                            latest_input_seq: None,
+                            is_local: false,
                         },
                     );
                     (client_id, outbound_rx)
@@ -274,6 +280,8 @@ impl RemoteServer {
                             challenge: None,
                             attached_session: None,
                             last_state: None,
+                            latest_input_seq: None,
+                            is_local: true,
                         },
                     );
                     (client_id, outbound_rx)
@@ -347,6 +355,7 @@ impl RemoteServer {
         self.update_client(client_id, |client| {
             client.attached_session = Some(session_id);
             client.last_state = None;
+            client.latest_input_seq = None;
         });
         self.send_to_client(client_id, MessageType::Attached, payload);
     }
@@ -355,6 +364,7 @@ impl RemoteServer {
         self.update_client(client_id, |client| {
             client.attached_session = None;
             client.last_state = None;
+            client.latest_input_seq = None;
         });
         self.send_to_client(client_id, MessageType::Detached, Vec::new());
     }
@@ -393,8 +403,17 @@ impl RemoteServer {
             self.update_client(client_id, |client| {
                 client.attached_session = None;
                 client.last_state = None;
+                client.latest_input_seq = None;
             });
         }
+    }
+
+    pub fn record_input_seq(&self, client_id: u64, input_seq: Option<u64>) {
+        self.update_client(client_id, |client| {
+            if let Some(input_seq) = input_seq {
+                client.latest_input_seq = Some(input_seq);
+            }
+        });
     }
 
     fn clients_for_session(&self, session_id: u32) -> Vec<u64> {
@@ -429,13 +448,17 @@ impl RemoteServer {
             let Some(client) = guard.clients.get_mut(&client_id) else {
                 return;
             };
+            let latest_input_seq = client.latest_input_seq;
             let encoded = match client
                 .last_state
                 .as_ref()
-                .and_then(|previous| encode_delta(previous, state))
+                .and_then(|previous| encode_delta(previous, state, latest_input_seq, client.is_local))
             {
                 Some(delta) => (MessageType::Delta, delta),
-                None => (MessageType::FullState, encode_full_state(state)),
+                None => (
+                    MessageType::FullState,
+                    encode_full_state(state, latest_input_seq, client.is_local),
+                ),
             };
             client.last_state = Some(state.clone());
             encoded
@@ -470,13 +493,13 @@ fn read_loop(
     cmd_tx: mpsc::Sender<RemoteCmd>,
 ) {
     while let Ok((ty, payload)) = read_message(&mut stream) {
-        let authenticated = {
+        let (authenticated, is_local) = {
             let state = state.lock().expect("remote server state poisoned");
             state
                 .clients
                 .get(&client_id)
-                .map(|client| client.authenticated)
-                .unwrap_or(false)
+                .map(|client| (client.authenticated, client.is_local))
+                .unwrap_or((false, false))
         };
 
         if matches!(ty, MessageType::Auth) {
@@ -501,13 +524,19 @@ fn read_loop(
                 cols,
                 rows,
             }),
-            MessageType::Input => Some(RemoteCmd::Input {
-                client_id,
-                bytes: payload,
+            MessageType::Input => parse_input_payload(&payload, is_local).map(|(input_seq, bytes)| {
+                RemoteCmd::Input {
+                    client_id,
+                    bytes,
+                    input_seq,
+                }
             }),
-            MessageType::Key => String::from_utf8(payload)
-                .ok()
-                .map(|keyspec| RemoteCmd::Key { client_id, keyspec }),
+            MessageType::Key => parse_key_payload(&payload, is_local)
+                .and_then(|(input_seq, payload)| String::from_utf8(payload).ok().map(|keyspec| RemoteCmd::Key {
+                    client_id,
+                    keyspec,
+                    input_seq,
+                })),
             MessageType::Resize => parse_resize(&payload).map(|(cols, rows)| RemoteCmd::Resize {
                 client_id,
                 cols,
@@ -629,6 +658,21 @@ fn parse_resize(payload: &[u8]) -> Option<(u16, u16)> {
     })
 }
 
+fn parse_input_payload(payload: &[u8], is_local: bool) -> Option<(Option<u64>, Vec<u8>)> {
+    if is_local {
+        if payload.len() < 8 {
+            return None;
+        }
+        let input_seq = u64::from_le_bytes(payload[..8].try_into().ok()?);
+        return Some((Some(input_seq), payload[8..].to_vec()));
+    }
+    Some((None, payload.to_vec()))
+}
+
+fn parse_key_payload(payload: &[u8], is_local: bool) -> Option<(Option<u64>, Vec<u8>)> {
+    parse_input_payload(payload, is_local)
+}
+
 pub(crate) fn encode_message(ty: MessageType, payload: &[u8]) -> Vec<u8> {
     let mut frame = Vec::with_capacity(HEADER_LEN + payload.len());
     frame.extend_from_slice(&MAGIC);
@@ -658,8 +702,12 @@ pub fn encode_session_list(sessions: &[RemoteSessionInfo]) -> Vec<u8> {
     payload
 }
 
-pub fn encode_full_state(state: &RemoteFullState) -> Vec<u8> {
-    let mut payload = Vec::with_capacity(12 + state.cells.len() * 12);
+pub fn encode_full_state(state: &RemoteFullState, latest_input_seq: Option<u64>, local: bool) -> Vec<u8> {
+    let prefix_len = if local { 8 } else { 0 };
+    let mut payload = Vec::with_capacity(prefix_len + 12 + state.cells.len() * 12);
+    if local {
+        payload.extend_from_slice(&latest_input_seq.unwrap_or(0).to_le_bytes());
+    }
     payload.extend_from_slice(&state.rows.to_le_bytes());
     payload.extend_from_slice(&state.cols.to_le_bytes());
     payload.extend_from_slice(&state.cursor_x.to_le_bytes());
@@ -676,12 +724,21 @@ pub fn encode_full_state(state: &RemoteFullState) -> Vec<u8> {
     payload
 }
 
-fn encode_delta(previous: &RemoteFullState, current: &RemoteFullState) -> Option<Vec<u8>> {
+fn encode_delta(
+    previous: &RemoteFullState,
+    current: &RemoteFullState,
+    latest_input_seq: Option<u64>,
+    local: bool,
+) -> Option<Vec<u8>> {
     if previous.rows != current.rows || previous.cols != current.cols {
         return None;
     }
     if previous == current {
-        let mut payload = Vec::with_capacity(8);
+        let prefix_len = if local { 8 } else { 0 };
+        let mut payload = Vec::with_capacity(prefix_len + 8);
+        if local {
+            payload.extend_from_slice(&latest_input_seq.unwrap_or(0).to_le_bytes());
+        }
         payload.extend_from_slice(&0u16.to_le_bytes());
         payload.extend_from_slice(&current.cursor_x.to_le_bytes());
         payload.extend_from_slice(&current.cursor_y.to_le_bytes());
@@ -702,7 +759,11 @@ fn encode_delta(previous: &RemoteFullState, current: &RemoteFullState) -> Option
     }
 
     if changed_rows.is_empty() {
-        let mut payload = Vec::with_capacity(8);
+        let prefix_len = if local { 8 } else { 0 };
+        let mut payload = Vec::with_capacity(prefix_len + 8);
+        if local {
+            payload.extend_from_slice(&latest_input_seq.unwrap_or(0).to_le_bytes());
+        }
         payload.extend_from_slice(&0u16.to_le_bytes());
         payload.extend_from_slice(&current.cursor_x.to_le_bytes());
         payload.extend_from_slice(&current.cursor_y.to_le_bytes());
@@ -716,6 +777,9 @@ fn encode_delta(previous: &RemoteFullState, current: &RemoteFullState) -> Option
     }
 
     let mut payload = Vec::new();
+    if local {
+        payload.extend_from_slice(&latest_input_seq.unwrap_or(0).to_le_bytes());
+    }
     payload.extend_from_slice(&(changed_rows.len() as u16).to_le_bytes());
     payload.extend_from_slice(&current.cursor_x.to_le_bytes());
     payload.extend_from_slice(&current.cursor_y.to_le_bytes());
@@ -849,29 +913,33 @@ mod tests {
 
     #[test]
     fn full_state_encoding_uses_12_byte_cells() {
-        let payload = encode_full_state(&RemoteFullState {
-            rows: 1,
-            cols: 2,
-            cursor_x: 1,
-            cursor_y: 0,
-            cursor_visible: true,
-            cells: vec![
-                RemoteCell {
-                    codepoint: u32::from('A'),
-                    fg: [1, 2, 3],
-                    bg: [4, 5, 6],
-                    style_flags: 0x21,
-                    wide: false,
-                },
-                RemoteCell {
-                    codepoint: u32::from('好'),
-                    fg: [7, 8, 9],
-                    bg: [10, 11, 12],
-                    style_flags: 0x42,
-                    wide: true,
-                },
-            ],
-        });
+        let payload = encode_full_state(
+            &RemoteFullState {
+                rows: 1,
+                cols: 2,
+                cursor_x: 1,
+                cursor_y: 0,
+                cursor_visible: true,
+                cells: vec![
+                    RemoteCell {
+                        codepoint: u32::from('A'),
+                        fg: [1, 2, 3],
+                        bg: [4, 5, 6],
+                        style_flags: 0x21,
+                        wide: false,
+                    },
+                    RemoteCell {
+                        codepoint: u32::from('好'),
+                        fg: [7, 8, 9],
+                        bg: [10, 11, 12],
+                        style_flags: 0x42,
+                        wide: true,
+                    },
+                ],
+            },
+            None,
+            false,
+        );
         assert_eq!(payload.len(), 12 + 2 * 12);
         assert_eq!(u16::from_le_bytes(payload[0..2].try_into().unwrap()), 1);
         assert_eq!(u16::from_le_bytes(payload[2..4].try_into().unwrap()), 2);
@@ -887,6 +955,31 @@ mod tests {
         );
         assert_eq!(payload[34], 0x42);
         assert_eq!(payload[35], 1);
+    }
+
+    #[test]
+    fn local_full_state_encoding_prefixes_latest_input_seq() {
+        let payload = encode_full_state(
+            &RemoteFullState {
+                rows: 1,
+                cols: 1,
+                cursor_x: 0,
+                cursor_y: 0,
+                cursor_visible: true,
+                cells: vec![RemoteCell {
+                    codepoint: u32::from('A'),
+                    fg: [1, 2, 3],
+                    bg: [4, 5, 6],
+                    style_flags: 0,
+                    wide: false,
+                }],
+            },
+            Some(42),
+            true,
+        );
+        assert_eq!(u64::from_le_bytes(payload[0..8].try_into().unwrap()), 42);
+        assert_eq!(u16::from_le_bytes(payload[8..10].try_into().unwrap()), 1);
+        assert_eq!(u16::from_le_bytes(payload[10..12].try_into().unwrap()), 1);
     }
 
     #[test]
