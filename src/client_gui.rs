@@ -269,7 +269,11 @@ impl ClientApp {
         }
 
         if let Some(keyspec) = keyspec_from_key(&key, modifiers, text.as_deref()) {
-            let _ = self.client.send(&control::Request::SendKey { key: keyspec });
+            if let Some(stream_client) = self.stream_client.as_ref() {
+                stream_client.send_key(keyspec);
+            } else {
+                let _ = self.client.send(&control::Request::SendKey { key: keyspec });
+            }
             self.fast_poll_ticks_remaining = FAST_POLL_BURST_TICKS;
         }
     }
@@ -462,6 +466,10 @@ impl LocalStreamClient {
 
     fn send_input(&self, bytes: Vec<u8>) {
         self.send_message(remote::MessageType::Input, &bytes);
+    }
+
+    fn send_key(&self, keyspec: String) {
+        self.send_message(remote::MessageType::Key, keyspec.as_bytes());
     }
 
     fn send_resize(&self, cols: u16, rows: u16) {

@@ -157,6 +157,31 @@ impl BooApp {
                 };
                 let _ = self.backend.write_input(pane, &bytes);
             }
+            server::Command::RemoteKey { client_id, keyspec } => {
+                let Some(session_id) = self
+                    .remote_server_for_client(client_id)
+                    .and_then(|server| server.client_session(client_id))
+                else {
+                    if let Some(server) = self.remote_server_for_client(client_id).or(self.server.local_gui_server.as_ref()).or(self.server.remote_server.as_ref()) {
+                        server.send_error(client_id, "not attached");
+                    }
+                    return;
+                };
+                let Some(tab_index) = self.server.tabs.find_index_by_session_id(session_id) else {
+                    if let Some(server) = self.remote_server_for_client(client_id).or(self.server.local_gui_server.as_ref()).or(self.server.remote_server.as_ref()) {
+                        server.send_session_exited(session_id);
+                    }
+                    return;
+                };
+                let old = self.server.tabs.focused_pane();
+                self.server.tabs.goto_tab(tab_index);
+                let new = self.server.tabs.focused_pane();
+                if old != new {
+                    self.set_pane_focus(old, false);
+                    self.set_pane_focus(new, true);
+                }
+                self.inject_key(&keyspec);
+            }
             server::Command::RemoteResize {
                 client_id,
                 cols,

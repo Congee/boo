@@ -66,6 +66,10 @@ pub enum Command {
         client_id: u64,
         bytes: Vec<u8>,
     },
+    RemoteKey {
+        client_id: u64,
+        keyspec: String,
+    },
     RemoteResize {
         client_id: u64,
         cols: u16,
@@ -192,6 +196,7 @@ impl From<remote::RemoteCmd> for Command {
                 rows,
             },
             remote::RemoteCmd::Input { client_id, bytes } => Self::RemoteInput { client_id, bytes },
+            remote::RemoteCmd::Key { client_id, keyspec } => Self::RemoteKey { client_id, keyspec },
             remote::RemoteCmd::Resize {
                 client_id,
                 cols,

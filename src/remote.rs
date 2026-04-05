@@ -29,6 +29,7 @@ pub enum MessageType {
     Destroy = 0x08,
     AuthChallenge = 0x09,
     Scroll = 0x0a,
+    Key = 0x0b,
 
     AuthOk = 0x80,
     AuthFail = 0x81,
@@ -60,6 +61,7 @@ impl TryFrom<u8> for MessageType {
             0x08 => Self::Destroy,
             0x09 => Self::AuthChallenge,
             0x0a => Self::Scroll,
+            0x0b => Self::Key,
             0x80 => Self::AuthOk,
             0x81 => Self::AuthFail,
             0x82 => Self::SessionList,
@@ -135,6 +137,10 @@ pub enum RemoteCmd {
     Input {
         client_id: u64,
         bytes: Vec<u8>,
+    },
+    Key {
+        client_id: u64,
+        keyspec: String,
     },
     Resize {
         client_id: u64,
@@ -499,6 +505,9 @@ fn read_loop(
                 client_id,
                 bytes: payload,
             }),
+            MessageType::Key => String::from_utf8(payload)
+                .ok()
+                .map(|keyspec| RemoteCmd::Key { client_id, keyspec }),
             MessageType::Resize => parse_resize(&payload).map(|(cols, rows)| RemoteCmd::Resize {
                 client_id,
                 cols,
