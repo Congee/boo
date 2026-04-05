@@ -17,6 +17,7 @@ const DEFAULT_FONT_SIZE: f32 = 14.0;
 const FAST_TICK_INTERVAL: Duration = Duration::from_millis(8);
 const IDLE_TICK_INTERVAL: Duration = Duration::from_millis(80);
 const FAST_POLL_BURST_TICKS: u8 = 6;
+const SNAPSHOT_IDLE_REFRESH_TICKS: u8 = 12;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -241,10 +242,12 @@ impl ClientApp {
         self.drain_stream_events();
         if self.fast_poll_ticks_remaining > 0 {
             self.fast_poll_ticks_remaining -= 1;
-            self.refresh_snapshot();
         } else {
             self.tick_counter = self.tick_counter.wrapping_add(1);
-            self.refresh_snapshot();
+            if self.snapshot.is_none() || self.tick_counter >= SNAPSHOT_IDLE_REFRESH_TICKS {
+                self.tick_counter = 0;
+                self.refresh_snapshot();
+            }
         }
     }
 
