@@ -9,6 +9,7 @@ mod macos_vt_backend;
 mod pane;
 mod platform;
 mod remote;
+mod server;
 mod session;
 mod splits;
 mod tabs;
@@ -173,7 +174,8 @@ fn main() {
             STARTUP_REMOTE_AUTH_KEY.set(key.clone()).ok();
         }
     }
-    let headless = args.iter().any(|a| a == "--headless");
+    let server_mode = args.get(1).is_some_and(|arg| arg == "server");
+    let headless = server_mode || args.iter().any(|a| a == "--headless");
     if headless {
         run_headless();
         return;
@@ -1300,10 +1302,10 @@ impl BooApp {
 
         // Process one control command per frame
         if let Ok(cmd) = self.ctl_rx.try_recv() {
-            self.handle_control_cmd(cmd);
+            self.handle_server_cmd(cmd.into());
         }
         while let Ok(cmd) = self.remote_rx.try_recv() {
-            self.handle_remote_cmd(cmd);
+            self.handle_server_cmd(cmd.into());
         }
         self.publish_remote_state();
 
@@ -1632,12 +1634,11 @@ impl BooApp {
         }
     }
 
-    fn handle_control_cmd(&mut self, cmd: control::ControlCmd) {
+    fn handle_server_cmd(&mut self, cmd: server::Command) {
         match cmd {
-            control::ControlCmd::DumpKeysOn => self.dump_keys = true,
-            control::ControlCmd::DumpKeysOff => self.dump_keys = false,
-            control::ControlCmd::Quit => self.terminate(0),
-            control::ControlCmd::ListSurfaces { reply } => {
+            server::Command::DumpKeys(enabled) => self.dump_keys = enabled,
+            server::Command::Quit => self.terminate(0),
+            server::Command::ListSurfaces { reply } => {
                 let info = if let Some(tree) = self.tabs.active_tree() {
                     tree.surface_info()
                         .into_iter()
@@ -1648,10 +1649,10 @@ impl BooApp {
                 };
                 let _ = reply.send(control::Response::Surfaces { surfaces: info });
             }
-            control::ControlCmd::NewSplit { direction } => {
+            server::Command::NewSplit { direction } => {
                 self.create_split(Self::split_direction_from_str(&direction));
             }
-            control::ControlCmd::FocusSurface { index } => {
+            server::Command::FocusSurface { index } => {
                 let old = self.tabs.focused_pane();
                 if let Some(tree) = self.tabs.active_tree_mut() {
                     tree.set_focus(index);
@@ -1662,12 +1663,12 @@ impl BooApp {
                     self.set_pane_focus(new, true);
                 }
             }
-            control::ControlCmd::ListTabs { reply } => {
+            server::Command::ListTabs { reply } => {
                 let _ = reply.send(control::Response::Tabs {
                     tabs: self.tabs.tab_info(),
                 });
             }
-            control::ControlCmd::GetClipboard { reply } => {
+            server::Command::GetClipboard { reply } => {
                 let _ = reply.send(control::Response::Clipboard {
                     text: if self.last_clipboard_text.is_empty() {
                         platform::clipboard_read().unwrap_or_default()
@@ -1676,15 +1677,15 @@ impl BooApp {
                     },
                 });
             }
-            control::ControlCmd::GetUiSnapshot { reply } => {
+            server::Command::GetUiSnapshot { reply } => {
                 let _ = reply.send(control::Response::UiSnapshot {
                     snapshot: self.ui_snapshot(),
                 });
             }
-            control::ControlCmd::ExecuteCommand { input } => {
+            server::Command::ExecuteCommand { input } => {
                 self.execute_command(&input);
             }
-            control::ControlCmd::SendText { text } => {
+            server::Command::SendText { text } => {
                 #[cfg(any(target_os = "linux", target_os = "macos"))]
                 {
                     let _ = self
@@ -1692,30 +1693,155 @@ impl BooApp {
                         .write_input(self.tabs.focused_pane(), text.as_bytes());
                 }
             }
-            control::ControlCmd::SendVt { text } => {
+            server::Command::SendVt { text } => {
                 #[cfg(any(target_os = "linux", target_os = "macos"))]
                 {
                     self.backend
                         .write_vt_bytes(self.tabs.focused_pane(), text.as_bytes());
                 }
             }
-            control::ControlCmd::NewTab => {
+            server::Command::NewTab => {
                 let _ = self.new_tab();
             }
-            control::ControlCmd::GotoTab { index } => {
+            server::Command::GotoTab { index } => {
                 self.tabs.goto_tab(index);
                 self.sync_after_tab_change();
             }
-            control::ControlCmd::NextTab => {
+            server::Command::NextTab => {
                 self.tabs.next_tab();
                 self.sync_after_tab_change();
             }
-            control::ControlCmd::PrevTab => {
+            server::Command::PrevTab => {
                 self.tabs.prev_tab();
                 self.sync_after_tab_change();
             }
-            control::ControlCmd::SendKey { keyspec } => {
+            server::Command::SendKey { keyspec } => {
                 self.inject_key(&keyspec);
+            }
+            server::Command::RemoteListSessions { client_id } => {
+                if let Some(server) = self.remote_server.as_ref() {
+                    server.send_session_list(client_id, &self.remote_sessions());
+                }
+            }
+            server::Command::RemoteAttach {
+                client_id,
+                session_id,
+            } => {
+                if self.pane_for_session(session_id).is_some() {
+                    if let Some(server) = self.remote_server.as_ref() {
+                        server.send_attached(client_id, session_id);
+                    }
+                    self.publish_remote_session(session_id);
+                } else if let Some(server) = self.remote_server.as_ref() {
+                    server.send_error(client_id, "unknown session");
+                }
+            }
+            server::Command::RemoteDetach { client_id } => {
+                if let Some(server) = self.remote_server.as_ref() {
+                    server.send_detached(client_id);
+                }
+            }
+            server::Command::RemoteCreate {
+                client_id,
+                cols,
+                rows,
+            } => {
+                let created = self.new_tab();
+                let Some(session_id) = created else {
+                    if let Some(server) = self.remote_server.as_ref() {
+                        server.send_error(client_id, "failed to create session");
+                    }
+                    return;
+                };
+                if let Some(pane) = self.pane_for_session(session_id) {
+                    let (width, height) = self.session_size_pixels(cols, rows);
+                    self.resize_pane_backend(pane, self.scale_factor(), width, height);
+                }
+                if let Some(server) = self.remote_server.as_ref() {
+                    server.send_session_created(client_id, session_id);
+                }
+            }
+            server::Command::RemoteInput { client_id, bytes } => {
+                let Some(session_id) = self
+                    .remote_server
+                    .as_ref()
+                    .and_then(|server| server.client_session(client_id))
+                else {
+                    if let Some(server) = self.remote_server.as_ref() {
+                        server.send_error(client_id, "not attached");
+                    }
+                    return;
+                };
+                let Some(pane) = self.pane_for_session(session_id) else {
+                    if let Some(server) = self.remote_server.as_ref() {
+                        server.send_session_exited(session_id);
+                    }
+                    return;
+                };
+                let _ = self.backend.write_input(pane, &bytes);
+            }
+            server::Command::RemoteResize {
+                client_id,
+                cols,
+                rows,
+            } => {
+                let Some(session_id) = self
+                    .remote_server
+                    .as_ref()
+                    .and_then(|server| server.client_session(client_id))
+                else {
+                    if let Some(server) = self.remote_server.as_ref() {
+                        server.send_error(client_id, "not attached");
+                    }
+                    return;
+                };
+                let Some(pane) = self.pane_for_session(session_id) else {
+                    if let Some(server) = self.remote_server.as_ref() {
+                        server.send_session_exited(session_id);
+                    }
+                    return;
+                };
+                let (width, height) = self.session_size_pixels(cols, rows);
+                self.resize_pane_backend(pane, self.scale_factor(), width, height);
+            }
+            server::Command::RemoteDestroy {
+                client_id,
+                session_id,
+            } => {
+                let target = session_id.or_else(|| {
+                    self.remote_server
+                        .as_ref()
+                        .and_then(|server| server.client_session(client_id))
+                });
+                let Some(target) = target else {
+                    if let Some(server) = self.remote_server.as_ref() {
+                        server.send_error(client_id, "unknown session");
+                    }
+                    return;
+                };
+                let Some(tab_index) = self.tabs.find_index_by_session_id(target) else {
+                    if let Some(server) = self.remote_server.as_ref() {
+                        server.send_session_exited(target);
+                    }
+                    return;
+                };
+                if self.tabs.len() <= 1 {
+                    if let Some(server) = self.remote_server.as_ref() {
+                        server.send_error(client_id, "cannot destroy last session");
+                    }
+                    return;
+                }
+                let was_active = tab_index == self.tabs.active_index();
+                let panes = self.tabs.remove_tab(tab_index);
+                for pane in panes {
+                    self.backend.free_pane(pane);
+                }
+                if was_active && !self.tabs.is_empty() {
+                    self.sync_after_tab_change();
+                }
+                if let Some(server) = self.remote_server.as_ref() {
+                    server.send_session_exited(target);
+                }
             }
         }
     }
@@ -1760,142 +1886,6 @@ impl BooApp {
         let width = (cols as f64 * self.cell_width).round().max(1.0) as u32;
         let height = (rows as f64 * self.cell_height).round().max(1.0) as u32;
         (width, height)
-    }
-
-    fn handle_remote_cmd(&mut self, cmd: remote::RemoteCmd) {
-        if self.remote_server.is_none() {
-            return;
-        }
-
-        match cmd {
-            remote::RemoteCmd::ListSessions { client_id } => {
-                if let Some(server) = self.remote_server.as_ref() {
-                    server.send_session_list(client_id, &self.remote_sessions());
-                }
-            }
-            remote::RemoteCmd::Attach {
-                client_id,
-                session_id,
-            } => {
-                if self.pane_for_session(session_id).is_some() {
-                    if let Some(server) = self.remote_server.as_ref() {
-                        server.send_attached(client_id, session_id);
-                    }
-                    self.publish_remote_session(session_id);
-                } else {
-                    if let Some(server) = self.remote_server.as_ref() {
-                        server.send_error(client_id, "unknown session");
-                    }
-                }
-            }
-            remote::RemoteCmd::Detach { client_id } => {
-                if let Some(server) = self.remote_server.as_ref() {
-                    server.send_detached(client_id);
-                }
-            }
-            remote::RemoteCmd::Create {
-                client_id,
-                cols,
-                rows,
-            } => {
-                let created = self.new_tab();
-                let Some(session_id) = created else {
-                    if let Some(server) = self.remote_server.as_ref() {
-                        server.send_error(client_id, "failed to create session");
-                    }
-                    return;
-                };
-                if let Some(pane) = self.pane_for_session(session_id) {
-                    let (width, height) = self.session_size_pixels(cols, rows);
-                    self.resize_pane_backend(pane, self.scale_factor(), width, height);
-                }
-                if let Some(server) = self.remote_server.as_ref() {
-                    server.send_session_created(client_id, session_id);
-                }
-            }
-            remote::RemoteCmd::Input { client_id, bytes } => {
-                let Some(session_id) = self
-                    .remote_server
-                    .as_ref()
-                    .and_then(|server| server.client_session(client_id))
-                else {
-                    if let Some(server) = self.remote_server.as_ref() {
-                        server.send_error(client_id, "not attached");
-                    }
-                    return;
-                };
-                let Some(pane) = self.pane_for_session(session_id) else {
-                    if let Some(server) = self.remote_server.as_ref() {
-                        server.send_session_exited(session_id);
-                    }
-                    return;
-                };
-                let _ = self.backend.write_input(pane, &bytes);
-            }
-            remote::RemoteCmd::Resize {
-                client_id,
-                cols,
-                rows,
-            } => {
-                let Some(session_id) = self
-                    .remote_server
-                    .as_ref()
-                    .and_then(|server| server.client_session(client_id))
-                else {
-                    if let Some(server) = self.remote_server.as_ref() {
-                        server.send_error(client_id, "not attached");
-                    }
-                    return;
-                };
-                let Some(pane) = self.pane_for_session(session_id) else {
-                    if let Some(server) = self.remote_server.as_ref() {
-                        server.send_session_exited(session_id);
-                    }
-                    return;
-                };
-                let (width, height) = self.session_size_pixels(cols, rows);
-                self.resize_pane_backend(pane, self.scale_factor(), width, height);
-            }
-            remote::RemoteCmd::Destroy {
-                client_id,
-                session_id,
-            } => {
-                let target = session_id.or_else(|| {
-                    self.remote_server
-                        .as_ref()
-                        .and_then(|server| server.client_session(client_id))
-                });
-                let Some(target) = target else {
-                    if let Some(server) = self.remote_server.as_ref() {
-                        server.send_error(client_id, "unknown session");
-                    }
-                    return;
-                };
-                let Some(tab_index) = self.tabs.find_index_by_session_id(target) else {
-                    if let Some(server) = self.remote_server.as_ref() {
-                        server.send_session_exited(target);
-                    }
-                    return;
-                };
-                if self.tabs.len() <= 1 {
-                    if let Some(server) = self.remote_server.as_ref() {
-                        server.send_error(client_id, "cannot destroy last session");
-                    }
-                    return;
-                }
-                let was_active = tab_index == self.tabs.active_index();
-                let panes = self.tabs.remove_tab(tab_index);
-                for pane in panes {
-                    self.backend.free_pane(pane);
-                }
-                if was_active && !self.tabs.is_empty() {
-                    self.sync_after_tab_change();
-                }
-                if let Some(server) = self.remote_server.as_ref() {
-                    server.send_session_exited(target);
-                }
-            }
-        }
     }
 
     fn publish_remote_session(&self, session_id: u32) {

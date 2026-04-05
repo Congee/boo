@@ -1,0 +1,177 @@
+use crate::control;
+use crate::remote;
+use std::sync::mpsc;
+
+#[derive(Debug)]
+pub enum Command {
+    DumpKeys(bool),
+    Quit,
+    ListSurfaces {
+        reply: mpsc::Sender<control::Response>,
+    },
+    ListTabs {
+        reply: mpsc::Sender<control::Response>,
+    },
+    GetClipboard {
+        reply: mpsc::Sender<control::Response>,
+    },
+    GetUiSnapshot {
+        reply: mpsc::Sender<control::Response>,
+    },
+    ExecuteCommand {
+        input: String,
+    },
+    SendKey {
+        keyspec: String,
+    },
+    SendText {
+        text: String,
+    },
+    SendVt {
+        text: String,
+    },
+    NewSplit {
+        direction: String,
+    },
+    NewTab,
+    GotoTab {
+        index: usize,
+    },
+    NextTab,
+    PrevTab,
+    FocusSurface {
+        index: usize,
+    },
+    RemoteListSessions {
+        client_id: u64,
+    },
+    RemoteAttach {
+        client_id: u64,
+        session_id: u32,
+    },
+    RemoteDetach {
+        client_id: u64,
+    },
+    RemoteCreate {
+        client_id: u64,
+        cols: u16,
+        rows: u16,
+    },
+    RemoteInput {
+        client_id: u64,
+        bytes: Vec<u8>,
+    },
+    RemoteResize {
+        client_id: u64,
+        cols: u16,
+        rows: u16,
+    },
+    RemoteDestroy {
+        client_id: u64,
+        session_id: Option<u32>,
+    },
+}
+
+impl From<control::ControlCmd> for Command {
+    fn from(value: control::ControlCmd) -> Self {
+        match value {
+            control::ControlCmd::DumpKeysOn => Self::DumpKeys(true),
+            control::ControlCmd::DumpKeysOff => Self::DumpKeys(false),
+            control::ControlCmd::ListSurfaces { reply } => Self::ListSurfaces { reply },
+            control::ControlCmd::ListTabs { reply } => Self::ListTabs { reply },
+            control::ControlCmd::GetClipboard { reply } => Self::GetClipboard { reply },
+            control::ControlCmd::GetUiSnapshot { reply } => Self::GetUiSnapshot { reply },
+            control::ControlCmd::ExecuteCommand { input } => Self::ExecuteCommand { input },
+            control::ControlCmd::SendKey { keyspec } => Self::SendKey { keyspec },
+            control::ControlCmd::SendText { text } => Self::SendText { text },
+            control::ControlCmd::SendVt { text } => Self::SendVt { text },
+            control::ControlCmd::NewSplit { direction } => Self::NewSplit { direction },
+            control::ControlCmd::NewTab => Self::NewTab,
+            control::ControlCmd::GotoTab { index } => Self::GotoTab { index },
+            control::ControlCmd::NextTab => Self::NextTab,
+            control::ControlCmd::PrevTab => Self::PrevTab,
+            control::ControlCmd::FocusSurface { index } => Self::FocusSurface { index },
+            control::ControlCmd::Quit => Self::Quit,
+        }
+    }
+}
+
+impl From<remote::RemoteCmd> for Command {
+    fn from(value: remote::RemoteCmd) -> Self {
+        match value {
+            remote::RemoteCmd::ListSessions { client_id } => Self::RemoteListSessions { client_id },
+            remote::RemoteCmd::Attach {
+                client_id,
+                session_id,
+            } => Self::RemoteAttach {
+                client_id,
+                session_id,
+            },
+            remote::RemoteCmd::Detach { client_id } => Self::RemoteDetach { client_id },
+            remote::RemoteCmd::Create {
+                client_id,
+                cols,
+                rows,
+            } => Self::RemoteCreate {
+                client_id,
+                cols,
+                rows,
+            },
+            remote::RemoteCmd::Input { client_id, bytes } => Self::RemoteInput { client_id, bytes },
+            remote::RemoteCmd::Resize {
+                client_id,
+                cols,
+                rows,
+            } => Self::RemoteResize {
+                client_id,
+                cols,
+                rows,
+            },
+            remote::RemoteCmd::Destroy {
+                client_id,
+                session_id,
+            } => Self::RemoteDestroy {
+                client_id,
+                session_id,
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Command;
+    use crate::control;
+    use crate::remote;
+    use std::sync::mpsc;
+
+    #[test]
+    fn local_control_commands_map_to_server_surface() {
+        let (tx, _rx) = mpsc::channel();
+        match Command::from(control::ControlCmd::ListTabs { reply: tx }) {
+            Command::ListTabs { .. } => {}
+            other => panic!("expected list-tabs mapping, got {other:?}"),
+        }
+        match Command::from(control::ControlCmd::DumpKeysOn) {
+            Command::DumpKeys(true) => {}
+            other => panic!("expected dump-keys on mapping, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remote_commands_map_to_server_surface() {
+        match Command::from(remote::RemoteCmd::Attach {
+            client_id: 7,
+            session_id: 11,
+        }) {
+            Command::RemoteAttach {
+                client_id,
+                session_id,
+            } => {
+                assert_eq!(client_id, 7);
+                assert_eq!(session_id, 11);
+            }
+            other => panic!("expected remote attach mapping, got {other:?}"),
+        }
+    }
+}
