@@ -91,6 +91,14 @@ chrome, layout, and VT rendering path.
 - Headless mode exposes the same snapshot/query/control surface as the GUI app
 - Tabs, splits, sessions, PTYs, and terminal snapshots stay on the same runtime path as the GUI build
 
+### iOS Remote Viewer
+- A native SwiftUI iOS app lives under [`ios/`](/Users/example/dev/boo/ios)
+- Bundle identifier: `me.congee.boo`
+- Connects to a compatible remote daemon using the existing GSP wire protocol
+- Browses both `_boo._tcp` and `_ghostty._tcp` Bonjour services so the client can bridge current and future service names
+- Includes manual host/auth-key entry, saved nodes, connection history, session listing, and a VT cell-grid viewer
+- Uses iOS local-network permissions via `NSLocalNetworkUsageDescription` and `NSBonjourServices`
+
 ---
 
 ## Architecture
