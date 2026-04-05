@@ -112,6 +112,7 @@ chrome, layout, and VT rendering path.
 - Browses `_boo._tcp` Bonjour services
 - Includes manual host/auth-key entry, saved nodes, connection history, session listing, and a VT cell-grid viewer
 - Uses iOS local-network permissions via `NSLocalNetworkUsageDescription` and `NSBonjourServices`
+- Task: add an end-to-end test pass for the iOS remote viewer against a live Boo remote daemon, covering discovery, auth, session listing, attach, resize, and terminal-state updates
 
 ---
 
