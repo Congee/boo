@@ -7,6 +7,8 @@ AUTH_KEY="${BOO_IOS_REMOTE_AUTH_KEY:-boo-ios-validation}"
 SOCKET_PATH="${BOO_IOS_REMOTE_SOCKET:-/tmp/boo-ios-remote-validation.sock}"
 XCODE_LOG="$ROOT/ios/.derived-validate/xcodebuild.log"
 SWIFT_MODULE_CACHE="$ROOT/ios/.swift-module-cache"
+VALIDATOR_BIN="$ROOT/ios/.derived-validate/remote-validator"
+SELFTEST_BIN="$ROOT/ios/.derived-validate/protocol-codec-selftest"
 
 cleanup() {
   if [[ -n "${SERVER_PID:-}" ]]; then
@@ -22,15 +24,30 @@ cd "$ROOT"
 cargo build >/dev/null
 rm -f "$SOCKET_PATH"
 mkdir -p "$SWIFT_MODULE_CACHE"
+mkdir -p "$(dirname "$VALIDATOR_BIN")"
 target/debug/boo server --socket "$SOCKET_PATH" --remote-port "$PORT" --remote-auth-key "$AUTH_KEY" >/tmp/boo-ios-remote-server.log 2>&1 &
 SERVER_PID=$!
 sleep 1
 
-swift -module-cache-path "$SWIFT_MODULE_CACHE" ios/Validation/RemoteValidator.swift \
+swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
+  ios/Validation/WireCodec.swift \
+  ios/Validation/RemoteValidator.swift \
+  ios/Validation/RemoteValidatorMain.swift \
+  -emit-executable \
+  -o "$VALIDATOR_BIN"
+"$VALIDATOR_BIN" \
   --host 127.0.0.1 \
   --port "$PORT" \
   --auth-key "$AUTH_KEY" \
   --check-discovery
+
+swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
+  ios/Validation/WireCodec.swift \
+  ios/Validation/ProtocolCodecSelfTest.swift \
+  ios/Validation/ProtocolCodecSelfTestMain.swift \
+  -emit-executable \
+  -o "$SELFTEST_BIN"
+"$SELFTEST_BIN"
 
 mkdir -p "$(dirname "$XCODE_LOG")"
 if ! xcodebuild \

@@ -34,6 +34,7 @@ It verifies:
 - create + attach
 - resize
 - terminal-state publishing with a real shell command round-trip
+- wire-codec decoding with a standalone Swift self-test
 
 Run it with:
 

@@ -25,15 +25,6 @@ enum WireMessageType: UInt8 {
     case sessionExited = 0x89
 }
 
-struct SessionInfo {
-    let id: UInt32
-    let name: String
-    let title: String
-    let pwd: String
-    let attached: Bool
-    let childExited: Bool
-}
-
 final class RemoteValidator {
     private let magic: [UInt8] = [0x47, 0x53]
     private let queue = DispatchQueue(label: "boo-ios-remote-validator")
@@ -44,7 +35,7 @@ final class RemoteValidator {
 
     private var connected = false
     private var authenticated = false
-    private var sessions: [SessionInfo] = []
+    private var sessions: [ValidationSessionInfo] = []
     private var attachedSessionId: UInt32?
     private var createdSessionId: UInt32?
     private var lastScreenText = ""
@@ -249,7 +240,7 @@ final class RemoteValidator {
         case .authFail:
             lastError = "authentication failed"
         case .sessionList:
-            sessions = parseSessionList(payload)
+            sessions = WireCodec.decodeSessionList(payload)
         case .sessionCreated:
             guard payload.count >= 4 else { return }
             createdSessionId = payload.withUnsafeBytes {
@@ -261,7 +252,9 @@ final class RemoteValidator {
                 UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
             }
         case .fullState:
-            lastScreenText = decodeScreenText(payload)
+            if let screen = WireCodec.decodeFullState(payload) {
+                lastScreenText = WireCodec.screenText(from: screen)
+            }
         case .detached, .sessionExited:
             attachedSessionId = nil
         case .errorMsg:
@@ -269,78 +262,6 @@ final class RemoteValidator {
         default:
             break
         }
-    }
-
-    private func parseSessionList(_ data: Data) -> [SessionInfo] {
-        guard data.count >= 4 else { return [] }
-        let count = data.withUnsafeBytes {
-            Int(UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self)))
-        }
-        var offset = 4
-        var items: [SessionInfo] = []
-        func readString() -> String {
-            guard offset + 2 <= data.count else { return "" }
-            let len = data.withUnsafeBytes {
-                Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt16.self)))
-            }
-            offset += 2
-            guard offset + len <= data.count else { return "" }
-            let value = String(data: data[offset..<(offset + len)], encoding: .utf8) ?? ""
-            offset += len
-            return value
-        }
-        for _ in 0..<count {
-            guard offset + 4 <= data.count else { break }
-            let id = data.withUnsafeBytes {
-                UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt32.self))
-            }
-            offset += 4
-            let name = readString()
-            let title = readString()
-            let pwd = readString()
-            guard offset < data.count else { break }
-            let flags = data[offset]
-            offset += 1
-            items.append(SessionInfo(
-                id: id,
-                name: name,
-                title: title,
-                pwd: pwd,
-                attached: (flags & 0x01) != 0,
-                childExited: (flags & 0x02) != 0
-            ))
-        }
-        return items
-    }
-
-    private func decodeScreenText(_ data: Data) -> String {
-        guard data.count >= 12 else { return "" }
-        let rows = data.withUnsafeBytes {
-            Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt16.self)))
-        }
-        let cols = data.withUnsafeBytes {
-            Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 2, as: UInt16.self)))
-        }
-        var offset = 12
-        var text = ""
-        for row in 0..<rows {
-            for _ in 0..<cols {
-                guard offset + 12 <= data.count else { break }
-                let codepoint = data.withUnsafeBytes {
-                    UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt32.self))
-                }
-                offset += 12
-                if codepoint == 0 {
-                    text.append(" ")
-                } else if let scalar = UnicodeScalar(codepoint) {
-                    text.append(Character(scalar))
-                }
-            }
-            if row + 1 < rows {
-                text.append("\n")
-            }
-        }
-        return text
     }
 
     private func waitUntil(_ description: String, timeout: TimeInterval = 5, predicate: @escaping () -> Bool) throws {
@@ -379,7 +300,7 @@ struct ValidationError: Error, CustomStringConvertible {
     init(_ description: String) { self.description = description }
 }
 
-func resolveArgs() -> (host: String, port: UInt16, authKey: String, checkDiscovery: Bool) {
+func resolveRemoteValidatorArgs() -> (host: String, port: UInt16, authKey: String, checkDiscovery: Bool) {
     var host = "127.0.0.1"
     var port: UInt16 = 7337
     var authKey = ""
@@ -404,25 +325,4 @@ func resolveArgs() -> (host: String, port: UInt16, authKey: String, checkDiscove
         index += 1
     }
     return (host, port, authKey, checkDiscovery)
-}
-
-let args = resolveArgs()
-let validator = RemoteValidator(authKey: args.authKey)
-
-do {
-    if args.checkDiscovery {
-        if let endpoint = validator.browse() {
-            FileHandle.standardError.write(Data("discovered Bonjour endpoint: \(endpoint)\n".utf8))
-        } else {
-            FileHandle.standardError.write(Data("warning: Bonjour discovery did not resolve within timeout\n".utf8))
-        }
-    }
-    try validator.connect(host: args.host, port: args.port)
-    try validator.validateRoundTrip()
-    validator.disconnect()
-    print("iOS remote daemon validation passed")
-} catch {
-    validator.disconnect()
-    FileHandle.standardError.write(Data("validation failed: \(error)\n".utf8))
-    exit(1)
 }
