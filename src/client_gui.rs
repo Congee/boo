@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 const STATUS_BAR_HEIGHT: f64 = 20.0;
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 const IDLE_TICK_INTERVAL: Duration = Duration::from_secs(1);
+const STREAM_RECONNECT_DELAY: Duration = Duration::from_millis(250);
 const SNAPSHOT_RETRY_TICKS: u8 = 3;
 const SNAPSHOT_KEEPALIVE_TICKS: u8 = 30;
 
@@ -344,11 +345,11 @@ impl ClientApp {
                     self.send_stream_command(StreamCommand::ListSessions);
                 }
                 LocalStreamEvent::Disconnected => {
+                    self.stream_tx = None;
                     self.stream_state = None;
                     self.stream_snapshot = None;
                     self.pending_input_latencies.clear();
-                    self.last_error = Some("boo server disconnected".to_string());
-                    self.should_exit = true;
+                    self.last_error = Some("boo server stream disconnected".to_string());
                 }
                 LocalStreamEvent::FullState { ack_input_seq, state } => {
                     self.stream_snapshot = Some(Arc::new(remote_full_state_to_vt_snapshot(&state)));
@@ -572,64 +573,71 @@ fn local_stream_subscription(
     Box::pin(stream::channel(
         100,
         move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
-        let Ok(write) = UnixStream::connect(&socket_path) else {
-            let _ = output.send(Message::StreamEvent(LocalStreamEvent::Disconnected)).await;
-            return;
-        };
-        let Ok(read) = write.try_clone() else {
-            let _ = output.send(Message::StreamEvent(LocalStreamEvent::Disconnected)).await;
-            return;
-        };
-        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<StreamCommand>();
-        let _ = output.send(Message::StreamReady(cmd_tx)).await;
-
-        let (event_tx, mut event_rx) =
-            iced::futures::channel::mpsc::unbounded::<LocalStreamEvent>();
-
-        let writer_event_tx = event_tx.clone();
-        std::thread::spawn(move || {
-            let mut write = write;
-            while let Ok(command) = cmd_rx.recv() {
-                let result = match command {
-                    StreamCommand::ListSessions => {
-                        write_stream_message(&mut write, remote::MessageType::ListSessions, &[])
-                    }
-                    StreamCommand::Attach(session_id) => {
-                        write_stream_message(&mut write, remote::MessageType::Attach, &session_id.to_le_bytes())
-                    }
-                    StreamCommand::Input { input_seq, bytes } => {
-                        let mut payload = Vec::with_capacity(8 + bytes.len());
-                        payload.extend_from_slice(&input_seq.to_le_bytes());
-                        payload.extend_from_slice(&bytes);
-                        write_stream_message(&mut write, remote::MessageType::Input, &payload)
-                    }
-                    StreamCommand::Key { input_seq, keyspec } => {
-                        let mut payload = Vec::with_capacity(8 + keyspec.len());
-                        payload.extend_from_slice(&input_seq.to_le_bytes());
-                        payload.extend_from_slice(keyspec.as_bytes());
-                        write_stream_message(&mut write, remote::MessageType::Key, &payload)
-                    }
-                    StreamCommand::Resize { cols, rows } => {
-                        let mut payload = Vec::with_capacity(4);
-                        payload.extend_from_slice(&cols.to_le_bytes());
-                        payload.extend_from_slice(&rows.to_le_bytes());
-                        write_stream_message(&mut write, remote::MessageType::Resize, &payload)
-                    }
+            loop {
+                let Ok(write) = UnixStream::connect(&socket_path) else {
+                    std::thread::sleep(STREAM_RECONNECT_DELAY);
+                    continue;
                 };
-                if result.is_err() {
-                    let _ = writer_event_tx.unbounded_send(LocalStreamEvent::Disconnected);
-                    break;
+                let Ok(read) = write.try_clone() else {
+                    std::thread::sleep(STREAM_RECONNECT_DELAY);
+                    continue;
+                };
+                let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<StreamCommand>();
+                let _ = output.send(Message::StreamReady(cmd_tx)).await;
+
+                let (event_tx, mut event_rx) =
+                    iced::futures::channel::mpsc::unbounded::<LocalStreamEvent>();
+
+                let writer_event_tx = event_tx.clone();
+                std::thread::spawn(move || {
+                    let mut write = write;
+                    while let Ok(command) = cmd_rx.recv() {
+                        let result = match command {
+                            StreamCommand::ListSessions => {
+                                write_stream_message(&mut write, remote::MessageType::ListSessions, &[])
+                            }
+                            StreamCommand::Attach(session_id) => {
+                                write_stream_message(&mut write, remote::MessageType::Attach, &session_id.to_le_bytes())
+                            }
+                            StreamCommand::Input { input_seq, bytes } => {
+                                let mut payload = Vec::with_capacity(8 + bytes.len());
+                                payload.extend_from_slice(&input_seq.to_le_bytes());
+                                payload.extend_from_slice(&bytes);
+                                write_stream_message(&mut write, remote::MessageType::Input, &payload)
+                            }
+                            StreamCommand::Key { input_seq, keyspec } => {
+                                let mut payload = Vec::with_capacity(8 + keyspec.len());
+                                payload.extend_from_slice(&input_seq.to_le_bytes());
+                                payload.extend_from_slice(keyspec.as_bytes());
+                                write_stream_message(&mut write, remote::MessageType::Key, &payload)
+                            }
+                            StreamCommand::Resize { cols, rows } => {
+                                let mut payload = Vec::with_capacity(4);
+                                payload.extend_from_slice(&cols.to_le_bytes());
+                                payload.extend_from_slice(&rows.to_le_bytes());
+                                write_stream_message(&mut write, remote::MessageType::Resize, &payload)
+                            }
+                        };
+                        if result.is_err() {
+                            let _ = writer_event_tx.unbounded_send(LocalStreamEvent::Disconnected);
+                            break;
+                        }
+                    }
+                });
+
+                std::thread::spawn(move || read_local_stream_loop(read, move |event| {
+                    let _ = event_tx.unbounded_send(event);
+                }));
+
+                while let Some(event) = event_rx.next().await {
+                    let saw_disconnect = matches!(event, LocalStreamEvent::Disconnected);
+                    let _ = output.send(Message::StreamEvent(event)).await;
+                    if saw_disconnect {
+                        break;
+                    }
                 }
+                std::thread::sleep(STREAM_RECONNECT_DELAY);
             }
-        });
-
-        std::thread::spawn(move || read_local_stream_loop(read, move |event| {
-            let _ = event_tx.unbounded_send(event);
-        }));
-
-        while let Some(event) = event_rx.next().await {
-            let _ = output.send(Message::StreamEvent(event)).await;
-        }
         },
     ))
 }
