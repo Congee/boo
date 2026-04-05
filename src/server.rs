@@ -40,6 +40,10 @@ pub enum Command {
     },
     NextTab,
     PrevTab,
+    ResizeFocused {
+        cols: u16,
+        rows: u16,
+    },
     FocusSurface {
         index: usize,
     },
@@ -137,6 +141,7 @@ impl From<control::ControlCmd> for Command {
             control::ControlCmd::GotoTab { index } => Self::GotoTab { index },
             control::ControlCmd::NextTab => Self::NextTab,
             control::ControlCmd::PrevTab => Self::PrevTab,
+            control::ControlCmd::ResizeFocused { cols, rows } => Self::ResizeFocused { cols, rows },
             control::ControlCmd::FocusSurface { index } => Self::FocusSurface { index },
             control::ControlCmd::Quit => Self::Quit,
         }

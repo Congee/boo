@@ -279,7 +279,7 @@ fn spinner_for(frame: usize) -> &'static str {
     FRAMES[frame % FRAMES.len()]
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct TabInfo {
     pub index: usize,
     pub active: bool,

@@ -1,5 +1,6 @@
 mod backend;
 mod bindings;
+mod client_gui;
 mod config;
 mod control;
 mod ffi;
@@ -30,6 +31,7 @@ use iced::widget::{column, container, row, text};
 use iced::window;
 use iced::{Color, Element, Event, Font, Length, Size, Subscription, Task, Theme, keyboard, mouse};
 use pane::PaneHandle;
+use std::io::Write;
 use std::ffi::{CStr, CString, c_void};
 #[cfg(target_os = "linux")]
 use std::process::Command;
@@ -62,6 +64,14 @@ const DEFAULT_TERMINAL_FONT_SIZE: f32 = 14.0;
 const DEFAULT_BACKGROUND_OPACITY: f32 = 1.0;
 const HEADLESS_WIDTH: f32 = 1024.0;
 const HEADLESS_HEIGHT: f32 = 768.0;
+const CLI_SUBCOMMANDS: &[(&str, &str)] = &[
+    ("attach", "connect the GUI client to the local Boo server"),
+    ("completions", "print shell completion scripts"),
+    ("kill-server", "stop the local Boo server"),
+    ("ls", "list live sessions on the local Boo server"),
+    ("new-session", "create a new live session on the local Boo server"),
+    ("server", "run the Boo session server without a GUI"),
+];
 
 #[derive(Debug)]
 struct ResolvedAppearance {
@@ -175,30 +185,288 @@ fn main() {
         }
     }
     let server_mode = args.get(1).is_some_and(|arg| arg == "server");
+    if handle_cli_command(&args) {
+        std::process::exit(0);
+    }
     let headless = server_mode || args.iter().any(|a| a == "--headless");
     if headless {
         run_headless();
         return;
     }
+    run_gui_client();
+}
 
-    let (scroll_tx, scroll_rx) = std::sync::mpsc::channel();
-    let (key_event_tx, key_event_rx) = std::sync::mpsc::channel();
-    let (text_input_tx, text_input_rx) = std::sync::mpsc::channel();
-    platform::install_event_monitors(scroll_tx, key_event_tx, text_input_tx);
-    // Store in a static so BooApp::new can pick it up
-    SCROLL_RX.set(std::sync::Mutex::new(scroll_rx)).ok();
-    KEY_EVENT_RX.set(std::sync::Mutex::new(key_event_rx)).ok();
-    TEXT_INPUT_RX.set(std::sync::Mutex::new(text_input_rx)).ok();
+fn load_startup_config() -> config::Config {
+    let mut boo_config = config::Config::load();
+    if let Some(socket_path) = STARTUP_CONTROL_SOCKET.get() {
+        boo_config.control_socket = Some(socket_path.clone());
+    }
+    if let Some(port) = STARTUP_REMOTE_PORT.get() {
+        boo_config.remote_port = Some(*port);
+    }
+    if let Some(key) = STARTUP_REMOTE_AUTH_KEY.get() {
+        boo_config.remote_auth_key = Some(key.clone());
+    }
+    if boo_config.control_socket.is_none() {
+        boo_config.control_socket = Some(control::default_socket_path());
+    }
+    boo_config
+}
 
-    iced::application(BooApp::new, BooApp::update, BooApp::view)
-        .title("boo")
-        .decorations(false)
-        .transparent(true)
-        .style(|state, _theme| state.window_style())
-        .theme(BooApp::theme)
-        .subscription(BooApp::subscription)
-        .run()
-        .unwrap();
+fn bash_completion_script() -> String {
+    let commands = CLI_SUBCOMMANDS
+        .iter()
+        .map(|(name, _)| *name)
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        r#"_boo_completions() {{
+    local cur prev words cword
+    _init_completion || return
+
+    prev="${{COMP_WORDS[COMP_CWORD-1]}}"
+    case "$prev" in
+        --socket)
+            COMPREPLY=($(compgen -f -- "$cur"))
+            return
+            ;;
+        --remote-port)
+            return
+            ;;
+        --remote-auth-key|--session)
+            return
+            ;;
+        completions)
+            COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur"))
+            return
+            ;;
+    esac
+
+    if [[ $COMP_CWORD -eq 1 ]]; then
+        COMPREPLY=($(compgen -W "{commands}" -- "$cur"))
+        return
+    fi
+
+    COMPREPLY=($(compgen -W "--headless --socket --remote-port --remote-auth-key --session --help" -- "$cur"))
+}}
+
+complete -F _boo_completions boo
+"#
+    )
+}
+
+fn zsh_completion_script() -> String {
+    let mut lines = vec![
+        "#compdef boo".to_string(),
+        String::new(),
+        "_boo() {".to_string(),
+        "  local -a commands".to_string(),
+        "  commands=(".to_string(),
+    ];
+    for (name, description) in CLI_SUBCOMMANDS {
+        lines.push(format!("    '{}:{}'", name, description));
+    }
+    lines.extend([
+        "  )".to_string(),
+        "  _arguments -C \\".to_string(),
+        "    '--headless[run without opening the GUI window]' \\".to_string(),
+        "    '--socket=[override local control socket path]:socket path:_files' \\".to_string(),
+        "    '--remote-port=[start the TCP remote daemon]:port:' \\".to_string(),
+        "    '--remote-auth-key=[shared secret for remote auth]:secret:' \\".to_string(),
+        "    '--session=[session layout to load]:session:' \\".to_string(),
+        "    '--help[show help]' \\".to_string(),
+        "    '1:command:->command' \\".to_string(),
+        "    '*::arg:->args'".to_string(),
+        String::new(),
+        "  case $state in".to_string(),
+        "    command)".to_string(),
+        "      _describe 'boo command' commands".to_string(),
+        "      ;;".to_string(),
+        "    args)".to_string(),
+        "      if [[ ${words[2]} == completions ]]; then".to_string(),
+        "        _values 'shell' bash zsh fish".to_string(),
+        "      fi".to_string(),
+        "      ;;".to_string(),
+        "  esac".to_string(),
+        "}".to_string(),
+        String::new(),
+        "_boo \"$@\"".to_string(),
+    ]);
+    lines.join("\n")
+}
+
+fn fish_completion_script() -> String {
+    let mut lines = vec![
+        "complete -c boo -f".to_string(),
+        "complete -c boo -l headless -d 'run without opening the GUI window'".to_string(),
+        "complete -c boo -l socket -r -d 'override local control socket path'".to_string(),
+        "complete -c boo -l remote-port -r -d 'start the TCP remote daemon'".to_string(),
+        "complete -c boo -l remote-auth-key -r -d 'shared secret for remote auth'".to_string(),
+        "complete -c boo -l session -r -d 'session layout to load'".to_string(),
+    ];
+    for (name, description) in CLI_SUBCOMMANDS {
+        lines.push(format!(
+            "complete -c boo -n '__fish_use_subcommand' -a '{name}' -d '{description}'"
+        ));
+    }
+    lines.push(
+        "complete -c boo -n '__fish_seen_subcommand_from completions' -a 'bash zsh fish' -d 'shell'"
+            .to_string(),
+    );
+    lines.join("\n")
+}
+
+fn print_completions(shell: &str) -> Result<(), String> {
+    let script = match shell {
+        "bash" => bash_completion_script(),
+        "zsh" => zsh_completion_script(),
+        "fish" => fish_completion_script(),
+        other => return Err(format!("unsupported shell: {other}")),
+    };
+    let mut stdout = std::io::stdout().lock();
+    stdout
+        .write_all(script.as_bytes())
+        .map_err(|error| format!("write completions: {error}"))?;
+    stdout
+        .write_all(b"\n")
+        .map_err(|error| format!("write completions: {error}"))?;
+    stdout
+        .flush()
+        .map_err(|error| format!("flush completions: {error}"))
+}
+
+fn handle_cli_command(args: &[String]) -> bool {
+    let Some(command) = args.get(1).map(String::as_str) else {
+        return false;
+    };
+    if matches!(command, "server") {
+        return false;
+    }
+
+    let boo_config = load_startup_config();
+    let socket_path = boo_config
+        .control_socket
+        .clone()
+        .unwrap_or_else(control::default_socket_path);
+
+    match command {
+        "ls" => {
+            let client = control::Client::connect(socket_path);
+            match client.request(&control::Request::ListTabs) {
+                Ok(control::Response::Tabs { tabs }) => {
+                    let mut stdout = std::io::stdout().lock();
+                    for tab in tabs {
+                        let marker = if tab.active { "*" } else { " " };
+                        let _ = writeln!(stdout, "{marker} {}\t{}", tab.index + 1, tab.title);
+                    }
+                    let _ = stdout.flush();
+                }
+                Ok(control::Response::Error { error }) => {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                }
+                Ok(other) => {
+                    eprintln!("unexpected response: {other:?}");
+                    std::process::exit(1);
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                }
+            }
+            true
+        }
+        "completions" => {
+            let shell = args.get(2).map(String::as_str).unwrap_or("bash");
+            if let Err(error) = print_completions(shell) {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+            true
+        }
+        "kill-server" => {
+            let client = control::Client::connect(socket_path);
+            if let Err(error) = client.send(&control::Request::Quit) {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+            true
+        }
+        "new-session" => {
+            ensure_server_running(&socket_path, &boo_config);
+            let client = control::Client::connect(socket_path);
+            if let Err(error) = client.send(&control::Request::NewTab) {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+            true
+        }
+        "attach" => false,
+        _ => false,
+    }
+}
+
+fn run_gui_client() {
+    let boo_config = load_startup_config();
+    let socket_path = boo_config
+        .control_socket
+        .clone()
+        .unwrap_or_else(control::default_socket_path);
+
+    ensure_server_running(&socket_path, &boo_config);
+
+    iced::application(
+        move || client_gui::ClientApp::new(socket_path.clone()),
+        client_gui::ClientApp::update,
+        client_gui::ClientApp::view,
+    )
+    .title("boo")
+    .decorations(false)
+    .transparent(true)
+    .style(|state, _theme| state.window_style())
+    .theme(client_gui::ClientApp::theme)
+    .subscription(client_gui::ClientApp::subscription)
+    .run()
+    .unwrap();
+}
+
+fn ensure_server_running(socket_path: &str, boo_config: &config::Config) {
+    let client = control::Client::connect(socket_path.to_string());
+    if client.get_ui_snapshot().is_ok() {
+        return;
+    }
+
+    let Ok(exe) = std::env::current_exe() else {
+        log::error!("failed to locate current executable for server autostart");
+        return;
+    };
+    let mut command = std::process::Command::new(exe);
+    command.arg("server").arg("--socket").arg(socket_path);
+    if let Some(port) = boo_config.remote_port {
+        command.arg("--remote-port").arg(port.to_string());
+    }
+    if let Some(key) = boo_config.remote_auth_key.as_deref() {
+        command.arg("--remote-auth-key").arg(key);
+    }
+    if let Some(name) = STARTUP_SESSION.get() {
+        command.arg("--session").arg(name);
+    }
+    command
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if let Err(error) = command.spawn() {
+        log::error!("failed to spawn boo server: {error}");
+        return;
+    }
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while std::time::Instant::now() < deadline {
+        if client.get_ui_snapshot().is_ok() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    log::warn!("boo server did not become ready at {socket_path}");
 }
 
 fn run_headless() {
@@ -584,16 +852,7 @@ impl BooApp {
     fn new_with_mode(headless: bool) -> (Self, Task<Message>) {
         let backend = <backend::Backend as backend::TerminalBackend>::new(ptr::null_mut());
 
-        let mut boo_config = config::Config::load();
-        if let Some(socket_path) = STARTUP_CONTROL_SOCKET.get() {
-            boo_config.control_socket = Some(socket_path.clone());
-        }
-        if let Some(port) = STARTUP_REMOTE_PORT.get() {
-            boo_config.remote_port = Some(*port);
-        }
-        if let Some(key) = STARTUP_REMOTE_AUTH_KEY.get() {
-            boo_config.remote_auth_key = Some(key.clone());
-        }
+        let boo_config = load_startup_config();
         let server = server::State::new(
             boo_config.control_socket.clone(),
             boo_config.remote_port,
@@ -1692,6 +1951,11 @@ impl BooApp {
             server::Command::PrevTab => {
                 self.server.tabs.prev_tab();
                 self.sync_after_tab_change();
+            }
+            server::Command::ResizeFocused { cols, rows } => {
+                let pane = self.server.tabs.focused_pane();
+                let (width, height) = self.session_size_pixels(cols, rows);
+                self.resize_pane_backend(pane, self.scale_factor(), width, height);
             }
             server::Command::SendKey { keyspec } => {
                 self.inject_key(&keyspec);
@@ -4718,6 +4982,15 @@ fn parse_keyspec(spec: &str) -> Option<(u32, i32)> {
         "space" => 0x31,
         "escape" | "esc" => 0x35,
         "backspace" => 0x33,
+        "delete" => 0x75,
+        "up" => 0x7E,
+        "down" => 0x7D,
+        "left" => 0x7B,
+        "right" => 0x7C,
+        "pageup" => 0x74,
+        "pagedown" => 0x79,
+        "home" => 0x73,
+        "end" => 0x77,
         _ if key_part.starts_with("0x") => u32::from_str_radix(&key_part[2..], 16).ok()?,
         _ => return None,
     };
@@ -4764,6 +5037,15 @@ fn parse_keyspec(spec: &str) -> Option<(u32, i32)> {
         "space" => 63,
         "escape" | "esc" => 120,
         "backspace" => 53,
+        "delete" => 119,
+        "up" => 111,
+        "down" => 116,
+        "left" => 113,
+        "right" => 114,
+        "pageup" => 112,
+        "pagedown" => 117,
+        "home" => 110,
+        "end" => 115,
         _ if key_part.starts_with("0x") => u32::from_str_radix(&key_part[2..], 16).ok()?,
         _ => return None,
     };
@@ -4834,6 +5116,14 @@ fn parse_vt_keyspec(spec: &str) -> Option<(u32, i32)> {
         "escape" | "esc" => 120,
         "backspace" => 53,
         "delete" => 68,
+        "up" => 73,
+        "down" => 74,
+        "left" => 71,
+        "right" => 72,
+        "pageup" => 75,
+        "pagedown" => 78,
+        "home" => 69,
+        "end" => 70,
         _ if key_part.starts_with("0x") => u32::from_str_radix(&key_part[2..], 16).ok()?,
         _ => return None,
     };
@@ -4851,6 +5141,15 @@ fn control_key_to_keyboard_key(spec: &str, key_char: Option<char>) -> keyboard::
         "space" => keyboard::Key::Named(Named::Space),
         "escape" | "esc" => keyboard::Key::Named(Named::Escape),
         "backspace" => keyboard::Key::Named(Named::Backspace),
+        "delete" => keyboard::Key::Named(Named::Delete),
+        "up" => keyboard::Key::Named(Named::ArrowUp),
+        "down" => keyboard::Key::Named(Named::ArrowDown),
+        "left" => keyboard::Key::Named(Named::ArrowLeft),
+        "right" => keyboard::Key::Named(Named::ArrowRight),
+        "pageup" => keyboard::Key::Named(Named::PageUp),
+        "pagedown" => keyboard::Key::Named(Named::PageDown),
+        "home" => keyboard::Key::Named(Named::Home),
+        "end" => keyboard::Key::Named(Named::End),
         _ => keyboard::Key::Character(key_char.unwrap_or_default().to_string().into()),
     }
 }
@@ -5305,6 +5604,19 @@ pub mod main_tests {
         ));
         assert_eq!(crate::keymap::native_to_vt_keycode(0x33), Some(53));
         assert_eq!(crate::keymap::native_to_vt_keycode(0x24), Some(58));
+    }
+
+    #[test]
+    fn test_completion_scripts_include_core_subcommands() {
+        let bash = bash_completion_script();
+        let zsh = zsh_completion_script();
+        let fish = fish_completion_script();
+
+        for script in [bash, zsh, fish] {
+            assert!(script.contains("new-session"));
+            assert!(script.contains("kill-server"));
+            assert!(script.contains("completions"));
+        }
     }
 
     #[test]

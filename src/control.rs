@@ -15,9 +15,11 @@
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
+use std::os::unix::net::UnixStream;
+use std::time::Duration;
 use std::sync::mpsc;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "kebab-case")]
 pub enum Request {
     ListSurfaces,
@@ -32,13 +34,14 @@ pub enum Request {
     GotoTab { index: usize },
     NextTab,
     PrevTab,
+    ResizeFocused { cols: u16, rows: u16 },
     FocusSurface { index: usize },
     SendKey { key: String },
     DumpKeys { enabled: bool },
     Quit,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Response {
     Surfaces { surfaces: Vec<SurfaceInfo> },
@@ -49,7 +52,7 @@ pub enum Response {
     Error { error: String },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SurfaceInfo {
     pub index: usize,
     pub focused: bool,
@@ -193,8 +196,68 @@ pub enum ControlCmd {
     GotoTab { index: usize },
     NextTab,
     PrevTab,
+    ResizeFocused { cols: u16, rows: u16 },
     FocusSurface { index: usize },
     Quit,
+}
+
+pub struct Client {
+    socket_path: String,
+}
+
+impl Client {
+    pub fn connect(socket_path: impl Into<String>) -> Self {
+        Self {
+            socket_path: socket_path.into(),
+        }
+    }
+
+    pub fn request(&self, request: &Request) -> Result<Response, String> {
+        let mut stream = UnixStream::connect(&self.socket_path)
+            .map_err(|error| format!("connect {}: {}", self.socket_path, error))?;
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+        serde_json::to_writer(&mut stream, request)
+            .map_err(|error| format!("serialize request: {error}"))?;
+        stream
+            .write_all(b"\n")
+            .map_err(|error| format!("write request: {error}"))?;
+        stream
+            .flush()
+            .map_err(|error| format!("flush request: {error}"))?;
+        let _ = stream.shutdown(std::net::Shutdown::Write);
+
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .map_err(|error| format!("read response: {error}"))?;
+        if line.is_empty() {
+            return Err("empty response from control socket".to_string());
+        }
+        serde_json::from_str(line.trim())
+            .map_err(|error| format!("parse response: {error}; raw={line:?}"))
+    }
+
+    pub fn get_ui_snapshot(&self) -> Result<UiSnapshot, String> {
+        match self.request(&Request::GetUiSnapshot)? {
+            Response::UiSnapshot { snapshot } => Ok(snapshot),
+            Response::Error { error } => Err(error),
+            other => Err(format!("unexpected response: {other:?}")),
+        }
+    }
+
+    pub fn send(&self, request: &Request) -> Result<(), String> {
+        match self.request(request)? {
+            Response::Ok { ok: true } => Ok(()),
+            Response::Error { error } => Err(error),
+            _ => Ok(()),
+        }
+    }
+}
+
+pub fn default_socket_path() -> String {
+    "/tmp/boo.sock".to_string()
 }
 
 pub fn start(socket_path: Option<&str>) -> mpsc::Receiver<ControlCmd> {
@@ -314,7 +377,9 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
             let _ = tx.send(ControlCmd::ListSurfaces { reply: reply_tx });
             match reply_rx.recv_timeout(std::time::Duration::from_secs(2)) {
                 Ok(resp) => resp,
-                Err(_) => Response::Error { error: "timeout".into() },
+                Err(_) => Response::Error {
+                    error: "timeout".into(),
+                },
             }
         }
         Request::ListTabs => {
@@ -322,7 +387,9 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
             let _ = tx.send(ControlCmd::ListTabs { reply: reply_tx });
             match reply_rx.recv_timeout(std::time::Duration::from_secs(2)) {
                 Ok(resp) => resp,
-                Err(_) => Response::Error { error: "timeout".into() },
+                Err(_) => Response::Error {
+                    error: "timeout".into(),
+                },
             }
         }
         Request::GetUiSnapshot => {
@@ -330,7 +397,9 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
             let _ = tx.send(ControlCmd::GetUiSnapshot { reply: reply_tx });
             match reply_rx.recv_timeout(std::time::Duration::from_secs(2)) {
                 Ok(resp) => resp,
-                Err(_) => Response::Error { error: "timeout".into() },
+                Err(_) => Response::Error {
+                    error: "timeout".into(),
+                },
             }
         }
         Request::NewTab => {
@@ -347,6 +416,10 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
         }
         Request::PrevTab => {
             let _ = tx.send(ControlCmd::PrevTab);
+            Response::Ok { ok: true }
+        }
+        Request::ResizeFocused { cols, rows } => {
+            let _ = tx.send(ControlCmd::ResizeFocused { cols, rows });
             Response::Ok { ok: true }
         }
     }
@@ -374,9 +447,9 @@ fn run_pipe(tx: &mpsc::Sender<ControlCmd>) {
                 "dump-keys on" => Some(ControlCmd::DumpKeysOn),
                 "dump-keys off" => Some(ControlCmd::DumpKeysOff),
                 "quit" => Some(ControlCmd::Quit),
-                _ if line.starts_with("key ") => {
-                    Some(ControlCmd::SendKey { keyspec: line[4..].to_owned() })
-                }
+                _ if line.starts_with("key ") => Some(ControlCmd::SendKey {
+                    keyspec: line[4..].to_owned(),
+                }),
                 _ if line.starts_with("{") => {
                     // JSON on the pipe — dispatch like socket
                     if let Ok(req) = serde_json::from_str::<Request>(line) {
@@ -407,7 +480,11 @@ pub fn cleanup(socket_path: Option<&str>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{dispatch_request, ControlCmd, Request, Response, UiAppearanceSnapshot, UiCommandPromptSnapshot, UiCopyModeSnapshot, UiPaneSnapshot, UiRectSnapshot, UiScrollbarSnapshot, UiSearchSnapshot, UiSnapshot, UiTabSnapshot};
+    use super::{
+        ControlCmd, Request, Response, UiAppearanceSnapshot, UiCommandPromptSnapshot,
+        UiCopyModeSnapshot, UiPaneSnapshot, UiRectSnapshot, UiScrollbarSnapshot, UiSearchSnapshot,
+        UiSnapshot, UiTabSnapshot, dispatch_request,
+    };
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -728,10 +805,19 @@ mod tests {
                 .as_f64()
                 .is_some_and(|opacity| (opacity - 0.7).abs() < 0.001)
         );
-        assert_eq!(value["snapshot"]["copy_mode"]["selection_mode"], "character");
+        assert_eq!(
+            value["snapshot"]["copy_mode"]["selection_mode"],
+            "character"
+        );
         assert_eq!(value["snapshot"]["copy_mode"]["anchor_row"], 12);
-        assert_eq!(value["snapshot"]["copy_mode"]["selection_rects"][0]["width"], 8.0);
-        assert_eq!(value["snapshot"]["visible_panes"][0]["frame"]["width"], 200.0);
+        assert_eq!(
+            value["snapshot"]["copy_mode"]["selection_rects"][0]["width"],
+            8.0
+        );
+        assert_eq!(
+            value["snapshot"]["visible_panes"][0]["frame"]["width"],
+            200.0
+        );
         assert_eq!(value["snapshot"]["search"]["query"], "panic");
     }
 }

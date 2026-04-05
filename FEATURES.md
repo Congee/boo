@@ -85,6 +85,12 @@ chrome, layout, and VT rendering path.
 - Unix domain socket IPC at configurable path (default `/tmp/boo.sock`)
 - External programs can send actions to a running boo instance
 
+### Session Server
+- `boo server` runs the long-lived session owner without a GUI
+- `boo` auto-connects to the local server and auto-starts it when needed
+- `boo ls`, `boo new-session`, and `boo kill-server` operate against the local server
+- Live sessions persist when the GUI client exits because PTYs and tabs belong to the server process
+
 ### Headless Mode
 - `boo --headless` runs the shared VT backend and control socket without creating a GUI window
 - `boo --headless --socket /path/to.sock` overrides the control-socket path at startup
@@ -219,6 +225,7 @@ nix develop
 ### Shell Integration
 - Boo shell integration now ships for bash, zsh, and fish in [shell-integration/README.md](/Users/example/dev/boo/shell-integration/README.md)
 - These scripts emit `OSC 133` prompt markers and `cmdline_url` command metadata for the tab spinner/title path
+- `boo completions bash|zsh|fish` prints shell completions for the server/client lifecycle commands
 
 ### Command Finish Notifications
 - `notify-on-command-finish` config and duration thresholds are implemented
