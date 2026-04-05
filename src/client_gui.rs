@@ -307,7 +307,14 @@ impl ClientApp {
         while let Some(event) = self.stream_client.as_ref().and_then(|stream_client| stream_client.try_recv()) {
             match event {
                 LocalStreamEvent::SessionList(sessions) => {
-                    if let Some(session) = sessions.get(self.active_tab_index).or_else(|| sessions.first()) {
+                    let live_sessions: Vec<_> = sessions
+                        .iter()
+                        .filter(|session| !session.child_exited)
+                        .collect();
+                    if let Some(session) = live_sessions
+                        .get(self.active_tab_index)
+                        .or_else(|| live_sessions.first())
+                    {
                         self.should_exit = false;
                         if let Some(stream_client) = self.stream_client.as_ref() {
                             stream_client.attach(session.id);
@@ -448,7 +455,21 @@ fn remote_full_state_to_vt_snapshot(state: &remote::RemoteFullState) -> vt_backe
         },
         rows_data,
         scrollbar: Default::default(),
-        colors: Default::default(),
+        colors: vt::GhosttyRenderStateColors {
+            foreground: vt::GhosttyColorRgb {
+                r: 0xf0,
+                g: 0xf0,
+                b: 0xf0,
+            },
+            background: vt::GhosttyColorRgb { r: 0, g: 0, b: 0 },
+            cursor: vt::GhosttyColorRgb {
+                r: 0xff,
+                g: 0xff,
+                b: 0xff,
+            },
+            cursor_has_value: true,
+            ..Default::default()
+        },
     }
 }
 
@@ -491,7 +512,21 @@ fn ui_terminal_to_vt_snapshot(snapshot: &control::UiTerminalSnapshot) -> vt_back
             })
             .collect(),
         scrollbar: Default::default(),
-        colors: Default::default(),
+        colors: vt::GhosttyRenderStateColors {
+            foreground: vt::GhosttyColorRgb {
+                r: 0xf0,
+                g: 0xf0,
+                b: 0xf0,
+            },
+            background: vt::GhosttyColorRgb { r: 0, g: 0, b: 0 },
+            cursor: vt::GhosttyColorRgb {
+                r: 0xff,
+                g: 0xff,
+                b: 0xff,
+            },
+            cursor_has_value: true,
+            ..Default::default()
+        },
     }
 }
 
