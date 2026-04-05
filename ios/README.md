@@ -24,4 +24,21 @@ This directory contains the Boo iOS remote viewer app.
 
 ## Verification
 
-In this environment, the Swift sources compile through Xcode's Swift phase, but final linking via `xcodebuild` is currently blocked by an Xcode/linker environment issue that emits malformed linker arguments during the final app link step. The app project and sources are still structured for normal Xcode use on a local developer machine.
+Automated validation now exists in [`scripts/test-ios-remote-view.sh`](/Users/example/dev/boo/scripts/test-ios-remote-view.sh).
+
+It verifies:
+
+- Bonjour discovery on `_boo._tcp`
+- HMAC auth against a live Boo daemon
+- session listing
+- create + attach
+- resize
+- terminal-state publishing with a real shell command round-trip
+
+Run it with:
+
+```bash
+bash scripts/test-ios-remote-view.sh
+```
+
+In this environment, `xcodebuild` reaches full Swift compilation for the iOS app, but final linking still fails with an Xcode/linker environment issue during the last app-link step. The validation script treats that specific linker failure as environmental and still enforces the live Boo daemon protocol validation.

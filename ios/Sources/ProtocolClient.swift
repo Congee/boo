@@ -315,10 +315,16 @@ final class GSPClient: ObservableObject {
         case .authOk:
             authenticated = true
             lastError = nil
+            listSessions()
         case .authFail:
             lastError = "Authentication failed"
         case .sessionList:
             parseSessionList(payload)
+        case .attached:
+            guard payload.count >= 4 else { break }
+            attachedSessionId = payload.withUnsafeBytes {
+                UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
+            }
         case .sessionCreated:
             guard payload.count >= 4 else { break }
             let sessionId = payload.withUnsafeBytes { UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self)) }
