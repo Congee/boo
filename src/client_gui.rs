@@ -30,6 +30,7 @@ pub struct ClientApp {
     stream_client: Option<LocalStreamClient>,
     snapshot: Option<control::UiSnapshot>,
     stream_state: Option<remote::RemoteFullState>,
+    stream_snapshot: Option<Arc<vt_backend_core::TerminalSnapshot>>,
     last_error: Option<String>,
     cell_width: f64,
     cell_height: f64,
@@ -65,6 +66,7 @@ impl ClientApp {
                 stream_client,
                 snapshot,
                 stream_state: None,
+                stream_snapshot: None,
                 last_error: None,
                 cell_width,
                 cell_height,
@@ -106,9 +108,9 @@ impl ClientApp {
         let mut main_col = column![];
 
         if let Some(snapshot) = self.snapshot.as_ref() {
-            if let Some(stream_state) = self.stream_state.as_ref() {
+            if let Some(stream_snapshot) = self.stream_snapshot.as_ref() {
                 let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
-                    remote_full_state_to_vt_snapshot(stream_state),
+                    Arc::clone(stream_snapshot),
                     self.render_revision,
                     self.cell_width as f32,
                     self.cell_height as f32,
@@ -132,7 +134,7 @@ impl ClientApp {
                 );
             } else if let Some(terminal) = snapshot.terminal.as_ref() {
                 let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
-                    ui_terminal_to_vt_snapshot(terminal),
+                    Arc::new(ui_terminal_to_vt_snapshot(terminal)),
                     self.render_revision,
                     self.cell_width as f32,
                     self.cell_height as f32,
@@ -328,6 +330,7 @@ impl ClientApp {
                 }
                 LocalStreamEvent::Detached => {
                     self.stream_state = None;
+                    self.stream_snapshot = None;
                     self.pending_input_latencies.clear();
                     self.render_revision = self.render_revision.wrapping_add(1);
                     if let Some(stream_client) = self.stream_client.as_ref() {
@@ -337,6 +340,7 @@ impl ClientApp {
                 LocalStreamEvent::SessionExited(session_id) => {
                     let _ = session_id;
                     self.stream_state = None;
+                    self.stream_snapshot = None;
                     self.pending_input_latencies.clear();
                     self.render_revision = self.render_revision.wrapping_add(1);
                     if let Some(stream_client) = self.stream_client.as_ref() {
@@ -345,11 +349,13 @@ impl ClientApp {
                 }
                 LocalStreamEvent::Disconnected => {
                     self.stream_state = None;
+                    self.stream_snapshot = None;
                     self.pending_input_latencies.clear();
                     self.last_error = Some("boo server disconnected".to_string());
                     self.should_exit = true;
                 }
                 LocalStreamEvent::FullState { ack_input_seq, state } => {
+                    self.stream_snapshot = Some(Arc::new(remote_full_state_to_vt_snapshot(&state)));
                     self.stream_state = Some(state);
                     self.render_revision = self.render_revision.wrapping_add(1);
                     self.acknowledge_input_latency("stream_full_state", ack_input_seq);
@@ -358,8 +364,11 @@ impl ClientApp {
                 LocalStreamEvent::Delta { ack_input_seq, delta } => {
                     if let Some(state) = self.stream_state.as_mut() {
                         apply_remote_delta(state, &delta);
-                        self.render_revision = self.render_revision.wrapping_add(1);
                     }
+                    if let Some(snapshot) = self.stream_snapshot.as_mut() {
+                        apply_remote_delta_snapshot(Arc::make_mut(snapshot), &delta);
+                    }
+                    self.render_revision = self.render_revision.wrapping_add(1);
                     self.acknowledge_input_latency("stream_delta", ack_input_seq);
                     self.fast_poll_ticks_remaining = FAST_POLL_BURST_TICKS;
                 }
@@ -425,27 +434,7 @@ fn remote_full_state_to_vt_snapshot(state: &remote::RemoteFullState) -> vt_backe
         .cells
         .chunks(cols.max(1))
         .map(|row| {
-            row.iter()
-                .map(|cell| vt_backend_core::CellSnapshot {
-                    text: std::char::from_u32(cell.codepoint)
-                        .map(|ch| ch.to_string())
-                        .unwrap_or_else(|| " ".to_string()),
-                    display_width: if cell.wide { 2 } else { 1 },
-                    fg: vt::GhosttyColorRgb {
-                        r: cell.fg[0],
-                        g: cell.fg[1],
-                        b: cell.fg[2],
-                    },
-                    bg: vt::GhosttyColorRgb {
-                        r: cell.bg[0],
-                        g: cell.bg[1],
-                        b: cell.bg[2],
-                    },
-                    bold: (cell.style_flags & 0x01) != 0,
-                    italic: (cell.style_flags & 0x02) != 0,
-                    underline: 0,
-                })
-                .collect()
+            row.iter().map(remote_cell_to_snapshot).collect()
         })
         .collect();
     vt_backend_core::TerminalSnapshot {
@@ -806,6 +795,51 @@ fn apply_remote_delta(state: &mut remote::RemoteFullState, delta: &RemoteDelta) 
         if end <= state.cells.len() {
             state.cells[start..end].clone_from_slice(&row_cells[..(end - start)]);
         }
+    }
+}
+
+fn apply_remote_delta_snapshot(
+    snapshot: &mut vt_backend_core::TerminalSnapshot,
+    delta: &RemoteDelta,
+) {
+    snapshot.cursor.x = delta.cursor_x;
+    snapshot.cursor.y = delta.cursor_y;
+    snapshot.cursor.visible = delta.cursor_visible;
+    let cols = snapshot.cols as usize;
+    for (row, row_cells) in &delta.changed_rows {
+        let row_index = *row as usize;
+        if row_index >= snapshot.rows_data.len() {
+            continue;
+        }
+        let target_row = &mut snapshot.rows_data[row_index];
+        if target_row.len() < cols {
+            target_row.resize_with(cols, Default::default);
+        }
+        for (col_index, cell) in row_cells.iter().enumerate().take(cols) {
+            target_row[col_index] = remote_cell_to_snapshot(cell);
+        }
+    }
+}
+
+fn remote_cell_to_snapshot(cell: &remote::RemoteCell) -> vt_backend_core::CellSnapshot {
+    vt_backend_core::CellSnapshot {
+        text: std::char::from_u32(cell.codepoint)
+            .map(|ch| ch.to_string())
+            .unwrap_or_else(|| " ".to_string()),
+        display_width: if cell.wide { 2 } else { 1 },
+        fg: vt::GhosttyColorRgb {
+            r: cell.fg[0],
+            g: cell.fg[1],
+            b: cell.fg[2],
+        },
+        bg: vt::GhosttyColorRgb {
+            r: cell.bg[0],
+            g: cell.bg[1],
+            b: cell.bg[2],
+        },
+        bold: (cell.style_flags & 0x01) != 0,
+        italic: (cell.style_flags & 0x02) != 0,
+        underline: 0,
     }
 }
 

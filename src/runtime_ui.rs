@@ -238,7 +238,7 @@ impl BooApp {
                     .collect::<Vec<_>>();
 
                 let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
-                    snapshot,
+                    std::sync::Arc::new(snapshot),
                     0,
                     self.cell_width as f32,
                     self.cell_height as f32,

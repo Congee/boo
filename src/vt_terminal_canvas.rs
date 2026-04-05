@@ -8,12 +8,13 @@ use iced::widget::canvas::{self, Cache, Frame};
 use iced::{Color, Font, Pixels, Point, Rectangle, Renderer, Size, Theme};
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 const PADDING_X: f32 = 4.0;
 const PADDING_Y: f32 = 2.0;
 #[derive(Debug)]
 pub struct TerminalCanvas {
-    pub snapshot: vt_backend_core::TerminalSnapshot,
+    pub snapshot: Arc<vt_backend_core::TerminalSnapshot>,
     pub content_revision: u64,
     pub cell_width: f32,
     pub cell_height: f32,
@@ -37,7 +38,7 @@ pub struct TerminalSelectionRect {
 
 impl TerminalCanvas {
     pub fn new(
-        snapshot: vt_backend_core::TerminalSnapshot,
+        snapshot: Arc<vt_backend_core::TerminalSnapshot>,
         content_revision: u64,
         cell_width: f32,
         cell_height: f32,
@@ -439,7 +440,7 @@ mod tests {
 
     fn sample_canvas(revision: u64) -> TerminalCanvas {
         TerminalCanvas::new(
-            vt_backend_core::TerminalSnapshot::default(),
+            Arc::new(vt_backend_core::TerminalSnapshot::default()),
             0,
             8.0,
             16.0,
