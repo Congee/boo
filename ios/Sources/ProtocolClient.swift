@@ -85,7 +85,7 @@ final class BonjourBrowser: ObservableObject {
 
     private var browsers: [NWBrowser] = []
     private let queue = DispatchQueue(label: "boo-bonjour-browser")
-    private let serviceTypes = ["_boo._tcp", "_ghostty._tcp"]
+    private let serviceTypes = ["_boo._tcp"]
 
     func startBrowsing() {
         stopBrowsing()

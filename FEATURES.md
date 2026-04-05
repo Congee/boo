@@ -95,9 +95,10 @@ chrome, layout, and VT rendering path.
 - A native SwiftUI iOS app lives under [`ios/`](/Users/example/dev/boo/ios)
 - Bundle identifier: `me.congee.boo`
 - Connects to a compatible remote daemon using the existing GSP wire protocol
-- Browses both `_boo._tcp` and `_ghostty._tcp` Bonjour services so the client can bridge current and future service names
+- Browses `_boo._tcp` Bonjour services
 - Includes manual host/auth-key entry, saved nodes, connection history, session listing, and a VT cell-grid viewer
 - Uses iOS local-network permissions via `NSLocalNetworkUsageDescription` and `NSBonjourServices`
+- Follow-up task: implement the Boo daemon/service side that advertises `_boo._tcp` and speaks the Boo remote protocol directly
 
 ---
 
