@@ -114,7 +114,6 @@ impl ClientApp {
             if let Some(stream_snapshot) = self.stream_snapshot.as_ref() {
                 let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
                     Arc::clone(stream_snapshot),
-                    self.render_revision,
                     self.cell_width as f32,
                     self.cell_height as f32,
                     self.font_size,
@@ -138,7 +137,6 @@ impl ClientApp {
             } else if let Some(terminal) = snapshot.terminal.as_ref() {
                 let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
                     Arc::new(ui_terminal_to_vt_snapshot(terminal)),
-                    self.render_revision,
                     self.cell_width as f32,
                     self.cell_height as f32,
                     self.font_size,
@@ -845,20 +843,34 @@ fn apply_remote_delta_snapshot(
 }
 
 fn remote_cell_to_snapshot(cell: &remote::RemoteCell) -> vt_backend_core::CellSnapshot {
+    let default_fg = vt::GhosttyColorRgb {
+        r: 0xf0,
+        g: 0xf0,
+        b: 0xf0,
+    };
+    let default_bg = vt::GhosttyColorRgb { r: 0, g: 0, b: 0 };
     vt_backend_core::CellSnapshot {
         text: std::char::from_u32(cell.codepoint)
             .map(|ch| ch.to_string())
             .unwrap_or_else(|| " ".to_string()),
         display_width: if cell.wide { 2 } else { 1 },
-        fg: vt::GhosttyColorRgb {
-            r: cell.fg[0],
-            g: cell.fg[1],
-            b: cell.fg[2],
+        fg: if (cell.style_flags & 0x20) != 0 {
+            vt::GhosttyColorRgb {
+                r: cell.fg[0],
+                g: cell.fg[1],
+                b: cell.fg[2],
+            }
+        } else {
+            default_fg
         },
-        bg: vt::GhosttyColorRgb {
-            r: cell.bg[0],
-            g: cell.bg[1],
-            b: cell.bg[2],
+        bg: if (cell.style_flags & 0x40) != 0 {
+            vt::GhosttyColorRgb {
+                r: cell.bg[0],
+                g: cell.bg[1],
+                b: cell.bg[2],
+            }
+        } else {
+            default_bg
         },
         bold: (cell.style_flags & 0x01) != 0,
         italic: (cell.style_flags & 0x02) != 0,
@@ -890,6 +902,43 @@ fn build_status(snapshot: &control::UiSnapshot) -> (String, String) {
         right_parts.push(snapshot.pwd.clone());
     }
     (left, right_parts.join("  "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_cell_defaults_to_terminal_colors_when_not_explicit() {
+        let cell = remote::RemoteCell {
+            codepoint: u32::from('x'),
+            fg: [0, 0, 0],
+            bg: [0, 0, 0],
+            style_flags: 0,
+            wide: false,
+        };
+        let snapshot = remote_cell_to_snapshot(&cell);
+        assert_eq!(snapshot.fg.r, 0xf0);
+        assert_eq!(snapshot.fg.g, 0xf0);
+        assert_eq!(snapshot.fg.b, 0xf0);
+        assert_eq!(snapshot.bg.r, 0);
+        assert_eq!(snapshot.bg.g, 0);
+        assert_eq!(snapshot.bg.b, 0);
+    }
+
+    #[test]
+    fn remote_cell_preserves_explicit_colors() {
+        let cell = remote::RemoteCell {
+            codepoint: u32::from('x'),
+            fg: [1, 2, 3],
+            bg: [4, 5, 6],
+            style_flags: 0x60,
+            wide: false,
+        };
+        let snapshot = remote_cell_to_snapshot(&cell);
+        assert_eq!((snapshot.fg.r, snapshot.fg.g, snapshot.fg.b), (1, 2, 3));
+        assert_eq!((snapshot.bg.r, snapshot.bg.g, snapshot.bg.b), (4, 5, 6));
+    }
 }
 
 fn keyspec_from_key(

@@ -239,7 +239,6 @@ impl BooApp {
 
                 let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
                     std::sync::Arc::new(snapshot),
-                    0,
                     self.cell_width as f32,
                     self.cell_height as f32,
                     self.terminal_font_size,

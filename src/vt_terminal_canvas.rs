@@ -15,7 +15,6 @@ const PADDING_Y: f32 = 2.0;
 #[derive(Debug)]
 pub struct TerminalCanvas {
     pub snapshot: Arc<vt_backend_core::TerminalSnapshot>,
-    pub content_revision: u64,
     pub cell_width: f32,
     pub cell_height: f32,
     pub font_size: f32,
@@ -39,7 +38,6 @@ pub struct TerminalSelectionRect {
 impl TerminalCanvas {
     pub fn new(
         snapshot: Arc<vt_backend_core::TerminalSnapshot>,
-        content_revision: u64,
         cell_width: f32,
         cell_height: f32,
         font_size: f32,
@@ -53,7 +51,6 @@ impl TerminalCanvas {
     ) -> Self {
         Self {
             snapshot,
-            content_revision,
             cell_width,
             cell_height,
             font_size,
@@ -372,7 +369,6 @@ impl TerminalCanvas {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         row_index.hash(&mut hasher);
         self.snapshot.cols.hash(&mut hasher);
-        self.content_revision.hash(&mut hasher);
         self.font_size.to_bits().hash(&mut hasher);
         self.background_opacity.to_bits().hash(&mut hasher);
         self.background_opacity_cells.hash(&mut hasher);
@@ -426,7 +422,6 @@ impl TerminalCanvas {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.base_fingerprint().hash(&mut hasher);
         self.overlay_fingerprint().hash(&mut hasher);
-        self.content_revision.hash(&mut hasher);
         for row_index in 0..self.snapshot.rows_data.len() {
             self.row_fingerprint(row_index).hash(&mut hasher);
         }
@@ -441,7 +436,6 @@ mod tests {
     fn sample_canvas(revision: u64) -> TerminalCanvas {
         TerminalCanvas::new(
             Arc::new(vt_backend_core::TerminalSnapshot::default()),
-            0,
             8.0,
             16.0,
             14.0,
@@ -468,5 +462,53 @@ mod tests {
         let mut after = sample_canvas(1);
         after.preedit_text = Some("k".to_string());
         assert_ne!(before, after.fingerprint());
+    }
+
+    #[test]
+    fn row_fingerprint_ignores_global_content_revision() {
+        let mut before = sample_canvas(1);
+        before.snapshot = Arc::new(vt_backend_core::TerminalSnapshot {
+            cols: 2,
+            rows: 1,
+            rows_data: vec![vec![
+                vt_backend_core::CellSnapshot {
+                    text: "a".to_string(),
+                    ..Default::default()
+                },
+                vt_backend_core::CellSnapshot {
+                    text: "b".to_string(),
+                    ..Default::default()
+                },
+            ]],
+            ..Default::default()
+        });
+        let mut after = TerminalCanvas::new(
+            Arc::clone(&before.snapshot),
+            before.cell_width,
+            before.cell_height,
+            before.font_size,
+            before.font_family,
+            before.appearance_revision,
+            before.background_opacity,
+            before.background_opacity_cells,
+            before.selection_rects.clone(),
+            before.selection_color,
+            before.preedit_text.clone(),
+        );
+        assert_eq!(before.row_fingerprint(0), after.row_fingerprint(0));
+        after.snapshot = Arc::new(vt_backend_core::TerminalSnapshot {
+            rows_data: vec![vec![
+                vt_backend_core::CellSnapshot {
+                    text: "a".to_string(),
+                    ..Default::default()
+                },
+                vt_backend_core::CellSnapshot {
+                    text: "c".to_string(),
+                    ..Default::default()
+                },
+            ]],
+            ..(*before.snapshot).clone()
+        });
+        assert_ne!(before.row_fingerprint(0), after.row_fingerprint(0));
     }
 }
