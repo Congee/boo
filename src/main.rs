@@ -3,6 +3,7 @@ mod bindings;
 mod client_gui;
 mod cli;
 mod config;
+mod copy_mode;
 mod control;
 mod ffi;
 mod keymap;
@@ -31,6 +32,8 @@ mod vt_snapshot;
 mod vt_terminal_canvas;
 
 use backend::TerminalBackend;
+pub use copy_mode::SelectionMode;
+use copy_mode::{CopyModeState, JumpKind, WordMoveKind, selection_mode_name};
 use iced::widget::{container, row, text};
 use iced::window;
 use iced::{Color, Element, Event, Font, Length, Size, Subscription, Task, Theme, keyboard, mouse};
@@ -205,50 +208,6 @@ struct BooApp {
     notify_on_command_finish_after_ns: u64,
     #[cfg(target_os = "linux")]
     pending_font_bytes: Option<Vec<u8>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SelectionMode {
-    None,
-    Char,
-    Line,
-    Rectangle,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum JumpKind {
-    Forward,
-    Backward,
-    ToForward,
-    ToBackward,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum WordMoveKind {
-    NextWord,
-    PrevWord,
-    EndWord,
-    NextBigWord,
-    PrevBigWord,
-    EndBigWord,
-}
-
-struct CopyModeState {
-    cursor_row: i64,
-    cursor_col: u32,
-    selection: SelectionMode,
-    sel_anchor: Option<(i64, u32)>,
-    highlight_layers: Vec<*mut c_void>,
-    cursor_layer: *mut c_void,
-    cell_width: f64,
-    cell_height: f64,
-    viewport_rows: u32,
-    viewport_cols: u32,
-    mark: Option<(i64, u32)>,
-    last_jump: Option<(char, JumpKind)>,
-    last_search_forward: bool,
-    pending_jump: Option<JumpKind>,
-    show_position: bool,
 }
 
 struct CommandDef {
@@ -1240,15 +1199,6 @@ fn split_direction_name(direction: splits::Direction) -> &'static str {
     match direction {
         splits::Direction::Horizontal => "horizontal",
         splits::Direction::Vertical => "vertical",
-    }
-}
-
-fn selection_mode_name(selection: SelectionMode) -> &'static str {
-    match selection {
-        SelectionMode::None => "none",
-        SelectionMode::Char => "character",
-        SelectionMode::Line => "line",
-        SelectionMode::Rectangle => "rectangle",
     }
 }
 
