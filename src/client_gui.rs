@@ -13,9 +13,9 @@ use std::time::Duration;
 
 const STATUS_BAR_HEIGHT: f64 = 20.0;
 const DEFAULT_FONT_SIZE: f32 = 14.0;
-const SNAPSHOT_TICK_INTERVAL: Duration = Duration::from_millis(16);
-const BACKGROUND_POLL_TICKS: u8 = 8;
-const FAST_POLL_BURST_TICKS: u8 = 3;
+const FAST_TICK_INTERVAL: Duration = Duration::from_millis(8);
+const IDLE_TICK_INTERVAL: Duration = Duration::from_millis(80);
+const FAST_POLL_BURST_TICKS: u8 = 6;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -193,7 +193,12 @@ impl ClientApp {
 
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
-            time::every(SNAPSHOT_TICK_INTERVAL).map(|_| Message::Frame),
+            time::every(if self.fast_poll_ticks_remaining > 0 {
+                FAST_TICK_INTERVAL
+            } else {
+                IDLE_TICK_INTERVAL
+            })
+            .map(|_| Message::Frame),
             iced::event::listen().map(Message::IcedEvent),
         ])
     }
@@ -224,14 +229,11 @@ impl ClientApp {
 
     fn on_tick(&mut self) {
         self.drain_stream_events();
-        self.tick_counter = self.tick_counter.wrapping_add(1);
-        let should_refresh = if self.fast_poll_ticks_remaining > 0 {
+        if self.fast_poll_ticks_remaining > 0 {
             self.fast_poll_ticks_remaining -= 1;
-            true
+            self.refresh_snapshot();
         } else {
-            self.tick_counter % BACKGROUND_POLL_TICKS == 0
-        };
-        if should_refresh {
+            self.tick_counter = self.tick_counter.wrapping_add(1);
             self.refresh_snapshot();
         }
     }
@@ -306,11 +308,13 @@ impl ClientApp {
                 }
                 LocalStreamEvent::FullState(state) => {
                     self.stream_state = Some(state);
+                    self.fast_poll_ticks_remaining = FAST_POLL_BURST_TICKS;
                 }
                 LocalStreamEvent::Delta(delta) => {
                     if let Some(state) = self.stream_state.as_mut() {
                         apply_remote_delta(state, &delta);
                     }
+                    self.fast_poll_ticks_remaining = FAST_POLL_BURST_TICKS;
                 }
                 LocalStreamEvent::Error(error) => {
                     self.last_error = Some(error);
