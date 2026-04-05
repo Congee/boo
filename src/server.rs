@@ -75,12 +75,19 @@ pub enum Command {
 
 pub struct State {
     pub tabs: tabs::TabManager,
+    pub socket_path: Option<String>,
+    pub ctl_rx: mpsc::Receiver<control::ControlCmd>,
     pub remote_server: Option<remote::RemoteServer>,
     pub remote_rx: mpsc::Receiver<remote::RemoteCmd>,
 }
 
 impl State {
-    pub fn new(remote_port: Option<u16>, remote_auth_key: Option<String>) -> Self {
+    pub fn new(
+        control_socket: Option<String>,
+        remote_port: Option<u16>,
+        remote_auth_key: Option<String>,
+    ) -> Self {
+        let ctl_rx = control::start(control_socket.as_deref());
         let (remote_server, remote_rx) = if let Some(port) = remote_port {
             match remote::RemoteServer::start(remote::RemoteConfig {
                 port,
@@ -104,6 +111,8 @@ impl State {
 
         Self {
             tabs: tabs::TabManager::new(),
+            socket_path: control_socket,
+            ctl_rx,
             remote_server,
             remote_rx,
         }

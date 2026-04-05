@@ -214,12 +214,10 @@ struct BooApp {
     headless: bool,
     server: server::State,
     parent_view: *mut c_void,
-    ctl_rx: std::sync::mpsc::Receiver<control::ControlCmd>,
     scroll_rx: std::sync::mpsc::Receiver<platform::ScrollEvent>,
     key_event_rx: std::sync::mpsc::Receiver<platform::KeyEvent>,
     text_input_rx: std::sync::mpsc::Receiver<platform::TextInputEvent>,
     bindings: bindings::Bindings,
-    socket_path: Option<String>,
     dump_keys: bool,
     last_size: Size,
     last_mouse_pos: (f64, f64),
@@ -596,8 +594,11 @@ impl BooApp {
         if let Some(key) = STARTUP_REMOTE_AUTH_KEY.get() {
             boo_config.remote_auth_key = Some(key.clone());
         }
-        let ctl_rx = control::start(boo_config.control_socket.as_deref());
-        let server = server::State::new(boo_config.remote_port, boo_config.remote_auth_key.clone());
+        let server = server::State::new(
+            boo_config.control_socket.clone(),
+            boo_config.remote_port,
+            boo_config.remote_auth_key.clone(),
+        );
         let bindings = bindings::Bindings::from_config(&boo_config);
         let appearance = Self::resolve_appearance_config(&boo_config);
         let (cell_width, cell_height) = terminal_metrics(appearance.font_size);
@@ -610,7 +611,6 @@ impl BooApp {
                     headless,
                     server,
                     parent_view: ptr::null_mut(),
-                    ctl_rx,
                     scroll_rx: SCROLL_RX
                         .get()
                         .and_then(|m| m.lock().ok())
@@ -636,7 +636,6 @@ impl BooApp {
                         })
                         .unwrap_or_else(|| std::sync::mpsc::channel().1),
                     bindings,
-                    socket_path: boo_config.control_socket.clone(),
                     dump_keys: std::env::args().any(|a| a == "--dump-keys"),
                     last_size: if headless {
                         Size::new(HEADLESS_WIDTH, HEADLESS_HEIGHT)
@@ -688,7 +687,6 @@ impl BooApp {
                     headless,
                     server,
                     parent_view: ptr::null_mut(),
-                    ctl_rx,
                     scroll_rx: SCROLL_RX
                         .get()
                         .and_then(|m| m.lock().ok())
@@ -714,7 +712,6 @@ impl BooApp {
                         })
                         .unwrap_or_else(|| std::sync::mpsc::channel().1),
                     bindings,
-                    socket_path: boo_config.control_socket.clone(),
                     dump_keys: std::env::args().any(|a| a == "--dump-keys"),
                     last_size: if headless {
                         Size::new(HEADLESS_WIDTH, HEADLESS_HEIGHT)
@@ -1111,7 +1108,7 @@ impl BooApp {
     }
 
     fn terminate(&self, code: i32) -> ! {
-        control::cleanup(self.socket_path.as_deref());
+        control::cleanup(self.server.socket_path.as_deref());
         std::process::exit(code);
     }
 
@@ -1282,7 +1279,7 @@ impl BooApp {
         self.update_text_input_cursor_rect();
 
         // Process one control command per frame
-        if let Ok(cmd) = self.ctl_rx.try_recv() {
+        if let Ok(cmd) = self.server.ctl_rx.try_recv() {
             self.handle_server_cmd(cmd.into());
         }
         while let Ok(cmd) = self.server.remote_rx.try_recv() {
@@ -4274,7 +4271,7 @@ impl Drop for BooApp {
         for pane in self.server.tabs.all_panes() {
             self.free_pane_backend(pane);
         }
-        control::cleanup(self.socket_path.as_deref());
+        control::cleanup(self.server.socket_path.as_deref());
     }
 }
 
