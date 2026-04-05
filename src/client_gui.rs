@@ -3,31 +3,35 @@ use crate::remote;
 use crate::vt;
 use crate::vt_backend_core;
 use crate::vt_terminal_canvas;
+use iced::futures::{SinkExt, StreamExt};
+use iced::stream;
 use iced::widget::{column, container, row, text};
 use iced::window;
 use iced::{keyboard, time, Color, Element, Event, Font, Length, Size, Subscription, Task, Theme};
 use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const STATUS_BAR_HEIGHT: f64 = 20.0;
 const DEFAULT_FONT_SIZE: f32 = 14.0;
-const FAST_TICK_INTERVAL: Duration = Duration::from_millis(8);
-const IDLE_TICK_INTERVAL: Duration = Duration::from_millis(80);
-const FAST_POLL_BURST_TICKS: u8 = 6;
-const SNAPSHOT_IDLE_REFRESH_TICKS: u8 = 12;
+const IDLE_TICK_INTERVAL: Duration = Duration::from_secs(1);
+const SNAPSHOT_RETRY_TICKS: u8 = 3;
+const SNAPSHOT_KEEPALIVE_TICKS: u8 = 30;
 
 #[derive(Debug, Clone)]
 pub enum Message {
     Frame,
     IcedEvent(Event),
+    StreamReady(std::sync::mpsc::Sender<StreamCommand>),
+    StreamEvent(LocalStreamEvent),
 }
 
 pub struct ClientApp {
+    socket_path: String,
     client: control::Client,
-    stream_client: Option<LocalStreamClient>,
+    stream_tx: Option<std::sync::mpsc::Sender<StreamCommand>>,
     snapshot: Option<control::UiSnapshot>,
     stream_state: Option<remote::RemoteFullState>,
     stream_snapshot: Option<Arc<vt_backend_core::TerminalSnapshot>>,
@@ -38,7 +42,6 @@ pub struct ClientApp {
     background_opacity: f32,
     background_opacity_cells: bool,
     tick_counter: u8,
-    fast_poll_ticks_remaining: u8,
     active_tab_index: usize,
     render_revision: u64,
     next_input_seq: u64,
@@ -56,14 +59,11 @@ impl ClientApp {
             .map(|snapshot| snapshot.appearance.font_size)
             .unwrap_or(DEFAULT_FONT_SIZE);
         let (cell_width, cell_height) = terminal_metrics(font_size);
-        let stream_client = LocalStreamClient::connect(format!("{socket_path}.stream"));
-        if let Some(stream_client) = stream_client.as_ref() {
-            stream_client.list_sessions();
-        }
         (
             Self {
+                socket_path,
                 client,
-                stream_client,
+                stream_tx: None,
                 snapshot,
                 stream_state: None,
                 stream_snapshot: None,
@@ -74,7 +74,6 @@ impl ClientApp {
                 background_opacity: 1.0,
                 background_opacity_cells: false,
                 tick_counter: 0,
-                fast_poll_ticks_remaining: FAST_POLL_BURST_TICKS,
                 active_tab_index,
                 render_revision: 1,
                 next_input_seq: 1,
@@ -88,10 +87,14 @@ impl ClientApp {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Frame => self.on_tick(),
+            Message::StreamReady(tx) => {
+                self.stream_tx = Some(tx);
+                self.send_stream_command(StreamCommand::ListSessions);
+            }
+            Message::StreamEvent(event) => self.handle_stream_event(event),
             Message::IcedEvent(event) => match event {
                 Event::Window(window::Event::Resized(size)) => {
                     self.send_resize(size);
-                    self.refresh_snapshot();
                 }
                 Event::Keyboard(event) => self.handle_keyboard(event),
                 _ => {}
@@ -211,13 +214,9 @@ impl ClientApp {
 
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
-            time::every(if self.fast_poll_ticks_remaining > 0 {
-                FAST_TICK_INTERVAL
-            } else {
-                IDLE_TICK_INTERVAL
-            })
-            .map(|_| Message::Frame),
+            time::every(IDLE_TICK_INTERVAL).map(|_| Message::Frame),
             iced::event::listen().map(Message::IcedEvent),
+            iced::Subscription::run_with(self.socket_path.clone(), local_stream_subscription),
         ])
     }
 
@@ -247,15 +246,15 @@ impl ClientApp {
     }
 
     fn on_tick(&mut self) {
-        self.drain_stream_events();
-        if self.fast_poll_ticks_remaining > 0 {
-            self.fast_poll_ticks_remaining -= 1;
+        self.tick_counter = self.tick_counter.wrapping_add(1);
+        let refresh_ticks = if self.snapshot.is_none() || self.stream_tx.is_none() {
+            SNAPSHOT_RETRY_TICKS
         } else {
-            self.tick_counter = self.tick_counter.wrapping_add(1);
-            if self.snapshot.is_none() || self.tick_counter >= SNAPSHOT_IDLE_REFRESH_TICKS {
-                self.tick_counter = 0;
-                self.refresh_snapshot();
-            }
+            SNAPSHOT_KEEPALIVE_TICKS
+        };
+        if self.tick_counter >= refresh_ticks {
+            self.tick_counter = 0;
+            self.refresh_snapshot();
         }
     }
 
@@ -264,8 +263,8 @@ impl ClientApp {
         let rows = (((size.height as f64 - STATUS_BAR_HEIGHT).max(1.0) / self.cell_height).floor()
             as u16)
             .max(1);
-        if let Some(stream_client) = self.stream_client.as_ref() {
-            stream_client.send_resize(cols, rows);
+        if self.stream_tx.is_some() {
+            self.send_stream_command(StreamCommand::Resize { cols, rows });
         } else {
             let _ = self.client.send(&control::Request::ResizeFocused { cols, rows });
         }
@@ -282,32 +281,30 @@ impl ClientApp {
             .filter(|text| !text.is_empty())
             .filter(|_| !(modifiers.control() || modifiers.alt() || modifiers.logo()))
         {
-            if self.stream_client.is_some() {
+            if self.stream_tx.is_some() {
                 let input_seq = self.record_pending_input();
-                let stream_client = self.stream_client.as_ref().expect("stream client present");
-                stream_client.send_input(input_seq, committed.into_bytes());
+                self.send_stream_command(StreamCommand::Input {
+                    input_seq,
+                    bytes: committed.into_bytes(),
+                });
             } else {
                 let _ = self.client.send(&control::Request::SendText { text: committed });
             }
-            self.fast_poll_ticks_remaining = FAST_POLL_BURST_TICKS;
             return;
         }
 
         if let Some(keyspec) = keyspec_from_key(&key, modifiers, text.as_deref()) {
-            if self.stream_client.is_some() {
+            if self.stream_tx.is_some() {
                 let input_seq = self.record_pending_input();
-                let stream_client = self.stream_client.as_ref().expect("stream client present");
-                stream_client.send_key(input_seq, keyspec);
+                self.send_stream_command(StreamCommand::Key { input_seq, keyspec });
             } else {
                 let _ = self.client.send(&control::Request::SendKey { key: keyspec });
             }
-            self.fast_poll_ticks_remaining = FAST_POLL_BURST_TICKS;
         }
     }
 
-    fn drain_stream_events(&mut self) {
-        while let Some(event) = self.stream_client.as_ref().and_then(|stream_client| stream_client.try_recv()) {
-            match event {
+    fn handle_stream_event(&mut self, event: LocalStreamEvent) {
+        match event {
                 LocalStreamEvent::SessionList(sessions) => {
                     let live_sessions: Vec<_> = sessions
                         .iter()
@@ -318,9 +315,7 @@ impl ClientApp {
                         .or_else(|| live_sessions.first())
                     {
                         self.should_exit = false;
-                        if let Some(stream_client) = self.stream_client.as_ref() {
-                            stream_client.attach(session.id);
-                        }
+                        self.send_stream_command(StreamCommand::Attach(session.id));
                     } else {
                         self.should_exit = true;
                     }
@@ -333,9 +328,7 @@ impl ClientApp {
                     self.stream_snapshot = None;
                     self.pending_input_latencies.clear();
                     self.render_revision = self.render_revision.wrapping_add(1);
-                    if let Some(stream_client) = self.stream_client.as_ref() {
-                        stream_client.list_sessions();
-                    }
+                    self.send_stream_command(StreamCommand::ListSessions);
                 }
                 LocalStreamEvent::SessionExited(session_id) => {
                     let _ = session_id;
@@ -343,9 +336,7 @@ impl ClientApp {
                     self.stream_snapshot = None;
                     self.pending_input_latencies.clear();
                     self.render_revision = self.render_revision.wrapping_add(1);
-                    if let Some(stream_client) = self.stream_client.as_ref() {
-                        stream_client.list_sessions();
-                    }
+                    self.send_stream_command(StreamCommand::ListSessions);
                 }
                 LocalStreamEvent::Disconnected => {
                     self.stream_state = None;
@@ -359,7 +350,6 @@ impl ClientApp {
                     self.stream_state = Some(state);
                     self.render_revision = self.render_revision.wrapping_add(1);
                     self.acknowledge_input_latency("stream_full_state", ack_input_seq);
-                    self.fast_poll_ticks_remaining = FAST_POLL_BURST_TICKS;
                 }
                 LocalStreamEvent::Delta { ack_input_seq, delta } => {
                     if let Some(state) = self.stream_state.as_mut() {
@@ -370,12 +360,16 @@ impl ClientApp {
                     }
                     self.render_revision = self.render_revision.wrapping_add(1);
                     self.acknowledge_input_latency("stream_delta", ack_input_seq);
-                    self.fast_poll_ticks_remaining = FAST_POLL_BURST_TICKS;
                 }
                 LocalStreamEvent::Error(error) => {
                     self.last_error = Some(error);
                 }
-            }
+        }
+    }
+
+    fn send_stream_command(&self, command: StreamCommand) {
+        if let Some(tx) = self.stream_tx.as_ref() {
+            let _ = tx.send(command);
         }
     }
 
@@ -525,7 +519,8 @@ fn ui_terminal_to_vt_snapshot(snapshot: &control::UiTerminalSnapshot) -> vt_back
     }
 }
 
-enum LocalStreamEvent {
+#[derive(Clone, Debug)]
+pub(crate) enum LocalStreamEvent {
     SessionList(Vec<remote::RemoteSessionInfo>),
     Attached(u32),
     Detached,
@@ -542,71 +537,99 @@ enum LocalStreamEvent {
     Error(String),
 }
 
-struct RemoteDelta {
+#[derive(Clone, Debug)]
+pub(crate) struct RemoteDelta {
     cursor_x: u16,
     cursor_y: u16,
     cursor_visible: bool,
     changed_rows: Vec<(u16, Vec<remote::RemoteCell>)>,
 }
 
-struct LocalStreamClient {
-    write: Arc<Mutex<UnixStream>>,
-    rx: mpsc::Receiver<LocalStreamEvent>,
+#[derive(Clone, Debug)]
+pub(crate) enum StreamCommand {
+    ListSessions,
+    Attach(u32),
+    Input { input_seq: u64, bytes: Vec<u8> },
+    Key { input_seq: u64, keyspec: String },
+    Resize { cols: u16, rows: u16 },
 }
 
-impl LocalStreamClient {
-    fn connect(socket_path: String) -> Option<Self> {
-        let write = UnixStream::connect(socket_path).ok()?;
-        let read = write.try_clone().ok()?;
-        let write = Arc::new(Mutex::new(write));
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || read_local_stream_loop(read, tx));
-        Some(Self { write, rx })
-    }
-
-    fn send_message(&self, ty: remote::MessageType, payload: &[u8]) {
+fn write_stream_message(write: &mut UnixStream, ty: remote::MessageType, payload: &[u8]) -> std::io::Result<()> {
         let frame = remote::encode_message(ty, payload);
-        if let Ok(mut write) = self.write.lock() {
-            let _ = write.write_all(&frame);
-            let _ = write.flush();
-        }
-    }
-
-    fn list_sessions(&self) {
-        self.send_message(remote::MessageType::ListSessions, &[]);
-    }
-
-    fn attach(&self, session_id: u32) {
-        self.send_message(remote::MessageType::Attach, &session_id.to_le_bytes());
-    }
-
-    fn send_input(&self, input_seq: u64, bytes: Vec<u8>) {
-        let mut payload = Vec::with_capacity(8 + bytes.len());
-        payload.extend_from_slice(&input_seq.to_le_bytes());
-        payload.extend_from_slice(&bytes);
-        self.send_message(remote::MessageType::Input, &payload);
-    }
-
-    fn send_key(&self, input_seq: u64, keyspec: String) {
-        let mut payload = Vec::with_capacity(8 + keyspec.len());
-        payload.extend_from_slice(&input_seq.to_le_bytes());
-        payload.extend_from_slice(keyspec.as_bytes());
-        self.send_message(remote::MessageType::Key, &payload);
-    }
-
-    fn send_resize(&self, cols: u16, rows: u16) {
-        let mut payload = Vec::with_capacity(4);
-        payload.extend_from_slice(&cols.to_le_bytes());
-        payload.extend_from_slice(&rows.to_le_bytes());
-        self.send_message(remote::MessageType::Resize, &payload);
-    }
-
-    fn try_recv(&self) -> Option<LocalStreamEvent> {
-        self.rx.try_recv().ok()
-    }
+        write.write_all(&frame)?;
+        write.flush()
 }
 
-fn read_local_stream_loop(mut read: UnixStream, tx: mpsc::Sender<LocalStreamEvent>) {
+fn local_stream_subscription(
+    socket_path: &String,
+) -> iced::futures::stream::BoxStream<'static, Message> {
+    let socket_path = socket_path.clone();
+    Box::pin(stream::channel(
+        100,
+        move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+        let Ok(write) = UnixStream::connect(&socket_path) else {
+            let _ = output.send(Message::StreamEvent(LocalStreamEvent::Disconnected)).await;
+            return;
+        };
+        let Ok(read) = write.try_clone() else {
+            let _ = output.send(Message::StreamEvent(LocalStreamEvent::Disconnected)).await;
+            return;
+        };
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<StreamCommand>();
+        let _ = output.send(Message::StreamReady(cmd_tx)).await;
+
+        let (event_tx, mut event_rx) =
+            iced::futures::channel::mpsc::unbounded::<LocalStreamEvent>();
+
+        let writer_event_tx = event_tx.clone();
+        std::thread::spawn(move || {
+            let mut write = write;
+            while let Ok(command) = cmd_rx.recv() {
+                let result = match command {
+                    StreamCommand::ListSessions => {
+                        write_stream_message(&mut write, remote::MessageType::ListSessions, &[])
+                    }
+                    StreamCommand::Attach(session_id) => {
+                        write_stream_message(&mut write, remote::MessageType::Attach, &session_id.to_le_bytes())
+                    }
+                    StreamCommand::Input { input_seq, bytes } => {
+                        let mut payload = Vec::with_capacity(8 + bytes.len());
+                        payload.extend_from_slice(&input_seq.to_le_bytes());
+                        payload.extend_from_slice(&bytes);
+                        write_stream_message(&mut write, remote::MessageType::Input, &payload)
+                    }
+                    StreamCommand::Key { input_seq, keyspec } => {
+                        let mut payload = Vec::with_capacity(8 + keyspec.len());
+                        payload.extend_from_slice(&input_seq.to_le_bytes());
+                        payload.extend_from_slice(keyspec.as_bytes());
+                        write_stream_message(&mut write, remote::MessageType::Key, &payload)
+                    }
+                    StreamCommand::Resize { cols, rows } => {
+                        let mut payload = Vec::with_capacity(4);
+                        payload.extend_from_slice(&cols.to_le_bytes());
+                        payload.extend_from_slice(&rows.to_le_bytes());
+                        write_stream_message(&mut write, remote::MessageType::Resize, &payload)
+                    }
+                };
+                if result.is_err() {
+                    let _ = writer_event_tx.unbounded_send(LocalStreamEvent::Disconnected);
+                    break;
+                }
+            }
+        });
+
+        std::thread::spawn(move || read_local_stream_loop(read, move |event| {
+            let _ = event_tx.unbounded_send(event);
+        }));
+
+        while let Some(event) = event_rx.next().await {
+            let _ = output.send(Message::StreamEvent(event)).await;
+        }
+        },
+    ))
+}
+
+fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStreamEvent)) {
     while let Ok((ty, payload)) = remote::read_message(&mut read) {
         let event = match ty {
             remote::MessageType::SessionList => {
@@ -628,10 +651,10 @@ fn read_local_stream_loop(mut read: UnixStream, tx: mpsc::Sender<LocalStreamEven
             _ => None,
         };
         if let Some(event) = event {
-            let _ = tx.send(event);
+            emit(event);
         }
     }
-    let _ = tx.send(LocalStreamEvent::Disconnected);
+    emit(LocalStreamEvent::Disconnected);
 }
 
 fn decode_u32(payload: &[u8]) -> Option<u32> {

@@ -16,6 +16,11 @@ const MAGIC: [u8; 2] = [0x47, 0x53];
 const HEADER_LEN: usize = 7;
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 
+enum OutboundMessage {
+    Frame(Vec<u8>),
+    ScreenUpdate(Vec<u8>),
+}
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageType {
@@ -156,7 +161,7 @@ pub enum RemoteCmd {
 }
 
 struct ClientState {
-    outbound: mpsc::Sender<Vec<u8>>,
+    outbound: mpsc::Sender<OutboundMessage>,
     authenticated: bool,
     challenge: Option<[u8; 32]>,
     attached_session: Option<u32>,
@@ -438,7 +443,7 @@ impl RemoteServer {
         let frame = encode_message(ty, &payload);
         let state = self.state.lock().expect("remote server state poisoned");
         if let Some(client) = state.clients.get(&client_id) {
-            let _ = client.outbound.send(frame);
+            let _ = client.outbound.send(OutboundMessage::Frame(frame));
         }
     }
 
@@ -463,7 +468,11 @@ impl RemoteServer {
             client.last_state = Some(state.clone());
             encoded
         };
-        self.send_to_client(client_id, ty, payload);
+        let frame = encode_message(ty, &payload);
+        let state = self.state.lock().expect("remote server state poisoned");
+        if let Some(client) = state.clients.get(&client_id) {
+            let _ = client.outbound.send(OutboundMessage::ScreenUpdate(frame));
+        }
     }
 }
 
@@ -475,15 +484,49 @@ impl Drop for RemoteServer {
     }
 }
 
-fn writer_loop<W: Write>(mut stream: W, outbound_rx: mpsc::Receiver<Vec<u8>>) {
-    for frame in outbound_rx {
-        if stream.write_all(&frame).is_err() {
-            break;
+fn writer_loop<W: Write>(mut stream: W, outbound_rx: mpsc::Receiver<OutboundMessage>) {
+    while let Ok(message) = outbound_rx.recv() {
+        let batch = collect_outbound_batch(message, &outbound_rx);
+        let mut failed = false;
+        for frame in batch {
+            if stream.write_all(&frame).is_err() {
+                failed = true;
+                break;
+            }
         }
-        if stream.flush().is_err() {
+        if failed || stream.flush().is_err() {
             break;
         }
     }
+}
+
+fn collect_outbound_batch(
+    first: OutboundMessage,
+    outbound_rx: &mpsc::Receiver<OutboundMessage>,
+) -> Vec<Vec<u8>> {
+    let mut frames = Vec::new();
+    let mut pending_screen = None;
+
+    let mut push = |message| match message {
+        OutboundMessage::Frame(frame) => {
+            if let Some(screen) = pending_screen.take() {
+                frames.push(screen);
+            }
+            frames.push(frame);
+        }
+        OutboundMessage::ScreenUpdate(frame) => {
+            pending_screen = Some(frame);
+        }
+    };
+
+    push(first);
+    while let Ok(message) = outbound_rx.try_recv() {
+        push(message);
+    }
+    if let Some(screen) = pending_screen {
+        frames.push(screen);
+    }
+    frames
 }
 
 fn read_loop(
@@ -573,7 +616,7 @@ fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>
         client.authenticated = true;
         let _ = client
             .outbound
-            .send(encode_message(MessageType::AuthOk, &[]));
+            .send(OutboundMessage::Frame(encode_message(MessageType::AuthOk, &[])));
         return;
     }
 
@@ -582,20 +625,23 @@ fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>
         client.challenge = Some(challenge);
         let _ = client
             .outbound
-            .send(encode_message(MessageType::AuthChallenge, &challenge));
+            .send(OutboundMessage::Frame(encode_message(
+                MessageType::AuthChallenge,
+                &challenge,
+            )));
         return;
     }
 
     let Some(challenge) = client.challenge.take() else {
         let _ = client
             .outbound
-            .send(encode_message(MessageType::AuthFail, &[]));
+            .send(OutboundMessage::Frame(encode_message(MessageType::AuthFail, &[])));
         return;
     };
     let Some(key) = auth_key else {
         let _ = client
             .outbound
-            .send(encode_message(MessageType::AuthFail, &[]));
+            .send(OutboundMessage::Frame(encode_message(MessageType::AuthFail, &[])));
         return;
     };
 
@@ -606,12 +652,12 @@ fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>
             client.authenticated = true;
             let _ = client
                 .outbound
-                .send(encode_message(MessageType::AuthOk, &[]));
+                .send(OutboundMessage::Frame(encode_message(MessageType::AuthOk, &[])));
         }
         Err(_) => {
             let _ = client
                 .outbound
-                .send(encode_message(MessageType::AuthFail, &[]));
+                .send(OutboundMessage::Frame(encode_message(MessageType::AuthFail, &[])));
         }
     }
 }
@@ -621,7 +667,10 @@ fn send_direct_error(state: &Arc<Mutex<State>>, client_id: u64, message: &str) {
     if let Some(client) = state.clients.get(&client_id) {
         let _ = client
             .outbound
-            .send(encode_message(MessageType::ErrorMsg, message.as_bytes()));
+            .send(OutboundMessage::Frame(encode_message(
+                MessageType::ErrorMsg,
+                message.as_bytes(),
+            )));
     }
 }
 
@@ -1025,5 +1074,17 @@ mod tests {
         assert_eq!(state.cells[1].codepoint, u32::from('界'));
         assert!(state.cells[1].wide);
         assert_eq!(state.cells[1].style_flags & 0x03, 0x03);
+    }
+
+    #[test]
+    fn outbound_batch_coalesces_consecutive_screen_updates() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(OutboundMessage::ScreenUpdate(vec![1])).unwrap();
+        tx.send(OutboundMessage::ScreenUpdate(vec![2])).unwrap();
+        tx.send(OutboundMessage::Frame(vec![9])).unwrap();
+        tx.send(OutboundMessage::ScreenUpdate(vec![3])).unwrap();
+        let first = rx.recv().unwrap();
+        let batch = collect_outbound_batch(first, &rx);
+        assert_eq!(batch, vec![vec![2], vec![9], vec![3]]);
     }
 }
