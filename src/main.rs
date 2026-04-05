@@ -152,6 +152,7 @@ fn terminal_metrics(font_size: f32) -> (f64, f64) {
     (cell_width, cell_height)
 }
 
+#[allow(dead_code)]
 fn configured_font(family: Option<&'static str>) -> Font {
     family.map(Font::with_name).unwrap_or(Font::MONOSPACE)
 }
@@ -565,6 +566,7 @@ struct CopyModeState {
 
 struct CommandDef {
     name: &'static str,
+    #[allow(dead_code)]
     description: &'static str,
     args: &'static str, // e.g. "<n>" or "" for no args
 }
@@ -803,6 +805,7 @@ enum Message {
     Frame,
     #[cfg(target_os = "linux")]
     FontLoaded,
+    #[allow(dead_code)]
     IcedEvent(Event),
 }
 
@@ -839,10 +842,6 @@ impl BooApp {
             "up" => bindings::SplitDirection::Up,
             _ => bindings::SplitDirection::Right,
         }
-    }
-
-    fn new() -> (Self, Task<Message>) {
-        Self::new_with_mode(false)
     }
 
     fn new_headless() -> Self {
@@ -1340,14 +1339,17 @@ impl BooApp {
         }
     }
 
+    #[allow(dead_code)]
     fn ui_font(&self) -> Font {
         configured_font(self.terminal_font_family)
     }
 
+    #[allow(dead_code)]
     fn panel_alpha(&self, base: f32) -> f32 {
         (base * self.background_opacity.max(0.3)).clamp(0.2, 0.98)
     }
 
+    #[allow(dead_code)]
     fn window_style(&self) -> iced::theme::Style {
         #[cfg(target_os = "linux")]
         {
@@ -4238,6 +4240,7 @@ impl BooApp {
         }
     }
 
+    #[allow(dead_code)]
     fn view(&self) -> Element<'_, Message> {
         let ui_font = self.ui_font();
         // Search bar (overlays top of terminal area when active)
@@ -4455,6 +4458,7 @@ impl BooApp {
     }
 
     /// Build three-zone status bar: (left, right).
+    #[allow(dead_code)]
     fn build_status_zones(&self) -> (String, String) {
         // Left: tab list
         let spinner_frame = std::time::SystemTime::now()
@@ -4518,10 +4522,12 @@ impl BooApp {
         (left, right)
     }
 
+    #[allow(dead_code)]
     fn theme(&self) -> Theme {
         Theme::Dark
     }
 
+    #[allow(dead_code)]
     fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
             window::frames().map(|_| Message::Frame),

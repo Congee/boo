@@ -1,13 +1,19 @@
 //! macOS platform backend — AppKit + Core Animation + NSPasteboard.
 
-use super::{KeyEvent, LayerHandle, Point, Rect, ScrollEvent, Size, TextInputCommand, TextInputEvent, ViewHandle};
-use objc2::runtime::AnyObject;
+use super::{
+    KeyEvent, LayerHandle, Point, Rect, ScrollEvent, Size, TextInputCommand, TextInputEvent,
+    ViewHandle,
+};
 use objc2::rc::Retained;
-use objc2::{class, define_class, msg_send, sel, ClassType};
+use objc2::runtime::AnyObject;
+use objc2::{ClassType, class, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSEvent, NSEventMask, NSResponder, NSView, NSWindow, NSWindowOrderingMode,
 };
-use objc2_foundation::{NSArray, MainThreadMarker, NSAttributedString, NSObject, NSObjectProtocol, NSRange, NSRect, NSSize, NSString, NSNotFound};
+use objc2_foundation::{
+    MainThreadMarker, NSArray, NSAttributedString, NSNotFound, NSObject, NSObjectProtocol, NSRange,
+    NSRect, NSSize, NSString,
+};
 use std::ffi::c_void;
 
 static TEXT_INPUT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<TextInputEvent>> =
@@ -268,9 +274,7 @@ fn main_window() -> Option<Retained<NSWindow>> {
 // --- Public API (matches linux.rs surface) ---
 
 pub fn scale_factor() -> f64 {
-    main_window()
-        .map(|w| w.backingScaleFactor())
-        .unwrap_or(2.0)
+    main_window().map(|w| w.backingScaleFactor()).unwrap_or(2.0)
 }
 
 pub fn content_view() -> Option<Retained<NSView>> {
@@ -371,6 +375,7 @@ pub fn set_text_input_cursor_rect(rect: Rect) {
 
 // --- Event monitors ---
 
+#[allow(dead_code)]
 pub fn install_event_monitors(
     scroll_tx: std::sync::mpsc::Sender<ScrollEvent>,
     key_event_tx: std::sync::mpsc::Sender<KeyEvent>,
@@ -382,6 +387,7 @@ pub fn install_event_monitors(
     install_scroll_monitor(scroll_tx);
 }
 
+#[allow(dead_code)]
 fn install_scroll_monitor(tx: std::sync::mpsc::Sender<ScrollEvent>) {
     use std::ptr::NonNull;
 
@@ -413,6 +419,7 @@ fn install_scroll_monitor(tx: std::sync::mpsc::Sender<ScrollEvent>) {
     std::mem::forget(monitor);
 }
 
+#[allow(dead_code)]
 fn install_cmd_drag_monitor() {
     use std::ptr::NonNull;
 
@@ -541,9 +548,9 @@ pub fn clipboard_write(text: &str) {
     let pb = NSPasteboard::generalPasteboard();
     pb.clearContents();
     let ns_str = NSString::from_str(text);
-    let array = objc2_foundation::NSArray::from_slice(&[
-        objc2::runtime::ProtocolObject::from_ref(&*ns_str),
-    ]);
+    let array = objc2_foundation::NSArray::from_slice(&[objc2::runtime::ProtocolObject::from_ref(
+        &*ns_str,
+    )]);
     pb.writeObjects(&array);
 }
 
@@ -558,7 +565,8 @@ pub fn send_desktop_notification(title: &str, body: &str) {
 }
 
 unsafe fn send_user_notification(title: &str, body: &str) -> bool {
-    let center: *mut AnyObject = msg_send![class!(UNUserNotificationCenter), currentNotificationCenter];
+    let center: *mut AnyObject =
+        msg_send![class!(UNUserNotificationCenter), currentNotificationCenter];
     if center.is_null() {
         return false;
     }
@@ -631,9 +639,6 @@ mod tests {
 
     #[test]
     fn apple_script_literal_escapes_quotes_and_newlines() {
-        assert_eq!(
-            apple_script_literal("a\"b\nc\\d"),
-            "\"a\\\"b\\nc\\\\d\""
-        );
+        assert_eq!(apple_script_literal("a\"b\nc\\d"), "\"a\\\"b\\nc\\\\d\"");
     }
 }
