@@ -9,7 +9,9 @@ use std::time::Duration;
 
 const STATUS_BAR_HEIGHT: f64 = 20.0;
 const DEFAULT_FONT_SIZE: f32 = 14.0;
-const SNAPSHOT_POLL_INTERVAL: Duration = Duration::from_millis(120);
+const SNAPSHOT_TICK_INTERVAL: Duration = Duration::from_millis(16);
+const BACKGROUND_POLL_TICKS: u8 = 8;
+const FAST_POLL_BURST_TICKS: u8 = 3;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -26,6 +28,8 @@ pub struct ClientApp {
     font_size: f32,
     background_opacity: f32,
     background_opacity_cells: bool,
+    tick_counter: u8,
+    fast_poll_ticks_remaining: u8,
 }
 
 impl ClientApp {
@@ -47,6 +51,8 @@ impl ClientApp {
                 font_size,
                 background_opacity: 1.0,
                 background_opacity_cells: false,
+                tick_counter: 0,
+                fast_poll_ticks_remaining: FAST_POLL_BURST_TICKS,
             },
             Task::none(),
         )
@@ -54,7 +60,7 @@ impl ClientApp {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Frame => self.refresh_snapshot(),
+            Message::Frame => self.on_tick(),
             Message::IcedEvent(event) => match event {
                 Event::Window(window::Event::Resized(size)) => {
                     self.send_resize(size);
@@ -149,7 +155,7 @@ impl ClientApp {
 
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
-            time::every(SNAPSHOT_POLL_INTERVAL).map(|_| Message::Frame),
+            time::every(SNAPSHOT_TICK_INTERVAL).map(|_| Message::Frame),
             iced::event::listen().map(Message::IcedEvent),
         ])
     }
@@ -177,6 +183,19 @@ impl ClientApp {
         }
     }
 
+    fn on_tick(&mut self) {
+        self.tick_counter = self.tick_counter.wrapping_add(1);
+        let should_refresh = if self.fast_poll_ticks_remaining > 0 {
+            self.fast_poll_ticks_remaining -= 1;
+            true
+        } else {
+            self.tick_counter % BACKGROUND_POLL_TICKS == 0
+        };
+        if should_refresh {
+            self.refresh_snapshot();
+        }
+    }
+
     fn send_resize(&mut self, size: Size) {
         let cols = ((size.width as f64 / self.cell_width).floor() as u16).max(2);
         let rows = (((size.height as f64 - STATUS_BAR_HEIGHT).max(1.0) / self.cell_height).floor()
@@ -197,13 +216,13 @@ impl ClientApp {
             .filter(|_| !(modifiers.control() || modifiers.alt() || modifiers.logo()))
         {
             let _ = self.client.send(&control::Request::SendText { text: committed });
-            self.refresh_snapshot();
+            self.fast_poll_ticks_remaining = FAST_POLL_BURST_TICKS;
             return;
         }
 
         if let Some(keyspec) = keyspec_from_key(&key, modifiers, text.as_deref()) {
             let _ = self.client.send(&control::Request::SendKey { key: keyspec });
-            self.refresh_snapshot();
+            self.fast_poll_ticks_remaining = FAST_POLL_BURST_TICKS;
         }
     }
 }
