@@ -9,7 +9,7 @@ use std::time::Duration;
 
 const STATUS_BAR_HEIGHT: f64 = 20.0;
 const DEFAULT_FONT_SIZE: f32 = 14.0;
-const SNAPSHOT_POLL_INTERVAL: Duration = Duration::from_millis(33);
+const SNAPSHOT_POLL_INTERVAL: Duration = Duration::from_millis(120);
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -56,7 +56,10 @@ impl ClientApp {
         match message {
             Message::Frame => self.refresh_snapshot(),
             Message::IcedEvent(event) => match event {
-                Event::Window(window::Event::Resized(size)) => self.send_resize(size),
+                Event::Window(window::Event::Resized(size)) => {
+                    self.send_resize(size);
+                    self.refresh_snapshot();
+                }
                 Event::Keyboard(event) => self.handle_keyboard(event),
                 _ => {}
             },
@@ -194,11 +197,13 @@ impl ClientApp {
             .filter(|_| !(modifiers.control() || modifiers.alt() || modifiers.logo()))
         {
             let _ = self.client.send(&control::Request::SendText { text: committed });
+            self.refresh_snapshot();
             return;
         }
 
         if let Some(keyspec) = keyspec_from_key(&key, modifiers, text.as_deref()) {
             let _ = self.client.send(&control::Request::SendKey { key: keyspec });
+            self.refresh_snapshot();
         }
     }
 }
