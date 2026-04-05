@@ -13,6 +13,7 @@ mod macos_vt_backend;
 mod pane;
 mod platform;
 mod remote;
+mod runtime_input;
 mod runtime;
 mod runtime_copy;
 mod runtime_ui;
