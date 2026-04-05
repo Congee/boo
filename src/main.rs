@@ -219,6 +219,7 @@ struct BooApp {
     background_opacity_cells: bool,
     appearance_revision: u64,
     app_focused: bool,
+    remote_dirty: bool,
     desktop_notifications_enabled: bool,
     notify_on_command_finish: config::NotifyOnCommandFinish,
     notify_on_command_finish_action: config::NotifyOnCommandFinishAction,

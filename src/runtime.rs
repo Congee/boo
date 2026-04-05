@@ -117,6 +117,7 @@ impl BooApp {
                     background_opacity_cells: appearance.background_opacity_cells,
                     appearance_revision: 1,
                     app_focused: true,
+                    remote_dirty: true,
                     desktop_notifications_enabled: boo_config.desktop_notifications,
                     notify_on_command_finish: boo_config.notify_on_command_finish,
                     notify_on_command_finish_action: boo_config.notify_on_command_finish_action,
@@ -172,6 +173,7 @@ impl BooApp {
                     background_opacity_cells: appearance.background_opacity_cells,
                     appearance_revision: 1,
                     app_focused: true,
+                    remote_dirty: true,
                     desktop_notifications_enabled: boo_config.desktop_notifications,
                     notify_on_command_finish: boo_config.notify_on_command_finish,
                     notify_on_command_finish_action: boo_config.notify_on_command_finish_action,
@@ -291,6 +293,7 @@ impl BooApp {
     }
 
     pub(crate) fn poll_backend(&mut self) {
+        let mut remote_dirty = false;
         let active_id = self.server.tabs.focused_pane().id();
         let active_pane_ids: Vec<pane::PaneId> = self
             .server
@@ -312,6 +315,7 @@ impl BooApp {
                     command: running_command.command,
                 }),
             );
+            remote_dirty = true;
         }
         for pane_id in &active_pane_ids {
             if !poll
@@ -322,6 +326,7 @@ impl BooApp {
                 self.server
                     .tabs
                     .set_running_command_for_pane(*pane_id, None);
+                remote_dirty = true;
             }
         }
         for finished_command in poll.finished_commands {
@@ -337,16 +342,21 @@ impl BooApp {
         }
         if let Some(pwd) = poll.active_pwd {
             self.pwd = pwd;
+            remote_dirty = true;
         }
         if let Some(title) = poll.active_title {
             self.server.tabs.set_active_title(title);
+            remote_dirty = true;
         }
         if let Some(scrollbar) = poll.active_scrollbar {
             self.scrollbar = scrollbar;
+            remote_dirty = true;
         }
         for pane_id in poll.exited_panes {
             self.close_active_pane_by_id(pane_id);
+            remote_dirty = true;
         }
+        self.remote_dirty |= remote_dirty;
     }
 
     pub(crate) fn apply_appearance(&mut self, appearance: ResolvedAppearance) {
@@ -401,7 +411,13 @@ impl BooApp {
         while let Ok(cmd) = self.server.remote_rx.try_recv() {
             self.handle_server_cmd(cmd.into());
         }
-        self.publish_remote_state();
+        while let Ok(cmd) = self.server.local_gui_rx.try_recv() {
+            self.handle_server_cmd(cmd.into());
+        }
+        if self.remote_dirty {
+            self.publish_remote_state();
+            self.remote_dirty = false;
+        }
 
         while let Ok(scroll) = self.scroll_rx.try_recv() {
             let surface = self.focused_surface();

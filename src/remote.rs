@@ -3,14 +3,18 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
+use std::os::unix::net::UnixListener;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
 type HmacSha256 = Hmac<Sha256>;
 
 const MAGIC: [u8; 2] = [0x47, 0x53];
 const HEADER_LEN: usize = 7;
+static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,7 +156,6 @@ struct ClientState {
 
 struct State {
     clients: HashMap<u64, ClientState>,
-    next_client_id: u64,
     auth_key: Option<Vec<u8>>,
 }
 
@@ -160,6 +163,7 @@ pub struct RemoteServer {
     state: Arc<Mutex<State>>,
     _listener: std::thread::JoinHandle<()>,
     _advertiser: Option<ServiceAdvertiser>,
+    local_socket_path: Option<PathBuf>,
 }
 
 struct ServiceAdvertiser {
@@ -178,7 +182,6 @@ impl RemoteServer {
         let listener = TcpListener::bind(("0.0.0.0", config.port))?;
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::new(),
-            next_client_id: 1,
             auth_key: config.auth_key.map(|key| key.into_bytes()),
         }));
         let state_for_listener = Arc::clone(&state);
@@ -192,8 +195,7 @@ impl RemoteServer {
                     let mut state = state_for_listener
                         .lock()
                         .expect("remote server state poisoned");
-                    let client_id = state.next_client_id;
-                    state.next_client_id += 1;
+                    let client_id = NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
                     let (outbound_tx, outbound_rx) = mpsc::channel();
                     let authenticated = state.auth_key.is_none();
                     state.clients.insert(
@@ -229,6 +231,66 @@ impl RemoteServer {
                 state,
                 _listener: listener_thread,
                 _advertiser: advertiser,
+                local_socket_path: None,
+            },
+            cmd_rx,
+        ))
+    }
+
+    pub fn start_local(socket_path: impl AsRef<Path>) -> io::Result<(Self, mpsc::Receiver<RemoteCmd>)> {
+        let socket_path = socket_path.as_ref().to_path_buf();
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = UnixListener::bind(&socket_path)?;
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::new(),
+            auth_key: None,
+        }));
+        let state_for_listener = Arc::clone(&state);
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let listener_thread = std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else {
+                    continue;
+                };
+                let (client_id, outbound_rx) = {
+                    let mut state = state_for_listener
+                        .lock()
+                        .expect("remote server state poisoned");
+                    let client_id = NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
+                    let (outbound_tx, outbound_rx) = mpsc::channel();
+                    state.clients.insert(
+                        client_id,
+                        ClientState {
+                            outbound: outbound_tx,
+                            authenticated: true,
+                            challenge: None,
+                            attached_session: None,
+                        },
+                    );
+                    (client_id, outbound_rx)
+                };
+
+                let Ok(writer_stream) = stream.try_clone() else {
+                    let mut state = state_for_listener
+                        .lock()
+                        .expect("remote server state poisoned");
+                    state.clients.remove(&client_id);
+                    continue;
+                };
+                std::thread::spawn(move || writer_loop(writer_stream, outbound_rx));
+
+                let cmd_tx = cmd_tx.clone();
+                let state = Arc::clone(&state_for_listener);
+                std::thread::spawn(move || read_loop(stream, client_id, state, cmd_tx));
+            }
+        });
+
+        Ok((
+            Self {
+                state,
+                _listener: listener_thread,
+                _advertiser: None,
+                local_socket_path: Some(socket_path),
             },
             cmd_rx,
         ))
@@ -347,7 +409,15 @@ impl RemoteServer {
     }
 }
 
-fn writer_loop(mut stream: TcpStream, outbound_rx: mpsc::Receiver<Vec<u8>>) {
+impl Drop for RemoteServer {
+    fn drop(&mut self) {
+        if let Some(path) = self.local_socket_path.as_ref() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+fn writer_loop<W: Write>(mut stream: W, outbound_rx: mpsc::Receiver<Vec<u8>>) {
     for frame in outbound_rx {
         if stream.write_all(&frame).is_err() {
             break;
@@ -359,7 +429,7 @@ fn writer_loop(mut stream: TcpStream, outbound_rx: mpsc::Receiver<Vec<u8>>) {
 }
 
 fn read_loop(
-    mut stream: TcpStream,
+    mut stream: impl Read,
     client_id: u64,
     state: Arc<Mutex<State>>,
     cmd_tx: mpsc::Sender<RemoteCmd>,
@@ -488,7 +558,7 @@ fn send_direct_error(state: &Arc<Mutex<State>>, client_id: u64, message: &str) {
     }
 }
 
-fn read_message(stream: &mut TcpStream) -> io::Result<(MessageType, Vec<u8>)> {
+pub(crate) fn read_message(stream: &mut impl Read) -> io::Result<(MessageType, Vec<u8>)> {
     let mut header = [0u8; HEADER_LEN];
     stream.read_exact(&mut header)?;
     if header[..2] != MAGIC {
@@ -521,7 +591,7 @@ fn parse_resize(payload: &[u8]) -> Option<(u16, u16)> {
     })
 }
 
-fn encode_message(ty: MessageType, payload: &[u8]) -> Vec<u8> {
+pub(crate) fn encode_message(ty: MessageType, payload: &[u8]) -> Vec<u8> {
     let mut frame = Vec::with_capacity(HEADER_LEN + payload.len());
     frame.extend_from_slice(&MAGIC);
     frame.push(ty as u8);

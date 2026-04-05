@@ -83,6 +83,8 @@ pub struct State {
     pub ctl_rx: mpsc::Receiver<control::ControlCmd>,
     pub remote_server: Option<remote::RemoteServer>,
     pub remote_rx: mpsc::Receiver<remote::RemoteCmd>,
+    pub local_gui_server: Option<remote::RemoteServer>,
+    pub local_gui_rx: mpsc::Receiver<remote::RemoteCmd>,
 }
 
 impl State {
@@ -113,12 +115,32 @@ impl State {
             (None, rx)
         };
 
+        let (local_gui_server, local_gui_rx) = if let Some(socket_path) = control_socket.as_deref() {
+            let gui_socket_path = format!("{socket_path}.stream");
+            match remote::RemoteServer::start_local(&gui_socket_path) {
+                Ok((server, rx)) => {
+                    log::info!("local gui stream listening on {gui_socket_path}");
+                    (Some(server), rx)
+                }
+                Err(error) => {
+                    log::error!("failed to start local gui stream on {gui_socket_path}: {error}");
+                    let (_tx, rx) = mpsc::channel();
+                    (None, rx)
+                }
+            }
+        } else {
+            let (_tx, rx) = mpsc::channel();
+            (None, rx)
+        };
+
         Self {
             tabs: tabs::TabManager::new(),
             socket_path: control_socket,
             ctl_rx,
             remote_server,
             remote_rx,
+            local_gui_server,
+            local_gui_rx,
         }
     }
 }

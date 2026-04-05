@@ -1,10 +1,14 @@
 use crate::control;
+use crate::remote;
 use crate::vt;
 use crate::vt_backend_core;
 use crate::vt_terminal_canvas;
 use iced::widget::{column, container, row, text};
 use iced::window;
 use iced::{keyboard, time, Color, Element, Event, Font, Length, Size, Subscription, Task, Theme};
+use std::io::Write;
+use std::os::unix::net::UnixStream;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 const STATUS_BAR_HEIGHT: f64 = 20.0;
@@ -21,7 +25,9 @@ pub enum Message {
 
 pub struct ClientApp {
     client: control::Client,
+    stream_client: Option<LocalStreamClient>,
     snapshot: Option<control::UiSnapshot>,
+    stream_state: Option<remote::RemoteFullState>,
     last_error: Option<String>,
     cell_width: f64,
     cell_height: f64,
@@ -30,21 +36,29 @@ pub struct ClientApp {
     background_opacity_cells: bool,
     tick_counter: u8,
     fast_poll_ticks_remaining: u8,
+    active_tab_index: usize,
 }
 
 impl ClientApp {
     pub fn new(socket_path: String) -> (Self, Task<Message>) {
-        let client = control::Client::connect(socket_path);
+        let client = control::Client::connect(socket_path.clone());
         let snapshot = client.get_ui_snapshot().ok();
+        let active_tab_index = snapshot.as_ref().map(|snapshot| snapshot.active_tab).unwrap_or(0);
         let font_size = snapshot
             .as_ref()
             .map(|snapshot| snapshot.appearance.font_size)
             .unwrap_or(DEFAULT_FONT_SIZE);
         let (cell_width, cell_height) = terminal_metrics(font_size);
+        let stream_client = LocalStreamClient::connect(format!("{socket_path}.stream"));
+        if let Some(stream_client) = stream_client.as_ref() {
+            stream_client.list_sessions();
+        }
         (
             Self {
                 client,
+                stream_client,
                 snapshot,
+                stream_state: None,
                 last_error: None,
                 cell_width,
                 cell_height,
@@ -53,6 +67,7 @@ impl ClientApp {
                 background_opacity_cells: false,
                 tick_counter: 0,
                 fast_poll_ticks_remaining: FAST_POLL_BURST_TICKS,
+                active_tab_index,
             },
             Task::none(),
         )
@@ -77,7 +92,30 @@ impl ClientApp {
         let mut main_col = column![];
 
         if let Some(snapshot) = self.snapshot.as_ref() {
-            if let Some(terminal) = snapshot.terminal.as_ref() {
+            if let Some(stream_state) = self.stream_state.as_ref() {
+                let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
+                    remote_full_state_to_vt_snapshot(stream_state),
+                    self.cell_width as f32,
+                    self.cell_height as f32,
+                    self.font_size,
+                    None,
+                    1,
+                    self.background_opacity,
+                    self.background_opacity_cells,
+                    Vec::new(),
+                    Color::from_rgba(0.65, 0.72, 0.95, 0.35),
+                    None,
+                );
+                main_col = main_col.push(
+                    container(
+                        iced::widget::canvas(terminal_canvas)
+                            .width(Length::Fill)
+                            .height(Length::Fill),
+                    )
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+                );
+            } else if let Some(terminal) = snapshot.terminal.as_ref() {
                 let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
                     ui_terminal_to_vt_snapshot(terminal),
                     self.cell_width as f32,
@@ -170,6 +208,7 @@ impl ClientApp {
     fn refresh_snapshot(&mut self) {
         match self.client.get_ui_snapshot() {
             Ok(snapshot) => {
+                self.active_tab_index = snapshot.active_tab;
                 self.font_size = snapshot.appearance.font_size.max(8.0);
                 self.background_opacity = snapshot.appearance.background_opacity;
                 self.background_opacity_cells = snapshot.appearance.background_opacity_cells;
@@ -184,6 +223,7 @@ impl ClientApp {
     }
 
     fn on_tick(&mut self) {
+        self.drain_stream_events();
         self.tick_counter = self.tick_counter.wrapping_add(1);
         let should_refresh = if self.fast_poll_ticks_remaining > 0 {
             self.fast_poll_ticks_remaining -= 1;
@@ -201,7 +241,11 @@ impl ClientApp {
         let rows = (((size.height as f64 - STATUS_BAR_HEIGHT).max(1.0) / self.cell_height).floor()
             as u16)
             .max(1);
-        let _ = self.client.send(&control::Request::ResizeFocused { cols, rows });
+        if let Some(stream_client) = self.stream_client.as_ref() {
+            stream_client.send_resize(cols, rows);
+        } else {
+            let _ = self.client.send(&control::Request::ResizeFocused { cols, rows });
+        }
     }
 
     fn handle_keyboard(&mut self, event: keyboard::Event) {
@@ -215,7 +259,11 @@ impl ClientApp {
             .filter(|text| !text.is_empty())
             .filter(|_| !(modifiers.control() || modifiers.alt() || modifiers.logo()))
         {
-            let _ = self.client.send(&control::Request::SendText { text: committed });
+            if let Some(stream_client) = self.stream_client.as_ref() {
+                stream_client.send_input(committed.into_bytes());
+            } else {
+                let _ = self.client.send(&control::Request::SendText { text: committed });
+            }
             self.fast_poll_ticks_remaining = FAST_POLL_BURST_TICKS;
             return;
         }
@@ -225,6 +273,42 @@ impl ClientApp {
             self.fast_poll_ticks_remaining = FAST_POLL_BURST_TICKS;
         }
     }
+
+    fn drain_stream_events(&mut self) {
+        let Some(stream_client) = self.stream_client.as_ref() else {
+            return;
+        };
+        while let Some(event) = stream_client.try_recv() {
+            match event {
+                LocalStreamEvent::SessionList(sessions) => {
+                    if let Some(session) = sessions
+                        .get(self.active_tab_index)
+                        .or_else(|| sessions.first())
+                    {
+                        stream_client.attach(session.id);
+                    }
+                }
+                LocalStreamEvent::Attached(session_id) => {
+                    let _ = session_id;
+                }
+                LocalStreamEvent::Detached => {
+                    self.stream_state = None;
+                    stream_client.list_sessions();
+                }
+                LocalStreamEvent::SessionExited(session_id) => {
+                    let _ = session_id;
+                    self.stream_state = None;
+                    stream_client.list_sessions();
+                }
+                LocalStreamEvent::FullState(state) => {
+                    self.stream_state = Some(state);
+                }
+                LocalStreamEvent::Error(error) => {
+                    self.last_error = Some(error);
+                }
+            }
+        }
+    }
 }
 
 fn terminal_metrics(font_size: f32) -> (f64, f64) {
@@ -232,6 +316,52 @@ fn terminal_metrics(font_size: f32) -> (f64, f64) {
     let cell_width = (size * 0.62).max(6.0).ceil();
     let cell_height = (size * 1.35).max(12.0).ceil();
     (cell_width, cell_height)
+}
+
+fn remote_full_state_to_vt_snapshot(state: &remote::RemoteFullState) -> vt_backend_core::TerminalSnapshot {
+    let cols = state.cols as usize;
+    let rows_data = state
+        .cells
+        .chunks(cols.max(1))
+        .map(|row| {
+            row.iter()
+                .map(|cell| vt_backend_core::CellSnapshot {
+                    text: std::char::from_u32(cell.codepoint)
+                        .map(|ch| ch.to_string())
+                        .unwrap_or_else(|| " ".to_string()),
+                    display_width: if cell.wide { 2 } else { 1 },
+                    fg: vt::GhosttyColorRgb {
+                        r: cell.fg[0],
+                        g: cell.fg[1],
+                        b: cell.fg[2],
+                    },
+                    bg: vt::GhosttyColorRgb {
+                        r: cell.bg[0],
+                        g: cell.bg[1],
+                        b: cell.bg[2],
+                    },
+                    bold: (cell.style_flags & 0x01) != 0,
+                    italic: (cell.style_flags & 0x02) != 0,
+                    underline: 0,
+                })
+                .collect()
+        })
+        .collect();
+    vt_backend_core::TerminalSnapshot {
+        cols: state.cols,
+        rows: state.rows,
+        title: String::new(),
+        pwd: String::new(),
+        cursor: vt_backend_core::CursorSnapshot {
+            visible: state.cursor_visible,
+            x: state.cursor_x,
+            y: state.cursor_y,
+            style: 1,
+        },
+        rows_data,
+        scrollbar: Default::default(),
+        colors: Default::default(),
+    }
 }
 
 fn ui_terminal_to_vt_snapshot(snapshot: &control::UiTerminalSnapshot) -> vt_backend_core::TerminalSnapshot {
@@ -275,6 +405,183 @@ fn ui_terminal_to_vt_snapshot(snapshot: &control::UiTerminalSnapshot) -> vt_back
         scrollbar: Default::default(),
         colors: Default::default(),
     }
+}
+
+enum LocalStreamEvent {
+    SessionList(Vec<remote::RemoteSessionInfo>),
+    Attached(u32),
+    Detached,
+    SessionExited(u32),
+    FullState(remote::RemoteFullState),
+    Error(String),
+}
+
+struct LocalStreamClient {
+    write: Arc<Mutex<UnixStream>>,
+    rx: mpsc::Receiver<LocalStreamEvent>,
+}
+
+impl LocalStreamClient {
+    fn connect(socket_path: String) -> Option<Self> {
+        let write = UnixStream::connect(socket_path).ok()?;
+        let read = write.try_clone().ok()?;
+        let write = Arc::new(Mutex::new(write));
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || read_local_stream_loop(read, tx));
+        Some(Self { write, rx })
+    }
+
+    fn send_message(&self, ty: remote::MessageType, payload: &[u8]) {
+        let frame = remote::encode_message(ty, payload);
+        if let Ok(mut write) = self.write.lock() {
+            let _ = write.write_all(&frame);
+            let _ = write.flush();
+        }
+    }
+
+    fn list_sessions(&self) {
+        self.send_message(remote::MessageType::ListSessions, &[]);
+    }
+
+    fn attach(&self, session_id: u32) {
+        self.send_message(remote::MessageType::Attach, &session_id.to_le_bytes());
+    }
+
+    fn send_input(&self, bytes: Vec<u8>) {
+        self.send_message(remote::MessageType::Input, &bytes);
+    }
+
+    fn send_resize(&self, cols: u16, rows: u16) {
+        let mut payload = Vec::with_capacity(4);
+        payload.extend_from_slice(&cols.to_le_bytes());
+        payload.extend_from_slice(&rows.to_le_bytes());
+        self.send_message(remote::MessageType::Resize, &payload);
+    }
+
+    fn try_recv(&self) -> Option<LocalStreamEvent> {
+        self.rx.try_recv().ok()
+    }
+}
+
+fn read_local_stream_loop(mut read: UnixStream, tx: mpsc::Sender<LocalStreamEvent>) {
+    while let Ok((ty, payload)) = remote::read_message(&mut read) {
+        let event = match ty {
+            remote::MessageType::SessionList => {
+                decode_remote_session_list(&payload).map(LocalStreamEvent::SessionList)
+            }
+            remote::MessageType::Attached => decode_u32(&payload).map(LocalStreamEvent::Attached),
+            remote::MessageType::Detached => Some(LocalStreamEvent::Detached),
+            remote::MessageType::SessionExited => {
+                decode_u32(&payload).map(LocalStreamEvent::SessionExited)
+            }
+            remote::MessageType::FullState => {
+                decode_remote_full_state(&payload).map(LocalStreamEvent::FullState)
+            }
+            remote::MessageType::ErrorMsg => {
+                Some(LocalStreamEvent::Error(String::from_utf8_lossy(&payload).to_string()))
+            }
+            _ => None,
+        };
+        if let Some(event) = event {
+            let _ = tx.send(event);
+        }
+    }
+}
+
+fn decode_u32(payload: &[u8]) -> Option<u32> {
+    (payload.len() >= 4).then(|| u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]))
+}
+
+fn decode_remote_session_list(payload: &[u8]) -> Option<Vec<remote::RemoteSessionInfo>> {
+    if payload.len() < 4 {
+        return None;
+    }
+    let count = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
+    let mut offset = 4usize;
+    let mut sessions = Vec::with_capacity(count);
+    for _ in 0..count {
+        if offset + 4 > payload.len() {
+            return None;
+        }
+        let id = u32::from_le_bytes([
+            payload[offset],
+            payload[offset + 1],
+            payload[offset + 2],
+            payload[offset + 3],
+        ]);
+        offset += 4;
+        let name = decode_remote_string(payload, &mut offset)?;
+        let title = decode_remote_string(payload, &mut offset)?;
+        let pwd = decode_remote_string(payload, &mut offset)?;
+        if offset >= payload.len() {
+            return None;
+        }
+        let flags = payload[offset];
+        offset += 1;
+        sessions.push(remote::RemoteSessionInfo {
+            id,
+            name,
+            title,
+            pwd,
+            attached: (flags & 0x01) != 0,
+            child_exited: (flags & 0x02) != 0,
+        });
+    }
+    Some(sessions)
+}
+
+fn decode_remote_string(payload: &[u8], offset: &mut usize) -> Option<String> {
+    if *offset + 2 > payload.len() {
+        return None;
+    }
+    let len = u16::from_le_bytes([payload[*offset], payload[*offset + 1]]) as usize;
+    *offset += 2;
+    if *offset + len > payload.len() {
+        return None;
+    }
+    let value = String::from_utf8(payload[*offset..*offset + len].to_vec()).ok()?;
+    *offset += len;
+    Some(value)
+}
+
+fn decode_remote_full_state(payload: &[u8]) -> Option<remote::RemoteFullState> {
+    if payload.len() < 12 {
+        return None;
+    }
+    let rows = u16::from_le_bytes([payload[0], payload[1]]);
+    let cols = u16::from_le_bytes([payload[2], payload[3]]);
+    let cursor_x = u16::from_le_bytes([payload[4], payload[5]]);
+    let cursor_y = u16::from_le_bytes([payload[6], payload[7]]);
+    let cursor_visible = payload[8] != 0;
+    let cell_count = rows as usize * cols as usize;
+    if payload.len() < 12 + cell_count * 12 {
+        return None;
+    }
+    let mut cells = Vec::with_capacity(cell_count);
+    let mut offset = 12usize;
+    for _ in 0..cell_count {
+        cells.push(remote::RemoteCell {
+            codepoint: u32::from_le_bytes([
+                payload[offset],
+                payload[offset + 1],
+                payload[offset + 2],
+                payload[offset + 3],
+            ]),
+            fg: [payload[offset + 4], payload[offset + 5], payload[offset + 6]],
+            bg: [payload[offset + 7], payload[offset + 8], payload[offset + 9]],
+            style_flags: payload[offset + 10],
+            wide: payload[offset + 11] != 0,
+        });
+        offset += 12;
+    }
+    Some(remote::RemoteFullState {
+        rows,
+        cols,
+        cursor_x,
+        cursor_y,
+        cursor_visible,
+        cells,
+    })
 }
 
 fn build_status(snapshot: &control::UiSnapshot) -> (String, String) {

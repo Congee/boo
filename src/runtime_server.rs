@@ -1,6 +1,18 @@
 use super::*;
 
 impl BooApp {
+    fn remote_servers(&self) -> impl Iterator<Item = &remote::RemoteServer> {
+        self.server
+            .remote_server
+            .iter()
+            .chain(self.server.local_gui_server.iter())
+    }
+
+    fn remote_server_for_client(&self, client_id: u64) -> Option<&remote::RemoteServer> {
+        self.remote_servers()
+            .find(|server| server.client_session(client_id).is_some())
+    }
+
     pub(crate) fn handle_server_cmd(&mut self, cmd: server::Command) {
         match cmd {
             server::Command::DumpKeys(enabled) => self.dump_keys = enabled,
@@ -85,7 +97,7 @@ impl BooApp {
                 self.inject_key(&keyspec);
             }
             server::Command::RemoteListSessions { client_id } => {
-                if let Some(server) = self.server.remote_server.as_ref() {
+                if let Some(server) = self.remote_server_for_client(client_id).or(self.server.local_gui_server.as_ref()).or(self.server.remote_server.as_ref()) {
                     server.send_session_list(client_id, &self.remote_sessions());
                 }
             }
@@ -94,16 +106,16 @@ impl BooApp {
                 session_id,
             } => {
                 if self.pane_for_session(session_id).is_some() {
-                    if let Some(server) = self.server.remote_server.as_ref() {
+                    if let Some(server) = self.remote_server_for_client(client_id).or(self.server.local_gui_server.as_ref()).or(self.server.remote_server.as_ref()) {
                         server.send_attached(client_id, session_id);
                     }
                     self.publish_remote_session(session_id);
-                } else if let Some(server) = self.server.remote_server.as_ref() {
+                } else if let Some(server) = self.remote_server_for_client(client_id).or(self.server.local_gui_server.as_ref()).or(self.server.remote_server.as_ref()) {
                     server.send_error(client_id, "unknown session");
                 }
             }
             server::Command::RemoteDetach { client_id } => {
-                if let Some(server) = self.server.remote_server.as_ref() {
+                if let Some(server) = self.remote_server_for_client(client_id).or(self.server.local_gui_server.as_ref()).or(self.server.remote_server.as_ref()) {
                     server.send_detached(client_id);
                 }
             }
@@ -114,7 +126,7 @@ impl BooApp {
             } => {
                 let created = self.new_tab();
                 let Some(session_id) = created else {
-                    if let Some(server) = self.server.remote_server.as_ref() {
+                    if let Some(server) = self.remote_server_for_client(client_id).or(self.server.local_gui_server.as_ref()).or(self.server.remote_server.as_ref()) {
                         server.send_error(client_id, "failed to create session");
                     }
                     return;
@@ -123,24 +135,22 @@ impl BooApp {
                     let (width, height) = self.session_size_pixels(cols, rows);
                     self.resize_pane_backend(pane, self.scale_factor(), width, height);
                 }
-                if let Some(server) = self.server.remote_server.as_ref() {
+                if let Some(server) = self.remote_server_for_client(client_id).or(self.server.local_gui_server.as_ref()).or(self.server.remote_server.as_ref()) {
                     server.send_session_created(client_id, session_id);
                 }
             }
             server::Command::RemoteInput { client_id, bytes } => {
                 let Some(session_id) = self
-                    .server
-                    .remote_server
-                    .as_ref()
+                    .remote_server_for_client(client_id)
                     .and_then(|server| server.client_session(client_id))
                 else {
-                    if let Some(server) = self.server.remote_server.as_ref() {
+                    if let Some(server) = self.remote_server_for_client(client_id).or(self.server.local_gui_server.as_ref()).or(self.server.remote_server.as_ref()) {
                         server.send_error(client_id, "not attached");
                     }
                     return;
                 };
                 let Some(pane) = self.pane_for_session(session_id) else {
-                    if let Some(server) = self.server.remote_server.as_ref() {
+                    if let Some(server) = self.remote_server_for_client(client_id).or(self.server.local_gui_server.as_ref()).or(self.server.remote_server.as_ref()) {
                         server.send_session_exited(session_id);
                     }
                     return;
@@ -153,18 +163,16 @@ impl BooApp {
                 rows,
             } => {
                 let Some(session_id) = self
-                    .server
-                    .remote_server
-                    .as_ref()
+                    .remote_server_for_client(client_id)
                     .and_then(|server| server.client_session(client_id))
                 else {
-                    if let Some(server) = self.server.remote_server.as_ref() {
+                    if let Some(server) = self.remote_server_for_client(client_id).or(self.server.local_gui_server.as_ref()).or(self.server.remote_server.as_ref()) {
                         server.send_error(client_id, "not attached");
                     }
                     return;
                 };
                 let Some(pane) = self.pane_for_session(session_id) else {
-                    if let Some(server) = self.server.remote_server.as_ref() {
+                    if let Some(server) = self.remote_server_for_client(client_id).or(self.server.local_gui_server.as_ref()).or(self.server.remote_server.as_ref()) {
                         server.send_session_exited(session_id);
                     }
                     return;
@@ -177,25 +185,23 @@ impl BooApp {
                 session_id,
             } => {
                 let target = session_id.or_else(|| {
-                    self.server
-                        .remote_server
-                        .as_ref()
+                    self.remote_server_for_client(client_id)
                         .and_then(|server| server.client_session(client_id))
                 });
                 let Some(target) = target else {
-                    if let Some(server) = self.server.remote_server.as_ref() {
+                    if let Some(server) = self.remote_server_for_client(client_id).or(self.server.local_gui_server.as_ref()).or(self.server.remote_server.as_ref()) {
                         server.send_error(client_id, "unknown session");
                     }
                     return;
                 };
                 let Some(tab_index) = self.server.tabs.find_index_by_session_id(target) else {
-                    if let Some(server) = self.server.remote_server.as_ref() {
+                    if let Some(server) = self.remote_server_for_client(client_id).or(self.server.local_gui_server.as_ref()).or(self.server.remote_server.as_ref()) {
                         server.send_session_exited(target);
                     }
                     return;
                 };
                 if self.server.tabs.len() <= 1 {
-                    if let Some(server) = self.server.remote_server.as_ref() {
+                    if let Some(server) = self.remote_server_for_client(client_id).or(self.server.local_gui_server.as_ref()).or(self.server.remote_server.as_ref()) {
                         server.send_error(client_id, "cannot destroy last session");
                     }
                     return;
@@ -208,7 +214,7 @@ impl BooApp {
                 if was_active && !self.server.tabs.is_empty() {
                     self.sync_after_tab_change();
                 }
-                if let Some(server) = self.server.remote_server.as_ref() {
+                if let Some(server) = self.remote_server_for_client(client_id).or(self.server.local_gui_server.as_ref()).or(self.server.remote_server.as_ref()) {
                     server.send_session_exited(target);
                 }
             }
@@ -237,10 +243,8 @@ impl BooApp {
                         .map(|snapshot| snapshot.pwd.clone())
                         .unwrap_or_default(),
                     attached: self
-                        .server
-                        .remote_server
-                        .as_ref()
-                        .is_some_and(|server| server.attached_to_session(tab.id)),
+                        .remote_servers()
+                        .any(|server| server.attached_to_session(tab.id)),
                     child_exited: pane.id() == 0 || terminal.is_none(),
                 }
             })
@@ -262,26 +266,35 @@ impl BooApp {
     }
 
     pub(crate) fn publish_remote_session(&self, session_id: u32) {
-        let Some(server) = self.server.remote_server.as_ref() else {
+        let mut sent = false;
+        for server in self.remote_servers() {
+            sent = true;
+            let Some(pane) = self.pane_for_session(session_id) else {
+                server.send_session_exited(session_id);
+                continue;
+            };
+            let Some(snapshot) = self.backend.ui_terminal_snapshot(pane.id()) else {
+                server.send_session_exited(session_id);
+                continue;
+            };
+            let state = remote::full_state_from_ui(&snapshot);
+            server.send_full_state_to_attached(session_id, &state);
+        }
+        if !sent {
             return;
-        };
-        let Some(pane) = self.pane_for_session(session_id) else {
-            server.send_session_exited(session_id);
-            return;
-        };
-        let Some(snapshot) = self.backend.ui_terminal_snapshot(pane.id()) else {
-            server.send_session_exited(session_id);
-            return;
-        };
-        let state = remote::full_state_from_ui(&snapshot);
-        server.send_full_state_to_attached(session_id, &state);
+        }
     }
 
     pub(crate) fn publish_remote_state(&self) {
-        let Some(server) = self.server.remote_server.as_ref() else {
-            return;
-        };
-        for session_id in server.attached_sessions() {
+        let mut session_ids = Vec::new();
+        for server in self.remote_servers() {
+            for session_id in server.attached_sessions() {
+                if !session_ids.contains(&session_id) {
+                    session_ids.push(session_id);
+                }
+            }
+        }
+        for session_id in session_ids {
             self.publish_remote_session(session_id);
         }
     }
