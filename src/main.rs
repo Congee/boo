@@ -2,6 +2,7 @@ mod backend;
 mod bindings;
 mod client_gui;
 mod cli;
+mod command_prompt;
 mod config;
 mod copy_mode;
 mod control;
@@ -34,6 +35,9 @@ mod vt_snapshot;
 mod vt_terminal_canvas;
 
 use backend::TerminalBackend;
+use command_prompt::CommandPrompt;
+#[cfg(test)]
+use command_prompt::fuzzy_score;
 pub use copy_mode::SelectionMode;
 use copy_mode::{CopyModeState, JumpKind, WordMoveKind, selection_mode_name};
 use iced::widget::{container, row, text};
@@ -210,242 +214,6 @@ struct BooApp {
     notify_on_command_finish_after_ns: u64,
     #[cfg(target_os = "linux")]
     pending_font_bytes: Option<Vec<u8>>,
-}
-
-struct CommandDef {
-    name: &'static str,
-    #[allow(dead_code)]
-    description: &'static str,
-    args: &'static str, // e.g. "<n>" or "" for no args
-}
-
-const COMMANDS: &[CommandDef] = &[
-    CommandDef {
-        name: "split-right",
-        description: "vertical split",
-        args: "",
-    },
-    CommandDef {
-        name: "split-down",
-        description: "horizontal split",
-        args: "",
-    },
-    CommandDef {
-        name: "split-left",
-        description: "vertical split (left)",
-        args: "",
-    },
-    CommandDef {
-        name: "split-up",
-        description: "horizontal split (up)",
-        args: "",
-    },
-    CommandDef {
-        name: "resize-left",
-        description: "resize pane left",
-        args: "<n>",
-    },
-    CommandDef {
-        name: "resize-right",
-        description: "resize pane right",
-        args: "<n>",
-    },
-    CommandDef {
-        name: "resize-up",
-        description: "resize pane up",
-        args: "<n>",
-    },
-    CommandDef {
-        name: "resize-down",
-        description: "resize pane down",
-        args: "<n>",
-    },
-    CommandDef {
-        name: "close-pane",
-        description: "close focused pane",
-        args: "",
-    },
-    CommandDef {
-        name: "new-tab",
-        description: "create new tab",
-        args: "",
-    },
-    CommandDef {
-        name: "next-tab",
-        description: "switch to next tab",
-        args: "",
-    },
-    CommandDef {
-        name: "prev-tab",
-        description: "switch to previous tab",
-        args: "",
-    },
-    CommandDef {
-        name: "close-tab",
-        description: "close current tab",
-        args: "",
-    },
-    CommandDef {
-        name: "goto-tab",
-        description: "go to tab number",
-        args: "<n>",
-    },
-    CommandDef {
-        name: "last-tab",
-        description: "go to last tab",
-        args: "",
-    },
-    CommandDef {
-        name: "next-pane",
-        description: "focus next pane",
-        args: "",
-    },
-    CommandDef {
-        name: "prev-pane",
-        description: "focus previous pane",
-        args: "",
-    },
-    CommandDef {
-        name: "copy-mode",
-        description: "enter copy mode",
-        args: "",
-    },
-    CommandDef {
-        name: "command-prompt",
-        description: "open command prompt",
-        args: "",
-    },
-    CommandDef {
-        name: "search",
-        description: "open search",
-        args: "",
-    },
-    CommandDef {
-        name: "paste",
-        description: "paste from clipboard",
-        args: "",
-    },
-    CommandDef {
-        name: "zoom",
-        description: "toggle pane zoom",
-        args: "",
-    },
-    CommandDef {
-        name: "reload-config",
-        description: "reload configuration",
-        args: "",
-    },
-    CommandDef {
-        name: "goto-line",
-        description: "jump to line (copy mode)",
-        args: "<n>",
-    },
-    CommandDef {
-        name: "set",
-        description: "set ghostty config value",
-        args: "<key> <value>",
-    },
-    CommandDef {
-        name: "load-session",
-        description: "load a session layout",
-        args: "<name>",
-    },
-    CommandDef {
-        name: "save-session",
-        description: "save current layout",
-        args: "<name>",
-    },
-    CommandDef {
-        name: "list-sessions",
-        description: "list available sessions",
-        args: "",
-    },
-];
-
-struct CommandPrompt {
-    active: bool,
-    input: String,
-    history: Vec<String>,
-    history_idx: Option<usize>,
-    suggestions: Vec<usize>, // indices into COMMANDS
-    selected_suggestion: usize,
-}
-
-impl CommandPrompt {
-    fn new() -> Self {
-        CommandPrompt {
-            active: false,
-            input: String::new(),
-            history: Vec::new(),
-            history_idx: None,
-            suggestions: Vec::new(),
-            selected_suggestion: 0,
-        }
-    }
-
-    fn update_suggestions(&mut self) {
-        let query = self.input.split_whitespace().next().unwrap_or("");
-        if query.is_empty() {
-            self.suggestions = (0..COMMANDS.len()).collect();
-        } else {
-            let mut scored: Vec<(usize, i32)> = COMMANDS
-                .iter()
-                .enumerate()
-                .filter_map(|(i, cmd)| {
-                    let score = fuzzy_score(query, cmd.name);
-                    if score > 0 { Some((i, score)) } else { None }
-                })
-                .collect();
-            scored.sort_by(|a, b| b.1.cmp(&a.1));
-            self.suggestions = scored.into_iter().map(|(i, _)| i).take(7).collect();
-        }
-        self.selected_suggestion = 0;
-    }
-
-    fn selected_command(&self) -> Option<&'static CommandDef> {
-        self.suggestions
-            .get(self.selected_suggestion)
-            .map(|&i| &COMMANDS[i])
-    }
-}
-
-fn fuzzy_score(query: &str, target: &str) -> i32 {
-    if query.is_empty() {
-        return 1;
-    }
-    let ql = query.to_lowercase();
-    let tl = target.to_lowercase();
-
-    // Exact prefix
-    if tl.starts_with(&ql) {
-        return 100 + (100 - target.len() as i32);
-    }
-
-    // Word-initial match: "sr" matches "split-right" via s...r...
-    let parts: Vec<&str> = tl.split('-').collect();
-    let mut qi = 0;
-    let qchars: Vec<char> = ql.chars().collect();
-    for part in &parts {
-        if qi < qchars.len() && part.starts_with(qchars[qi]) {
-            qi += 1;
-        }
-    }
-    if qi == qchars.len() {
-        return 50 + (100 - target.len() as i32);
-    }
-
-    // Subsequence match
-    let mut qi = 0;
-    for tc in tl.chars() {
-        if qi < qchars.len() && tc == qchars[qi] {
-            qi += 1;
-        }
-    }
-    if qi == qchars.len() {
-        return 10 + (100 - target.len() as i32);
-    }
-
-    0
 }
 
 #[derive(Debug, Clone)]
@@ -1300,6 +1068,7 @@ fn text_input_command_key(command: platform::TextInputCommand) -> (u32, u32) {
 #[cfg(test)]
 pub mod main_tests {
     use super::*;
+    use crate::command_prompt::COMMANDS;
 
     pub fn compute_rects(
         selection: SelectionMode,

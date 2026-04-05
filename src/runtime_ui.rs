@@ -1,4 +1,5 @@
 use super::*;
+use crate::command_prompt::COMMANDS;
 
 impl BooApp {
     #[allow(dead_code)]
