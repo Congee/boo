@@ -3,7 +3,7 @@
 
 use crate::unix_pty::{PtyProcess, PtySize};
 use crate::vt;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::{CStr, c_void};
 use std::io;
 use std::path::Path;
@@ -58,6 +58,7 @@ pub struct VtPane {
     finished_commands: Vec<CommandFinished>,
     pending_notifications: HashMap<String, PendingNotification>,
     completed_notifications: Vec<DesktopNotification>,
+    pending_pty_chunks: VecDeque<PendingPtyChunk>,
 }
 
 pub struct PollPtyResult {
@@ -106,6 +107,11 @@ pub struct DesktopNotification {
 struct PendingNotification {
     title: String,
     body: String,
+}
+
+struct PendingPtyChunk {
+    bytes: Vec<u8>,
+    offset: usize,
 }
 
 impl VtPane {
@@ -178,6 +184,7 @@ impl VtPane {
             finished_commands: Vec::new(),
             pending_notifications: HashMap::new(),
             completed_notifications: Vec::new(),
+            pending_pty_chunks: VecDeque::new(),
         })
     }
 
@@ -200,24 +207,65 @@ impl VtPane {
     pub fn poll_pty(&mut self) -> io::Result<PollPtyResult> {
         let mut changed = false;
         let started_at = Instant::now();
+        let mut total_bytes = 0u64;
         for chunk in self
             .pty
             .try_read_budgeted(Self::PTY_POLL_MAX_CHUNKS, Self::PTY_POLL_MAX_BYTES)
         {
-            self.observe_control_sequences(&chunk);
-            for slice in chunk.chunks(Self::VT_WRITE_CHUNK) {
-                self.terminal.write(slice);
+            total_bytes = total_bytes.saturating_add(chunk.len() as u64);
+            {
+                let mut scope = crate::profiling::scope(
+                    "server.backend.poll_pty.osc",
+                    crate::profiling::Kind::Cpu,
+                );
+                scope.add_bytes(chunk.len() as u64);
+                self.observe_control_sequences(&chunk);
             }
-            changed = true;
-            if started_at.elapsed() >= Self::PTY_POLL_MAX_DURATION {
+            self.pending_pty_chunks.push_back(PendingPtyChunk {
+                bytes: chunk,
+                offset: 0,
+            });
+        }
+        while started_at.elapsed() < Self::PTY_POLL_MAX_DURATION {
+            let Some(mut chunk) = self.pending_pty_chunks.pop_front() else {
                 break;
+            };
+            let remaining = chunk.bytes.len().saturating_sub(chunk.offset);
+            if remaining == 0 {
+                continue;
+            }
+            let end = (chunk.offset + Self::VT_WRITE_CHUNK).min(chunk.bytes.len());
+            {
+                let mut scope = crate::profiling::scope(
+                    "server.backend.poll_pty.write",
+                    crate::profiling::Kind::Cpu,
+                );
+                scope.add_bytes((end - chunk.offset) as u64);
+                self.terminal.write(&chunk.bytes[chunk.offset..end]);
+            }
+            chunk.offset = end;
+            changed = true;
+            if chunk.offset < chunk.bytes.len() {
+                self.pending_pty_chunks.push_front(chunk);
             }
         }
         if changed {
-            self.key_encoder.sync_from_terminal(&self.terminal);
-            self.mouse_encoder.sync_from_terminal(&self.terminal);
+            {
+                let _scope = crate::profiling::scope(
+                    "server.backend.poll_pty.sync_encoders",
+                    crate::profiling::Kind::Cpu,
+                );
+                self.key_encoder.sync_from_terminal(&self.terminal);
+                self.mouse_encoder.sync_from_terminal(&self.terminal);
+            }
             self.dirty = true;
         }
+        crate::profiling::record_bytes(
+            "server.backend.poll_pty.total",
+            crate::profiling::Kind::Cpu,
+            started_at.elapsed(),
+            total_bytes,
+        );
         Ok(PollPtyResult {
             changed,
             exited: self.pty.try_wait()?,
