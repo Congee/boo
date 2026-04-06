@@ -110,8 +110,10 @@ impl TmuxParser {
             return parse_id(rest, "@").map(|id| TmuxEvent::WindowClose { window_id: id });
         }
         if let Some(rest) = line.strip_prefix("%window-renamed ") {
-            return parse_id_and_name(rest, "@")
-                .map(|(id, name)| TmuxEvent::WindowRenamed { window_id: id, name });
+            return parse_id_and_name(rest, "@").map(|(id, name)| TmuxEvent::WindowRenamed {
+                window_id: id,
+                name,
+            });
         }
         if let Some(rest) = line.strip_prefix("%layout-change ") {
             return parse_layout_change(rest);
@@ -277,9 +279,7 @@ fn parse_children(mut s: &str, close: char) -> Option<(Vec<LayoutNode>, &str)> {
 }
 
 fn parse_u32(s: &str) -> Option<(u32, &str)> {
-    let end = s
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(s.len());
+    let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
     if end == 0 {
         return None;
     }
@@ -355,7 +355,10 @@ mod tests {
 
     #[test]
     fn test_decode_octal_esc() {
-        assert_eq!(decode_octal(r"\033[31m"), vec![0x1B, b'[', b'3', b'1', b'm']);
+        assert_eq!(
+            decode_octal(r"\033[31m"),
+            vec![0x1B, b'[', b'3', b'1', b'm']
+        );
     }
 
     #[test]
@@ -365,10 +368,7 @@ mod tests {
 
     #[test]
     fn test_decode_octal_mixed() {
-        assert_eq!(
-            decode_octal(r"hello\012world"),
-            b"hello\nworld"
-        );
+        assert_eq!(decode_octal(r"hello\012world"), b"hello\nworld");
     }
 
     #[test]
@@ -584,7 +584,9 @@ mod tests {
                 assert_eq!(children.len(), 2);
                 match &children[1] {
                     LayoutNode::Split {
-                        horizontal, children, ..
+                        horizontal,
+                        children,
+                        ..
                     } => {
                         assert!(!horizontal);
                         assert_eq!(children.len(), 2);

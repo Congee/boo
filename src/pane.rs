@@ -45,13 +45,21 @@ impl PaneHandle {
         }
     }
 
-    pub fn id(self) -> PaneId { self.id }
+    pub fn id(self) -> PaneId {
+        self.id
+    }
 
-    pub fn surface(self) -> ffi::ghostty_surface_t { self.surface }
+    pub fn surface(self) -> ffi::ghostty_surface_t {
+        self.surface
+    }
 
-    pub fn view(self) -> *mut c_void { self.view }
+    pub fn view(self) -> *mut c_void {
+        self.view
+    }
 
-    pub fn is_null(self) -> bool { self.surface.is_null() }
+    pub fn is_null(self) -> bool {
+        self.surface.is_null()
+    }
 }
 
 #[cfg(test)]

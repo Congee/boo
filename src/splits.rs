@@ -60,11 +60,7 @@ impl SplitTree {
     }
 
     /// Split the focused leaf in the given direction. Returns the new leaf's ID.
-    pub fn split_focused(
-        &mut self,
-        direction: Direction,
-        pane: PaneHandle,
-    ) -> Option<LeafId> {
+    pub fn split_focused(&mut self, direction: Direction, pane: PaneHandle) -> Option<LeafId> {
         self.split_focused_with_ratio(direction, pane, 0.5)
     }
 
@@ -81,12 +77,7 @@ impl SplitTree {
 
         let root = self.root.take()?;
         self.root = Some(split_node_with_ratio(
-            root,
-            focused,
-            direction,
-            new_id,
-            pane,
-            ratio,
+            root, focused, direction, new_id, pane, ratio,
         ));
         self.focused_id = new_id;
         Some(new_id)
@@ -237,7 +228,9 @@ impl SplitTree {
         match &self.root {
             Some(root) => {
                 let ids = collect_leaf_ids(root);
-                ids.into_iter().map(|id| (id, id == self.focused_id)).collect()
+                ids.into_iter()
+                    .map(|id| (id, id == self.focused_id))
+                    .collect()
             }
             None => Vec::new(),
         }
@@ -271,20 +264,10 @@ fn split_node_with_ratio(
             direction: existing_direction,
             ratio: existing_ratio,
             first: Box::new(split_node_with_ratio(
-                *first,
-                target_id,
-                direction,
-                new_id,
-                pane,
-                ratio,
+                *first, target_id, direction, new_id, pane, ratio,
             )),
             second: Box::new(split_node_with_ratio(
-                *second,
-                target_id,
-                direction,
-                new_id,
-                pane,
-                ratio,
+                *second, target_id, direction, new_id, pane, ratio,
             )),
         },
         other => other,
@@ -335,7 +318,12 @@ fn layout_node(node: &Node, frame: Rect, scale: f64, out: &mut Vec<(PaneHandle, 
             let h = (frame.size.height * scale) as u32;
             out.push((*pane, w, h));
         }
-        Node::Split { direction, ratio, first, second } => {
+        Node::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } => {
             let (first_frame, second_frame) = split_frame(frame, *direction, *ratio);
             layout_node(first, first_frame, scale, out);
             layout_node(second, second_frame, scale, out);
@@ -447,10 +435,20 @@ fn remove_leaf(node: Node, target_id: LeafId) -> RemoveResult {
 }
 
 /// Find the nearest ancestor split matching `axis` that contains the focused leaf.
-fn resize_toward_leaf(node: &mut Node, target: LeafId, axis: Direction, delta: f64) -> (bool, bool) {
+fn resize_toward_leaf(
+    node: &mut Node,
+    target: LeafId,
+    axis: Direction,
+    delta: f64,
+) -> (bool, bool) {
     match node {
         Node::Leaf { id, .. } => (*id == target, false),
-        Node::Split { direction, ratio, first, second } => {
+        Node::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } => {
             let (found, done) = resize_toward_leaf(first, target, axis, delta);
             if found && done {
                 return (true, true);
@@ -533,14 +531,17 @@ fn resize_drag_node(node: &mut Node, frame: Rect, dir: Direction, point: (f64, f
             if *direction == dir {
                 match dir {
                     Direction::Horizontal => {
-                        if point.1 >= frame.origin.y && point.1 <= frame.origin.y + frame.size.height {
+                        if point.1 >= frame.origin.y
+                            && point.1 <= frame.origin.y + frame.size.height
+                        {
                             let rel = (point.0 - frame.origin.x) / frame.size.width.max(1.0);
                             *ratio = rel.clamp(0.1, 0.9);
                             return true;
                         }
                     }
                     Direction::Vertical => {
-                        if point.0 >= frame.origin.x && point.0 <= frame.origin.x + frame.size.width {
+                        if point.0 >= frame.origin.x && point.0 <= frame.origin.x + frame.size.width
+                        {
                             let rel = (point.1 - frame.origin.y) / frame.size.height.max(1.0);
                             *ratio = rel.clamp(0.1, 0.9);
                             return true;
@@ -558,13 +559,25 @@ fn resize_drag_node(node: &mut Node, frame: Rect, dir: Direction, point: (f64, f
 fn leaf_at_point(node: &Node, frame: Rect, point: (f64, f64)) -> Option<LeafId> {
     match node {
         Node::Leaf { id, .. } => {
-            let inside_x = point.0 >= frame.origin.x && point.0 <= frame.origin.x + frame.size.width;
-            let inside_y = point.1 >= frame.origin.y && point.1 <= frame.origin.y + frame.size.height;
-            if inside_x && inside_y { Some(*id) } else { None }
+            let inside_x =
+                point.0 >= frame.origin.x && point.0 <= frame.origin.x + frame.size.width;
+            let inside_y =
+                point.1 >= frame.origin.y && point.1 <= frame.origin.y + frame.size.height;
+            if inside_x && inside_y {
+                Some(*id)
+            } else {
+                None
+            }
         }
-        Node::Split { direction, ratio, first, second } => {
+        Node::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } => {
             let (first_frame, second_frame) = split_frame(frame, *direction, *ratio);
-            leaf_at_point(first, first_frame, point).or_else(|| leaf_at_point(second, second_frame, point))
+            leaf_at_point(first, first_frame, point)
+                .or_else(|| leaf_at_point(second, second_frame, point))
         }
     }
 }
@@ -636,7 +649,7 @@ fn set_hidden_recursive(node: &Node, hidden: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{split_frame, Direction, SplitTree, SPLIT_BORDER};
+    use super::{Direction, SPLIT_BORDER, SplitTree, split_frame};
     use crate::pane::PaneHandle;
     use crate::platform::{Point, Rect, Size};
 
@@ -668,7 +681,9 @@ mod tests {
         tree.add_root(root);
         tree.split_focused(Direction::Vertical, split);
 
-        let removed = tree.remove_focused().expect("focused leaf should be removed");
+        let removed = tree
+            .remove_focused()
+            .expect("focused leaf should be removed");
 
         assert_eq!(removed, split);
         assert_eq!(tree.len(), 1);

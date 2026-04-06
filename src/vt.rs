@@ -33,12 +33,9 @@ pub type GhosttyMouseButton = ffi::GhosttyMouseButton;
 pub type GhosttyMouseTrackingMode = ffi::GhosttyMouseTrackingMode;
 pub type GhosttyMouseFormat = ffi::GhosttyMouseFormat;
 
-pub const GHOSTTY_KEY_ACTION_RELEASE: i32 =
-    ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_RELEASE as i32;
-pub const GHOSTTY_KEY_ACTION_PRESS: i32 =
-    ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_PRESS as i32;
-pub const GHOSTTY_KEY_ACTION_REPEAT: i32 =
-    ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_REPEAT as i32;
+pub const GHOSTTY_KEY_ACTION_RELEASE: i32 = ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_RELEASE as i32;
+pub const GHOSTTY_KEY_ACTION_PRESS: i32 = ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_PRESS as i32;
+pub const GHOSTTY_KEY_ACTION_REPEAT: i32 = ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_REPEAT as i32;
 
 pub const GHOSTTY_MOUSE_ACTION_PRESS: GhosttyMouseAction =
     ffi::GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_PRESS;
@@ -613,7 +610,9 @@ impl KeyEvent {
     }
 
     pub fn set_utf8(&mut self, utf8: &str) {
-        unsafe { ffi::ghostty_key_event_set_utf8(self.raw, utf8.as_ptr() as *const c_char, utf8.len()) };
+        unsafe {
+            ffi::ghostty_key_event_set_utf8(self.raw, utf8.as_ptr() as *const c_char, utf8.len())
+        };
     }
 
     pub fn set_unshifted_codepoint(&mut self, codepoint: u32) {

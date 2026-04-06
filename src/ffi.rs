@@ -343,7 +343,7 @@ pub struct ghostty_action_search_selected_s {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ghostty_point_s {
-    pub tag: u32,  // ghostty_point_tag_e
+    pub tag: u32,   // ghostty_point_tag_e
     pub coord: u32, // ghostty_point_coord_e
     pub x: u32,
     pub y: u32,
@@ -391,20 +391,14 @@ impl ghostty_action_s {
 
 pub type ghostty_runtime_wakeup_cb = Option<unsafe extern "C" fn(*mut c_void)>;
 
-pub type ghostty_runtime_action_cb = Option<
-    unsafe extern "C" fn(ghostty_app_t, ghostty_target_s, ghostty_action_s) -> bool,
->;
+pub type ghostty_runtime_action_cb =
+    Option<unsafe extern "C" fn(ghostty_app_t, ghostty_target_s, ghostty_action_s) -> bool>;
 
 pub type ghostty_runtime_read_clipboard_cb =
     Option<unsafe extern "C" fn(*mut c_void, ghostty_clipboard_e, *mut c_void) -> bool>;
 
 pub type ghostty_runtime_confirm_read_clipboard_cb = Option<
-    unsafe extern "C" fn(
-        *mut c_void,
-        *const c_char,
-        *mut c_void,
-        ghostty_clipboard_request_e,
-    ),
+    unsafe extern "C" fn(*mut c_void, *const c_char, *mut c_void, ghostty_clipboard_request_e),
 >;
 
 pub type ghostty_runtime_write_clipboard_cb = Option<
@@ -417,8 +411,7 @@ pub type ghostty_runtime_write_clipboard_cb = Option<
     ),
 >;
 
-pub type ghostty_runtime_close_surface_cb =
-    Option<unsafe extern "C" fn(*mut c_void, bool)>;
+pub type ghostty_runtime_close_surface_cb = Option<unsafe extern "C" fn(*mut c_void, bool)>;
 
 #[repr(C)]
 pub struct ghostty_runtime_config_s {
@@ -486,10 +479,7 @@ unsafe extern "C" {
         surface: ghostty_surface_t,
         mods: ghostty_input_mods_e,
     ) -> ghostty_input_mods_e;
-    pub fn ghostty_surface_key(
-        surface: ghostty_surface_t,
-        event: ghostty_input_key_s,
-    ) -> bool;
+    pub fn ghostty_surface_key(surface: ghostty_surface_t, event: ghostty_input_key_s) -> bool;
     pub fn ghostty_surface_binding_action(
         surface: ghostty_surface_t,
         action: *const c_char,
@@ -507,10 +497,7 @@ unsafe extern "C" {
         sel: ghostty_selection_s,
         text: *mut ghostty_text_s,
     ) -> bool;
-    pub fn ghostty_surface_free_text(
-        surface: ghostty_surface_t,
-        text: *mut ghostty_text_s,
-    );
+    pub fn ghostty_surface_free_text(surface: ghostty_surface_t, text: *mut ghostty_text_s);
     pub fn ghostty_surface_mouse_button(
         surface: ghostty_surface_t,
         state: ghostty_input_mouse_state_e,
@@ -557,8 +544,14 @@ mod tests {
 
     #[test]
     fn ghostty_platform_union_matches_header_layout() {
-        assert_eq!(size_of::<ghostty_platform_macos_s>(), size_of::<*mut c_void>());
-        assert_eq!(size_of::<ghostty_platform_ios_s>(), size_of::<*mut c_void>());
+        assert_eq!(
+            size_of::<ghostty_platform_macos_s>(),
+            size_of::<*mut c_void>()
+        );
+        assert_eq!(
+            size_of::<ghostty_platform_ios_s>(),
+            size_of::<*mut c_void>()
+        );
         assert_eq!(size_of::<ghostty_platform_u>(), size_of::<*mut c_void>());
     }
 

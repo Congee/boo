@@ -4,10 +4,7 @@ use crate::control;
 use crate::ffi;
 use crate::vt_backend_core::{CellSnapshot, TerminalSnapshot};
 
-pub fn selection_text(
-    snapshot: &TerminalSnapshot,
-    selection: ffi::ghostty_selection_s,
-) -> String {
+pub fn selection_text(snapshot: &TerminalSnapshot, selection: ffi::ghostty_selection_s) -> String {
     let start_row = selection.top_left.y.min(selection.bottom_right.y) as usize;
     let end_row = selection.top_left.y.max(selection.bottom_right.y) as usize;
     let start_col = selection.top_left.x.min(selection.bottom_right.x) as usize;
@@ -16,7 +13,11 @@ pub fn selection_text(
 
     let mut lines = Vec::new();
     for row_index in start_row.min(max_row)..=end_row.min(max_row) {
-        let row = snapshot.rows_data.get(row_index).map(Vec::as_slice).unwrap_or(&[]);
+        let row = snapshot
+            .rows_data
+            .get(row_index)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         let line_start = if selection.rectangle || row_index == start_row {
             start_col
         } else {

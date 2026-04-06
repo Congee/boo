@@ -63,7 +63,9 @@ pub fn sessions_dir() -> PathBuf {
 
 pub fn list_sessions() -> Vec<String> {
     let dir = sessions_dir();
-    let Ok(entries) = std::fs::read_dir(&dir) else { return vec![] };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return vec![];
+    };
     entries
         .filter_map(|e| e.ok())
         .filter_map(|e| {
@@ -95,12 +97,21 @@ pub fn parse_session(name: &str, content: &str) -> SessionLayout {
         }
         // Bare directives (no = sign)
         if line == "split-right" || line == "split-down" {
-            let dir = if line == "split-right" { SplitDir::Right } else { SplitDir::Down };
-            pending_split = Some(SplitSpec { direction: dir, ratio: 0.5 });
+            let dir = if line == "split-right" {
+                SplitDir::Right
+            } else {
+                SplitDir::Down
+            };
+            pending_split = Some(SplitSpec {
+                direction: dir,
+                ratio: 0.5,
+            });
             continue;
         }
 
-        let Some((key, value)) = line.split_once('=') else { continue };
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
         let key = key.trim();
         let value = value.trim();
 
@@ -132,11 +143,20 @@ pub fn parse_session(name: &str, content: &str) -> SessionLayout {
                 });
             }
             "split-right" | "split-down" => {
-                let dir = if key == "split-right" { SplitDir::Right } else { SplitDir::Down };
-                let ratio = if value.is_empty() { 0.5 } else {
+                let dir = if key == "split-right" {
+                    SplitDir::Right
+                } else {
+                    SplitDir::Down
+                };
+                let ratio = if value.is_empty() {
+                    0.5
+                } else {
                     parse_ratio(value)
                 };
-                pending_split = Some(SplitSpec { direction: dir, ratio });
+                pending_split = Some(SplitSpec {
+                    direction: dir,
+                    ratio,
+                });
             }
             "pane" => {
                 if layout.tabs.is_empty() {
@@ -146,7 +166,11 @@ pub fn parse_session(name: &str, content: &str) -> SessionLayout {
                         panes: Vec::new(),
                     });
                 }
-                let command = if value.is_empty() { None } else { Some(value.to_string()) };
+                let command = if value.is_empty() {
+                    None
+                } else {
+                    Some(value.to_string())
+                };
                 let tab = layout.tabs.last_mut().unwrap();
                 tab.panes.push(SessionPane {
                     command,
@@ -191,48 +215,82 @@ pub fn layout_splits(layout: &TabLayout, n: usize) -> Vec<SplitSpec> {
     match layout {
         TabLayout::Manual => {
             // Default: all vertical splits, equal
-            (1..n).map(|_| SplitSpec { direction: SplitDir::Down, ratio: 0.5 }).collect()
+            (1..n)
+                .map(|_| SplitSpec {
+                    direction: SplitDir::Down,
+                    ratio: 0.5,
+                })
+                .collect()
         }
         TabLayout::EvenHorizontal => {
             // Cascading right-splits: each split gives 1/(remaining) to the first child
-            (1..n).map(|i| {
-                let remaining = n - i + 1;
-                SplitSpec { direction: SplitDir::Right, ratio: 1.0 / remaining as f64 }
-            }).collect()
+            (1..n)
+                .map(|i| {
+                    let remaining = n - i + 1;
+                    SplitSpec {
+                        direction: SplitDir::Right,
+                        ratio: 1.0 / remaining as f64,
+                    }
+                })
+                .collect()
         }
-        TabLayout::EvenVertical => {
-            (1..n).map(|i| {
+        TabLayout::EvenVertical => (1..n)
+            .map(|i| {
                 let remaining = n - i + 1;
-                SplitSpec { direction: SplitDir::Down, ratio: 1.0 / remaining as f64 }
-            }).collect()
-        }
+                SplitSpec {
+                    direction: SplitDir::Down,
+                    ratio: 1.0 / remaining as f64,
+                }
+            })
+            .collect(),
         TabLayout::MainVertical => {
             // First split: big pane left (60%), rest right
-            let mut splits = vec![SplitSpec { direction: SplitDir::Right, ratio: 0.6 }];
+            let mut splits = vec![SplitSpec {
+                direction: SplitDir::Right,
+                ratio: 0.6,
+            }];
             // Remaining panes split vertically on the right side
             for i in 2..n {
                 let remaining = n - i + 1;
-                splits.push(SplitSpec { direction: SplitDir::Down, ratio: 1.0 / remaining as f64 });
+                splits.push(SplitSpec {
+                    direction: SplitDir::Down,
+                    ratio: 1.0 / remaining as f64,
+                });
             }
             splits
         }
         TabLayout::MainHorizontal => {
             // First split: big pane top (60%), rest below
-            let mut splits = vec![SplitSpec { direction: SplitDir::Down, ratio: 0.6 }];
+            let mut splits = vec![SplitSpec {
+                direction: SplitDir::Down,
+                ratio: 0.6,
+            }];
             // Remaining panes split horizontally below
             for i in 2..n {
                 let remaining = n - i + 1;
-                splits.push(SplitSpec { direction: SplitDir::Right, ratio: 1.0 / remaining as f64 });
+                splits.push(SplitSpec {
+                    direction: SplitDir::Right,
+                    ratio: 1.0 / remaining as f64,
+                });
             }
             splits
         }
         TabLayout::Tiled => {
             // Alternate horizontal and vertical splits
-            (1..n).map(|i| {
-                let remaining = n - i + 1;
-                let dir = if i % 2 == 1 { SplitDir::Right } else { SplitDir::Down };
-                SplitSpec { direction: dir, ratio: 1.0 / remaining as f64 }
-            }).collect()
+            (1..n)
+                .map(|i| {
+                    let remaining = n - i + 1;
+                    let dir = if i % 2 == 1 {
+                        SplitDir::Right
+                    } else {
+                        SplitDir::Down
+                    };
+                    SplitSpec {
+                        direction: dir,
+                        ratio: 1.0 / remaining as f64,
+                    }
+                })
+                .collect()
         }
     }
 }
@@ -262,7 +320,11 @@ pub fn save_session(layout: &SessionLayout) -> std::io::Result<()> {
             }
             if i > 0 {
                 if let Some(ref spec) = pane.split {
-                    let dir_str = if spec.direction == SplitDir::Right { "split-right" } else { "split-down" };
+                    let dir_str = if spec.direction == SplitDir::Right {
+                        "split-right"
+                    } else {
+                        "split-down"
+                    };
                     if (spec.ratio - 0.5).abs() < 0.01 {
                         out.push_str(&format!("{dir_str}\n"));
                     } else {
@@ -314,7 +376,10 @@ pane = tail -f log
         assert_eq!(layout.tabs[0].panes.len(), 1);
         assert!(layout.tabs[0].panes[0].split.is_none());
         assert_eq!(layout.tabs[1].panes.len(), 2);
-        assert_eq!(layout.tabs[1].panes[1].split.as_ref().unwrap().direction, SplitDir::Right);
+        assert_eq!(
+            layout.tabs[1].panes[1].split.as_ref().unwrap().direction,
+            SplitDir::Right
+        );
     }
 
     #[test]
@@ -355,7 +420,7 @@ pane = htop
         assert_eq!(splits[0].direction, SplitDir::Right);
         assert_eq!(splits[1].direction, SplitDir::Right);
         // First split: 1/3 for pane 0, 2/3 remaining
-        assert!((splits[0].ratio - 1.0/3.0).abs() < 0.01);
+        assert!((splits[0].ratio - 1.0 / 3.0).abs() < 0.01);
         // Second split: 1/2 of remaining
         assert!((splits[1].ratio - 0.5).abs() < 0.01);
     }
@@ -405,7 +470,13 @@ pane = htop
     fn test_parse_working_directory() {
         let content = "working-directory = ~/dev\ntab = x\npane = nvim\n";
         let layout = parse_session("wd", content);
-        assert!(layout.tabs[0].panes[0].working_directory.as_ref().unwrap().contains("/dev"));
+        assert!(
+            layout.tabs[0].panes[0]
+                .working_directory
+                .as_ref()
+                .unwrap()
+                .contains("/dev")
+        );
     }
 
     #[test]
@@ -430,8 +501,19 @@ pane = htop
                 title: "main".to_string(),
                 layout: TabLayout::MainVertical,
                 panes: vec![
-                    SessionPane { command: Some("nvim".to_string()), working_directory: None, split: None },
-                    SessionPane { command: Some("cargo run".to_string()), working_directory: None, split: Some(SplitSpec { direction: SplitDir::Right, ratio: 0.6 }) },
+                    SessionPane {
+                        command: Some("nvim".to_string()),
+                        working_directory: None,
+                        split: None,
+                    },
+                    SessionPane {
+                        command: Some("cargo run".to_string()),
+                        working_directory: None,
+                        split: Some(SplitSpec {
+                            direction: SplitDir::Right,
+                            ratio: 0.6,
+                        }),
+                    },
                 ],
             }],
         };
@@ -450,11 +532,18 @@ pane = htop
             for (i, pane) in tab.panes.iter().enumerate() {
                 if i > 0 {
                     if let Some(ref spec) = pane.split {
-                        let d = if spec.direction == SplitDir::Right { "split-right" } else { "split-down" };
+                        let d = if spec.direction == SplitDir::Right {
+                            "split-right"
+                        } else {
+                            "split-down"
+                        };
                         out.push_str(&format!("{d} = {:.0}%\n", spec.ratio * 100.0));
                     }
                 }
-                out.push_str(&format!("pane = {}\n", pane.command.as_deref().unwrap_or("")));
+                out.push_str(&format!(
+                    "pane = {}\n",
+                    pane.command.as_deref().unwrap_or("")
+                ));
             }
             out.push('\n');
         }
