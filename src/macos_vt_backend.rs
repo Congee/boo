@@ -344,6 +344,13 @@ impl crate::backend::TerminalBackend for MacVtBackend {
         self.snapshots.get(&pane_id).cloned()
     }
 
+    fn render_snapshot_ref(
+        &self,
+        pane_id: pane::PaneId,
+    ) -> Option<&crate::vt_backend_core::TerminalSnapshot> {
+        self.snapshots.get(&pane_id)
+    }
+
     fn forward_vt_key(
         &mut self,
         focused_pane: PaneHandle,
