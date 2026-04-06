@@ -322,14 +322,14 @@ impl BooApp {
             self.cell_width,
             self.cell_height,
         );
+        remote_dirty |= poll.terminal_dirty;
         for running_command in poll.running_commands.iter().cloned() {
-            self.server.tabs.set_running_command_for_pane(
+            remote_dirty |= self.server.tabs.set_running_command_for_pane(
                 running_command.pane_id,
                 Some(tabs::RunningCommand {
                     command: running_command.command,
                 }),
             );
-            remote_dirty = true;
         }
         for pane_id in &active_pane_ids {
             if !poll
@@ -337,10 +337,9 @@ impl BooApp {
                 .iter()
                 .any(|running| running.pane_id == *pane_id)
             {
-                self.server
+                remote_dirty |= self.server
                     .tabs
                     .set_running_command_for_pane(*pane_id, None);
-                remote_dirty = true;
             }
         }
         for finished_command in poll.finished_commands {
@@ -355,16 +354,25 @@ impl BooApp {
             }
         }
         if let Some(pwd) = poll.active_pwd {
-            self.pwd = pwd;
-            remote_dirty = true;
+            if self.pwd != pwd {
+                self.pwd = pwd;
+                remote_dirty = true;
+            }
         }
         if let Some(title) = poll.active_title {
-            self.server.tabs.set_active_title(title);
-            remote_dirty = true;
+            if self.server.tabs.active_title() != Some(title.as_str()) {
+                self.server.tabs.set_active_title(title);
+                remote_dirty = true;
+            }
         }
         if let Some(scrollbar) = poll.active_scrollbar {
-            self.scrollbar = scrollbar;
-            remote_dirty = true;
+            if self.scrollbar.total != scrollbar.total
+                || self.scrollbar.offset != scrollbar.offset
+                || self.scrollbar.len != scrollbar.len
+            {
+                self.scrollbar = scrollbar;
+                remote_dirty = true;
+            }
         }
         for pane_id in poll.exited_panes {
             self.close_active_pane_by_id(pane_id);

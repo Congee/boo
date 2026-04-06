@@ -17,7 +17,7 @@ pub struct Tab {
     running_command: Option<RunningCommand>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct RunningCommand {
     pub command: Option<String>,
 }
@@ -169,16 +169,25 @@ impl TabManager {
         }
     }
 
+    pub fn active_title(&self) -> Option<&str> {
+        self.tabs.get(self.active).map(|tab| tab.title.as_str())
+    }
+
     pub fn set_running_command_for_pane(
         &mut self,
         pane_id: crate::pane::PaneId,
         running_command: Option<RunningCommand>,
-    ) {
+    ) -> bool {
+        let mut changed = false;
         for tab in &mut self.tabs {
             if tab.tree.focused_pane().id() == pane_id {
-                tab.running_command = running_command.clone();
+                if tab.running_command != running_command {
+                    tab.running_command = running_command.clone();
+                    changed = true;
+                }
             }
         }
+        changed
     }
 
     pub fn display_title(&self, index: usize, spinner: Option<&str>) -> String {

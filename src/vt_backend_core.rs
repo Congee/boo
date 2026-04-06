@@ -7,6 +7,9 @@ use std::collections::{HashMap, VecDeque};
 use std::ffi::{CStr, c_void};
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
@@ -61,9 +64,74 @@ pub struct VtPane {
     pending_pty_chunks: VecDeque<PendingPtyChunk>,
 }
 
+// SAFETY: VtPane and the wrapped libghostty-vt handles are never accessed
+// concurrently. The worker thread becomes the sole owner after spawn, and all
+// interaction happens by message passing.
+unsafe impl Send for VtPane {}
+
 pub struct PollPtyResult {
     pub changed: bool,
     pub exited: bool,
+}
+
+pub struct VtPaneUpdate {
+    pub snapshot: Arc<TerminalSnapshot>,
+    pub version: u64,
+    pub running_command: Option<Option<String>>,
+    pub finished_commands: Vec<CommandFinished>,
+    pub desktop_notifications: Vec<DesktopNotification>,
+    pub exited: bool,
+}
+
+#[derive(Clone)]
+pub struct VtForwardKey {
+    pub action: i32,
+    pub keycode: u32,
+    pub mods: vt::GhosttyMods,
+    pub consumed_mods: vt::GhosttyMods,
+    pub key_char: Option<char>,
+    pub text: String,
+    pub composing: bool,
+    pub unshifted_codepoint: u32,
+}
+
+pub struct VtPaneWorker {
+    tx: mpsc::Sender<WorkerCommand>,
+    state: Arc<Mutex<WorkerState>>,
+    pending_work: Arc<AtomicBool>,
+    join: Option<thread::JoinHandle<()>>,
+}
+
+struct WorkerState {
+    snapshot: Arc<TerminalSnapshot>,
+    version: u64,
+    running_command: Option<Option<String>>,
+    finished_commands: Vec<CommandFinished>,
+    desktop_notifications: Vec<DesktopNotification>,
+    exited: bool,
+}
+
+enum WorkerCommand {
+    Resize {
+        cols: u16,
+        rows: u16,
+        cell_width_px: u32,
+        cell_height_px: u32,
+    },
+    WriteInput(Vec<u8>),
+    WriteVtBytes(Vec<u8>),
+    ForwardKey(VtForwardKey),
+    MouseInput {
+        action: vt::GhosttyMouseAction,
+        button: Option<vt::GhosttyMouseButton>,
+        x: f32,
+        y: f32,
+        mods: vt::GhosttyMods,
+    },
+    ScrollViewportDelta(isize),
+    ScrollViewportTop,
+    ScrollViewportBottom,
+    Shutdown,
 }
 
 struct PtyWriteProxy {
@@ -112,6 +180,144 @@ struct PendingNotification {
 struct PendingPtyChunk {
     bytes: Vec<u8>,
     offset: usize,
+}
+
+impl VtPaneWorker {
+    const WORKER_IDLE_WAIT: Duration = Duration::from_millis(4);
+
+    pub fn spawn(
+        cols: u16,
+        rows: u16,
+        cell_width_px: u32,
+        cell_height_px: u32,
+        command: Option<&CStr>,
+        working_directory: Option<&Path>,
+    ) -> io::Result<Self> {
+        let mut pane = VtPane::spawn(
+            cols,
+            rows,
+            cell_width_px,
+            cell_height_px,
+            command,
+            working_directory,
+        )?;
+        let snapshot = pane.snapshot()?;
+        let state = Arc::new(Mutex::new(WorkerState {
+            snapshot: Arc::new(snapshot.clone()),
+            version: 1,
+            running_command: pane.running_command().map(|running| running.command.clone()),
+            finished_commands: Vec::new(),
+            desktop_notifications: Vec::new(),
+            exited: false,
+        }));
+        let pending_work = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::channel();
+        let worker_state = Arc::clone(&state);
+        let worker_pending = Arc::clone(&pending_work);
+        let join = thread::Builder::new()
+            .name("boo-vt-pane".into())
+            .spawn(move || worker_loop(pane, snapshot, rx, worker_state, worker_pending))
+            .map_err(io::Error::other)?;
+        Ok(Self {
+            tx,
+            state,
+            pending_work,
+            join: Some(join),
+        })
+    }
+
+    pub fn poll_update(&self) -> VtPaneUpdate {
+        let mut state = self.state.lock().unwrap();
+        VtPaneUpdate {
+            snapshot: Arc::clone(&state.snapshot),
+            version: state.version,
+            running_command: state.running_command.clone(),
+            finished_commands: std::mem::take(&mut state.finished_commands),
+            desktop_notifications: std::mem::take(&mut state.desktop_notifications),
+            exited: state.exited,
+        }
+    }
+
+    pub fn has_pending_pty_work(&self) -> bool {
+        self.pending_work.load(Ordering::Relaxed)
+    }
+
+    pub fn resize(
+        &self,
+        cols: u16,
+        rows: u16,
+        cell_width_px: u32,
+        cell_height_px: u32,
+    ) {
+        let _ = self.tx.send(WorkerCommand::Resize {
+            cols,
+            rows,
+            cell_width_px,
+            cell_height_px,
+        });
+    }
+
+    pub fn write_input(&self, bytes: &[u8]) -> io::Result<()> {
+        self.tx
+            .send(WorkerCommand::WriteInput(bytes.to_vec()))
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "vt pane worker closed"))
+    }
+
+    pub fn write_vt_bytes(&self, bytes: &[u8]) {
+        let _ = self.tx.send(WorkerCommand::WriteVtBytes(bytes.to_vec()));
+    }
+
+    pub fn forward_key(&self, event: VtForwardKey) -> io::Result<()> {
+        self.tx
+            .send(WorkerCommand::ForwardKey(event))
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "vt pane worker closed"))
+    }
+
+    pub fn send_mouse_input(
+        &self,
+        action: vt::GhosttyMouseAction,
+        button: Option<vt::GhosttyMouseButton>,
+        x: f32,
+        y: f32,
+        mods: vt::GhosttyMods,
+    ) -> io::Result<()> {
+        self.tx
+            .send(WorkerCommand::MouseInput {
+                action,
+                button,
+                x,
+                y,
+                mods,
+            })
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "vt pane worker closed"))
+    }
+
+    pub fn scroll_viewport_delta(&self, delta: isize) -> io::Result<()> {
+        self.tx
+            .send(WorkerCommand::ScrollViewportDelta(delta))
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "vt pane worker closed"))
+    }
+
+    pub fn scroll_viewport_top(&self) -> io::Result<()> {
+        self.tx
+            .send(WorkerCommand::ScrollViewportTop)
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "vt pane worker closed"))
+    }
+
+    pub fn scroll_viewport_bottom(&self) -> io::Result<()> {
+        self.tx
+            .send(WorkerCommand::ScrollViewportBottom)
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "vt pane worker closed"))
+    }
+}
+
+impl Drop for VtPaneWorker {
+    fn drop(&mut self) {
+        let _ = self.tx.send(WorkerCommand::Shutdown);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
 }
 
 impl VtPane {
@@ -631,6 +837,155 @@ impl VtPane {
             self.pending_notifications.insert(id, notification);
         }
     }
+}
+
+fn worker_loop(
+    mut pane: VtPane,
+    mut snapshot: TerminalSnapshot,
+    rx: mpsc::Receiver<WorkerCommand>,
+    state: Arc<Mutex<WorkerState>>,
+    pending_work: Arc<AtomicBool>,
+) {
+    let mut disconnected = false;
+    loop {
+        let timeout = if pane.has_pending_pty_work() {
+            Duration::ZERO
+        } else {
+            VtPaneWorker::WORKER_IDLE_WAIT
+        };
+        match rx.recv_timeout(timeout) {
+            Ok(command) => {
+                if !handle_worker_command(&mut pane, command) {
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => disconnected = true,
+        }
+
+        while let Ok(command) = rx.try_recv() {
+            if !handle_worker_command(&mut pane, command) {
+                disconnected = true;
+                break;
+            }
+        }
+
+        let exited = match pane.poll_pty() {
+            Ok(poll) => poll.exited,
+            Err(error) => {
+                log::warn!("vt pane worker PTY poll failed: {error}");
+                true
+            }
+        };
+
+        let snapshot_changed = if pane.is_dirty() {
+            let _scope =
+                crate::profiling::scope("server.backend.snapshot_refresh", crate::profiling::Kind::Cpu);
+            match pane.refresh_snapshot(&mut snapshot) {
+                Ok(()) => true,
+                Err(error) => {
+                    log::warn!("vt pane worker snapshot refresh failed: {error}");
+                    false
+                }
+            }
+        } else {
+            false
+        };
+
+        pending_work.store(pane.has_pending_pty_work(), Ordering::Relaxed);
+        {
+            let mut shared = state.lock().unwrap();
+            if snapshot_changed {
+                shared.snapshot = Arc::new(snapshot.clone());
+                shared.version = shared.version.wrapping_add(1);
+            }
+            shared.running_command = pane.running_command().map(|running| running.command.clone());
+            shared.finished_commands.extend(pane.take_finished_commands());
+            shared
+                .desktop_notifications
+                .extend(pane.take_desktop_notifications());
+            shared.exited = shared.exited || exited;
+        }
+
+        if exited || disconnected {
+            break;
+        }
+    }
+
+    pending_work.store(false, Ordering::Relaxed);
+}
+
+fn handle_worker_command(pane: &mut VtPane, command: WorkerCommand) -> bool {
+    match command {
+        WorkerCommand::Resize {
+            cols,
+            rows,
+            cell_width_px,
+            cell_height_px,
+        } => {
+            let _ = pane.resize(cols, rows, cell_width_px, cell_height_px);
+        }
+        WorkerCommand::WriteInput(bytes) => {
+            let _ = pane.write_input(&bytes);
+        }
+        WorkerCommand::WriteVtBytes(bytes) => pane.write_vt_bytes(&bytes),
+        WorkerCommand::ForwardKey(event) => {
+            let _ = pane_forward_key(pane, &event);
+        }
+        WorkerCommand::MouseInput {
+            action,
+            button,
+            x,
+            y,
+            mods,
+        } => {
+            let _ = pane.send_mouse_input(action, button, x, y, mods);
+        }
+        WorkerCommand::ScrollViewportDelta(delta) => {
+            let _ = pane.scroll_viewport_delta(delta);
+        }
+        WorkerCommand::ScrollViewportTop => {
+            let _ = pane.scroll_viewport_top();
+        }
+        WorkerCommand::ScrollViewportBottom => {
+            let _ = pane.scroll_viewport_bottom();
+        }
+        WorkerCommand::Shutdown => return false,
+    }
+    true
+}
+
+fn pane_forward_key(pane: &mut VtPane, request: &VtForwardKey) -> io::Result<()> {
+    let mut ev = vt::KeyEvent::new().map_err(vt_to_io)?;
+    ev.set_action(request.action);
+    ev.set_key(request.keycode as vt::GhosttyKey);
+    ev.set_mods(request.mods);
+    ev.set_consumed_mods(request.consumed_mods);
+    ev.set_composing(request.composing);
+    ev.set_unshifted_codepoint(request.unshifted_codepoint);
+
+    let fallback_text = request
+        .key_char
+        .filter(|ch| !ch.is_control())
+        .map(|ch| ch.to_string());
+    let utf8 = if request
+        .text
+        .as_bytes()
+        .first()
+        .is_some_and(|&byte| byte >= 0x20)
+    {
+        Some(request.text.as_str())
+    } else {
+        fallback_text.as_deref()
+    };
+    if let Some(utf8) = utf8 {
+        ev.set_utf8(utf8);
+    }
+    let bytes = pane.key_encoder().encode(&ev).map_err(vt_to_io)?;
+    if !bytes.is_empty() {
+        pane.write_input(&bytes)?;
+    }
+    Ok(())
 }
 
 struct Osc99Metadata {

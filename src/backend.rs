@@ -3,7 +3,10 @@ use crate::ffi;
 use crate::pane::{self, PaneHandle};
 use crate::platform;
 use std::ffi::{CStr, c_void};
+#[cfg(target_os = "linux")]
+use std::sync::Arc;
 pub struct BackendPollResult {
+    pub terminal_dirty: bool,
     pub exited_panes: Vec<pane::PaneId>,
     pub active_title: Option<String>,
     pub active_pwd: Option<String>,
@@ -151,8 +154,10 @@ pub type Backend = LinuxBackend;
 
 #[cfg(target_os = "linux")]
 pub struct LinuxBackend {
-    panes: std::collections::HashMap<pane::PaneId, crate::vt_backend_core::VtPane>,
-    snapshots: std::collections::HashMap<pane::PaneId, crate::vt_backend_core::TerminalSnapshot>,
+    panes: std::collections::HashMap<pane::PaneId, crate::vt_backend_core::VtPaneWorker>,
+    snapshots:
+        std::collections::HashMap<pane::PaneId, Arc<crate::vt_backend_core::TerminalSnapshot>>,
+    snapshot_versions: std::collections::HashMap<pane::PaneId, u64>,
 }
 
 #[cfg(target_os = "linux")]
@@ -160,11 +165,11 @@ impl LinuxBackend {
     fn pane_mut(
         &mut self,
         focused_pane: PaneHandle,
-    ) -> Option<&mut crate::vt_backend_core::VtPane> {
+    ) -> Option<&mut crate::vt_backend_core::VtPaneWorker> {
         self.panes.get_mut(&focused_pane.id())
     }
 
-    fn pane(&self, focused_pane: PaneHandle) -> Option<&crate::vt_backend_core::VtPane> {
+    fn pane(&self, focused_pane: PaneHandle) -> Option<&crate::vt_backend_core::VtPaneWorker> {
         self.panes.get(&focused_pane.id())
     }
 }
@@ -175,6 +180,7 @@ impl TerminalBackend for LinuxBackend {
         Self {
             panes: std::collections::HashMap::new(),
             snapshots: std::collections::HashMap::new(),
+            snapshot_versions: std::collections::HashMap::new(),
         }
     }
 
@@ -213,7 +219,7 @@ impl TerminalBackend for LinuxBackend {
         let pane = PaneHandle::detached();
         let wd_path = working_directory
             .map(|wd| std::path::Path::new(std::ffi::OsStr::from_bytes(wd.to_bytes())));
-        let backend = match crate::vt_backend_core::VtPane::spawn(
+        let backend = match crate::vt_backend_core::VtPaneWorker::spawn(
             cols,
             rows,
             cell_width_px,
@@ -228,19 +234,12 @@ impl TerminalBackend for LinuxBackend {
             }
         };
 
+        let update = backend.poll_update();
+        self.snapshot_versions.insert(pane.id(), update.version);
+        self.snapshots.insert(pane.id(), update.snapshot);
         self.panes.insert(pane.id(), backend);
-        if let Some(backend) = self.panes.get_mut(&pane.id()) {
-            match backend.snapshot() {
-                Ok(snapshot) => {
-                    self.snapshots.insert(pane.id(), snapshot);
-                }
-                Err(error) => {
-                    log::warn!(
-                        "initial linux vt snapshot failed for pane {}: {error}",
-                        pane.id()
-                    );
-                }
-            }
+        if !self.snapshots.contains_key(&pane.id()) {
+            log::warn!("initial linux vt snapshot missing for pane {}", pane.id());
         }
 
         Some(pane)
@@ -258,7 +257,7 @@ impl TerminalBackend for LinuxBackend {
         if let Some(vt_pane) = self.panes.get_mut(&pane.id()) {
             let cols = ((width as f64 / cell_width).floor() as u16).max(2);
             let rows = ((height as f64 / cell_height).floor() as u16).max(1);
-            let _ = vt_pane.resize(
+            vt_pane.resize(
                 cols,
                 rows,
                 cell_width.max(1.0).round() as u32,
@@ -270,6 +269,7 @@ impl TerminalBackend for LinuxBackend {
     fn free_pane(&mut self, pane: PaneHandle) {
         self.panes.remove(&pane.id());
         self.snapshots.remove(&pane.id());
+        self.snapshot_versions.remove(&pane.id());
         platform::remove_view(pane.view());
     }
 
@@ -371,6 +371,7 @@ impl TerminalBackend for LinuxBackend {
         _cell_height: f64,
     ) -> BackendPollResult {
         let mut result = BackendPollResult {
+            terminal_dirty: false,
             exited_panes: Vec::new(),
             active_title: None,
             active_pwd: None,
@@ -380,81 +381,48 @@ impl TerminalBackend for LinuxBackend {
             desktop_notifications: Vec::new(),
         };
         for id in active_pane_ids {
-            let Some(pane) = self.panes.get_mut(id) else {
+            let Some(pane) = self.panes.get(id) else {
                 continue;
             };
-
-            let poll = {
-                let _scope =
-                    crate::profiling::scope("server.backend.poll_pty", crate::profiling::Kind::Cpu);
-                match pane.poll_pty() {
-                    Ok(poll) => poll,
-                    Err(error) => {
-                        log::warn!("linux vt PTY poll failed for pane {id}: {error}");
-                        continue;
-                    }
-                }
-            };
-            let changed = poll.changed;
-            if poll.exited {
+            let update = pane.poll_update();
+            if update.exited {
                 result.exited_panes.push(*id);
             }
-            for finished in pane.take_finished_commands() {
+            for finished in update.finished_commands {
                 result.finished_commands.push(CommandFinished {
                     exit_code: finished.exit_code,
                     duration_ns: finished.duration_ns,
                 });
             }
-            for notification in pane.take_desktop_notifications() {
+            for notification in update.desktop_notifications {
                 result.desktop_notifications.push(DesktopNotification {
                     title: notification.title,
                     body: notification.body,
                 });
             }
-
-            let needs_snapshot = changed || pane.is_dirty() || !self.snapshots.contains_key(id);
-            if needs_snapshot {
-                let update = if let Some(snapshot) = self.snapshots.get_mut(id) {
-                    pane.refresh_snapshot(snapshot)
-                } else {
-                    match pane.snapshot() {
-                        Ok(snapshot) => {
-                            self.snapshots.insert(*id, snapshot);
-                            Ok(())
-                        }
-                        Err(error) => Err(error),
-                    }
-                };
-                let _scope = crate::profiling::scope(
-                    "server.backend.snapshot_refresh",
-                    crate::profiling::Kind::Cpu,
-                );
-                match update {
-                    Ok(()) => {
-                        if let Some(snapshot) = self.snapshots.get(id) {
-                            if *id == active_id {
-                                result.active_pwd = Some(snapshot.pwd.clone());
-                                if !snapshot.title.is_empty() {
-                                    result.active_title = Some(snapshot.title.clone());
-                                }
-                                result.active_scrollbar = Some(ffi::ghostty_action_scrollbar_s {
-                                    total: snapshot.scrollbar.total,
-                                    offset: snapshot.scrollbar.offset,
-                                    len: snapshot.scrollbar.len,
-                                });
-                            }
-                        }
-                        if let Some(running_command) = pane.running_command() {
-                            result.running_commands.push(PaneRunningCommand {
-                                pane_id: *id,
-                                command: running_command.command.clone(),
-                            });
-                        }
-                    }
-                    Err(error) => {
-                        log::warn!("linux vt snapshot failed for pane {id}: {error}");
-                    }
+            let cached_version = self.snapshot_versions.get(id).copied().unwrap_or_default();
+            if update.version != cached_version || !self.snapshots.contains_key(id) {
+                self.snapshot_versions.insert(*id, update.version);
+                self.snapshots.insert(*id, Arc::clone(&update.snapshot));
+                result.terminal_dirty = true;
+            }
+            if *id == active_id {
+                let snapshot = update.snapshot.as_ref();
+                result.active_pwd = Some(snapshot.pwd.clone());
+                if !snapshot.title.is_empty() {
+                    result.active_title = Some(snapshot.title.clone());
                 }
+                result.active_scrollbar = Some(ffi::ghostty_action_scrollbar_s {
+                    total: snapshot.scrollbar.total,
+                    offset: snapshot.scrollbar.offset,
+                    len: snapshot.scrollbar.len,
+                });
+            }
+            if let Some(running_command) = update.running_command {
+                result.running_commands.push(PaneRunningCommand {
+                    pane_id: *id,
+                    command: running_command,
+                });
             }
         }
         result
@@ -463,25 +431,27 @@ impl TerminalBackend for LinuxBackend {
     fn ui_terminal_snapshot(&self, pane_id: pane::PaneId) -> Option<control::UiTerminalSnapshot> {
         self.snapshots
             .get(&pane_id)
-            .map(crate::vt_snapshot::ui_terminal_snapshot)
+            .map(|snapshot| crate::vt_snapshot::ui_terminal_snapshot(snapshot.as_ref()))
     }
 
     fn has_pending_terminal_work(&self) -> bool {
-        self.panes.values().any(crate::vt_backend_core::VtPane::has_pending_pty_work)
+        self.panes
+            .values()
+            .any(crate::vt_backend_core::VtPaneWorker::has_pending_pty_work)
     }
 
     fn render_snapshot(
         &self,
         pane_id: pane::PaneId,
     ) -> Option<crate::vt_backend_core::TerminalSnapshot> {
-        self.snapshots.get(&pane_id).cloned()
+        self.snapshots.get(&pane_id).map(|snapshot| snapshot.as_ref().clone())
     }
 
     fn render_snapshot_ref(
         &self,
         pane_id: pane::PaneId,
     ) -> Option<&crate::vt_backend_core::TerminalSnapshot> {
-        self.snapshots.get(&pane_id)
+        self.snapshots.get(&pane_id).map(|snapshot| snapshot.as_ref())
     }
 
     fn forward_vt_key(
@@ -496,37 +466,19 @@ impl TerminalBackend for LinuxBackend {
         composing: bool,
         unshifted_codepoint: u32,
     ) -> std::io::Result<()> {
-        let Some(pane) = self.pane_mut(focused_pane) else {
+        let Some(pane) = self.pane(focused_pane) else {
             return Ok(());
         };
-        let mut ev = crate::vt::KeyEvent::new()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        ev.set_action(action);
-        ev.set_key(keycode as crate::vt::GhosttyKey);
-        ev.set_mods(mods);
-        ev.set_consumed_mods(consumed_mods);
-        ev.set_composing(composing);
-        ev.set_unshifted_codepoint(unshifted_codepoint);
-
-        let fallback_text = key_char
-            .filter(|ch| !ch.is_control())
-            .map(|ch| ch.to_string());
-        let utf8 = if text.as_bytes().first().is_some_and(|&byte| byte >= 0x20) {
-            Some(text)
-        } else {
-            fallback_text.as_deref()
-        };
-        if let Some(utf8) = utf8 {
-            ev.set_utf8(utf8);
-        }
-        let bytes = pane
-            .key_encoder()
-            .encode(&ev)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        if !bytes.is_empty() {
-            pane.write_input(&bytes)?;
-        }
-        Ok(())
+        pane.forward_key(crate::vt_backend_core::VtForwardKey {
+            action,
+            keycode,
+            mods,
+            consumed_mods,
+            key_char,
+            text: text.to_string(),
+            composing,
+            unshifted_codepoint,
+        })
     }
 
     fn send_mouse_input(
@@ -538,7 +490,7 @@ impl TerminalBackend for LinuxBackend {
         y: f32,
         mods: crate::vt::GhosttyMods,
     ) -> std::io::Result<()> {
-        let Some(pane) = self.pane_mut(focused_pane) else {
+        let Some(pane) = self.pane(focused_pane) else {
             return Ok(());
         };
         pane.send_mouse_input(action, button, x, y, mods)
@@ -549,21 +501,21 @@ impl TerminalBackend for LinuxBackend {
         focused_pane: PaneHandle,
         delta: isize,
     ) -> std::io::Result<()> {
-        let Some(pane) = self.pane_mut(focused_pane) else {
+        let Some(pane) = self.pane(focused_pane) else {
             return Ok(());
         };
         pane.scroll_viewport_delta(delta)
     }
 
     fn scroll_viewport_top(&mut self, focused_pane: PaneHandle) -> std::io::Result<()> {
-        let Some(pane) = self.pane_mut(focused_pane) else {
+        let Some(pane) = self.pane(focused_pane) else {
             return Ok(());
         };
         pane.scroll_viewport_top()
     }
 
     fn scroll_viewport_bottom(&mut self, focused_pane: PaneHandle) -> std::io::Result<()> {
-        let Some(pane) = self.pane_mut(focused_pane) else {
+        let Some(pane) = self.pane(focused_pane) else {
             return Ok(());
         };
         pane.scroll_viewport_bottom()
@@ -577,7 +529,7 @@ impl TerminalBackend for LinuxBackend {
     }
 
     fn write_vt_bytes(&mut self, focused_pane: PaneHandle, bytes: &[u8]) {
-        if let Some(pane) = self.pane_mut(focused_pane) {
+        if let Some(pane) = self.pane(focused_pane) {
             pane.write_vt_bytes(bytes);
         }
     }

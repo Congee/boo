@@ -143,9 +143,6 @@ impl ClientApp {
             Message::Frame => self.on_tick(),
             Message::StreamReady(tx) => {
                 self.stream_tx = Some(tx);
-                if !matches!(self.mode, ClientMode::Attached) {
-                    self.refresh_snapshot();
-                }
                 self.send_stream_command(StreamCommand::ListSessions);
             }
             Message::StreamEvent(event) => self.handle_stream_event(event),
@@ -311,7 +308,10 @@ impl ClientApp {
     }
 
     fn on_tick(&mut self) {
-        if matches!(self.mode, ClientMode::Attached) {
+        if matches!(self.mode, ClientMode::Attached)
+            || self.stream_tx.is_some()
+            || self.has_paintable_terminal()
+        {
             return;
         }
         self.tick_counter = self.tick_counter.wrapping_add(1);
@@ -399,9 +399,7 @@ impl ClientApp {
                 LocalStreamEvent::Detached => {
                     self.mode = ClientMode::Recovering;
                     self.active_session_id = None;
-                    self.stream_snapshot = None;
                     self.pending_input_latencies.clear();
-                    self.refresh_snapshot();
                     self.send_stream_command(StreamCommand::ListSessions);
                 }
                 LocalStreamEvent::SessionExited(session_id) => {
@@ -409,18 +407,14 @@ impl ClientApp {
                         self.active_session_id = None;
                     }
                     self.mode = ClientMode::Recovering;
-                    self.stream_snapshot = None;
                     self.pending_input_latencies.clear();
-                    self.refresh_snapshot();
                     self.send_stream_command(StreamCommand::ListSessions);
                 }
                 LocalStreamEvent::Disconnected => {
                     self.stream_tx = None;
                     self.mode = ClientMode::Recovering;
-                    self.stream_snapshot = None;
                     self.active_session_id = None;
                     self.pending_input_latencies.clear();
-                    self.refresh_snapshot();
                     self.last_error = Some("boo server stream disconnected".to_string());
                 }
                 LocalStreamEvent::FullState { ack_input_seq, state } => {
@@ -776,7 +770,7 @@ fn write_stream_message(write: &mut UnixStream, ty: remote::MessageType, payload
 fn local_stream_subscription(
     socket_path: &String,
 ) -> iced::futures::stream::BoxStream<'static, Message> {
-    let socket_path = socket_path.clone();
+    let socket_path = format!("{socket_path}.stream");
     Box::pin(stream::channel(
         100,
         move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
