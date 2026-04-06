@@ -2,7 +2,7 @@ use crate::control;
 use crate::ffi;
 use crate::pane::{self, PaneHandle};
 use crate::platform;
-use std::ffi::{c_void, CStr};
+use std::ffi::{CStr, c_void};
 pub struct BackendPollResult {
     pub exited_panes: Vec<pane::PaneId>,
     pub active_title: Option<String>,
@@ -36,7 +36,12 @@ pub trait TerminalBackend {
     fn tick(&mut self);
     fn set_app_focus(&mut self, focused: bool);
     fn reload_config(&mut self);
-    fn apply_config_override(&mut self, focused_surface: ffi::ghostty_surface_t, key: &str, value: &str);
+    fn apply_config_override(
+        &mut self,
+        focused_surface: ffi::ghostty_surface_t,
+        key: &str,
+        value: &str,
+    );
     fn create_pane(
         &mut self,
         callback_userdata: *mut c_void,
@@ -89,7 +94,10 @@ pub trait TerminalBackend {
     fn ui_terminal_snapshot(&self, pane_id: pane::PaneId) -> Option<control::UiTerminalSnapshot>;
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn render_snapshot(&self, pane_id: pane::PaneId) -> Option<crate::vt_backend_core::TerminalSnapshot>;
+    fn render_snapshot(
+        &self,
+        pane_id: pane::PaneId,
+    ) -> Option<crate::vt_backend_core::TerminalSnapshot>;
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn forward_vt_key(
         &mut self,
@@ -114,7 +122,11 @@ pub trait TerminalBackend {
         mods: crate::vt::GhosttyMods,
     ) -> std::io::Result<()>;
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn scroll_viewport_delta(&mut self, focused_pane: PaneHandle, delta: isize) -> std::io::Result<()>;
+    fn scroll_viewport_delta(
+        &mut self,
+        focused_pane: PaneHandle,
+        delta: isize,
+    ) -> std::io::Result<()>;
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn scroll_viewport_top(&mut self, focused_pane: PaneHandle) -> std::io::Result<()>;
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -139,7 +151,10 @@ pub struct LinuxBackend {
 
 #[cfg(target_os = "linux")]
 impl LinuxBackend {
-    fn pane_mut(&mut self, focused_pane: PaneHandle) -> Option<&mut crate::vt_backend_core::VtPane> {
+    fn pane_mut(
+        &mut self,
+        focused_pane: PaneHandle,
+    ) -> Option<&mut crate::vt_backend_core::VtPane> {
         self.panes.get_mut(&focused_pane.id())
     }
 
@@ -163,7 +178,13 @@ impl TerminalBackend for LinuxBackend {
 
     fn reload_config(&mut self) {}
 
-    fn apply_config_override(&mut self, _focused_surface: ffi::ghostty_surface_t, _key: &str, _value: &str) {}
+    fn apply_config_override(
+        &mut self,
+        _focused_surface: ffi::ghostty_surface_t,
+        _key: &str,
+        _value: &str,
+    ) {
+    }
 
     fn create_pane(
         &mut self,
@@ -184,7 +205,8 @@ impl TerminalBackend for LinuxBackend {
         let cell_width_px = cell_width.max(1.0).round() as u32;
         let cell_height_px = cell_height.max(1.0).round() as u32;
         let pane = PaneHandle::detached();
-        let wd_path = working_directory.map(|wd| std::path::Path::new(std::ffi::OsStr::from_bytes(wd.to_bytes())));
+        let wd_path = working_directory
+            .map(|wd| std::path::Path::new(std::ffi::OsStr::from_bytes(wd.to_bytes())));
         let backend = match crate::vt_backend_core::VtPane::spawn(
             cols,
             rows,
@@ -207,7 +229,10 @@ impl TerminalBackend for LinuxBackend {
                     self.snapshots.insert(pane.id(), snapshot);
                 }
                 Err(error) => {
-                    log::warn!("initial linux vt snapshot failed for pane {}: {error}", pane.id());
+                    log::warn!(
+                        "initial linux vt snapshot failed for pane {}: {error}",
+                        pane.id()
+                    );
                 }
             }
         }
@@ -242,8 +267,7 @@ impl TerminalBackend for LinuxBackend {
         platform::remove_view(pane.view());
     }
 
-    fn set_surface_focus(&self, _surface: ffi::ghostty_surface_t, _focused: bool) {
-    }
+    fn set_surface_focus(&self, _surface: ffi::ghostty_surface_t, _focused: bool) {}
 
     fn surface_key_translation_mods(&self, _surface: ffi::ghostty_surface_t, mods: i32) -> i32 {
         mods
@@ -253,8 +277,7 @@ impl TerminalBackend for LinuxBackend {
         false
     }
 
-    fn surface_mouse_pos(&mut self, _focused_pane: PaneHandle, _x: f64, _y: f64, _mods: i32) {
-    }
+    fn surface_mouse_pos(&mut self, _focused_pane: PaneHandle, _x: f64, _y: f64, _mods: i32) {}
 
     fn surface_mouse_button(
         &mut self,
@@ -265,8 +288,7 @@ impl TerminalBackend for LinuxBackend {
     ) {
     }
 
-    fn surface_mouse_scroll(&mut self, _focused_pane: PaneHandle, _dx: f64, _dy: f64, _mods: i32) {
-    }
+    fn surface_mouse_scroll(&mut self, _focused_pane: PaneHandle, _dx: f64, _dy: f64, _mods: i32) {}
 
     fn ime_point(&self, _focused_pane: PaneHandle) -> Option<(f64, f64, f64, f64)> {
         None
@@ -356,11 +378,15 @@ impl TerminalBackend for LinuxBackend {
                 continue;
             };
 
-            let poll = match pane.poll_pty() {
-                Ok(poll) => poll,
-                Err(error) => {
-                    log::warn!("linux vt PTY poll failed for pane {id}: {error}");
-                    continue;
+            let poll = {
+                let _scope =
+                    crate::profiling::scope("server.backend.poll_pty", crate::profiling::Kind::Cpu);
+                match pane.poll_pty() {
+                    Ok(poll) => poll,
+                    Err(error) => {
+                        log::warn!("linux vt PTY poll failed for pane {id}: {error}");
+                        continue;
+                    }
                 }
             };
             let changed = poll.changed;
@@ -382,18 +408,35 @@ impl TerminalBackend for LinuxBackend {
 
             let needs_snapshot = changed || pane.is_dirty() || !self.snapshots.contains_key(id);
             if needs_snapshot {
-                match pane.snapshot() {
-                    Ok(snapshot) => {
-                        if *id == active_id {
-                            result.active_pwd = Some(snapshot.pwd.clone());
-                            if !snapshot.title.is_empty() {
-                                result.active_title = Some(snapshot.title.clone());
+                let update = if let Some(snapshot) = self.snapshots.get_mut(id) {
+                    pane.refresh_snapshot(snapshot)
+                } else {
+                    match pane.snapshot() {
+                        Ok(snapshot) => {
+                            self.snapshots.insert(*id, snapshot);
+                            Ok(())
+                        }
+                        Err(error) => Err(error),
+                    }
+                };
+                let _scope = crate::profiling::scope(
+                    "server.backend.snapshot_refresh",
+                    crate::profiling::Kind::Cpu,
+                );
+                match update {
+                    Ok(()) => {
+                        if let Some(snapshot) = self.snapshots.get(id) {
+                            if *id == active_id {
+                                result.active_pwd = Some(snapshot.pwd.clone());
+                                if !snapshot.title.is_empty() {
+                                    result.active_title = Some(snapshot.title.clone());
+                                }
+                                result.active_scrollbar = Some(ffi::ghostty_action_scrollbar_s {
+                                    total: snapshot.scrollbar.total,
+                                    offset: snapshot.scrollbar.offset,
+                                    len: snapshot.scrollbar.len,
+                                });
                             }
-                            result.active_scrollbar = Some(ffi::ghostty_action_scrollbar_s {
-                                total: snapshot.scrollbar.total,
-                                offset: snapshot.scrollbar.offset,
-                                len: snapshot.scrollbar.len,
-                            });
                         }
                         if let Some(running_command) = pane.running_command() {
                             result.running_commands.push(PaneRunningCommand {
@@ -401,7 +444,6 @@ impl TerminalBackend for LinuxBackend {
                                 command: running_command.command.clone(),
                             });
                         }
-                        self.snapshots.insert(*id, snapshot);
                     }
                     Err(error) => {
                         log::warn!("linux vt snapshot failed for pane {id}: {error}");
@@ -418,7 +460,10 @@ impl TerminalBackend for LinuxBackend {
             .map(crate::vt_snapshot::ui_terminal_snapshot)
     }
 
-    fn render_snapshot(&self, pane_id: pane::PaneId) -> Option<crate::vt_backend_core::TerminalSnapshot> {
+    fn render_snapshot(
+        &self,
+        pane_id: pane::PaneId,
+    ) -> Option<crate::vt_backend_core::TerminalSnapshot> {
         self.snapshots.get(&pane_id).cloned()
     }
 
@@ -449,11 +494,7 @@ impl TerminalBackend for LinuxBackend {
         let fallback_text = key_char
             .filter(|ch| !ch.is_control())
             .map(|ch| ch.to_string());
-        let utf8 = if text
-            .as_bytes()
-            .first()
-            .is_some_and(|&byte| byte >= 0x20)
-        {
+        let utf8 = if text.as_bytes().first().is_some_and(|&byte| byte >= 0x20) {
             Some(text)
         } else {
             fallback_text.as_deref()
@@ -486,7 +527,11 @@ impl TerminalBackend for LinuxBackend {
         pane.send_mouse_input(action, button, x, y, mods)
     }
 
-    fn scroll_viewport_delta(&mut self, focused_pane: PaneHandle, delta: isize) -> std::io::Result<()> {
+    fn scroll_viewport_delta(
+        &mut self,
+        focused_pane: PaneHandle,
+        delta: isize,
+    ) -> std::io::Result<()> {
         let Some(pane) = self.pane_mut(focused_pane) else {
             return Ok(());
         };

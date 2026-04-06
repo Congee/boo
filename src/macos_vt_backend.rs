@@ -6,7 +6,7 @@ use crate::pane::{self, PaneHandle};
 use crate::platform;
 use crate::vt_backend_core::{CellSnapshot, TerminalSnapshot, VtPane};
 use std::collections::HashMap;
-use std::ffi::{c_void, CStr};
+use std::ffi::{CStr, c_void};
 use std::os::unix::ffi::OsStrExt;
 
 pub struct MacVtBackend {
@@ -73,23 +73,16 @@ impl crate::backend::TerminalBackend for MacVtBackend {
             platform::create_focusable_child_view(parent_view, frame)
         };
         let pane = PaneHandle::new(std::ptr::null_mut(), view);
-        let wd_path = working_directory.map(|wd| {
-            std::path::Path::new(std::ffi::OsStr::from_bytes(wd.to_bytes()))
-        });
-        let backend = match VtPane::spawn(
-            cols,
-            rows,
-            cell_width_px,
-            cell_height_px,
-            command,
-            wd_path,
-        ) {
-            Ok(backend) => backend,
-            Err(error) => {
-                log::warn!("failed to spawn macOS VT pane: {error}");
-                return None;
-            }
-        };
+        let wd_path = working_directory
+            .map(|wd| std::path::Path::new(std::ffi::OsStr::from_bytes(wd.to_bytes())));
+        let backend =
+            match VtPane::spawn(cols, rows, cell_width_px, cell_height_px, command, wd_path) {
+                Ok(backend) => backend,
+                Err(error) => {
+                    log::warn!("failed to spawn macOS VT pane: {error}");
+                    return None;
+                }
+            };
 
         self.panes.insert(pane.id(), backend);
         if let Some(backend) = self.panes.get_mut(&pane.id()) {
@@ -157,14 +150,7 @@ impl crate::backend::TerminalBackend for MacVtBackend {
     ) {
     }
 
-    fn surface_mouse_scroll(
-        &mut self,
-        _focused_pane: PaneHandle,
-        _dx: f64,
-        _dy: f64,
-        _mods: i32,
-    ) {
-    }
+    fn surface_mouse_scroll(&mut self, _focused_pane: PaneHandle, _dx: f64, _dy: f64, _mods: i32) {}
 
     fn ime_point(&self, focused_pane: PaneHandle) -> Option<(f64, f64, f64, f64)> {
         let snapshot = self.snapshots.get(&focused_pane.id())?;
@@ -264,11 +250,15 @@ impl crate::backend::TerminalBackend for MacVtBackend {
                 continue;
             };
 
-            let poll = match pane.poll_pty() {
-                Ok(poll) => poll,
-                Err(error) => {
-                    log::warn!("macOS VT PTY poll failed for pane {id}: {error}");
-                    continue;
+            let poll = {
+                let _scope =
+                    crate::profiling::scope("server.backend.poll_pty", crate::profiling::Kind::Cpu);
+                match pane.poll_pty() {
+                    Ok(poll) => poll,
+                    Err(error) => {
+                        log::warn!("macOS VT PTY poll failed for pane {id}: {error}");
+                        continue;
+                    }
                 }
             };
             let changed = poll.changed;
@@ -276,40 +266,62 @@ impl crate::backend::TerminalBackend for MacVtBackend {
                 result.exited_panes.push(*id);
             }
             for finished in pane.take_finished_commands() {
-                result.finished_commands.push(crate::backend::CommandFinished {
-                    exit_code: finished.exit_code,
-                    duration_ns: finished.duration_ns,
-                });
+                result
+                    .finished_commands
+                    .push(crate::backend::CommandFinished {
+                        exit_code: finished.exit_code,
+                        duration_ns: finished.duration_ns,
+                    });
             }
             for notification in pane.take_desktop_notifications() {
-                result.desktop_notifications.push(crate::backend::DesktopNotification {
-                    title: notification.title,
-                    body: notification.body,
-                });
+                result
+                    .desktop_notifications
+                    .push(crate::backend::DesktopNotification {
+                        title: notification.title,
+                        body: notification.body,
+                    });
             }
 
             let needs_snapshot = changed || pane.is_dirty() || !self.snapshots.contains_key(id);
             if needs_snapshot {
-                match pane.snapshot() {
-                    Ok(snapshot) => {
-                        if *id == active_id {
-                            result.active_pwd = Some(snapshot.pwd.clone());
-                            if !snapshot.title.is_empty() {
-                                result.active_title = Some(snapshot.title.clone());
+                let _scope = crate::profiling::scope(
+                    "server.backend.snapshot_refresh",
+                    crate::profiling::Kind::Cpu,
+                );
+                let update = if let Some(snapshot) = self.snapshots.get_mut(id) {
+                    pane.refresh_snapshot(snapshot)
+                } else {
+                    match pane.snapshot() {
+                        Ok(snapshot) => {
+                            self.snapshots.insert(*id, snapshot);
+                            Ok(())
+                        }
+                        Err(error) => Err(error),
+                    }
+                };
+                match update {
+                    Ok(()) => {
+                        if let Some(snapshot) = self.snapshots.get(id) {
+                            if *id == active_id {
+                                result.active_pwd = Some(snapshot.pwd.clone());
+                                if !snapshot.title.is_empty() {
+                                    result.active_title = Some(snapshot.title.clone());
+                                }
+                                result.active_scrollbar = Some(ffi::ghostty_action_scrollbar_s {
+                                    total: snapshot.scrollbar.total,
+                                    offset: snapshot.scrollbar.offset,
+                                    len: snapshot.scrollbar.len,
+                                });
                             }
-                            result.active_scrollbar = Some(ffi::ghostty_action_scrollbar_s {
-                                total: snapshot.scrollbar.total,
-                                offset: snapshot.scrollbar.offset,
-                                len: snapshot.scrollbar.len,
-                            });
                         }
                         if let Some(running_command) = pane.running_command() {
-                            result.running_commands.push(crate::backend::PaneRunningCommand {
-                                pane_id: *id,
-                                command: running_command.command.clone(),
-                            });
+                            result
+                                .running_commands
+                                .push(crate::backend::PaneRunningCommand {
+                                    pane_id: *id,
+                                    command: running_command.command.clone(),
+                                });
                         }
-                        self.snapshots.insert(*id, snapshot);
                     }
                     Err(error) => {
                         log::warn!("macOS VT snapshot failed for pane {id}: {error}");
@@ -325,7 +337,10 @@ impl crate::backend::TerminalBackend for MacVtBackend {
         self.snapshots.get(&pane_id).map(ui_terminal_snapshot)
     }
 
-    fn render_snapshot(&self, pane_id: pane::PaneId) -> Option<crate::vt_backend_core::TerminalSnapshot> {
+    fn render_snapshot(
+        &self,
+        pane_id: pane::PaneId,
+    ) -> Option<crate::vt_backend_core::TerminalSnapshot> {
         self.snapshots.get(&pane_id).cloned()
     }
 
@@ -356,11 +371,7 @@ impl crate::backend::TerminalBackend for MacVtBackend {
         let fallback_text = key_char
             .filter(|ch| !ch.is_control())
             .map(|ch| ch.to_string());
-        let utf8 = if text
-            .as_bytes()
-            .first()
-            .is_some_and(|&byte| byte >= 0x20)
-        {
+        let utf8 = if text.as_bytes().first().is_some_and(|&byte| byte >= 0x20) {
             Some(text)
         } else {
             fallback_text.as_deref()
@@ -432,7 +443,10 @@ impl crate::backend::TerminalBackend for MacVtBackend {
     }
 }
 
-fn snapshot_selection_text(snapshot: &TerminalSnapshot, selection: ffi::ghostty_selection_s) -> String {
+fn snapshot_selection_text(
+    snapshot: &TerminalSnapshot,
+    selection: ffi::ghostty_selection_s,
+) -> String {
     let start_row = selection.top_left.y.min(selection.bottom_right.y) as usize;
     let end_row = selection.top_left.y.max(selection.bottom_right.y) as usize;
     let start_col = selection.top_left.x.min(selection.bottom_right.x) as usize;
@@ -441,7 +455,11 @@ fn snapshot_selection_text(snapshot: &TerminalSnapshot, selection: ffi::ghostty_
 
     let mut lines = Vec::new();
     for row_index in start_row.min(max_row)..=end_row.min(max_row) {
-        let row = snapshot.rows_data.get(row_index).map(Vec::as_slice).unwrap_or(&[]);
+        let row = snapshot
+            .rows_data
+            .get(row_index)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         let line_start = if selection.rectangle || row_index == start_row {
             start_col
         } else {

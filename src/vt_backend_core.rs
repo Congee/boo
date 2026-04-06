@@ -4,10 +4,10 @@
 use crate::unix_pty::{PtyProcess, PtySize};
 use crate::vt;
 use std::collections::HashMap;
-use std::ffi::{c_void, CStr};
+use std::ffi::{CStr, c_void};
 use std::io;
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, Clone, Default)]
@@ -109,7 +109,10 @@ struct PendingNotification {
 }
 
 impl VtPane {
-    const VT_WRITE_CHUNK: usize = 512;
+    const VT_WRITE_CHUNK: usize = 8 * 1024;
+    const PTY_POLL_MAX_CHUNKS: usize = 8;
+    const PTY_POLL_MAX_BYTES: usize = 32 * 1024;
+    const PTY_POLL_MAX_DURATION: Duration = Duration::from_millis(2);
 
     pub fn spawn(
         cols: u16,
@@ -135,7 +138,9 @@ impl VtPane {
             .resize(cols, rows, cell_width_px, cell_height_px)
             .map_err(vt_to_io)?;
 
-        let write_proxy = Box::new(PtyWriteProxy { fd: pty.master_fd() });
+        let write_proxy = Box::new(PtyWriteProxy {
+            fd: pty.master_fd(),
+        });
         terminal
             .set_userdata((&*write_proxy as *const PtyWriteProxy).cast_mut().cast())
             .map_err(vt_to_io)?;
@@ -194,12 +199,19 @@ impl VtPane {
 
     pub fn poll_pty(&mut self) -> io::Result<PollPtyResult> {
         let mut changed = false;
-        for chunk in self.pty.try_read() {
+        let started_at = Instant::now();
+        for chunk in self
+            .pty
+            .try_read_budgeted(Self::PTY_POLL_MAX_CHUNKS, Self::PTY_POLL_MAX_BYTES)
+        {
             self.observe_control_sequences(&chunk);
             for slice in chunk.chunks(Self::VT_WRITE_CHUNK) {
                 self.terminal.write(slice);
             }
             changed = true;
+            if started_at.elapsed() >= Self::PTY_POLL_MAX_DURATION {
+                break;
+            }
         }
         if changed {
             self.key_encoder.sync_from_terminal(&self.terminal);
@@ -342,32 +354,7 @@ impl VtPane {
         let mut row_iter = self.render_state.row_iterator().map_err(vt_to_io)?;
         let mut rows_data = Vec::with_capacity(rows as usize);
         while row_iter.next() {
-            let mut cells = row_iter.cells().map_err(vt_to_io)?;
-            let mut row = Vec::with_capacity(cols as usize);
-            while cells.next() {
-                let len = cells.grapheme_len().map_err(vt_to_io)? as usize;
-                let text = if len == 0 {
-                    String::new()
-                } else {
-                    let graphemes = cells.graphemes(len).map_err(vt_to_io)?;
-                    graphemes
-                        .into_iter()
-                        .filter_map(char::from_u32)
-                        .collect::<String>()
-                };
-                let style = cells.style().map_err(vt_to_io)?;
-                let fg = cells.fg_color().unwrap_or(colors.foreground);
-                let bg = cells.bg_color().unwrap_or(colors.background);
-                row.push(CellSnapshot {
-                    display_width: text_width(&text),
-                    text,
-                    fg,
-                    bg,
-                    bold: style.bold,
-                    italic: style.italic,
-                    underline: style.underline,
-                });
-            }
+            let row = snapshot_row(&row_iter, cols, colors)?;
             rows_data.push(row);
             let _ = row_iter.clear_dirty();
         }
@@ -384,6 +371,67 @@ impl VtPane {
             scrollbar,
             colors,
         })
+    }
+
+    pub fn refresh_snapshot(&mut self, snapshot: &mut TerminalSnapshot) -> io::Result<()> {
+        self.render_state.update(&self.terminal).map_err(vt_to_io)?;
+
+        let cols = self
+            .render_state
+            .get_u16(vt::GHOSTTY_RENDER_STATE_DATA_COLS)
+            .map_err(vt_to_io)?;
+        let rows = self
+            .render_state
+            .get_u16(vt::GHOSTTY_RENDER_STATE_DATA_ROWS)
+            .map_err(vt_to_io)?;
+        let colors = self.render_state.colors().map_err(vt_to_io)?;
+        let title = self.terminal.title().map_err(vt_to_io)?;
+        let pwd = self.terminal.pwd().map_err(vt_to_io)?;
+        let scrollbar = self.terminal.scrollbar().map_err(vt_to_io)?;
+        let cursor = CursorSnapshot {
+            visible: self
+                .render_state
+                .get_bool(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VISIBLE)
+                .map_err(vt_to_io)?,
+            x: self
+                .render_state
+                .get_u16(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X)
+                .unwrap_or(0),
+            y: self
+                .render_state
+                .get_u16(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y)
+                .unwrap_or(0),
+            style: self
+                .render_state
+                .get_i32(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE)
+                .unwrap_or(0),
+        };
+
+        let size_changed = snapshot.cols != cols || snapshot.rows != rows;
+        if size_changed || snapshot.rows_data.len() != rows as usize {
+            snapshot.rows_data.resize_with(rows as usize, Vec::new);
+        }
+
+        let mut row_iter = self.render_state.row_iterator().map_err(vt_to_io)?;
+        let mut row_index = 0usize;
+        while row_iter.next() {
+            let row_dirty = size_changed || row_iter.dirty().map_err(vt_to_io)?;
+            if row_dirty {
+                snapshot.rows_data[row_index] = snapshot_row(&row_iter, cols, colors)?;
+                let _ = row_iter.clear_dirty();
+            }
+            row_index += 1;
+        }
+
+        snapshot.cols = cols;
+        snapshot.rows = rows;
+        snapshot.title = title;
+        snapshot.pwd = pwd;
+        snapshot.cursor = cursor;
+        snapshot.scrollbar = scrollbar;
+        snapshot.colors = colors;
+        self.dirty = false;
+        Ok(())
     }
 
     pub fn key_encoder(&mut self) -> &mut vt::KeyEncoder {
@@ -407,6 +455,9 @@ impl VtPane {
     }
 
     fn observe_control_sequences(&mut self, bytes: &[u8]) {
+        if matches!(self.osc_state.mode, OscMode::Ground) && !bytes.contains(&0x1b) {
+            return;
+        }
         for &byte in bytes {
             match self.osc_state.mode {
                 OscMode::Ground => {
@@ -496,7 +547,12 @@ impl VtPane {
         };
 
         let meta = parse_osc_99_metadata(metadata);
-        if meta.base64 || matches!(meta.payload_type.as_deref(), Some("close" | "?" | "alive" | "icon" | "buttons")) {
+        if meta.base64
+            || matches!(
+                meta.payload_type.as_deref(),
+                Some("close" | "?" | "alive" | "icon" | "buttons")
+            )
+        {
             return;
         }
 
@@ -656,6 +712,40 @@ fn vt_to_io(err: vt::Error) -> io::Error {
 
 fn text_width(text: &str) -> u8 {
     UnicodeWidthStr::width(text).max(1).min(u8::MAX as usize) as u8
+}
+
+fn snapshot_row(
+    row_iter: &vt::RowIterator,
+    cols: u16,
+    colors: vt::GhosttyRenderStateColors,
+) -> io::Result<Vec<CellSnapshot>> {
+    let mut cells = row_iter.cells().map_err(vt_to_io)?;
+    let mut row = Vec::with_capacity(cols as usize);
+    while cells.next() {
+        let len = cells.grapheme_len().map_err(vt_to_io)? as usize;
+        let text = if len == 0 {
+            String::new()
+        } else {
+            let graphemes = cells.graphemes(len).map_err(vt_to_io)?;
+            graphemes
+                .into_iter()
+                .filter_map(char::from_u32)
+                .collect::<String>()
+        };
+        let style = cells.style().map_err(vt_to_io)?;
+        let fg = cells.fg_color().unwrap_or(colors.foreground);
+        let bg = cells.bg_color().unwrap_or(colors.background);
+        row.push(CellSnapshot {
+            display_width: text_width(&text),
+            text,
+            fg,
+            bg,
+            bold: style.bold,
+            italic: style.italic,
+            underline: style.underline,
+        });
+    }
+    Ok(row)
 }
 
 #[cfg(test)]

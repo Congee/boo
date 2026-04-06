@@ -101,9 +101,26 @@ impl PtyProcess {
         out
     }
 
-    pub fn child_pid(&self) -> libc::pid_t { self.child_pid }
+    pub fn try_read_budgeted(&self, max_chunks: usize, max_bytes: usize) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        let mut total_bytes = 0usize;
+        while out.len() < max_chunks && total_bytes < max_bytes {
+            let Ok(chunk) = self.rx.try_recv() else {
+                break;
+            };
+            total_bytes = total_bytes.saturating_add(chunk.len());
+            out.push(chunk);
+        }
+        out
+    }
 
-    pub fn master_fd(&self) -> RawFd { self.master_fd }
+    pub fn child_pid(&self) -> libc::pid_t {
+        self.child_pid
+    }
+
+    pub fn master_fd(&self) -> RawFd {
+        self.master_fd
+    }
 
     pub fn try_wait(&mut self) -> io::Result<bool> {
         if self.reaped {
@@ -250,7 +267,8 @@ fn child_exec(
     }
 
     if let Some(dir) = working_directory {
-        let dir = CString::new(dir.as_os_str().as_bytes()).unwrap_or_else(|_| CString::new("/").unwrap());
+        let dir =
+            CString::new(dir.as_os_str().as_bytes()).unwrap_or_else(|_| CString::new("/").unwrap());
         unsafe {
             libc::chdir(dir.as_ptr());
         }
@@ -327,5 +345,29 @@ fn read_loop(fd: RawFd, tx: mpsc::Sender<Vec<u8>>) {
     }
     unsafe {
         libc::close(fd);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn budgeted_read_limits_chunks_and_bytes() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(vec![0; 4]).unwrap();
+        tx.send(vec![0; 4]).unwrap();
+        tx.send(vec![0; 4]).unwrap();
+        let pty = PtyProcess {
+            master_fd: -1,
+            reader_fd: -1,
+            child_pid: 0,
+            rx,
+            reaped: true,
+        };
+
+        let chunks = pty.try_read_budgeted(2, 5);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks.iter().map(Vec::len).sum::<usize>(), 8);
     }
 }
