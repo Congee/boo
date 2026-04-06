@@ -279,6 +279,9 @@ impl BooApp {
     }
 
     pub(crate) fn update_text_input_cursor_rect(&self) {
+        if self.headless {
+            return;
+        }
         #[cfg(target_os = "macos")]
         {
             let rect = if self.focused_surface().is_null() {

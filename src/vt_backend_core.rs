@@ -115,7 +115,7 @@ struct PendingPtyChunk {
 }
 
 impl VtPane {
-    const VT_WRITE_CHUNK: usize = 8 * 1024;
+    const VT_WRITE_CHUNK: usize = 1024;
     const PTY_POLL_MAX_CHUNKS: usize = 8;
     const PTY_POLL_MAX_BYTES: usize = 32 * 1024;
     const PTY_POLL_MAX_DURATION: Duration = Duration::from_millis(2);
