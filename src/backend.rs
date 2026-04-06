@@ -92,6 +92,7 @@ pub trait TerminalBackend {
         cell_height: f64,
     ) -> BackendPollResult;
     fn ui_terminal_snapshot(&self, pane_id: pane::PaneId) -> Option<control::UiTerminalSnapshot>;
+    fn has_pending_terminal_work(&self) -> bool;
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn render_snapshot(
@@ -463,6 +464,10 @@ impl TerminalBackend for LinuxBackend {
         self.snapshots
             .get(&pane_id)
             .map(crate::vt_snapshot::ui_terminal_snapshot)
+    }
+
+    fn has_pending_terminal_work(&self) -> bool {
+        self.panes.values().any(crate::vt_backend_core::VtPane::has_pending_pty_work)
     }
 
     fn render_snapshot(

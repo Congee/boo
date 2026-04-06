@@ -502,6 +502,10 @@ impl VtPane {
         &self.terminal
     }
 
+    pub fn has_pending_pty_work(&self) -> bool {
+        !self.pending_pty_chunks.is_empty()
+    }
+
     fn observe_control_sequences(&mut self, bytes: &[u8]) {
         if matches!(self.osc_state.mode, OscMode::Ground) && !bytes.contains(&0x1b) {
             return;

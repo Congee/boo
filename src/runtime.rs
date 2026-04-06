@@ -19,9 +19,14 @@ pub fn run_headless() {
             let _scope = crate::profiling::scope("server.headless.update", crate::profiling::Kind::Cpu);
             let _ = app.update(Message::Frame);
         }
+        let sleep_duration = if app.backend.has_pending_terminal_work() {
+            std::time::Duration::from_millis(1)
+        } else {
+            std::time::Duration::from_millis(16)
+        };
         {
             let _scope = crate::profiling::scope("server.headless.sleep", crate::profiling::Kind::Wait);
-            std::thread::sleep(std::time::Duration::from_millis(16));
+            std::thread::sleep(sleep_duration);
         }
     }
 }
