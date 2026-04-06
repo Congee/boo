@@ -7,11 +7,25 @@ fn latency_debug_enabled() -> bool {
 }
 
 fn log_server_latency(stage: &str, started_at: Instant) {
+    crate::profiling::record(
+        stage_to_profile_path(stage),
+        crate::profiling::Kind::Cpu,
+        started_at.elapsed(),
+    );
     if latency_debug_enabled() {
         log::info!(
             "boo_latency_server stage={stage} ms={:.3}",
             started_at.elapsed().as_secs_f64() * 1000.0
         );
+    }
+}
+
+fn stage_to_profile_path(stage: &str) -> &'static str {
+    match stage {
+        "remote_input_applied" => "server.remote.input.apply",
+        "remote_key_applied" => "server.remote.key.apply",
+        "publish_remote_session" => "server.remote.publish_session",
+        _ => "server.unknown",
     }
 }
 

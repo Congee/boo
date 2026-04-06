@@ -447,6 +447,8 @@ impl RemoteServer {
     }
 
     fn send_state_to_client(&self, client_id: u64, state: &RemoteFullState) {
+        let _scope =
+            crate::profiling::scope("server.stream.encode_state", crate::profiling::Kind::Cpu);
         let (ty, payload) = {
             let mut guard = self.state.lock().expect("remote server state poisoned");
             let Some(client) = guard.clients.get_mut(&client_id) else {
@@ -485,9 +487,12 @@ impl Drop for RemoteServer {
 
 fn writer_loop<W: Write>(mut stream: W, outbound_rx: mpsc::Receiver<OutboundMessage>) {
     while let Ok(message) = outbound_rx.recv() {
+        let mut scope =
+            crate::profiling::scope("server.stream.batch_write", crate::profiling::Kind::Io);
         let batch = collect_outbound_batch(message, &outbound_rx);
         let mut failed = false;
         for frame in batch {
+            scope.add_bytes(frame.len() as u64);
             if stream.write_all(&frame).is_err() {
                 failed = true;
                 break;
@@ -534,7 +539,13 @@ fn read_loop(
     state: Arc<Mutex<State>>,
     cmd_tx: mpsc::Sender<RemoteCmd>,
 ) {
-    while let Ok((ty, payload)) = read_message(&mut stream) {
+    loop {
+        let mut scope =
+            crate::profiling::scope("server.stream.read_message", crate::profiling::Kind::Io);
+        let Ok((ty, payload)) = read_message(&mut stream) else {
+            break;
+        };
+        scope.add_bytes(payload.len() as u64);
         let (authenticated, is_local) = {
             let state = state.lock().expect("remote server state poisoned");
             state

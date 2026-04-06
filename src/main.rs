@@ -14,6 +14,7 @@ mod launch;
 mod macos_vt_backend;
 mod pane;
 mod platform;
+mod profiling;
 mod remote;
 mod runtime_input;
 mod runtime;

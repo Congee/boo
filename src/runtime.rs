@@ -15,8 +15,14 @@ fn take_global_receiver<T>(
 pub fn run_headless() {
     let mut app = BooApp::new_headless();
     loop {
-        let _ = app.update(Message::Frame);
-        std::thread::sleep(std::time::Duration::from_millis(16));
+        {
+            let _scope = crate::profiling::scope("server.headless.update", crate::profiling::Kind::Cpu);
+            let _ = app.update(Message::Frame);
+        }
+        {
+            let _scope = crate::profiling::scope("server.headless.sleep", crate::profiling::Kind::Wait);
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
     }
 }
 
@@ -401,9 +407,21 @@ impl BooApp {
             return iced::font::load(bytes).map(|_| Message::FontLoaded);
         }
 
-        self.backend.tick();
-        self.poll_backend();
-        self.update_text_input_cursor_rect();
+        {
+            let _scope = crate::profiling::scope("server.backend.tick", crate::profiling::Kind::Cpu);
+            self.backend.tick();
+        }
+        {
+            let _scope = crate::profiling::scope("server.backend.poll", crate::profiling::Kind::Cpu);
+            self.poll_backend();
+        }
+        {
+            let _scope = crate::profiling::scope(
+                "server.text_input_cursor_rect",
+                crate::profiling::Kind::Cpu,
+            );
+            self.update_text_input_cursor_rect();
+        }
 
         if let Ok(cmd) = self.server.ctl_rx.try_recv() {
             self.handle_server_cmd(cmd.into());
@@ -415,6 +433,8 @@ impl BooApp {
             self.handle_server_cmd(cmd.into());
         }
         if self.remote_dirty {
+            let _scope =
+                crate::profiling::scope("server.publish_remote_state", crate::profiling::Kind::Cpu);
             self.publish_remote_state();
             self.remote_dirty = false;
         }

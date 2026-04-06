@@ -288,6 +288,8 @@ impl ClientApp {
     }
 
     fn refresh_snapshot(&mut self) {
+        let _scope =
+            crate::profiling::scope("client.control.get_ui_snapshot", crate::profiling::Kind::Io);
         match self.client.get_ui_snapshot() {
             Ok(snapshot) => {
                 if matches!(self.mode, ClientMode::Attached) {
@@ -422,12 +424,16 @@ impl ClientApp {
                     self.last_error = Some("boo server stream disconnected".to_string());
                 }
                 LocalStreamEvent::FullState { ack_input_seq, state } => {
+                    let _scope =
+                        crate::profiling::scope("client.stream.apply_full", crate::profiling::Kind::Cpu);
                     self.mode = ClientMode::Attached;
                     self.stream_snapshot = Some(Arc::new(remote_full_state_to_vt_snapshot(&state)));
                     self.bootstrap_snapshot = None;
                     self.acknowledge_input_latency("stream_full_state", ack_input_seq);
                 }
                 LocalStreamEvent::Delta { ack_input_seq, delta } => {
+                    let _scope =
+                        crate::profiling::scope("client.stream.apply_delta", crate::profiling::Kind::Cpu);
                     if let Some(snapshot) = self.stream_snapshot.as_mut() {
                         apply_remote_delta_snapshot(Arc::make_mut(snapshot), &delta);
                     }
@@ -608,6 +614,15 @@ fn latency_debug_enabled() -> bool {
 }
 
 fn log_client_latency(stage: &str, input_seq: u64, started_at: Instant) {
+    crate::profiling::record(
+        match stage {
+            "stream_full_state" => "client.latency.stream_full_state",
+            "stream_delta" => "client.latency.stream_delta",
+            _ => "client.latency.other",
+        },
+        crate::profiling::Kind::Cpu,
+        started_at.elapsed(),
+    );
     if !latency_debug_enabled() {
         return;
     }
@@ -752,6 +767,8 @@ pub(crate) enum StreamCommand {
 
 fn write_stream_message(write: &mut UnixStream, ty: remote::MessageType, payload: &[u8]) -> std::io::Result<()> {
         let frame = remote::encode_message(ty, payload);
+        let mut scope = crate::profiling::scope("client.stream.write", crate::profiling::Kind::Io);
+        scope.add_bytes(frame.len() as u64);
         write.write_all(&frame)?;
         write.flush()
 }
@@ -903,7 +920,13 @@ fn parse_gui_test_command(line: &str) -> Option<GuiTestCommand> {
 }
 
 fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStreamEvent)) {
-    while let Ok((ty, payload)) = remote::read_message(&mut read) {
+    loop {
+        let mut scope =
+            crate::profiling::scope("client.stream.read_message", crate::profiling::Kind::Io);
+        let Ok((ty, payload)) = remote::read_message(&mut read) else {
+            break;
+        };
+        scope.add_bytes(payload.len() as u64);
         let event = match ty {
             remote::MessageType::SessionList => {
                 decode_remote_session_list(&payload).map(LocalStreamEvent::SessionList)

@@ -246,6 +246,8 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry<Renderer>> {
+        let _profile_scope =
+            crate::profiling::scope("client.canvas.draw", crate::profiling::Kind::Cpu);
         let started_at = render_debug_enabled().then(Instant::now);
         let base_fingerprint = self.base_fingerprint();
         {
