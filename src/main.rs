@@ -576,6 +576,7 @@ pub mod main_tests {
                     underline: 0,
                 },
             ]],
+            row_revisions: vec![1],
             scrollbar: vt::GhosttyTerminalScrollbar {
                 total: 1,
                 offset: 0,
@@ -631,6 +632,7 @@ pub mod main_tests {
                     },
                 ],
             ],
+            row_revisions: vec![1, 1],
             scrollbar: vt::GhosttyTerminalScrollbar::default(),
             colors: vt::GhosttyRenderStateColors::default(),
         };
@@ -687,6 +689,7 @@ pub mod main_tests {
                     vt_backend_core::CellSnapshot::default(),
                 ],
             ],
+            row_revisions: vec![1, 1],
             scrollbar: vt::GhosttyTerminalScrollbar::default(),
             colors: vt::GhosttyRenderStateColors::default(),
         };

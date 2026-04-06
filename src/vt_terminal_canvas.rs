@@ -505,7 +505,9 @@ impl TerminalCanvas {
         self.background_opacity_cells.hash(&mut hasher);
         self.font_family.hash(&mut hasher);
         self.appearance_revision.hash(&mut hasher);
-        if let Some(row) = self.snapshot.rows_data.get(row_index) {
+        if let Some(revision) = self.snapshot.row_revisions.get(row_index).copied() {
+            revision.hash(&mut hasher);
+        } else if let Some(row) = self.snapshot.rows_data.get(row_index) {
             for cell in row {
                 cell.text.hash(&mut hasher);
                 cell.display_width.hash(&mut hasher);

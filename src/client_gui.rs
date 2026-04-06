@@ -647,6 +647,7 @@ fn remote_full_state_to_vt_snapshot(state: &remote::RemoteFullState) -> vt_backe
             style: 1,
         },
         rows_data,
+        row_revisions: vec![1; state.rows as usize],
         scrollbar: Default::default(),
         colors: vt::GhosttyRenderStateColors {
             foreground: vt::GhosttyColorRgb {
@@ -704,6 +705,7 @@ fn ui_terminal_to_vt_snapshot(snapshot: &control::UiTerminalSnapshot) -> vt_back
                     .collect()
             })
             .collect(),
+        row_revisions: vec![1; snapshot.rows_data.len()],
         scrollbar: Default::default(),
         colors: vt::GhosttyRenderStateColors {
             foreground: vt::GhosttyColorRgb {
@@ -1117,8 +1119,16 @@ fn apply_remote_delta_snapshot(
     snapshot.cursor.y = delta.cursor_y;
     snapshot.cursor.visible = delta.cursor_visible;
     let cols = snapshot.cols as usize;
+    if snapshot.row_revisions.len() != snapshot.rows_data.len() {
+        snapshot
+            .row_revisions
+            .resize(snapshot.rows_data.len(), 1);
+    }
     if delta.scroll_rows != 0 {
         apply_snapshot_scroll(snapshot, delta.scroll_rows);
+        for revision in &mut snapshot.row_revisions {
+            *revision = revision.wrapping_add(1);
+        }
     }
     for (row, row_cells) in &delta.changed_rows {
         let row_index = *row as usize;
@@ -1132,6 +1142,9 @@ fn apply_remote_delta_snapshot(
         for (col_index, cell) in row_cells.iter().enumerate().take(cols) {
             target_row[col_index] = remote_cell_to_snapshot(cell);
         }
+        if let Some(revision) = snapshot.row_revisions.get_mut(row_index) {
+            *revision = revision.wrapping_add(1);
+        }
     }
 }
 
@@ -1141,19 +1154,26 @@ fn apply_snapshot_scroll(snapshot: &mut vt_backend_core::TerminalSnapshot, scrol
         return;
     }
     let cols = snapshot.cols as usize;
+    if snapshot.row_revisions.len() != rows {
+        snapshot.row_revisions.resize(rows, 1);
+    }
     let blank_row = || vec![vt_backend_core::CellSnapshot::default(); cols];
     if scroll_rows > 0 {
         let shift = (scroll_rows as usize).min(rows);
         snapshot.rows_data.drain(0..shift);
+        snapshot.row_revisions.drain(0..shift);
         for _ in 0..shift {
             snapshot.rows_data.push(blank_row());
+            snapshot.row_revisions.push(1);
         }
     } else {
         let shift = ((-scroll_rows) as usize).min(rows);
         for _ in 0..shift {
             snapshot.rows_data.insert(0, blank_row());
+            snapshot.row_revisions.insert(0, 1);
         }
         snapshot.rows_data.truncate(rows);
+        snapshot.row_revisions.truncate(rows);
     }
 }
 

@@ -40,6 +40,7 @@ pub struct TerminalSnapshot {
     pub pwd: String,
     pub cursor: CursorSnapshot,
     pub rows_data: Vec<Vec<CellSnapshot>>,
+    pub row_revisions: Vec<u64>,
     pub scrollbar: vt::GhosttyTerminalScrollbar,
     pub colors: vt::GhosttyRenderStateColors,
 }
@@ -622,6 +623,7 @@ impl VtPane {
             pwd,
             cursor,
             rows_data,
+            row_revisions: vec![1; rows as usize],
             scrollbar,
             colors,
         })
@@ -664,6 +666,7 @@ impl VtPane {
         let size_changed = snapshot.cols != cols || snapshot.rows != rows;
         if size_changed || snapshot.rows_data.len() != rows as usize {
             snapshot.rows_data.resize_with(rows as usize, Vec::new);
+            snapshot.row_revisions.resize(rows as usize, 1);
         }
 
         let mut row_iter = self.render_state.row_iterator().map_err(vt_to_io)?;
@@ -672,6 +675,8 @@ impl VtPane {
             let row_dirty = size_changed || row_iter.dirty().map_err(vt_to_io)?;
             if row_dirty {
                 snapshot.rows_data[row_index] = snapshot_row(&row_iter, cols, colors)?;
+                snapshot.row_revisions[row_index] =
+                    snapshot.row_revisions[row_index].wrapping_add(1);
                 let _ = row_iter.clear_dirty();
             }
             row_index += 1;
