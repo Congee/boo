@@ -9,7 +9,9 @@ use iced::widget::{column, container, row, text};
 use iced::window;
 use iced::{keyboard, time, Color, Element, Event, Font, Length, Size, Subscription, Task, Theme};
 use std::collections::HashMap;
+use std::io::{BufRead, BufReader};
 use std::io::Write;
+use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -27,6 +29,15 @@ pub enum Message {
     IcedEvent(Event),
     StreamReady(std::sync::mpsc::Sender<StreamCommand>),
     StreamEvent(LocalStreamEvent),
+    GuiTest(GuiTestCommand),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuiTestCommand {
+    Text(String),
+    Key(String),
+    Resize { cols: u16, rows: u16 },
+    Refresh,
 }
 
 pub struct ClientApp {
@@ -107,6 +118,7 @@ impl ClientApp {
                 self.send_stream_command(StreamCommand::ListSessions);
             }
             Message::StreamEvent(event) => self.handle_stream_event(event),
+            Message::GuiTest(command) => self.handle_gui_test(command),
             Message::IcedEvent(event) => match event {
                 Event::Window(window::Event::Resized(size)) => {
                     self.send_resize(size);
@@ -233,6 +245,7 @@ impl ClientApp {
             time::every(IDLE_TICK_INTERVAL).map(|_| Message::Frame),
             iced::event::listen().map(Message::IcedEvent),
             iced::Subscription::run_with(self.socket_path.clone(), local_stream_subscription),
+            gui_test_subscription(),
         ])
     }
 
@@ -389,9 +402,46 @@ impl ClientApp {
         }
     }
 
+    fn handle_gui_test(&mut self, command: GuiTestCommand) {
+        match command {
+            GuiTestCommand::Text(text) => {
+                if self.stream_ready_for_terminal_io() {
+                    let input_seq = self.record_pending_input();
+                    self.send_stream_command(StreamCommand::Input {
+                        input_seq,
+                        bytes: text.into_bytes(),
+                    });
+                } else {
+                    let _ = self.client.send(&control::Request::SendText { text });
+                    self.refresh_snapshot();
+                }
+            }
+            GuiTestCommand::Key(keyspec) => {
+                if self.stream_ready_for_terminal_io() {
+                    let input_seq = self.record_pending_input();
+                    self.send_stream_command(StreamCommand::Key { input_seq, keyspec });
+                } else {
+                    let _ = self.client.send(&control::Request::SendKey { key: keyspec });
+                    self.refresh_snapshot();
+                }
+            }
+            GuiTestCommand::Resize { cols, rows } => self.send_resize_cells(cols, rows),
+            GuiTestCommand::Refresh => self.refresh_snapshot(),
+        }
+    }
+
     fn send_stream_command(&self, command: StreamCommand) {
         if let Some(tx) = self.stream_tx.as_ref() {
             let _ = tx.send(command);
+        }
+    }
+
+    fn send_resize_cells(&mut self, cols: u16, rows: u16) {
+        if self.stream_ready_for_terminal_io() {
+            self.send_stream_command(StreamCommand::Resize { cols, rows });
+        } else {
+            let _ = self.client.send(&control::Request::ResizeFocused { cols, rows });
+            self.refresh_snapshot();
         }
     }
 
@@ -656,6 +706,76 @@ fn local_stream_subscription(
             }
         },
     ))
+}
+
+fn gui_test_subscription() -> Subscription<Message> {
+    let Some(socket_path) = std::env::var_os("BOO_GUI_TEST_SOCKET").and_then(|path| path.into_string().ok()) else {
+        return Subscription::none();
+    };
+    iced::Subscription::run_with(socket_path, |socket_path| {
+        let socket_path = socket_path.clone();
+        Box::pin(stream::channel(
+            100,
+            move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+                let (event_tx, mut event_rx) =
+                    iced::futures::channel::mpsc::unbounded::<GuiTestCommand>();
+                std::thread::spawn(move || {
+                    let _ = std::fs::remove_file(&socket_path);
+                    let Ok(listener) = UnixListener::bind(&socket_path) else {
+                        return;
+                    };
+                    while let Ok((stream, _addr)) = listener.accept() {
+                        let mut reader = BufReader::new(stream);
+                        let mut line = String::new();
+                        loop {
+                            line.clear();
+                            let Ok(bytes) = reader.read_line(&mut line) else {
+                                break;
+                            };
+                            if bytes == 0 {
+                                break;
+                            }
+                            if let Some(command) =
+                                parse_gui_test_command(line.trim_end_matches(['\r', '\n']))
+                            {
+                                let _ = event_tx.unbounded_send(command);
+                            }
+                        }
+                    }
+                    let _ = std::fs::remove_file(&socket_path);
+                });
+
+                while let Some(command) = event_rx.next().await {
+                    if output.send(Message::GuiTest(command)).await.is_err() {
+                        break;
+                    }
+                }
+            },
+        ))
+    })
+}
+
+fn parse_gui_test_command(line: &str) -> Option<GuiTestCommand> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(rest) = trimmed.strip_prefix("text ") {
+        return Some(GuiTestCommand::Text(rest.to_string()));
+    }
+    if let Some(rest) = trimmed.strip_prefix("key ") {
+        return Some(GuiTestCommand::Key(rest.to_string()));
+    }
+    if let Some(rest) = trimmed.strip_prefix("resize ") {
+        let mut parts = rest.split_whitespace();
+        let cols = parts.next()?.parse().ok()?;
+        let rows = parts.next()?.parse().ok()?;
+        return Some(GuiTestCommand::Resize { cols, rows });
+    }
+    if trimmed == "refresh" {
+        return Some(GuiTestCommand::Refresh);
+    }
+    None
 }
 
 fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStreamEvent)) {
@@ -986,6 +1106,30 @@ mod tests {
         assert_eq!(
             committed_text_from_key(&key, keyboard::Modifiers::CTRL),
             None
+        );
+    }
+
+    #[test]
+    fn parse_gui_test_text_command() {
+        assert_eq!(
+            parse_gui_test_command("text hello"),
+            Some(GuiTestCommand::Text("hello".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_gui_test_resize_command() {
+        assert_eq!(
+            parse_gui_test_command("resize 120 40"),
+            Some(GuiTestCommand::Resize { cols: 120, rows: 40 })
+        );
+    }
+
+    #[test]
+    fn parse_gui_test_refresh_command() {
+        assert_eq!(
+            parse_gui_test_command("refresh"),
+            Some(GuiTestCommand::Refresh)
         );
     }
 }
