@@ -820,7 +820,8 @@ fn encode_delta(
         return Some(payload);
     }
 
-    if changed_rows.len() == rows {
+    let scroll_rows = detect_scroll_rows(previous, current);
+    if changed_rows.len() == rows && scroll_rows.is_none() {
         return None;
     }
 
@@ -828,12 +829,24 @@ fn encode_delta(
     if local {
         payload.extend_from_slice(&latest_input_seq.unwrap_or(0).to_le_bytes());
     }
-    payload.extend_from_slice(&(changed_rows.len() as u16).to_le_bytes());
+    let rows_to_encode = if let Some(scroll_rows) = scroll_rows {
+        rows_changed_after_scroll(current.rows as usize, scroll_rows)
+    } else {
+        changed_rows
+    };
+    payload.extend_from_slice(&(rows_to_encode.len() as u16).to_le_bytes());
     payload.extend_from_slice(&current.cursor_x.to_le_bytes());
     payload.extend_from_slice(&current.cursor_y.to_le_bytes());
     payload.push(u8::from(current.cursor_visible));
-    payload.push(0);
-    for row in changed_rows {
+    let mut flags = 0u8;
+    if scroll_rows.is_some() {
+        flags |= 0x01;
+    }
+    payload.push(flags);
+    if let Some(scroll_rows) = scroll_rows {
+        payload.extend_from_slice(&scroll_rows.to_le_bytes());
+    }
+    for row in rows_to_encode {
         payload.extend_from_slice(&row.to_le_bytes());
         payload.extend_from_slice(&current.cols.to_le_bytes());
         let start = row as usize * cols;
@@ -847,6 +860,37 @@ fn encode_delta(
         }
     }
     Some(payload)
+}
+
+fn detect_scroll_rows(previous: &RemoteFullState, current: &RemoteFullState) -> Option<i16> {
+    if previous.rows != current.rows || previous.cols != current.cols || current.rows <= 1 {
+        return None;
+    }
+    let rows = current.rows as usize;
+    let cols = current.cols as usize;
+
+    for shift in 1..rows {
+        let overlap = rows - shift;
+        if previous.cells[shift * cols..rows * cols] == current.cells[..overlap * cols] {
+            return Some(shift as i16);
+        }
+        if previous.cells[..overlap * cols] == current.cells[shift * cols..rows * cols] {
+            return Some(-(shift as i16));
+        }
+    }
+    None
+}
+
+fn rows_changed_after_scroll(rows: usize, scroll_rows: i16) -> Vec<u16> {
+    if scroll_rows > 0 {
+        let shift = scroll_rows as usize;
+        ((rows.saturating_sub(shift))..rows)
+            .map(|row| row as u16)
+            .collect()
+    } else {
+        let shift = (-scroll_rows) as usize;
+        (0..shift.min(rows)).map(|row| row as u16).collect()
+    }
 }
 
 fn push_string(payload: &mut Vec<u8>, text: &str) {
@@ -1179,5 +1223,41 @@ mod tests {
         let first = rx.recv().unwrap();
         let batch = collect_outbound_batch(first, &rx);
         assert_eq!(batch, vec![vec![2], vec![9], vec![3]]);
+    }
+
+    #[test]
+    fn encode_delta_uses_scroll_delta_for_scrolling_output() {
+        let row = |ch: char| -> Vec<RemoteCell> {
+            vec![RemoteCell {
+                codepoint: u32::from(ch),
+                fg: [1, 2, 3],
+                bg: [0, 0, 0],
+                style_flags: 0,
+                wide: false,
+            }]
+        };
+        let previous = RemoteFullState {
+            rows: 3,
+            cols: 1,
+            cursor_x: 0,
+            cursor_y: 2,
+            cursor_visible: true,
+            cells: [row('a'), row('b'), row('c')].concat(),
+        };
+        let current = RemoteFullState {
+            rows: 3,
+            cols: 1,
+            cursor_x: 0,
+            cursor_y: 2,
+            cursor_visible: true,
+            cells: [row('b'), row('c'), row('d')].concat(),
+        };
+
+        let payload = encode_delta(&previous, &current, Some(7), true).expect("delta payload");
+        assert_eq!(u64::from_le_bytes(payload[0..8].try_into().unwrap()), 7);
+        assert_eq!(u16::from_le_bytes(payload[8..10].try_into().unwrap()), 1);
+        assert_eq!(payload[15] & 0x01, 0x01);
+        assert_eq!(i16::from_le_bytes(payload[16..18].try_into().unwrap()), 1);
+        assert_eq!(u16::from_le_bytes(payload[18..20].try_into().unwrap()), 2);
     }
 }

@@ -737,6 +737,7 @@ pub(crate) struct RemoteDelta {
     cursor_x: u16,
     cursor_y: u16,
     cursor_visible: bool,
+    scroll_rows: i16,
     changed_rows: Vec<(u16, Vec<remote::RemoteCell>)>,
 }
 
@@ -1038,7 +1039,18 @@ fn decode_remote_delta(payload: &[u8]) -> Option<(Option<u64>, RemoteDelta)> {
     let cursor_x = u16::from_le_bytes([payload[10], payload[11]]);
     let cursor_y = u16::from_le_bytes([payload[12], payload[13]]);
     let cursor_visible = payload[14] != 0;
+    let flags = payload[15];
     let mut offset = 16usize;
+    let scroll_rows = if (flags & 0x01) != 0 {
+        if offset + 2 > payload.len() {
+            return None;
+        }
+        let value = i16::from_le_bytes([payload[offset], payload[offset + 1]]);
+        offset += 2;
+        value
+    } else {
+        0
+    };
     let mut changed_rows = Vec::with_capacity(row_count);
     for _ in 0..row_count {
         if offset + 4 > payload.len() {
@@ -1074,6 +1086,7 @@ fn decode_remote_delta(payload: &[u8]) -> Option<(Option<u64>, RemoteDelta)> {
             cursor_x,
             cursor_y,
             cursor_visible,
+            scroll_rows,
             changed_rows,
         },
     ))
@@ -1087,6 +1100,9 @@ fn apply_remote_delta_snapshot(
     snapshot.cursor.y = delta.cursor_y;
     snapshot.cursor.visible = delta.cursor_visible;
     let cols = snapshot.cols as usize;
+    if delta.scroll_rows != 0 {
+        apply_snapshot_scroll(snapshot, delta.scroll_rows);
+    }
     for (row, row_cells) in &delta.changed_rows {
         let row_index = *row as usize;
         if row_index >= snapshot.rows_data.len() {
@@ -1099,6 +1115,28 @@ fn apply_remote_delta_snapshot(
         for (col_index, cell) in row_cells.iter().enumerate().take(cols) {
             target_row[col_index] = remote_cell_to_snapshot(cell);
         }
+    }
+}
+
+fn apply_snapshot_scroll(snapshot: &mut vt_backend_core::TerminalSnapshot, scroll_rows: i16) {
+    let rows = snapshot.rows_data.len();
+    if rows == 0 {
+        return;
+    }
+    let cols = snapshot.cols as usize;
+    let blank_row = || vec![vt_backend_core::CellSnapshot::default(); cols];
+    if scroll_rows > 0 {
+        let shift = (scroll_rows as usize).min(rows);
+        snapshot.rows_data.drain(0..shift);
+        for _ in 0..shift {
+            snapshot.rows_data.push(blank_row());
+        }
+    } else {
+        let shift = ((-scroll_rows) as usize).min(rows);
+        for _ in 0..shift {
+            snapshot.rows_data.insert(0, blank_row());
+        }
+        snapshot.rows_data.truncate(rows);
     }
 }
 
@@ -1240,6 +1278,62 @@ mod tests {
             parse_gui_test_command("refresh"),
             Some(GuiTestCommand::Refresh)
         );
+    }
+
+    #[test]
+    fn apply_remote_delta_scrolls_snapshot_before_replacing_changed_rows() {
+        let mut snapshot = vt_backend_core::TerminalSnapshot {
+            cols: 1,
+            rows: 3,
+            cursor: vt_backend_core::CursorSnapshot {
+                visible: true,
+                x: 0,
+                y: 2,
+                style: 0,
+            },
+            rows_data: vec![
+                vec![vt_backend_core::CellSnapshot {
+                    text: "a".to_string(),
+                    ..Default::default()
+                }],
+                vec![vt_backend_core::CellSnapshot {
+                    text: "b".to_string(),
+                    ..Default::default()
+                }],
+                vec![vt_backend_core::CellSnapshot {
+                    text: "c".to_string(),
+                    ..Default::default()
+                }],
+            ],
+            ..Default::default()
+        };
+
+        apply_remote_delta_snapshot(
+            &mut snapshot,
+            &RemoteDelta {
+                cursor_x: 0,
+                cursor_y: 2,
+                cursor_visible: true,
+                scroll_rows: 1,
+                changed_rows: vec![(
+                    2,
+                    vec![remote::RemoteCell {
+                        codepoint: u32::from('d'),
+                        fg: [0, 0, 0],
+                        bg: [0, 0, 0],
+                        style_flags: 0,
+                        wide: false,
+                    }],
+                )],
+            },
+        );
+
+        let texts = snapshot
+            .rows_data
+            .iter()
+            .map(|row| row.first().map(|cell| cell.text.clone()).unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(texts, vec!["b".to_string(), "c".to_string(), "d".to_string()]);
     }
 }
 
