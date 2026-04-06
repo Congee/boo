@@ -40,12 +40,38 @@ pub enum GuiTestCommand {
     Refresh,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientMode {
+    Bootstrapping,
+    Attached,
+    Recovering,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct ClientUiState {
+    tabs: Vec<ClientTabState>,
+    active_tab: usize,
+    pwd: String,
+    pane_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClientTabState {
+    index: usize,
+    session_id: Option<u32>,
+    active: bool,
+    title: String,
+    pane_count: usize,
+}
+
 pub struct ClientApp {
     socket_path: String,
     client: control::Client,
     stream_tx: Option<std::sync::mpsc::Sender<StreamCommand>>,
-    snapshot: Option<control::UiSnapshot>,
-    stream_state: Option<remote::RemoteFullState>,
+    bootstrap_snapshot: Option<control::UiSnapshot>,
+    ui_state: ClientUiState,
+    mode: ClientMode,
+    active_session_id: Option<u32>,
     stream_snapshot: Option<Arc<vt_backend_core::TerminalSnapshot>>,
     last_error: Option<String>,
     cell_width: f64,
@@ -54,10 +80,9 @@ pub struct ClientApp {
     background_opacity: f32,
     background_opacity_cells: bool,
     tick_counter: u8,
-    active_tab_index: usize,
-    render_revision: u64,
     next_input_seq: u64,
     pending_input_latencies: HashMap<u64, Instant>,
+    steady_state_snapshot_requests: u64,
     should_exit: bool,
 }
 
@@ -65,32 +90,37 @@ impl ClientApp {
     fn has_paintable_terminal(&self) -> bool {
         self.stream_snapshot.is_some()
             || self
-                .snapshot
+                .bootstrap_snapshot
                 .as_ref()
                 .and_then(|snapshot| snapshot.terminal.as_ref())
                 .is_some()
     }
 
     fn stream_ready_for_terminal_io(&self) -> bool {
-        self.stream_tx.is_some() && self.stream_state.is_some()
+        self.stream_tx.is_some() && matches!(self.mode, ClientMode::Attached)
     }
 
     pub fn new(socket_path: String) -> (Self, Task<Message>) {
         let client = control::Client::connect(socket_path.clone());
         let snapshot = client.get_ui_snapshot().ok();
-        let active_tab_index = snapshot.as_ref().map(|snapshot| snapshot.active_tab).unwrap_or(0);
         let font_size = snapshot
             .as_ref()
             .map(|snapshot| snapshot.appearance.font_size)
             .unwrap_or(DEFAULT_FONT_SIZE);
         let (cell_width, cell_height) = terminal_metrics(font_size);
+        let ui_state = snapshot
+            .as_ref()
+            .map(ClientUiState::from_snapshot)
+            .unwrap_or_default();
         (
             Self {
                 socket_path,
                 client,
                 stream_tx: None,
-                snapshot,
-                stream_state: None,
+                bootstrap_snapshot: snapshot,
+                ui_state,
+                mode: ClientMode::Bootstrapping,
+                active_session_id: None,
                 stream_snapshot: None,
                 last_error: None,
                 cell_width,
@@ -99,10 +129,9 @@ impl ClientApp {
                 background_opacity: 1.0,
                 background_opacity_cells: false,
                 tick_counter: 0,
-                active_tab_index,
-                render_revision: 1,
                 next_input_seq: 1,
                 pending_input_latencies: HashMap::new(),
+                steady_state_snapshot_requests: 0,
                 should_exit: false,
             },
             Task::none(),
@@ -114,7 +143,9 @@ impl ClientApp {
             Message::Frame => self.on_tick(),
             Message::StreamReady(tx) => {
                 self.stream_tx = Some(tx);
-                self.refresh_snapshot();
+                if !matches!(self.mode, ClientMode::Attached) {
+                    self.refresh_snapshot();
+                }
                 self.send_stream_command(StreamCommand::ListSessions);
             }
             Message::StreamEvent(event) => self.handle_stream_event(event),
@@ -137,31 +168,31 @@ impl ClientApp {
     pub fn view(&self) -> Element<'_, Message> {
         let mut main_col = column![].width(Length::Fill).height(Length::Fill);
 
-        if let Some(snapshot) = self.snapshot.as_ref() {
-            if let Some(stream_snapshot) = self.stream_snapshot.as_ref() {
-                let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
-                    Arc::clone(stream_snapshot),
-                    self.cell_width as f32,
-                    self.cell_height as f32,
-                    self.font_size,
-                    None,
-                    1,
-                    self.background_opacity,
-                    self.background_opacity_cells,
-                    Vec::new(),
-                    Color::from_rgba(0.65, 0.72, 0.95, 0.35),
-                    None,
-                );
-                main_col = main_col.push(
-                    container(
-                        iced::widget::canvas(terminal_canvas)
-                            .width(Length::Fill)
-                            .height(Length::Fill),
-                    )
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-                );
-            } else if let Some(terminal) = snapshot.terminal.as_ref() {
+        if let Some(stream_snapshot) = self.stream_snapshot.as_ref() {
+            let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
+                Arc::clone(stream_snapshot),
+                self.cell_width as f32,
+                self.cell_height as f32,
+                self.font_size,
+                None,
+                1,
+                self.background_opacity,
+                self.background_opacity_cells,
+                Vec::new(),
+                Color::from_rgba(0.65, 0.72, 0.95, 0.35),
+                None,
+            );
+            main_col = main_col.push(
+                container(
+                    iced::widget::canvas(terminal_canvas)
+                        .width(Length::Fill)
+                        .height(Length::Fill),
+                )
+                .width(Length::Fill)
+                .height(Length::Fill),
+            );
+        } else if let Some(snapshot) = self.bootstrap_snapshot.as_ref() {
+            if let Some(terminal) = snapshot.terminal.as_ref() {
                 let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
                     Arc::new(ui_terminal_to_vt_snapshot(terminal)),
                     self.cell_width as f32,
@@ -191,33 +222,6 @@ impl ClientApp {
                         .height(Length::Fill),
                 );
             }
-
-            let (left, right) = build_status(snapshot);
-            main_col = main_col.push(
-                container(
-                    row![
-                        text(left)
-                            .font(Font::MONOSPACE)
-                            .size(13)
-                            .color(Color::from_rgb(0.8, 0.8, 0.8)),
-                        iced::widget::Space::new().width(Length::Fill),
-                        text(right)
-                            .font(Font::MONOSPACE)
-                            .size(13)
-                            .color(Color::from_rgb(0.6, 0.6, 0.6)),
-                    ]
-                    .width(Length::Fill),
-                )
-                .style(|_: &Theme| container::Style {
-                    background: Some(iced::Background::Color(Color::from_rgba(
-                        0.12, 0.12, 0.12, 0.92,
-                    ))),
-                    ..Default::default()
-                })
-                .width(Length::Fill)
-                .height(Length::Fixed(STATUS_BAR_HEIGHT as f32))
-                .padding([2, 6]),
-            );
         } else {
             let message = self
                 .last_error
@@ -229,6 +233,33 @@ impl ClientApp {
                     .height(Length::Fill),
             );
         }
+
+        let (left, right) = build_status(&self.ui_state);
+        main_col = main_col.push(
+            container(
+                row![
+                    text(left)
+                        .font(Font::MONOSPACE)
+                        .size(13)
+                        .color(Color::from_rgb(0.8, 0.8, 0.8)),
+                    iced::widget::Space::new().width(Length::Fill),
+                    text(right)
+                        .font(Font::MONOSPACE)
+                        .size(13)
+                        .color(Color::from_rgb(0.6, 0.6, 0.6)),
+                ]
+                .width(Length::Fill),
+            )
+            .style(|_: &Theme| container::Style {
+                background: Some(iced::Background::Color(Color::from_rgba(
+                    0.12, 0.12, 0.12, 0.92,
+                ))),
+                ..Default::default()
+            })
+            .width(Length::Fill)
+            .height(Length::Fixed(STATUS_BAR_HEIGHT as f32))
+            .padding([2, 6]),
+        );
 
         container(main_col)
             .width(Length::Fill)
@@ -259,13 +290,16 @@ impl ClientApp {
     fn refresh_snapshot(&mut self) {
         match self.client.get_ui_snapshot() {
             Ok(snapshot) => {
-                self.active_tab_index = snapshot.active_tab;
+                if matches!(self.mode, ClientMode::Attached) {
+                    self.steady_state_snapshot_requests =
+                        self.steady_state_snapshot_requests.saturating_add(1);
+                }
                 self.font_size = snapshot.appearance.font_size.max(8.0);
                 self.background_opacity = snapshot.appearance.background_opacity;
                 self.background_opacity_cells = snapshot.appearance.background_opacity_cells;
                 (self.cell_width, self.cell_height) = terminal_metrics(self.font_size);
-                self.snapshot = Some(snapshot);
-                self.render_revision = self.render_revision.wrapping_add(1);
+                self.ui_state = ClientUiState::from_snapshot(&snapshot);
+                self.bootstrap_snapshot = Some(snapshot);
                 self.last_error = None;
             }
             Err(error) => {
@@ -275,8 +309,11 @@ impl ClientApp {
     }
 
     fn on_tick(&mut self) {
+        if matches!(self.mode, ClientMode::Attached) {
+            return;
+        }
         self.tick_counter = self.tick_counter.wrapping_add(1);
-        let refresh_ticks = if !self.stream_ready_for_terminal_io() || !self.has_paintable_terminal() {
+        let refresh_ticks = if !self.has_paintable_terminal() || self.stream_tx.is_none() {
             SNAPSHOT_RETRY_TICKS
         } else {
             SNAPSHOT_KEEPALIVE_TICKS
@@ -345,10 +382,8 @@ impl ClientApp {
                         .iter()
                         .filter(|session| !session.child_exited)
                         .collect();
-                    if let Some(session) = live_sessions
-                        .get(self.active_tab_index)
-                        .or_else(|| live_sessions.first())
-                    {
+                    self.apply_remote_sessions(&sessions);
+                    if let Some(session) = self.pick_attach_session(&live_sessions) {
                         self.should_exit = false;
                         self.send_stream_command(StreamCommand::Attach(session.id));
                     } else {
@@ -356,44 +391,46 @@ impl ClientApp {
                     }
                 }
                 LocalStreamEvent::Attached(session_id) => {
-                    let _ = session_id;
+                    self.active_session_id = Some(session_id);
+                    self.ui_state.mark_active_session(Some(session_id));
                 }
                 LocalStreamEvent::Detached => {
-                    self.stream_state = None;
+                    self.mode = ClientMode::Recovering;
+                    self.active_session_id = None;
                     self.stream_snapshot = None;
                     self.pending_input_latencies.clear();
-                    self.render_revision = self.render_revision.wrapping_add(1);
+                    self.refresh_snapshot();
                     self.send_stream_command(StreamCommand::ListSessions);
                 }
                 LocalStreamEvent::SessionExited(session_id) => {
-                    let _ = session_id;
-                    self.stream_state = None;
+                    if self.active_session_id == Some(session_id) {
+                        self.active_session_id = None;
+                    }
+                    self.mode = ClientMode::Recovering;
                     self.stream_snapshot = None;
                     self.pending_input_latencies.clear();
-                    self.render_revision = self.render_revision.wrapping_add(1);
+                    self.refresh_snapshot();
                     self.send_stream_command(StreamCommand::ListSessions);
                 }
                 LocalStreamEvent::Disconnected => {
                     self.stream_tx = None;
-                    self.stream_state = None;
+                    self.mode = ClientMode::Recovering;
                     self.stream_snapshot = None;
+                    self.active_session_id = None;
                     self.pending_input_latencies.clear();
+                    self.refresh_snapshot();
                     self.last_error = Some("boo server stream disconnected".to_string());
                 }
                 LocalStreamEvent::FullState { ack_input_seq, state } => {
+                    self.mode = ClientMode::Attached;
                     self.stream_snapshot = Some(Arc::new(remote_full_state_to_vt_snapshot(&state)));
-                    self.stream_state = Some(state);
-                    self.render_revision = self.render_revision.wrapping_add(1);
+                    self.bootstrap_snapshot = None;
                     self.acknowledge_input_latency("stream_full_state", ack_input_seq);
                 }
                 LocalStreamEvent::Delta { ack_input_seq, delta } => {
-                    if let Some(state) = self.stream_state.as_mut() {
-                        apply_remote_delta(state, &delta);
-                    }
                     if let Some(snapshot) = self.stream_snapshot.as_mut() {
                         apply_remote_delta_snapshot(Arc::make_mut(snapshot), &delta);
                     }
-                    self.render_revision = self.render_revision.wrapping_add(1);
                     self.acknowledge_input_latency("stream_delta", ack_input_seq);
                 }
                 LocalStreamEvent::Error(error) => {
@@ -468,6 +505,92 @@ impl ClientApp {
         });
         if let Some((input_seq, started_at)) = completed {
             log_client_latency(stage, input_seq, started_at);
+        }
+    }
+
+    fn apply_remote_sessions(&mut self, sessions: &[remote::RemoteSessionInfo]) {
+        self.ui_state = ClientUiState::from_remote_sessions(sessions, self.active_session_id);
+    }
+
+    fn pick_attach_session<'a>(
+        &self,
+        live_sessions: &'a [&remote::RemoteSessionInfo],
+    ) -> Option<&'a remote::RemoteSessionInfo> {
+        self.active_session_id
+            .and_then(|session_id| live_sessions.iter().copied().find(|session| session.id == session_id))
+            .or_else(|| live_sessions.get(self.ui_state.active_tab).copied())
+            .or_else(|| live_sessions.first().copied())
+    }
+}
+
+impl ClientUiState {
+    fn from_snapshot(snapshot: &control::UiSnapshot) -> Self {
+        Self {
+            tabs: snapshot
+                .tabs
+                .iter()
+                .map(|tab| ClientTabState {
+                    index: tab.index,
+                    session_id: None,
+                    active: tab.active,
+                    title: tab.title.clone(),
+                    pane_count: tab.pane_count,
+                })
+                .collect(),
+            active_tab: snapshot.active_tab,
+            pwd: snapshot.pwd.clone(),
+            pane_count: snapshot.visible_panes.len(),
+        }
+    }
+
+    fn from_remote_sessions(
+        sessions: &[remote::RemoteSessionInfo],
+        active_session_id: Option<u32>,
+    ) -> Self {
+        let active_index = active_session_id
+            .and_then(|session_id| sessions.iter().position(|session| session.id == session_id))
+            .or_else(|| sessions.iter().position(|session| session.attached))
+            .unwrap_or(0);
+        let tabs = sessions
+            .iter()
+            .enumerate()
+            .map(|(index, session)| ClientTabState {
+                index,
+                session_id: Some(session.id),
+                active: index == active_index,
+                title: if session.title.is_empty() {
+                    session.name.clone()
+                } else {
+                    session.title.clone()
+                },
+                pane_count: 1,
+            })
+            .collect::<Vec<_>>();
+        let pwd = sessions
+            .get(active_index)
+            .map(|session| session.pwd.clone())
+            .unwrap_or_default();
+        Self {
+            tabs,
+            active_tab: active_index.min(sessions.len().saturating_sub(1)),
+            pwd,
+            pane_count: usize::from(!sessions.is_empty()),
+        }
+    }
+
+    fn mark_active_session(&mut self, session_id: Option<u32>) {
+        let Some(session_id) = session_id else {
+            return;
+        };
+        if let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.session_id == Some(session_id))
+        {
+            self.active_tab = index;
+        }
+        for (index, tab) in self.tabs.iter_mut().enumerate() {
+            tab.active = index == self.active_tab;
         }
     }
 }
@@ -956,20 +1079,6 @@ fn decode_remote_delta(payload: &[u8]) -> Option<(Option<u64>, RemoteDelta)> {
     ))
 }
 
-fn apply_remote_delta(state: &mut remote::RemoteFullState, delta: &RemoteDelta) {
-    state.cursor_x = delta.cursor_x;
-    state.cursor_y = delta.cursor_y;
-    state.cursor_visible = delta.cursor_visible;
-    let cols = state.cols as usize;
-    for (row, row_cells) in &delta.changed_rows {
-        let start = *row as usize * cols;
-        let end = start + row_cells.len().min(cols);
-        if end <= state.cells.len() {
-            state.cells[start..end].clone_from_slice(&row_cells[..(end - start)]);
-        }
-    }
-}
-
 fn apply_remote_delta_snapshot(
     snapshot: &mut vt_backend_core::TerminalSnapshot,
     delta: &RemoteDelta,
@@ -1029,8 +1138,8 @@ fn remote_cell_to_snapshot(cell: &remote::RemoteCell) -> vt_backend_core::CellSn
     }
 }
 
-fn build_status(snapshot: &control::UiSnapshot) -> (String, String) {
-    let left = snapshot
+fn build_status(ui_state: &ClientUiState) -> (String, String) {
+    let left = ui_state
         .tabs
         .iter()
         .map(|tab| {
@@ -1046,11 +1155,11 @@ fn build_status(snapshot: &control::UiSnapshot) -> (String, String) {
         .join(" ");
 
     let mut right_parts = Vec::new();
-    if snapshot.visible_panes.len() > 1 {
-        right_parts.push(format!("{} panes", snapshot.visible_panes.len()));
+    if ui_state.pane_count > 1 {
+        right_parts.push(format!("{} panes", ui_state.pane_count));
     }
-    if !snapshot.pwd.is_empty() {
-        right_parts.push(snapshot.pwd.clone());
+    if !ui_state.pwd.is_empty() {
+        right_parts.push(ui_state.pwd.clone());
     }
     (left, right_parts.join("  "))
 }
