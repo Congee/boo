@@ -30,3 +30,6 @@ libghostty-vt = "0.1.1"
 arboard = "3"
 khronos-egl = { version = "6", features = ["dynamic"] }
 libghostty-vt = "0.1.1"
+
+[patch.crates-io]
+libghostty-vt-sys = { path = "vendor/libghostty-vt-sys" }
