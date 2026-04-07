@@ -249,6 +249,13 @@ impl TabManager {
         Some(self.new_tab(pane))
     }
 
+    pub fn rebalance_active_layout(&mut self) -> bool {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return false;
+        };
+        tab.tree.rebalance()
+    }
+
     pub fn active_title(&self) -> Option<&str> {
         self.tabs.get(self.active).map(|tab| tab.title.as_str())
     }

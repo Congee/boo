@@ -253,10 +253,10 @@ nix develop
   - [x] `swap-pane`
   - [x] `rotate-window`
 - [ ] add live preset layout commands:
-  - `select-layout`
-  - `next-layout`
-  - `previous-layout`
-  - rebalance/spread panes evenly
+  - [x] `select-layout`
+  - [x] `next-layout`
+  - [x] `previous-layout`
+  - [x] rebalance/spread panes evenly
 - [ ] add interactive tmux-style chooser UIs:
   - display-panes
   - choose-tree

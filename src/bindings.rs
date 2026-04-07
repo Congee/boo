@@ -35,6 +35,7 @@ pub enum Action {
     SelectLayout(crate::session::TabLayout),
     NextLayout,
     PreviousLayout,
+    RebalanceLayout,
     ToggleZoom,
     OpenCommandPrompt,
     NextPane,
@@ -640,6 +641,7 @@ fn parse_action(s: &str) -> Option<Action> {
         "swap_pane_previous" => Some(Action::SwapPanePrevious),
         "next_layout" => Some(Action::NextLayout),
         "previous_layout" => Some(Action::PreviousLayout),
+        "rebalance_layout" => Some(Action::RebalanceLayout),
         "select_layout:manual" => Some(Action::SelectLayout(crate::session::TabLayout::Manual)),
         "select_layout:even-horizontal" => {
             Some(Action::SelectLayout(crate::session::TabLayout::EvenHorizontal))
@@ -1033,6 +1035,10 @@ keybind = super+/ = search
         assert!(matches!(
             parse_action("select_layout:tiled"),
             Some(Action::SelectLayout(crate::session::TabLayout::Tiled))
+        ));
+        assert!(matches!(
+            parse_action("rebalance_layout"),
+            Some(Action::RebalanceLayout)
         ));
         assert!(matches!(parse_action("mark_pane"), Some(Action::MarkPane)));
         assert!(matches!(

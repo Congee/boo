@@ -96,6 +96,11 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         args: "<manual|even-horizontal|even-vertical|main-horizontal|main-vertical|tiled>",
     },
     CommandDef {
+        name: "rebalance-layout",
+        description: "spread the current split tree evenly",
+        args: "",
+    },
+    CommandDef {
         name: "last-tab",
         description: "jump to the last tab",
         args: "",
@@ -322,6 +327,14 @@ mod tests {
         assert!(
             COMMANDS.iter().any(|cmd| cmd.name == "copy"),
             "copy command should be exposed in the command prompt"
+        );
+    }
+
+    #[test]
+    fn commands_include_rebalance_layout() {
+        assert!(
+            COMMANDS.iter().any(|cmd| cmd.name == "rebalance-layout"),
+            "rebalance-layout command should be exposed in the command prompt"
         );
     }
 }

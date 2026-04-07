@@ -317,6 +317,14 @@ impl SplitTree {
         true
     }
 
+    pub fn rebalance(&mut self) -> bool {
+        let Some(root) = self.root.as_mut() else {
+            return false;
+        };
+        rebalance_node(root);
+        true
+    }
+
     /// Check if a point is on a split divider. Returns the direction if so.
     pub fn divider_at(&self, frame: Rect, point: (f64, f64)) -> Option<Direction> {
         self.root
@@ -481,6 +489,22 @@ fn assign_leaf_panes_inner(
         Node::Split { first, second, .. } => {
             assign_leaf_panes_inner(first, leaf_ids, panes, assigned);
             assign_leaf_panes_inner(second, leaf_ids, panes, assigned);
+        }
+    }
+}
+
+fn rebalance_node(node: &mut Node) {
+    match node {
+        Node::Leaf { .. } => {}
+        Node::Split {
+            ratio,
+            first,
+            second,
+            ..
+        } => {
+            *ratio = 0.5;
+            rebalance_node(first);
+            rebalance_node(second);
         }
     }
 }
@@ -933,6 +957,24 @@ mod tests {
         assert_eq!(removed, a);
         assert_eq!(tree.len(), 1);
         assert_eq!(tree.focused_pane(), b);
+    }
+
+    #[test]
+    fn rebalance_sets_nested_split_ratios_to_half() {
+        let mut tree = SplitTree::new();
+        let a = PaneHandle::detached();
+        let b = PaneHandle::detached();
+        let c = PaneHandle::detached();
+
+        tree.add_root(a);
+        tree.split_focused_with_ratio(Direction::Horizontal, b, 0.8);
+        tree.split_focused_with_ratio(Direction::Vertical, c, 0.2);
+
+        assert!(tree.rebalance());
+        let exported = tree.export_panes();
+        assert!(exported
+            .iter()
+            .all(|pane| pane.split.map(|(_, ratio)| (ratio - 0.5).abs() < 0.0001).unwrap_or(true)));
     }
 
     #[test]

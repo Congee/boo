@@ -581,6 +581,11 @@ impl BooApp {
                     self.relayout();
                 }
             }
+            bindings::Action::RebalanceLayout => {
+                if self.server.tabs.rebalance_active_layout() {
+                    self.relayout();
+                }
+            }
             bindings::Action::PreviousTab => {
                 let prev = self.server.tabs.previous_active();
                 self.server.tabs.goto_tab(prev);
@@ -768,6 +773,7 @@ impl BooApp {
                     self.dispatch_binding_action(bindings::Action::SelectLayout(layout));
                 }
             }
+            "rebalance-layout" => self.dispatch_binding_action(bindings::Action::RebalanceLayout),
             "next-pane" => self.dispatch_binding_action(bindings::Action::NextPane),
             "prev-pane" => self.dispatch_binding_action(bindings::Action::PreviousPane),
             "swap-pane-next" => self.dispatch_binding_action(bindings::Action::SwapPaneNext),
