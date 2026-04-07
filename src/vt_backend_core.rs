@@ -65,7 +65,6 @@ pub struct VtPane {
     pending_pty_chunks: VecDeque<PendingPtyChunk>,
     pending_pty_bytes: usize,
     pending_pty_profile: PendingPtyProfile,
-    last_exit_check: Instant,
     force_full_snapshot_refresh: bool,
     control_sequence_tail: Vec<u8>,
 }
@@ -341,7 +340,6 @@ impl VtPane {
     const PTY_POLL_MAX_DURATION: Duration = Duration::from_millis(2);
     const PTY_BACKLOG_SOFT_LIMIT_BYTES: usize = 16 * 1024;
     const PTY_BACKLOG_HARD_LIMIT_BYTES: usize = 64 * 1024;
-    const EXIT_CHECK_INTERVAL_UNDER_LOAD: Duration = Duration::from_millis(16);
 
     pub fn spawn(
         cols: u16,
@@ -410,7 +408,6 @@ impl VtPane {
             pending_pty_chunks: VecDeque::new(),
             pending_pty_bytes: 0,
             pending_pty_profile: PendingPtyProfile::default(),
-            last_exit_check: Instant::now(),
             force_full_snapshot_refresh: false,
             control_sequence_tail: Vec::new(),
         })
@@ -576,11 +573,8 @@ impl VtPane {
             ]);
             self.pending_pty_profile = PendingPtyProfile::default();
         }
-        let should_check_exit = !changed
-            || self.pending_pty_chunks.is_empty()
-            || self.last_exit_check.elapsed() >= Self::EXIT_CHECK_INTERVAL_UNDER_LOAD;
-        let exited = if should_check_exit {
-            self.last_exit_check = Instant::now();
+        let active_io = total_bytes > 0 || written_chunks > 0 || !self.pending_pty_chunks.is_empty();
+        let exited = if !active_io {
             self.pty.try_wait()?
         } else {
             false

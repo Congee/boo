@@ -7,6 +7,10 @@ use std::os::fd::RawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::sync::mpsc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct PtySize {
@@ -32,6 +36,7 @@ pub struct PtyProcess {
     reader_fd: RawFd,
     child_pid: libc::pid_t,
     rx: mpsc::Receiver<Vec<u8>>,
+    reader_closed: Arc<AtomicBool>,
     reaped: bool,
 }
 
@@ -63,13 +68,18 @@ impl PtyProcess {
         set_cloexec(reader_fd)?;
 
         let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || read_loop(reader_fd, tx));
+        let reader_closed = Arc::new(AtomicBool::new(false));
+        std::thread::spawn({
+            let reader_closed = Arc::clone(&reader_closed);
+            move || read_loop(reader_fd, tx, reader_closed)
+        });
 
         Ok(Self {
             master_fd,
             reader_fd,
             child_pid,
             rx,
+            reader_closed,
             reaped: false,
         })
     }
@@ -125,6 +135,9 @@ impl PtyProcess {
     pub fn try_wait(&mut self) -> io::Result<bool> {
         if self.reaped {
             return Ok(true);
+        }
+        if !self.reader_closed.load(Ordering::Relaxed) {
+            return Ok(false);
         }
 
         let mut status = 0;
@@ -324,7 +337,7 @@ fn set_env(key: &str, value: &str) {
     }
 }
 
-fn read_loop(fd: RawFd, tx: mpsc::Sender<Vec<u8>>) {
+fn read_loop(fd: RawFd, tx: mpsc::Sender<Vec<u8>>, reader_closed: Arc<AtomicBool>) {
     let mut buf = vec![0u8; 8192];
     loop {
         let rc = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut _, buf.len()) };
@@ -346,6 +359,7 @@ fn read_loop(fd: RawFd, tx: mpsc::Sender<Vec<u8>>) {
     unsafe {
         libc::close(fd);
     }
+    reader_closed.store(true, Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -363,6 +377,7 @@ mod tests {
             reader_fd: -1,
             child_pid: 0,
             rx,
+            reader_closed: Arc::new(AtomicBool::new(true)),
             reaped: true,
         };
 
