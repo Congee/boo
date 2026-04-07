@@ -245,7 +245,8 @@ pub struct TerminalCanvasState {
     base_cache: Cache,
     base_fingerprint: RefCell<Option<u64>>,
     row_chunk_caches: RefCell<Vec<Cache>>,
-    row_chunk_fingerprints: RefCell<Vec<u64>>,
+    row_style_fingerprint: RefCell<Option<u64>>,
+    row_seen_revisions: RefCell<Vec<u64>>,
     row_artifact_fingerprints: RefCell<Vec<u64>>,
     row_artifacts: RefCell<Vec<RowArtifacts>>,
     overlay_cache: Cache,
@@ -258,7 +259,8 @@ impl Default for TerminalCanvasState {
             base_cache: Cache::new(),
             base_fingerprint: RefCell::new(None),
             row_chunk_caches: RefCell::new(Vec::new()),
-            row_chunk_fingerprints: RefCell::new(Vec::new()),
+            row_style_fingerprint: RefCell::new(None),
+            row_seen_revisions: RefCell::new(Vec::new()),
             row_artifact_fingerprints: RefCell::new(Vec::new()),
             row_artifacts: RefCell::new(Vec::new()),
             overlay_cache: Cache::new(),
@@ -297,14 +299,26 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
         {
             let row_count = self.snapshot.rows_data.len();
             let chunk_count = row_count.div_ceil(ROW_CACHE_CHUNK_SIZE);
+            let row_style_fingerprint = self.row_style_fingerprint();
             let mut row_chunk_caches = state.row_chunk_caches.borrow_mut();
-            let mut row_chunk_fingerprints = state.row_chunk_fingerprints.borrow_mut();
             if row_chunk_caches.len() < chunk_count {
                 row_chunk_caches.resize_with(chunk_count, Cache::new);
             }
             row_chunk_caches.truncate(chunk_count);
-            row_chunk_fingerprints.resize(chunk_count, 0);
-            row_chunk_fingerprints.truncate(chunk_count);
+            let style_changed = {
+                let mut cached_style = state.row_style_fingerprint.borrow_mut();
+                let changed = cached_style.as_ref() != Some(&row_style_fingerprint);
+                if changed {
+                    for cache in row_chunk_caches.iter_mut() {
+                        cache.clear();
+                    }
+                }
+                *cached_style = Some(row_style_fingerprint);
+                changed
+            };
+            let mut row_seen_revisions = state.row_seen_revisions.borrow_mut();
+            row_seen_revisions.resize(row_count, 0);
+            row_seen_revisions.truncate(row_count);
             let mut row_artifact_fingerprints = state.row_artifact_fingerprints.borrow_mut();
             let mut row_artifacts = state.row_artifacts.borrow_mut();
             row_artifact_fingerprints.resize(row_count, 0);
@@ -315,13 +329,19 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
             drop(row_artifacts);
 
             for chunk_index in 0..chunk_count {
-                let chunk_fingerprint = self.row_chunk_fingerprint(chunk_index);
-                if row_chunk_fingerprints[chunk_index] != chunk_fingerprint {
-                    row_chunk_caches[chunk_index].clear();
-                    row_chunk_fingerprints[chunk_index] = chunk_fingerprint;
-                }
                 let start_row = chunk_index * ROW_CACHE_CHUNK_SIZE;
                 let end_row = (start_row + ROW_CACHE_CHUNK_SIZE).min(row_count);
+                let mut chunk_dirty = style_changed;
+                for row_index in start_row..end_row {
+                    let revision = self.row_revision_value(row_index);
+                    if row_seen_revisions[row_index] != revision {
+                        row_seen_revisions[row_index] = revision;
+                        chunk_dirty = true;
+                    }
+                }
+                if chunk_dirty {
+                    row_chunk_caches[chunk_index].clear();
+                }
                 geometries.push(
                     row_chunk_caches[chunk_index].draw(renderer, bounds.size(), |frame| {
                         self.draw_row_chunk(frame, start_row, end_row, state);
@@ -548,17 +568,15 @@ impl TerminalCanvas {
     }
 
     fn row_fingerprint(&self, row_index: usize) -> u64 {
+        let row_style_fingerprint = self.row_style_fingerprint();
+        if let Some(revision) = self.snapshot.row_revisions.get(row_index).copied() {
+            return row_style_fingerprint ^ revision.rotate_left(17) ^ (row_index as u64).rotate_left(33);
+        }
+
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         row_index.hash(&mut hasher);
-        self.snapshot.cols.hash(&mut hasher);
-        self.font_size.to_bits().hash(&mut hasher);
-        self.background_opacity.to_bits().hash(&mut hasher);
-        self.background_opacity_cells.hash(&mut hasher);
-        self.font_family.hash(&mut hasher);
-        self.appearance_revision.hash(&mut hasher);
-        if let Some(revision) = self.snapshot.row_revisions.get(row_index).copied() {
-            revision.hash(&mut hasher);
-        } else if let Some(row) = self.snapshot.rows_data.get(row_index) {
+        row_style_fingerprint.hash(&mut hasher);
+        if let Some(row) = self.snapshot.rows_data.get(row_index) {
             for cell in row {
                 cell.text.hash(&mut hasher);
                 cell.display_width.hash(&mut hasher);
@@ -576,15 +594,26 @@ impl TerminalCanvas {
         hasher.finish()
     }
 
-    fn row_chunk_fingerprint(&self, chunk_index: usize) -> u64 {
+    fn row_style_fingerprint(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        chunk_index.hash(&mut hasher);
-        let start_row = chunk_index * ROW_CACHE_CHUNK_SIZE;
-        let end_row = (start_row + ROW_CACHE_CHUNK_SIZE).min(self.snapshot.rows_data.len());
-        for row_index in start_row..end_row {
-            self.row_fingerprint(row_index).hash(&mut hasher);
-        }
+        self.snapshot.cols.hash(&mut hasher);
+        self.font_size.to_bits().hash(&mut hasher);
+        self.background_opacity.to_bits().hash(&mut hasher);
+        self.background_opacity_cells.hash(&mut hasher);
+        self.font_family.hash(&mut hasher);
+        self.appearance_revision.hash(&mut hasher);
+        self.snapshot.colors.background.r.hash(&mut hasher);
+        self.snapshot.colors.background.g.hash(&mut hasher);
+        self.snapshot.colors.background.b.hash(&mut hasher);
         hasher.finish()
+    }
+
+    fn row_revision_value(&self, row_index: usize) -> u64 {
+        self.snapshot
+            .row_revisions
+            .get(row_index)
+            .copied()
+            .unwrap_or_else(|| self.row_fingerprint(row_index))
     }
 
     fn overlay_fingerprint(&self) -> u64 {
