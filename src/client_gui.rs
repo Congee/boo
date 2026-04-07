@@ -20,7 +20,7 @@ const STATUS_BAR_HEIGHT: f64 = 20.0;
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 const IDLE_TICK_INTERVAL: Duration = Duration::from_secs(1);
 const STREAM_RECONNECT_DELAY: Duration = Duration::from_millis(250);
-const PASSIVE_STREAM_BATCH_WINDOW: Duration = Duration::from_millis(8);
+const PASSIVE_STREAM_BATCH_WINDOW: Duration = Duration::from_millis(16);
 const SNAPSHOT_RETRY_TICKS: u8 = 3;
 const SNAPSHOT_KEEPALIVE_TICKS: u8 = 30;
 
