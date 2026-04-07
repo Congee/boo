@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Mutex, OnceLock};
@@ -30,6 +31,13 @@ struct Entry {
     max: Duration,
     bytes: u64,
     units: u64,
+}
+
+#[derive(Default)]
+struct LocalState {
+    window_started: Option<Instant>,
+    entries: Vec<((&'static str, Kind), Entry)>,
+    last_entry: Option<((&'static str, Kind), usize)>,
 }
 
 struct State {
@@ -84,18 +92,45 @@ fn record_with_units(name: &'static str, kind: Kind, elapsed: Duration, bytes: u
     if !enabled() {
         return;
     }
-    let state = global_state();
-    let mut guard = state.lock().expect("profiling state poisoned");
-    let entry = guard.entries.entry((name, kind)).or_default();
-    entry.count += 1;
-    entry.total += elapsed;
-    entry.max = entry.max.max(elapsed);
-    entry.bytes = entry.bytes.saturating_add(bytes);
-    entry.units = entry.units.saturating_add(units);
+    LOCAL_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let window_started = *state.window_started.get_or_insert_with(Instant::now);
+        let expired = window_started.elapsed() >= SUMMARY_INTERVAL;
 
-    if guard.window_started.elapsed() >= SUMMARY_INTERVAL {
-        emit_summary(&mut guard);
-    }
+        let key = (name, kind);
+        let cached_index = state.last_entry.and_then(|(cached_key, index)| {
+            (cached_key == key && index < state.entries.len()).then_some(index)
+        });
+        let index = if let Some(index) = cached_index {
+            index
+        } else if let Some(index) = state
+            .entries
+            .iter()
+            .position(|((entry_name, entry_kind), _)| *entry_name == name && *entry_kind == kind)
+        {
+            state.last_entry = Some((key, index));
+            index
+        } else {
+            state.entries.push((key, Entry::default()));
+            let index = state.entries.len() - 1;
+            state.last_entry = Some((key, index));
+            index
+        };
+        let entry = if index < state.entries.len() {
+            &mut state.entries[index].1
+        } else {
+            unreachable!("cached profiling entry index out of bounds");
+        };
+        entry.count += 1;
+        entry.total += elapsed;
+        entry.max = entry.max.max(elapsed);
+        entry.bytes = entry.bytes.saturating_add(bytes);
+        entry.units = entry.units.saturating_add(units);
+
+        if expired {
+            flush_local(&mut state);
+        }
+    });
 }
 
 impl Scope {
@@ -121,6 +156,35 @@ fn global_state() -> &'static Mutex<State> {
             entries: HashMap::new(),
         })
     })
+}
+
+thread_local! {
+    static LOCAL_STATE: RefCell<LocalState> = RefCell::new(LocalState::default());
+}
+
+fn flush_local(local: &mut LocalState) {
+    if local.entries.is_empty() {
+        local.window_started = Some(Instant::now());
+        local.last_entry = None;
+        return;
+    }
+
+    let state = global_state();
+    let mut guard = state.lock().expect("profiling state poisoned");
+    for ((name, kind), entry) in local.entries.drain(..) {
+        let aggregate = guard.entries.entry((name, kind)).or_default();
+        aggregate.count = aggregate.count.saturating_add(entry.count);
+        aggregate.total += entry.total;
+        aggregate.max = aggregate.max.max(entry.max);
+        aggregate.bytes = aggregate.bytes.saturating_add(entry.bytes);
+        aggregate.units = aggregate.units.saturating_add(entry.units);
+    }
+    local.window_started = Some(Instant::now());
+    local.last_entry = None;
+
+    if guard.window_started.elapsed() >= SUMMARY_INTERVAL {
+        emit_summary(&mut guard);
+    }
 }
 
 fn emit_summary(state: &mut State) {

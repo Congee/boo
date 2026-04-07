@@ -63,6 +63,7 @@ pub struct VtPane {
     pending_notifications: HashMap<String, PendingNotification>,
     completed_notifications: Vec<DesktopNotification>,
     pending_pty_chunks: VecDeque<PendingPtyChunk>,
+    pending_pty_bytes: usize,
     force_full_snapshot_refresh: bool,
     control_sequence_tail: Vec<u8>,
 }
@@ -394,6 +395,7 @@ impl VtPane {
             pending_notifications: HashMap::new(),
             completed_notifications: Vec::new(),
             pending_pty_chunks: VecDeque::new(),
+            pending_pty_bytes: 0,
             force_full_snapshot_refresh: false,
             control_sequence_tail: Vec::new(),
         })
@@ -443,6 +445,9 @@ impl VtPane {
                     bytes: chunk,
                     offset: 0,
                 });
+                self.pending_pty_bytes = self
+                    .pending_pty_bytes
+                    .saturating_add(self.pending_pty_chunks.back().map_or(0, |chunk| chunk.bytes.len()));
             }
         } else {
             crate::profiling::record_units(
@@ -456,6 +461,9 @@ impl VtPane {
             let Some(mut chunk) = self.pending_pty_chunks.pop_front() else {
                 break;
             };
+            self.pending_pty_bytes = self
+                .pending_pty_bytes
+                .saturating_sub(chunk.bytes.len().saturating_sub(chunk.offset));
             let remaining = chunk.bytes.len().saturating_sub(chunk.offset);
             if remaining == 0 {
                 continue;
@@ -473,6 +481,9 @@ impl VtPane {
             chunk.offset = end;
             changed = true;
             if chunk.offset < chunk.bytes.len() {
+                self.pending_pty_bytes = self
+                    .pending_pty_bytes
+                    .saturating_add(chunk.bytes.len().saturating_sub(chunk.offset));
                 self.pending_pty_chunks.push_front(chunk);
             }
         }
@@ -512,10 +523,7 @@ impl VtPane {
             "server.backend.poll_pty.backlog_bytes",
             crate::profiling::Kind::Cpu,
             Duration::ZERO,
-            self.pending_pty_chunks
-                .iter()
-                .map(|chunk| chunk.bytes.len().saturating_sub(chunk.offset) as u64)
-                .sum(),
+            self.pending_pty_bytes as u64,
         );
         crate::profiling::record_units(
             "server.backend.poll_pty.write_chunk_size",
@@ -934,10 +942,7 @@ impl VtPane {
     }
 
     fn pending_backlog_bytes(&self) -> usize {
-        self.pending_pty_chunks
-            .iter()
-            .map(|chunk| chunk.bytes.len().saturating_sub(chunk.offset))
-            .sum()
+        self.pending_pty_bytes
     }
 
     fn write_chunk_size_for_backlog(&self) -> usize {
