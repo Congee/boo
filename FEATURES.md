@@ -232,6 +232,17 @@ nix develop
 - These scripts emit `OSC 133` prompt markers and `cmdline_url` command metadata for the tab spinner/title path
 - `boo completions bash|zsh|fish` prints shell completions for the server/client lifecycle commands
 - Remaining integration task: migrate `~/.config/kitty/watcher.py` behavior into `~/.config/boo/config.boo`
+- Kitty config migration backlog:
+  - [x] support Kitty-style direct punctuation bindings needed by the config, such as `ctrl+super+,`
+  - [ ] migrate supported keybinds from `~/.config/kitty/kitty.conf` into `~/.config/boo/config.boo`
+  - [ ] implement direct copy-to-clipboard action for `cmd+c`
+  - [ ] implement configurable macOS option-as-alt behavior
+  - [ ] implement `set_tab_title`
+  - [ ] implement Boo-native search-pane action to replace the Kitty `search.py` split binding
+  - [ ] implement configurable tab bar style/separator/alignment/title template
+  - [ ] implement `window-decoration` config instead of ignoring it
+  - [ ] decide how to map Kitty’s `close_on_child_death` / `macos_quit_when_last_window_closed` semantics onto Boo’s client/server model
+  - [ ] audit Kitty theme/include settings and decide which visual settings Boo should support directly
 
 ### Command Finish Notifications
 - `notify-on-command-finish` config and duration thresholds are implemented

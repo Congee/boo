@@ -517,6 +517,15 @@ fn single_char_to_keycode(key: &str) -> Option<u32> {
             "8" => 0x1C,
             "9" => 0x19,
             "0" => 0x1D,
+            "," | "comma" => 0x2B,
+            "." | "period" => 0x2F,
+            "/" | "slash" => 0x2C,
+            ";" | "semicolon" => 0x29,
+            "'" | "quote" => 0x27,
+            "-" | "minus" => 0x1B,
+            "=" | "equal" => 0x18,
+            "[" | "left_bracket" => 0x21,
+            "]" | "right_bracket" => 0x1E,
             "space" => 0x31,
             "enter" => 0x24,
             "tab" => 0x30,
@@ -565,6 +574,15 @@ fn single_char_to_keycode(key: &str) -> Option<u32> {
             "7" => 13,
             "8" => 14,
             "9" => 15,
+            "," | "comma" => 55,
+            "." | "period" => 56,
+            "/" | "slash" => 57,
+            ";" | "semicolon" => 51,
+            "'" | "quote" => 52,
+            "-" | "minus" => 16,
+            "=" | "equal" => 17,
+            "[" | "left_bracket" => 46,
+            "]" | "right_bracket" => 47,
             "space" => 63,
             "enter" => 58,
             "tab" => 64,
@@ -865,6 +883,19 @@ mod tests {
         assert_copy_action(send_char(&mut b, ':'), "OpenPrompt");
         assert_copy_action(send_char(&mut b, 'r'), "RefreshFromPane");
         assert_copy_action(send_char(&mut b, 'P'), "TogglePosition");
+    }
+
+    #[test]
+    fn test_direct_punctuation_keybinds_parse() {
+        let config = Config::parse(
+            r#"
+prefix-key = ctrl+s
+keybind = ctrl+super+, = reload_config
+keybind = super+/ = search
+"#,
+        );
+        let bindings = Bindings::from_config(&config);
+        assert_eq!(bindings.direct.len(), 2);
     }
 
     // --- Selection rect computation ---
