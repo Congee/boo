@@ -366,6 +366,19 @@ impl TabManager {
             .and_then(|(tab_index, _)| self.session_id_for_index(tab_index))
     }
 
+    pub fn remove_pane_by_id(&mut self, pane_id: crate::pane::PaneId) -> Option<PaneHandle> {
+        let (tab_index, _) = self.find_pane_location(pane_id)?;
+        let pane = self.tabs.get_mut(tab_index)?.tree.remove_pane(pane_id)?;
+        self.tabs[tab_index].layout = TabLayout::Manual;
+        if self.tabs[tab_index].tree.len() == 0 {
+            let _ = self.remove_tab(tab_index);
+        } else if tab_index == self.active {
+            let focused = self.tabs[tab_index].tree.focused_pane();
+            self.tabs[tab_index].tree.set_focus_to_pane(focused.id());
+        }
+        Some(pane)
+    }
+
     pub fn tab_info(&self) -> Vec<TabInfo> {
         self.tab_info_with_spinner(0)
     }

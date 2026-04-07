@@ -25,6 +25,9 @@ pub enum Action {
     Copy,
     Paste,
     SetTabTitle,
+    MarkPane,
+    ClearMarkedPane,
+    JoinMarkedPane(SplitDirection),
     RotatePanesForward,
     RotatePanesBackward,
     SwapPaneNext,
@@ -619,6 +622,18 @@ fn parse_action(s: &str) -> Option<Action> {
         "copy" => Some(Action::Copy),
         "paste" => Some(Action::Paste),
         "set_tab_title" => Some(Action::SetTabTitle),
+        "mark_pane" => Some(Action::MarkPane),
+        "clear_marked_pane" => Some(Action::ClearMarkedPane),
+        "join_marked_pane:right" | "move_marked_pane:right" => {
+            Some(Action::JoinMarkedPane(Right))
+        }
+        "join_marked_pane:down" | "move_marked_pane:down" => {
+            Some(Action::JoinMarkedPane(Down))
+        }
+        "join_marked_pane:left" | "move_marked_pane:left" => {
+            Some(Action::JoinMarkedPane(Left))
+        }
+        "join_marked_pane:up" | "move_marked_pane:up" => Some(Action::JoinMarkedPane(Up)),
         "rotate_panes_forward" => Some(Action::RotatePanesForward),
         "rotate_panes_backward" => Some(Action::RotatePanesBackward),
         "swap_pane_next" => Some(Action::SwapPaneNext),
@@ -1018,6 +1033,11 @@ keybind = super+/ = search
         assert!(matches!(
             parse_action("select_layout:tiled"),
             Some(Action::SelectLayout(crate::session::TabLayout::Tiled))
+        ));
+        assert!(matches!(parse_action("mark_pane"), Some(Action::MarkPane)));
+        assert!(matches!(
+            parse_action("join_marked_pane:down"),
+            Some(Action::JoinMarkedPane(SplitDirection::Down))
         ));
         assert!(parse_action("nonexistent").is_none());
     }

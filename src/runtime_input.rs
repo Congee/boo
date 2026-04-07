@@ -493,6 +493,41 @@ impl BooApp {
                 self.command_prompt.history_idx = None;
                 self.command_prompt.update_suggestions();
             }
+            bindings::Action::MarkPane => {
+                self.marked_pane_id = Some(self.server.tabs.focused_pane().id());
+            }
+            bindings::Action::ClearMarkedPane => {
+                self.marked_pane_id = None;
+            }
+            bindings::Action::JoinMarkedPane(direction) => {
+                let Some(marked_pane_id) = self.marked_pane_id else {
+                    return;
+                };
+                let focused_pane_id = self.server.tabs.focused_pane().id();
+                if marked_pane_id == 0 || marked_pane_id == focused_pane_id {
+                    return;
+                }
+                let Some(pane) = self.server.tabs.remove_pane_by_id(marked_pane_id) else {
+                    self.marked_pane_id = None;
+                    return;
+                };
+                let old = self.server.tabs.focused_pane();
+                if let Some(tree) = self.server.tabs.active_tree_mut() {
+                    let split_dir = match direction {
+                        bindings::SplitDirection::Right | bindings::SplitDirection::Left => {
+                            splits::Direction::Horizontal
+                        }
+                        bindings::SplitDirection::Down | bindings::SplitDirection::Up => {
+                            splits::Direction::Vertical
+                        }
+                    };
+                    let _ = tree.split_focused(split_dir, pane);
+                }
+                self.set_pane_focus(old, false);
+                self.set_pane_focus(pane, true);
+                self.marked_pane_id = None;
+                self.relayout();
+            }
             bindings::Action::ToggleZoom => {
                 self.ghostty_binding_action("toggle_split_zoom");
                 self.relayout();
@@ -748,6 +783,13 @@ impl BooApp {
             "command-prompt" => self.dispatch_binding_action(bindings::Action::OpenCommandPrompt),
             "search" => self.dispatch_binding_action(bindings::Action::Search),
             "paste" => self.dispatch_binding_action(bindings::Action::Paste),
+            "mark-pane" => self.dispatch_binding_action(bindings::Action::MarkPane),
+            "clear-marked-pane" => self.dispatch_binding_action(bindings::Action::ClearMarkedPane),
+            "join-pane" | "move-pane" => {
+                if let Some(direction) = arg1.and_then(parse_split_direction_name) {
+                    self.dispatch_binding_action(bindings::Action::JoinMarkedPane(direction));
+                }
+            }
             "set-tab-title" => {
                 if parts.len() >= 2 {
                     self.server.tabs.set_active_title(parts[1..].join(" "));
@@ -1084,6 +1126,16 @@ fn parse_tab_layout_name(name: &str) -> Option<session::TabLayout> {
         "main-horizontal" => Some(session::TabLayout::MainHorizontal),
         "main-vertical" => Some(session::TabLayout::MainVertical),
         "tiled" => Some(session::TabLayout::Tiled),
+        _ => None,
+    }
+}
+
+fn parse_split_direction_name(name: &str) -> Option<bindings::SplitDirection> {
+    match name {
+        "right" => Some(bindings::SplitDirection::Right),
+        "down" => Some(bindings::SplitDirection::Down),
+        "left" => Some(bindings::SplitDirection::Left),
+        "up" => Some(bindings::SplitDirection::Up),
         _ => None,
     }
 }

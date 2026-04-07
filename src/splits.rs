@@ -200,6 +200,30 @@ impl SplitTree {
         }
     }
 
+    pub fn remove_pane(&mut self, pane_id: crate::pane::PaneId) -> Option<PaneHandle> {
+        let root = self.root.take()?;
+        let Some(target_id) = find_leaf_id_by_pane(&root, pane_id) else {
+            self.root = Some(root);
+            return None;
+        };
+        match remove_leaf(root, target_id) {
+            RemoveResult::Removed { pane, remaining } => {
+                self.root = remaining;
+                if let Some(ref root) = self.root {
+                    let leaves = collect_leaf_ids(root);
+                    if !leaves.is_empty() {
+                        self.focused_id = leaves[0];
+                    }
+                }
+                Some(pane)
+            }
+            RemoveResult::NotFound(node) => {
+                self.root = Some(node);
+                None
+            }
+        }
+    }
+
     /// Resize the nearest matching split ancestor of the focused leaf.
     pub fn resize_focused(&mut self, axis: Direction, delta: f64) {
         if let Some(ref mut root) = self.root {
@@ -893,6 +917,22 @@ mod tests {
 
         assert!(tree.rotate_panes(true));
         assert_eq!(tree.all_panes(), vec![c, a, b]);
+    }
+
+    #[test]
+    fn remove_pane_by_id_removes_nonfocused_leaf() {
+        let mut tree = SplitTree::new();
+        let a = PaneHandle::detached();
+        let b = PaneHandle::detached();
+
+        tree.add_root(a);
+        tree.split_focused(Direction::Horizontal, b);
+
+        let removed = tree.remove_pane(a.id()).unwrap();
+
+        assert_eq!(removed, a);
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree.focused_pane(), b);
     }
 
     #[test]

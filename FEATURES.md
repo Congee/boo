@@ -248,10 +248,10 @@ nix develop
 - [x] support `set-tab-title`
 - [x] expose a bindable `copy` action for the current Boo selection
 - [ ] add pane lifecycle commands:
-  - `break-pane`
-  - `join-pane` / `move-pane`
-  - `swap-pane`
-  - `rotate-window`
+  - [x] `break-pane`
+  - [x] `join-pane` / `move-pane` using a marked pane
+  - [x] `swap-pane`
+  - [x] `rotate-window`
 - [ ] add live preset layout commands:
   - `select-layout`
   - `next-layout`

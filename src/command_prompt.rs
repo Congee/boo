@@ -121,6 +121,26 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         args: "",
     },
     CommandDef {
+        name: "mark-pane",
+        description: "mark the focused pane for later join/move operations",
+        args: "",
+    },
+    CommandDef {
+        name: "clear-marked-pane",
+        description: "clear the marked pane",
+        args: "",
+    },
+    CommandDef {
+        name: "join-pane",
+        description: "move the marked pane into the current split tree",
+        args: "<right|down|left|up>",
+    },
+    CommandDef {
+        name: "move-pane",
+        description: "alias of join-pane using the marked pane",
+        args: "<right|down|left|up>",
+    },
+    CommandDef {
         name: "rotate-panes-forward",
         description: "rotate pane positions forward",
         args: "",
