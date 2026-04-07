@@ -6,6 +6,25 @@ use iced::widget::stack;
 use iced::{Pixels, Point, Rectangle, Renderer};
 
 impl BooApp {
+    pub(crate) fn find_window_entries(&self) -> Vec<ChooseTreeEntry> {
+        let query = self.find_window_query.trim().to_lowercase();
+        self.choose_tree_entries()
+            .into_iter()
+            .filter(|entry| {
+                if query.is_empty() {
+                    return true;
+                }
+                let haystacks = [
+                    entry.tab_title.to_lowercase(),
+                    entry.cwd.to_lowercase(),
+                    entry.preview.to_lowercase(),
+                    format!("{}.{}", entry.tab_index + 1, entry.pane_index + 1),
+                ];
+                haystacks.iter().any(|value| value.contains(&query))
+            })
+            .collect()
+    }
+
     pub(crate) fn choose_tree_entries(&self) -> Vec<ChooseTreeEntry> {
         let active_pane_id = self.server.tabs.focused_pane().id();
         let mut entries = Vec::new();
@@ -435,6 +454,103 @@ impl BooApp {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
+        } else if self.find_window_active {
+            let entries = self.find_window_entries();
+            let mut list = iced::widget::column![]
+                .spacing(6)
+                .width(Length::Fill);
+            for (index, entry) in entries.iter().take(12).enumerate() {
+                let is_selected = index == self.find_window_selected;
+                let label = format!(
+                    "{}.{}  {}  {}",
+                    entry.tab_index + 1,
+                    entry.pane_index + 1,
+                    if entry.tab_title.is_empty() {
+                        "(untitled)"
+                    } else {
+                        entry.tab_title.as_str()
+                    },
+                    if entry.cwd.is_empty() {
+                        entry.preview.as_str()
+                    } else {
+                        entry.cwd.as_str()
+                    }
+                );
+                let preview = if entry.preview.is_empty() {
+                    String::new()
+                } else {
+                    format!("    {}", entry.preview.replace('\n', "\\n"))
+                };
+                list = list.push(
+                    container(
+                        iced::widget::column![
+                            text(label)
+                                .font(ui_font)
+                                .size(14)
+                                .color(if is_selected {
+                                    Color::WHITE
+                                } else {
+                                    Color::from_rgb(0.86, 0.86, 0.86)
+                                }),
+                            text(preview)
+                                .font(ui_font)
+                                .size(12)
+                                .color(Color::from_rgb(0.68, 0.68, 0.68))
+                        ]
+                        .spacing(2),
+                    )
+                    .padding([6, 10])
+                    .width(Length::Fill)
+                    .style(move |_: &Theme| container::Style {
+                        background: Some(iced::Background::Color(if is_selected {
+                            Color::from_rgba(0.24, 0.32, 0.62, 0.94)
+                        } else {
+                            Color::from_rgba(0.10, 0.10, 0.10, 0.88)
+                        })),
+                        ..Default::default()
+                    }),
+                );
+            }
+            let overlay: Element<'_, Message> = container(
+                iced::widget::column![
+                    text("find-window")
+                        .font(ui_font)
+                        .size(16)
+                        .color(Color::from_rgb(0.92, 0.92, 0.92)),
+                    text(format!("query: {}_", self.find_window_query))
+                        .font(ui_font)
+                        .size(13)
+                        .color(Color::from_rgb(0.82, 0.82, 0.82)),
+                    text("type to search   enter: select   arrows: move   backspace: delete   esc: close")
+                        .font(ui_font)
+                        .size(12)
+                        .color(Color::from_rgb(0.72, 0.72, 0.72)),
+                    list
+                ]
+                .spacing(8)
+                .width(Length::Fill),
+            )
+            .padding(16)
+            .width(Length::FillPortion(3))
+            .style(|_: &Theme| container::Style {
+                background: Some(iced::Background::Color(Color::from_rgba(
+                    0.06, 0.06, 0.06, 0.96,
+                ))),
+                ..Default::default()
+            })
+            .into();
+            stack([
+                base,
+                container(overlay)
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+            ])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
         } else if self.choose_tree_active {
             let entries = self.choose_tree_entries();
             let mut list = iced::widget::column![]

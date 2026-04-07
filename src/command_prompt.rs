@@ -191,6 +191,11 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         args: "",
     },
     CommandDef {
+        name: "find-window",
+        description: "search tabs and visible pane content, then jump to a match",
+        args: "",
+    },
+    CommandDef {
         name: "paste",
         description: "paste from clipboard",
         args: "",
@@ -366,6 +371,14 @@ mod tests {
         assert!(
             COMMANDS.iter().any(|cmd| cmd.name == "choose-tree"),
             "choose-tree command should be exposed in the command prompt"
+        );
+    }
+
+    #[test]
+    fn commands_include_find_window() {
+        assert!(
+            COMMANDS.iter().any(|cmd| cmd.name == "find-window"),
+            "find-window command should be exposed in the command prompt"
         );
     }
 

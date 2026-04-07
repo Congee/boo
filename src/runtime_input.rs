@@ -46,6 +46,10 @@ impl BooApp {
         let text = key_char.map(|ch| ch.to_string());
         let iced_mods = ghostty_mods_to_iced(mods);
 
+        if self.find_window_active && self.handle_find_window_key(&keyboard_key, key_char) {
+            return true;
+        }
+
         if self.choose_tree_active && self.handle_choose_tree_key(&keyboard_key, key_char) {
             return true;
         }
@@ -513,6 +517,11 @@ impl BooApp {
                 self.choose_tree_active = !self.choose_tree_entries().is_empty();
                 self.choose_tree_selected = 0;
             }
+            bindings::Action::FindWindow => {
+                self.find_window_active = true;
+                self.find_window_query.clear();
+                self.find_window_selected = 0;
+            }
             bindings::Action::DisplayPanes => {
                 self.display_panes_active =
                     self.server.tabs.active_tree().is_some_and(|tree| tree.len() > 1);
@@ -822,6 +831,7 @@ impl BooApp {
             "copy" => self.dispatch_binding_action(bindings::Action::Copy),
             "choose-buffer" => self.dispatch_binding_action(bindings::Action::ChooseBuffer),
             "choose-tree" => self.dispatch_binding_action(bindings::Action::ChooseTree),
+            "find-window" => self.dispatch_binding_action(bindings::Action::FindWindow),
             "display-panes" => self.dispatch_binding_action(bindings::Action::DisplayPanes),
             "command-prompt" => self.dispatch_binding_action(bindings::Action::OpenCommandPrompt),
             "search" => self.dispatch_binding_action(bindings::Action::Search),
@@ -963,6 +973,9 @@ impl BooApp {
     }
 
     pub(crate) fn sync_after_tab_change(&mut self) {
+        self.find_window_active = false;
+        self.find_window_query.clear();
+        self.find_window_selected = 0;
         self.choose_tree_active = false;
         self.choose_buffer_active = false;
         self.display_panes_active = false;
@@ -1187,6 +1200,88 @@ fn parse_split_direction_name(name: &str) -> Option<bindings::SplitDirection> {
 }
 
 impl BooApp {
+    fn handle_find_window_key(&mut self, key: &keyboard::Key, key_char: Option<char>) -> bool {
+        use keyboard::key::Named;
+
+        match key {
+            keyboard::Key::Named(Named::Escape) => {
+                self.find_window_active = false;
+                self.find_window_query.clear();
+                self.find_window_selected = 0;
+                true
+            }
+            keyboard::Key::Named(Named::Enter) => {
+                self.select_find_window_entry();
+                true
+            }
+            keyboard::Key::Named(Named::ArrowUp) => {
+                self.move_find_window_selection(false);
+                true
+            }
+            keyboard::Key::Named(Named::ArrowDown) => {
+                self.move_find_window_selection(true);
+                true
+            }
+            keyboard::Key::Named(Named::Backspace) => {
+                self.find_window_query.pop();
+                self.find_window_selected = 0;
+                true
+            }
+            _ => {
+                if let Some(ch) = key_char {
+                    if ch >= ' ' {
+                        self.find_window_query.push(ch);
+                        self.find_window_selected = 0;
+                    } else {
+                        self.find_window_active = false;
+                    }
+                } else {
+                    self.find_window_active = false;
+                }
+                true
+            }
+        }
+    }
+
+    fn move_find_window_selection(&mut self, forward: bool) {
+        let len = self.find_window_entries().len();
+        if len == 0 {
+            self.find_window_selected = 0;
+            return;
+        }
+        if forward {
+            self.find_window_selected = (self.find_window_selected + 1) % len;
+        } else {
+            self.find_window_selected = (self.find_window_selected + len - 1) % len;
+        }
+    }
+
+    fn select_find_window_entry(&mut self) {
+        let Some(entry) = self
+            .find_window_entries()
+            .get(self.find_window_selected)
+            .cloned()
+        else {
+            self.find_window_active = false;
+            self.find_window_query.clear();
+            self.find_window_selected = 0;
+            return;
+        };
+        self.find_window_active = false;
+        self.find_window_query.clear();
+        self.find_window_selected = 0;
+        let old = self.server.tabs.focused_pane();
+        self.server.tabs.goto_tab(entry.tab_index);
+        if self.server.tabs.focus_active_pane_by_id(entry.pane_id) {
+            let new = self.server.tabs.focused_pane();
+            if old != new {
+                self.set_pane_focus(old, false);
+                self.set_pane_focus(new, true);
+            }
+        }
+        self.sync_after_tab_change();
+    }
+
     fn handle_choose_tree_key(&mut self, key: &keyboard::Key, key_char: Option<char>) -> bool {
         use keyboard::key::Named;
 
