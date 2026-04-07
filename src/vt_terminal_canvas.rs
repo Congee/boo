@@ -94,7 +94,7 @@ impl TerminalCanvas {
                 font: run.font,
                 align_x: iced::widget::text::Alignment::Left,
                 align_y: alignment::Vertical::Top,
-                shaping: iced::widget::text::Shaping::Advanced,
+                shaping: iced::widget::text::Shaping::Basic,
                 max_width: draw_width,
             });
 
