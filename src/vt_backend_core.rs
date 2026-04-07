@@ -668,7 +668,11 @@ impl VtPane {
         };
 
         let size_changed = snapshot.cols != cols || snapshot.rows != rows;
-        let force_full_refresh = self.force_full_snapshot_refresh;
+        let render_state_dirty = self
+            .render_state
+            .get_bool(vt::GHOSTTY_RENDER_STATE_DATA_DIRTY)
+            .unwrap_or(false);
+        let force_full_refresh = self.force_full_snapshot_refresh || render_state_dirty;
         if size_changed || snapshot.rows_data.len() != rows as usize {
             snapshot.rows_data.resize_with(rows as usize, Vec::new);
             snapshot.row_revisions.resize(rows as usize, 1);

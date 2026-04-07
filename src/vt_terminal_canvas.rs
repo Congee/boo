@@ -77,6 +77,12 @@ impl TerminalCanvas {
             return;
         };
         let y = PADDING_Y + row_index as f32 * self.cell_height;
+        let default_bg = color_from_rgb(self.snapshot.colors.background, self.background_opacity);
+        frame.fill_rectangle(
+            Point::new(PADDING_X, y),
+            Size::new(self.snapshot.cols as f32 * self.cell_width, self.cell_height),
+            default_bg,
+        );
         let row_fingerprint = self.row_fingerprint(row_index);
         {
             let mut fingerprints = state.row_artifact_fingerprints.borrow_mut();
@@ -140,6 +146,15 @@ impl TerminalCanvas {
         end_row: usize,
         state: &TerminalCanvasState,
     ) {
+        let default_bg = color_from_rgb(self.snapshot.colors.background, self.background_opacity);
+        let chunk_y = (PADDING_Y + start_row as f32 * self.cell_height - 1.0).max(0.0);
+        let chunk_height =
+            ((end_row.saturating_sub(start_row)) as f32 * self.cell_height + 2.0).max(0.0);
+        frame.fill_rectangle(
+            Point::new(PADDING_X, chunk_y),
+            Size::new(self.snapshot.cols as f32 * self.cell_width, chunk_height),
+            default_bg,
+        );
         for row_index in start_row..end_row {
             self.draw_row(frame, row_index, state);
         }
