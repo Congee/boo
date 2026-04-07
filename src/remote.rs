@@ -831,7 +831,11 @@ fn encode_delta(
         return Some(payload);
     }
 
-    let scroll_rows = detect_scroll_rows(previous, current);
+    let scroll_rows = if local {
+        None
+    } else {
+        detect_scroll_rows(previous, current)
+    };
     if changed_rows.len() == rows && scroll_rows.is_none() {
         return None;
     }
@@ -1264,11 +1268,41 @@ mod tests {
             cells: [row('b'), row('c'), row('d')].concat(),
         };
 
-        let payload = encode_delta(&previous, &current, Some(7), true).expect("delta payload");
-        assert_eq!(u64::from_le_bytes(payload[0..8].try_into().unwrap()), 7);
-        assert_eq!(u16::from_le_bytes(payload[8..10].try_into().unwrap()), 1);
-        assert_eq!(payload[15] & 0x01, 0x01);
-        assert_eq!(i16::from_le_bytes(payload[16..18].try_into().unwrap()), 1);
-        assert_eq!(u16::from_le_bytes(payload[18..20].try_into().unwrap()), 2);
+        let payload = encode_delta(&previous, &current, Some(7), false).expect("delta payload");
+        assert_eq!(u16::from_le_bytes(payload[0..2].try_into().unwrap()), 1);
+        assert_eq!(payload[7] & 0x01, 0x01);
+        assert_eq!(i16::from_le_bytes(payload[8..10].try_into().unwrap()), 1);
+        assert_eq!(u16::from_le_bytes(payload[10..12].try_into().unwrap()), 2);
+    }
+
+    #[test]
+    fn encode_delta_skips_scroll_optimization_for_local_clients() {
+        let row = |ch: char| -> Vec<RemoteCell> {
+            vec![RemoteCell {
+                codepoint: u32::from(ch),
+                fg: [1, 2, 3],
+                bg: [0, 0, 0],
+                style_flags: 0,
+                wide: false,
+            }]
+        };
+        let previous = RemoteFullState {
+            rows: 4,
+            cols: 1,
+            cursor_x: 0,
+            cursor_y: 3,
+            cursor_visible: true,
+            cells: [row('a'), row('b'), row('c'), row('d')].concat(),
+        };
+        let current = RemoteFullState {
+            rows: 4,
+            cols: 1,
+            cursor_x: 0,
+            cursor_y: 3,
+            cursor_visible: true,
+            cells: [row('b'), row('c'), row('d'), row('e')].concat(),
+        };
+
+        assert!(encode_delta(&previous, &current, Some(9), true).is_none());
     }
 }
