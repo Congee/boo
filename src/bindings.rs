@@ -14,6 +14,7 @@ pub enum Action {
     GotoSplit(PaneFocusDirection),
     ResizeSplit(Direction, u16),
     CloseSurface,
+    BreakPane,
     NewTab,
     NextTab,
     PrevTab,
@@ -21,8 +22,16 @@ pub enum Action {
     GotoTab(TabTarget),
     Search,
     EnterCopyMode,
+    Copy,
     Paste,
     SetTabTitle,
+    RotatePanesForward,
+    RotatePanesBackward,
+    SwapPaneNext,
+    SwapPanePrevious,
+    SelectLayout(crate::session::TabLayout),
+    NextLayout,
+    PreviousLayout,
     ToggleZoom,
     OpenCommandPrompt,
     NextPane,
@@ -600,14 +609,36 @@ fn parse_action(s: &str) -> Option<Action> {
     match s {
         "reload_config" => Some(Action::ReloadConfig),
         "close_surface" => Some(Action::CloseSurface),
+        "break_pane" => Some(Action::BreakPane),
         "new_tab" => Some(Action::NewTab),
         "next_tab" => Some(Action::NextTab),
         "prev_tab" => Some(Action::PrevTab),
         "close_tab" => Some(Action::CloseTab),
         "search" => Some(Action::Search),
         "enter_copy_mode" => Some(Action::EnterCopyMode),
+        "copy" => Some(Action::Copy),
         "paste" => Some(Action::Paste),
         "set_tab_title" => Some(Action::SetTabTitle),
+        "rotate_panes_forward" => Some(Action::RotatePanesForward),
+        "rotate_panes_backward" => Some(Action::RotatePanesBackward),
+        "swap_pane_next" => Some(Action::SwapPaneNext),
+        "swap_pane_previous" => Some(Action::SwapPanePrevious),
+        "next_layout" => Some(Action::NextLayout),
+        "previous_layout" => Some(Action::PreviousLayout),
+        "select_layout:manual" => Some(Action::SelectLayout(crate::session::TabLayout::Manual)),
+        "select_layout:even-horizontal" => {
+            Some(Action::SelectLayout(crate::session::TabLayout::EvenHorizontal))
+        }
+        "select_layout:even-vertical" => {
+            Some(Action::SelectLayout(crate::session::TabLayout::EvenVertical))
+        }
+        "select_layout:main-horizontal" => {
+            Some(Action::SelectLayout(crate::session::TabLayout::MainHorizontal))
+        }
+        "select_layout:main-vertical" => {
+            Some(Action::SelectLayout(crate::session::TabLayout::MainVertical))
+        }
+        "select_layout:tiled" => Some(Action::SelectLayout(crate::session::TabLayout::Tiled)),
         "toggle_zoom" => Some(Action::ToggleZoom),
         "command_prompt" => Some(Action::OpenCommandPrompt),
         "next_pane" => Some(Action::NextPane),
@@ -971,6 +1002,22 @@ keybind = super+/ = search
         assert!(matches!(
             parse_action("resize_split:left,10"),
             Some(Action::ResizeSplit(Direction::Left, 10))
+        ));
+        assert!(matches!(
+            parse_action("break_pane"),
+            Some(Action::BreakPane)
+        ));
+        assert!(matches!(
+            parse_action("rotate_panes_forward"),
+            Some(Action::RotatePanesForward)
+        ));
+        assert!(matches!(
+            parse_action("swap_pane_previous"),
+            Some(Action::SwapPanePrevious)
+        ));
+        assert!(matches!(
+            parse_action("select_layout:tiled"),
+            Some(Action::SelectLayout(crate::session::TabLayout::Tiled))
         ));
         assert!(parse_action("nonexistent").is_none());
     }

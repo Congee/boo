@@ -1,6 +1,7 @@
 //! Tab management — each tab contains its own split tree.
 
 use crate::pane::PaneHandle;
+use crate::session::TabLayout;
 use crate::splits::SplitTree;
 
 pub struct TabManager {
@@ -14,6 +15,7 @@ pub struct Tab {
     id: u32,
     tree: SplitTree,
     pub title: String,
+    pub layout: TabLayout,
     running_command: Option<RunningCommand>,
 }
 
@@ -54,6 +56,7 @@ impl TabManager {
             id,
             tree,
             title: String::new(),
+            layout: TabLayout::Manual,
             running_command: None,
         });
     }
@@ -72,6 +75,7 @@ impl TabManager {
             id,
             tree,
             title: String::new(),
+            layout: TabLayout::Manual,
             running_command: None,
         });
         self.active = idx;
@@ -169,6 +173,82 @@ impl TabManager {
         }
     }
 
+    pub fn active_layout(&self) -> Option<TabLayout> {
+        self.tabs.get(self.active).map(|tab| tab.layout.clone())
+    }
+
+    pub fn apply_layout_to_active(&mut self, layout: TabLayout) -> bool {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return false;
+        };
+        let panes = tab.tree.all_panes();
+        if panes.len() <= 1 {
+            tab.layout = layout;
+            return false;
+        }
+        let focused_pane_id = tab.tree.focused_pane().id();
+        let specs = crate::session::layout_splits(&layout, panes.len())
+            .into_iter()
+            .map(|spec| {
+                let direction = match spec.direction {
+                    crate::session::SplitDir::Right => crate::splits::Direction::Horizontal,
+                    crate::session::SplitDir::Down => crate::splits::Direction::Vertical,
+                };
+                (direction, spec.ratio)
+            })
+            .collect::<Vec<_>>();
+        let changed = tab.tree.rebuild_from_panes(&panes, &specs, focused_pane_id);
+        tab.layout = layout;
+        changed
+    }
+
+    pub fn cycle_active_layout(&mut self, forward: bool) -> bool {
+        let current = self.active_layout().unwrap_or(TabLayout::Manual);
+        let layouts = [
+            TabLayout::EvenHorizontal,
+            TabLayout::EvenVertical,
+            TabLayout::MainHorizontal,
+            TabLayout::MainVertical,
+            TabLayout::Tiled,
+        ];
+        let pos = layouts.iter().position(|layout| *layout == current).unwrap_or(0);
+        let next = if forward {
+            layouts[(pos + 1) % layouts.len()].clone()
+        } else {
+            layouts[(pos + layouts.len() - 1) % layouts.len()].clone()
+        };
+        self.apply_layout_to_active(next)
+    }
+
+    pub fn rotate_active_panes(&mut self, forward: bool) -> bool {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return false;
+        };
+        tab.layout = TabLayout::Manual;
+        tab.tree.rotate_panes(forward)
+    }
+
+    pub fn swap_active_pane_with_adjacent(&mut self, next: bool) -> bool {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return false;
+        };
+        tab.layout = TabLayout::Manual;
+        tab.tree.swap_focused_with_adjacent(next)
+    }
+
+    pub fn break_active_pane_to_tab(&mut self) -> Option<usize> {
+        if self.tabs.is_empty() {
+            return None;
+        }
+        let active_index = self.active;
+        let pane = self.tabs.get_mut(active_index)?.tree.remove_focused()?;
+        self.tabs[active_index].layout = TabLayout::Manual;
+        if self.tabs[active_index].tree.len() == 0 {
+            let _ = self.remove_tab(active_index);
+        }
+        Some(self.new_tab(pane))
+    }
+
     pub fn active_title(&self) -> Option<&str> {
         self.tabs.get(self.active).map(|tab| tab.title.as_str())
     }
@@ -242,6 +322,10 @@ impl TabManager {
 
     pub fn tab_tree(&self, index: usize) -> Option<&SplitTree> {
         self.tabs.get(index).map(|t| &t.tree)
+    }
+
+    pub fn tab_layout(&self, index: usize) -> Option<TabLayout> {
+        self.tabs.get(index).map(|tab| tab.layout.clone())
     }
 
     pub fn tab_session_info(&self) -> Vec<TabSessionInfo> {
@@ -318,6 +402,7 @@ pub struct TabInfo {
 mod tests {
     use super::TabManager;
     use crate::pane::PaneHandle;
+    use crate::session::TabLayout;
 
     #[test]
     fn new_tab_switches_active_pane() {
@@ -412,5 +497,43 @@ mod tests {
         let info = tabs.tab_info_with_spinner(2);
 
         assert_eq!(info[0].title, "| shell");
+    }
+
+    #[test]
+    fn apply_layout_updates_active_layout() {
+        let mut tabs = TabManager::new();
+        let a = PaneHandle::detached();
+        let b = PaneHandle::detached();
+        let c = PaneHandle::detached();
+
+        tabs.add_initial_tab(a);
+        tabs.active_tree_mut()
+            .unwrap()
+            .split_focused(crate::splits::Direction::Horizontal, b);
+        tabs.active_tree_mut()
+            .unwrap()
+            .split_focused(crate::splits::Direction::Horizontal, c);
+
+        assert!(tabs.apply_layout_to_active(TabLayout::EvenVertical));
+        assert_eq!(tabs.active_layout(), Some(TabLayout::EvenVertical));
+    }
+
+    #[test]
+    fn break_active_pane_creates_new_tab() {
+        let mut tabs = TabManager::new();
+        let a = PaneHandle::detached();
+        let b = PaneHandle::detached();
+
+        tabs.add_initial_tab(a);
+        tabs.active_tree_mut()
+            .unwrap()
+            .split_focused(crate::splits::Direction::Horizontal, b);
+
+        let new_index = tabs.break_active_pane_to_tab().unwrap();
+
+        assert_eq!(new_index, 1);
+        assert_eq!(tabs.len(), 2);
+        assert_eq!(tabs.focused_pane(), b);
+        assert_eq!(tabs.tab_tree(0).unwrap().len(), 1);
     }
 }

@@ -235,7 +235,7 @@ nix develop
 - Kitty config migration backlog:
   - [x] support Kitty-style direct punctuation bindings needed by the config, such as `ctrl+super+,`
   - [ ] migrate supported keybinds from `~/.config/kitty/kitty.conf` into `~/.config/boo/config.boo`
-  - [ ] implement direct copy-to-clipboard action for `cmd+c`
+  - [x] expose a bindable copy-to-clipboard action for the current Boo selection
   - [ ] implement configurable macOS option-as-alt behavior
   - [x] implement `set_tab_title`
   - [ ] implement Boo-native search-pane action to replace the Kitty `search.py` split binding
@@ -243,6 +243,29 @@ nix develop
   - [ ] implement `window-decoration` config instead of ignoring it
   - [ ] decide how to map Kitty’s `close_on_child_death` / `macos_quit_when_last_window_closed` semantics onto Boo’s client/server model
   - [ ] audit Kitty theme/include settings and decide which visual settings Boo should support directly
+
+### tmux Parity Backlog
+- [x] support `set-tab-title`
+- [x] expose a bindable `copy` action for the current Boo selection
+- [ ] add pane lifecycle commands:
+  - `break-pane`
+  - `join-pane` / `move-pane`
+  - `swap-pane`
+  - `rotate-window`
+- [ ] add live preset layout commands:
+  - `select-layout`
+  - `next-layout`
+  - `previous-layout`
+  - rebalance/spread panes evenly
+- [ ] add interactive tmux-style chooser UIs:
+  - display-panes
+  - choose-tree
+  - choose-buffer
+- [ ] add paste buffer management beyond the system clipboard
+- [ ] add `find-window` style search across titles, names, and visible content
+- [ ] add remain-on-exit / respawn-pane style process lifecycle controls
+- [ ] add marked-pane targeting for pane move/swap/join commands
+- [ ] add session/window rename and move/link semantics closer to tmux
 
 ### Command Finish Notifications
 - `notify-on-command-finish` config and duration thresholds are implemented

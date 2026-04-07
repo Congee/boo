@@ -96,6 +96,17 @@ impl SplitTree {
         self.focused_id = id;
     }
 
+    pub fn set_focus_to_pane(&mut self, pane_id: crate::pane::PaneId) -> bool {
+        let Some(root) = self.root.as_ref() else {
+            return false;
+        };
+        let Some(id) = find_leaf_id_by_pane(root, pane_id) else {
+            return false;
+        };
+        self.focused_id = id;
+        true
+    }
+
     /// Focus the next leaf (in-order traversal).
     pub fn focus_next(&mut self) {
         if let Some(ref root) = self.root {
@@ -196,6 +207,92 @@ impl SplitTree {
         }
     }
 
+    pub fn swap_focused_with_adjacent(&mut self, next: bool) -> bool {
+        let Some(root) = self.root.as_ref() else {
+            return false;
+        };
+        let leaves = collect_leaf_ids(root);
+        let Some(pos) = leaves.iter().position(|&id| id == self.focused_id) else {
+            return false;
+        };
+        if leaves.len() < 2 {
+            return false;
+        }
+        let other_pos = if next {
+            (pos + 1) % leaves.len()
+        } else {
+            (pos + leaves.len() - 1) % leaves.len()
+        };
+        let other_id = leaves[other_pos];
+        let Some(root) = self.root.as_mut() else {
+            return false;
+        };
+        swap_leaf_panes(root, self.focused_id, other_id)
+    }
+
+    pub fn rotate_panes(&mut self, forward: bool) -> bool {
+        let Some(root) = self.root.as_ref() else {
+            return false;
+        };
+        let leaves = collect_leaf_ids(root);
+        if leaves.len() < 2 {
+            return false;
+        }
+        let panes = leaves
+            .iter()
+            .filter_map(|id| find_leaf(root, *id))
+            .collect::<Vec<_>>();
+        if panes.len() != leaves.len() {
+            return false;
+        }
+        let rotated = if forward {
+            let mut out = Vec::with_capacity(panes.len());
+            out.push(*panes.last().unwrap());
+            out.extend(panes.iter().copied().take(panes.len() - 1));
+            out
+        } else {
+            let mut out = panes.iter().copied().skip(1).collect::<Vec<_>>();
+            out.push(panes[0]);
+            out
+        };
+        let Some(root) = self.root.as_mut() else {
+            return false;
+        };
+        assign_leaf_panes(root, &leaves, &rotated)
+    }
+
+    pub fn rebuild_from_panes(
+        &mut self,
+        panes: &[PaneHandle],
+        splits: &[(Direction, f64)],
+        focused_pane_id: crate::pane::PaneId,
+    ) -> bool {
+        if panes.is_empty() {
+            self.root = None;
+            return false;
+        }
+        let mut next_id = 0usize;
+        let root_id = next_id;
+        next_id += 1;
+        let mut root = Node::Leaf {
+            id: root_id,
+            pane: panes[0],
+        };
+        for (idx, pane) in panes.iter().copied().enumerate().skip(1) {
+            let (direction, ratio) = splits.get(idx - 1).copied().unwrap_or((Direction::Vertical, 0.5));
+            let new_id = next_id;
+            next_id += 1;
+            root = split_node_with_ratio(root, new_id - 1, direction, new_id, pane, ratio);
+        }
+        self.root = Some(root);
+        self.next_id = next_id;
+        let _ = self.set_focus_to_pane(focused_pane_id);
+        if self.focused_pane().id() != focused_pane_id {
+            self.focused_id = 0;
+        }
+        true
+    }
+
     /// Check if a point is on a split divider. Returns the direction if so.
     pub fn divider_at(&self, frame: Rect, point: (f64, f64)) -> Option<Direction> {
         self.root
@@ -282,6 +379,15 @@ fn find_leaf(node: &Node, id: LeafId) -> Option<PaneHandle> {
     }
 }
 
+fn find_leaf_id_by_pane(node: &Node, pane_id: crate::pane::PaneId) -> Option<LeafId> {
+    match node {
+        Node::Leaf { id, pane } if pane.id() == pane_id => Some(*id),
+        Node::Split { first, second, .. } => find_leaf_id_by_pane(first, pane_id)
+            .or_else(|| find_leaf_id_by_pane(second, pane_id)),
+        _ => None,
+    }
+}
+
 fn collect_leaf_ids(node: &Node) -> Vec<LeafId> {
     match node {
         Node::Leaf { id, .. } => vec![*id],
@@ -299,6 +405,58 @@ fn collect_panes(node: &Node, out: &mut Vec<PaneHandle>) {
         Node::Split { first, second, .. } => {
             collect_panes(first, out);
             collect_panes(second, out);
+        }
+    }
+}
+
+fn swap_leaf_panes(node: &mut Node, a: LeafId, b: LeafId) -> bool {
+    let Some(first) = find_leaf(node, a) else {
+        return false;
+    };
+    let Some(second) = find_leaf(node, b) else {
+        return false;
+    };
+    set_leaf_pane(node, a, second) && set_leaf_pane(node, b, first)
+}
+
+fn assign_leaf_panes(node: &mut Node, leaf_ids: &[LeafId], panes: &[PaneHandle]) -> bool {
+    if leaf_ids.len() != panes.len() {
+        return false;
+    }
+    let mut assigned = 0usize;
+    assign_leaf_panes_inner(node, leaf_ids, panes, &mut assigned);
+    assigned == panes.len()
+}
+
+fn set_leaf_pane(node: &mut Node, target: LeafId, new_pane: PaneHandle) -> bool {
+    match node {
+        Node::Leaf { id, pane } if *id == target => {
+            *pane = new_pane;
+            true
+        }
+        Node::Split { first, second, .. } => {
+            set_leaf_pane(first, target, new_pane) || set_leaf_pane(second, target, new_pane)
+        }
+        _ => false,
+    }
+}
+
+fn assign_leaf_panes_inner(
+    node: &mut Node,
+    leaf_ids: &[LeafId],
+    panes: &[PaneHandle],
+    assigned: &mut usize,
+) {
+    match node {
+        Node::Leaf { id, pane } => {
+            if let Some(index) = leaf_ids.iter().position(|leaf_id| leaf_id == id) {
+                *pane = panes[index];
+                *assigned += 1;
+            }
+        }
+        Node::Split { first, second, .. } => {
+            assign_leaf_panes_inner(first, leaf_ids, panes, assigned);
+            assign_leaf_panes_inner(second, leaf_ids, panes, assigned);
         }
     }
 }
@@ -706,6 +864,35 @@ mod tests {
         assert_eq!(tree.focused_pane(), a);
         tree.focus_prev();
         assert_eq!(tree.focused_pane(), c);
+    }
+
+    #[test]
+    fn swap_focused_with_adjacent_swaps_panes() {
+        let mut tree = SplitTree::new();
+        let a = PaneHandle::detached();
+        let b = PaneHandle::detached();
+
+        tree.add_root(a);
+        tree.split_focused(Direction::Horizontal, b);
+
+        assert!(tree.swap_focused_with_adjacent(false));
+        assert_eq!(tree.all_panes(), vec![b, a]);
+        assert_eq!(tree.focused_pane(), a);
+    }
+
+    #[test]
+    fn rotate_panes_reorders_leaf_contents() {
+        let mut tree = SplitTree::new();
+        let a = PaneHandle::detached();
+        let b = PaneHandle::detached();
+        let c = PaneHandle::detached();
+
+        tree.add_root(a);
+        tree.split_focused(Direction::Horizontal, b);
+        tree.split_focused(Direction::Vertical, c);
+
+        assert!(tree.rotate_panes(true));
+        assert_eq!(tree.all_panes(), vec![c, a, b]);
     }
 
     #[test]

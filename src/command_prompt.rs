@@ -51,6 +51,11 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         args: "",
     },
     CommandDef {
+        name: "break-pane",
+        description: "move the focused pane into a new tab",
+        args: "",
+    },
+    CommandDef {
         name: "new-tab",
         description: "create a new tab",
         args: "",
@@ -76,6 +81,21 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         args: "<n>",
     },
     CommandDef {
+        name: "next-layout",
+        description: "switch to the next preset layout",
+        args: "",
+    },
+    CommandDef {
+        name: "prev-layout",
+        description: "switch to the previous preset layout",
+        args: "",
+    },
+    CommandDef {
+        name: "select-layout",
+        description: "set a specific pane layout",
+        args: "<manual|even-horizontal|even-vertical|main-horizontal|main-vertical|tiled>",
+    },
+    CommandDef {
         name: "last-tab",
         description: "jump to the last tab",
         args: "",
@@ -91,6 +111,26 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         args: "",
     },
     CommandDef {
+        name: "swap-pane-next",
+        description: "swap focused pane with the next pane",
+        args: "",
+    },
+    CommandDef {
+        name: "swap-pane-prev",
+        description: "swap focused pane with the previous pane",
+        args: "",
+    },
+    CommandDef {
+        name: "rotate-panes-forward",
+        description: "rotate pane positions forward",
+        args: "",
+    },
+    CommandDef {
+        name: "rotate-panes-backward",
+        description: "rotate pane positions backward",
+        args: "",
+    },
+    CommandDef {
         name: "copy-mode",
         description: "enter copy mode",
         args: "",
@@ -103,6 +143,11 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
     CommandDef {
         name: "search",
         description: "open search",
+        args: "",
+    },
+    CommandDef {
+        name: "copy",
+        description: "copy the current copy-mode selection to the clipboard",
         args: "",
     },
     CommandDef {
@@ -250,5 +295,13 @@ mod tests {
     #[test]
     fn fuzzy_score_matches_set_tab_title_abbreviation() {
         assert!(fuzzy_score("stt", "set-tab-title") > 0);
+    }
+
+    #[test]
+    fn commands_include_copy() {
+        assert!(
+            COMMANDS.iter().any(|cmd| cmd.name == "copy"),
+            "copy command should be exposed in the command prompt"
+        );
     }
 }

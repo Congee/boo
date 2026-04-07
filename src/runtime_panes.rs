@@ -327,7 +327,10 @@ impl BooApp {
             if !session_tab.title.is_empty() {
                 if let Some(tab) = self.server.tabs.tab_mut(tab_idx) {
                     tab.title = session_tab.title.clone();
+                    tab.layout = session_tab.layout.clone();
                 }
+            } else if let Some(tab) = self.server.tabs.tab_mut(tab_idx) {
+                tab.layout = session_tab.layout.clone();
             }
         }
         self.relayout();
@@ -366,7 +369,11 @@ impl BooApp {
                 };
                 session::SessionTab {
                     title: info.title.clone(),
-                    layout: session::TabLayout::Manual,
+                    layout: self
+                        .server
+                        .tabs
+                        .tab_layout(info.index)
+                        .unwrap_or(session::TabLayout::Manual),
                     panes,
                 }
             })

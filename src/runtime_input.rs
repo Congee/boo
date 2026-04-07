@@ -434,6 +434,13 @@ impl BooApp {
                 self.relayout();
             }
             bindings::Action::CloseSurface => self.handle_surface_closed(),
+            bindings::Action::BreakPane => {
+                if self.server.tabs.break_active_pane_to_tab().is_some() {
+                    let pane = self.server.tabs.focused_pane();
+                    self.set_pane_focus(pane, true);
+                    self.relayout();
+                }
+            }
             bindings::Action::NewTab => {
                 let _ = self.new_tab();
             }
@@ -473,6 +480,9 @@ impl BooApp {
             bindings::Action::EnterCopyMode => {
                 self.enter_copy_mode();
             }
+            bindings::Action::Copy => {
+                self.copy_mode_copy();
+            }
             bindings::Action::Paste => {
                 self.ghostty_binding_action("paste_from_clipboard");
             }
@@ -500,6 +510,41 @@ impl BooApp {
                 }
                 let new = self.server.tabs.focused_pane();
                 self.set_pane_focus(new, true);
+            }
+            bindings::Action::SwapPaneNext => {
+                if self.server.tabs.swap_active_pane_with_adjacent(true) {
+                    self.relayout();
+                }
+            }
+            bindings::Action::SwapPanePrevious => {
+                if self.server.tabs.swap_active_pane_with_adjacent(false) {
+                    self.relayout();
+                }
+            }
+            bindings::Action::RotatePanesForward => {
+                if self.server.tabs.rotate_active_panes(true) {
+                    self.relayout();
+                }
+            }
+            bindings::Action::RotatePanesBackward => {
+                if self.server.tabs.rotate_active_panes(false) {
+                    self.relayout();
+                }
+            }
+            bindings::Action::SelectLayout(layout) => {
+                if self.server.tabs.apply_layout_to_active(layout) {
+                    self.relayout();
+                }
+            }
+            bindings::Action::NextLayout => {
+                if self.server.tabs.cycle_active_layout(true) {
+                    self.relayout();
+                }
+            }
+            bindings::Action::PreviousLayout => {
+                if self.server.tabs.cycle_active_layout(false) {
+                    self.relayout();
+                }
             }
             bindings::Action::PreviousTab => {
                 let prev = self.server.tabs.previous_active();
@@ -666,6 +711,7 @@ impl BooApp {
                 ));
             }
             "close-pane" => self.dispatch_binding_action(bindings::Action::CloseSurface),
+            "break-pane" => self.dispatch_binding_action(bindings::Action::BreakPane),
             "new-tab" => self.dispatch_binding_action(bindings::Action::NewTab),
             "next-tab" => self.dispatch_binding_action(bindings::Action::NextTab),
             "prev-tab" => self.dispatch_binding_action(bindings::Action::PrevTab),
@@ -680,9 +726,25 @@ impl BooApp {
             "last-tab" => {
                 self.dispatch_binding_action(bindings::Action::GotoTab(bindings::TabTarget::Last))
             }
+            "next-layout" => self.dispatch_binding_action(bindings::Action::NextLayout),
+            "prev-layout" => self.dispatch_binding_action(bindings::Action::PreviousLayout),
+            "select-layout" => {
+                if let Some(layout) = arg1.and_then(parse_tab_layout_name) {
+                    self.dispatch_binding_action(bindings::Action::SelectLayout(layout));
+                }
+            }
             "next-pane" => self.dispatch_binding_action(bindings::Action::NextPane),
             "prev-pane" => self.dispatch_binding_action(bindings::Action::PreviousPane),
+            "swap-pane-next" => self.dispatch_binding_action(bindings::Action::SwapPaneNext),
+            "swap-pane-prev" => self.dispatch_binding_action(bindings::Action::SwapPanePrevious),
+            "rotate-panes-forward" => {
+                self.dispatch_binding_action(bindings::Action::RotatePanesForward)
+            }
+            "rotate-panes-backward" => {
+                self.dispatch_binding_action(bindings::Action::RotatePanesBackward)
+            }
             "copy-mode" => self.dispatch_binding_action(bindings::Action::EnterCopyMode),
+            "copy" => self.dispatch_binding_action(bindings::Action::Copy),
             "command-prompt" => self.dispatch_binding_action(bindings::Action::OpenCommandPrompt),
             "search" => self.dispatch_binding_action(bindings::Action::Search),
             "paste" => self.dispatch_binding_action(bindings::Action::Paste),
@@ -1011,5 +1073,17 @@ impl BooApp {
             }
             _ => {}
         }
+    }
+}
+
+fn parse_tab_layout_name(name: &str) -> Option<session::TabLayout> {
+    match name {
+        "manual" => Some(session::TabLayout::Manual),
+        "even-horizontal" => Some(session::TabLayout::EvenHorizontal),
+        "even-vertical" => Some(session::TabLayout::EvenVertical),
+        "main-horizontal" => Some(session::TabLayout::MainHorizontal),
+        "main-vertical" => Some(session::TabLayout::MainVertical),
+        "tiled" => Some(session::TabLayout::Tiled),
+        _ => None,
     }
 }
