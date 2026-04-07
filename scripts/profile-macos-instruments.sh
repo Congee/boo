@@ -13,11 +13,12 @@ SOCKET="${SOCKET:-/tmp/boo-prof.sock}"
 TEMPLATE="${TEMPLATE:-Time Profiler}"
 TIME_LIMIT="${TIME_LIMIT:-10s}"
 WORKLOAD="${WORKLOAD:-}"
+READY_TIMEOUT="${READY_TIMEOUT:-20}"
 
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/profile-macos-instruments.sh [--trace PATH] [--socket PATH] [--template NAME] [--time-limit DUR] [--workload TEXT]
+  scripts/profile-macos-instruments.sh [--trace PATH] [--socket PATH] [--template NAME] [--time-limit DUR] [--ready-timeout SEC] [--workload TEXT]
 
 Examples:
   cargo build --profile profiling
@@ -26,8 +27,8 @@ Examples:
 
 Notes:
   - Uses scripts/profiling-boo.sh so the profiling build can find libghostty-vt.dylib.
-  - If --workload is set, the script waits briefly for the control socket and then injects
-    the given terminal text through scripts/ui-test-client.py.
+  - If --workload is set, the script waits for the control socket to report a populated
+    UI snapshot and then injects the given terminal text through scripts/ui-test-client.py.
   - The output trace is overwritten by removing any existing trace path first.
 EOF
 }
@@ -52,6 +53,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --workload)
       WORKLOAD="$2"
+      shift 2
+      ;;
+    --ready-timeout)
+      READY_TIMEOUT="$2"
       shift 2
       ;;
     -h|--help)
@@ -84,13 +89,8 @@ xcrun xctrace record \
 TRACE_PID=$!
 
 if [[ -n "$WORKLOAD" ]]; then
-  for _ in $(seq 1 50); do
-    if [[ -S "$SOCKET" ]]; then
-      python3 scripts/ui-test-client.py --socket "$SOCKET" request send-text "text=$WORKLOAD" >/dev/null 2>&1 || true
-      break
-    fi
-    sleep 0.1
-  done
+  python3 scripts/ui-test-client.py --socket "$SOCKET" wait-ready --timeout "$READY_TIMEOUT" >/dev/null 2>&1 || true
+  python3 scripts/ui-test-client.py --socket "$SOCKET" request send-text "text=$WORKLOAD" >/dev/null 2>&1 || true
 fi
 
 wait "$TRACE_PID"

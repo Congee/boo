@@ -47,6 +47,7 @@ Linux deep dive:
 Repo-local supplemental view:
 
 - `BOO_PROFILE=1` built-in stage profiler
+- helper scripts under `scripts/`
 
 ## What To Measure
 
@@ -119,7 +120,7 @@ Profile the server:
 
 ```bash
 RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile profiling
-samply record ./target/profiling/boo server --socket /tmp/boo.sock
+scripts/profile-samply.sh server --socket /tmp/boo.sock
 ```
 
 In another shell, drive workload against it:
@@ -137,7 +138,7 @@ python3 scripts/ui-test-client.py --socket /tmp/boo.sock request send-text text=
 Profile the GUI client:
 
 ```bash
-samply record ./target/profiling/boo
+scripts/profile-samply.sh
 ```
 
 Why use `samply` first:
@@ -208,7 +209,7 @@ Use `perf` for canonical Linux sampling:
 
 ```bash
 RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile profiling
-perf record -g ./target/profiling/boo server --socket /tmp/boo.sock
+scripts/profile-linux-perf.sh server --socket /tmp/boo.sock
 perf report
 ```
 
@@ -227,6 +228,19 @@ RUSTFLAGS="-C force-frame-pointers=yes" cargo flamegraph --profile profiling -- 
 ```
 
 This is most useful on Linux. On macOS, prefer Instruments and `samply`.
+
+## Helper Scripts
+
+Repo-local wrappers:
+
+- `scripts/profiling-boo.sh`
+  - launches the profiling build with the right `DYLD_LIBRARY_PATH` on macOS
+- `scripts/profile-macos-instruments.sh`
+  - records an Instruments trace and can inject a terminal workload
+- `scripts/profile-samply.sh`
+  - cross-platform `samply` wrapper
+- `scripts/profile-linux-perf.sh`
+  - Linux `perf record` wrapper
 
 ## When To Use What
 
