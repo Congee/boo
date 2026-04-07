@@ -46,6 +46,10 @@ impl BooApp {
         let text = key_char.map(|ch| ch.to_string());
         let iced_mods = ghostty_mods_to_iced(mods);
 
+        if self.choose_tree_active && self.handle_choose_tree_key(&keyboard_key, key_char) {
+            return true;
+        }
+
         if self.choose_buffer_active && self.handle_choose_buffer_key(&keyboard_key, key_char) {
             return true;
         }
@@ -505,6 +509,10 @@ impl BooApp {
                 self.choose_buffer_active = !self.paste_buffers.is_empty();
                 self.choose_buffer_selected = 0;
             }
+            bindings::Action::ChooseTree => {
+                self.choose_tree_active = !self.choose_tree_entries().is_empty();
+                self.choose_tree_selected = 0;
+            }
             bindings::Action::DisplayPanes => {
                 self.display_panes_active =
                     self.server.tabs.active_tree().is_some_and(|tree| tree.len() > 1);
@@ -813,6 +821,7 @@ impl BooApp {
             "copy-mode" => self.dispatch_binding_action(bindings::Action::EnterCopyMode),
             "copy" => self.dispatch_binding_action(bindings::Action::Copy),
             "choose-buffer" => self.dispatch_binding_action(bindings::Action::ChooseBuffer),
+            "choose-tree" => self.dispatch_binding_action(bindings::Action::ChooseTree),
             "display-panes" => self.dispatch_binding_action(bindings::Action::DisplayPanes),
             "command-prompt" => self.dispatch_binding_action(bindings::Action::OpenCommandPrompt),
             "search" => self.dispatch_binding_action(bindings::Action::Search),
@@ -954,6 +963,7 @@ impl BooApp {
     }
 
     pub(crate) fn sync_after_tab_change(&mut self) {
+        self.choose_tree_active = false;
         self.choose_buffer_active = false;
         self.display_panes_active = false;
         let focused = self.server.tabs.focused_pane();
@@ -1177,6 +1187,75 @@ fn parse_split_direction_name(name: &str) -> Option<bindings::SplitDirection> {
 }
 
 impl BooApp {
+    fn handle_choose_tree_key(&mut self, key: &keyboard::Key, key_char: Option<char>) -> bool {
+        use keyboard::key::Named;
+
+        match key {
+            keyboard::Key::Named(Named::Escape) => {
+                self.choose_tree_active = false;
+                true
+            }
+            keyboard::Key::Named(Named::Enter) => {
+                self.select_choose_tree_entry();
+                true
+            }
+            keyboard::Key::Named(Named::ArrowUp) => {
+                self.move_choose_tree_selection(false);
+                true
+            }
+            keyboard::Key::Named(Named::ArrowDown) => {
+                self.move_choose_tree_selection(true);
+                true
+            }
+            _ => {
+                match key_char {
+                    Some('k') => self.move_choose_tree_selection(false),
+                    Some('j') => self.move_choose_tree_selection(true),
+                    Some('\r') => self.select_choose_tree_entry(),
+                    _ => self.choose_tree_active = false,
+                }
+                true
+            }
+        }
+    }
+
+    fn move_choose_tree_selection(&mut self, forward: bool) {
+        let len = self.choose_tree_entries().len();
+        if len == 0 {
+            self.choose_tree_active = false;
+            self.choose_tree_selected = 0;
+            return;
+        }
+        if forward {
+            self.choose_tree_selected = (self.choose_tree_selected + 1) % len;
+        } else {
+            self.choose_tree_selected = (self.choose_tree_selected + len - 1) % len;
+        }
+    }
+
+    fn select_choose_tree_entry(&mut self) {
+        let Some(entry) = self
+            .choose_tree_entries()
+            .get(self.choose_tree_selected)
+            .cloned()
+        else {
+            self.choose_tree_active = false;
+            self.choose_tree_selected = 0;
+            return;
+        };
+        self.choose_tree_active = false;
+        let old = self.server.tabs.focused_pane();
+        self.server.tabs.goto_tab(entry.tab_index);
+        if self.server.tabs.focus_active_pane_by_id(entry.pane_id) {
+            let new = self.server.tabs.focused_pane();
+            if old != new {
+                self.set_pane_focus(old, false);
+                self.set_pane_focus(new, true);
+            }
+        }
+        self.sync_after_tab_change();
+    }
+
     fn handle_choose_buffer_key(&mut self, key: &keyboard::Key, key_char: Option<char>) -> bool {
         use keyboard::key::Named;
 

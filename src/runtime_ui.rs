@@ -6,6 +6,51 @@ use iced::widget::stack;
 use iced::{Pixels, Point, Rectangle, Renderer};
 
 impl BooApp {
+    pub(crate) fn choose_tree_entries(&self) -> Vec<ChooseTreeEntry> {
+        let active_pane_id = self.server.tabs.focused_pane().id();
+        let mut entries = Vec::new();
+        for tab in self.server.tabs.tab_session_info() {
+            let Some(tree) = self.server.tabs.tab_tree(tab.index) else {
+                continue;
+            };
+            for (pane_index, pane) in tree.export_panes().into_iter().enumerate() {
+                let terminal = self.backend.ui_terminal_snapshot(pane.pane.id());
+                let title = self.server.tabs.display_title(tab.index, None);
+                let cwd = terminal
+                    .as_ref()
+                    .map(|snapshot| snapshot.pwd.clone())
+                    .unwrap_or_default();
+                let preview = terminal
+                    .and_then(|snapshot| {
+                        snapshot
+                            .rows_data
+                            .into_iter()
+                            .find_map(|row| {
+                                let line = row
+                                    .cells
+                                    .into_iter()
+                                    .map(|cell| cell.text)
+                                    .collect::<String>()
+                                    .trim()
+                                    .to_string();
+                                (!line.is_empty()).then_some(line)
+                            })
+                    })
+                    .unwrap_or_default();
+                entries.push(ChooseTreeEntry {
+                    tab_index: tab.index,
+                    pane_id: pane.pane.id(),
+                    pane_index,
+                    focused: pane.pane.id() == active_pane_id,
+                    tab_title: title,
+                    cwd,
+                    preview,
+                });
+            }
+        }
+        entries
+    }
+
     pub(crate) fn visible_pane_snapshots(&self) -> Vec<control::UiPaneSnapshot> {
         let focused_pane = self.server.tabs.focused_pane();
         let terminal_frame = self.terminal_frame();
@@ -390,6 +435,100 @@ impl BooApp {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
+        } else if self.choose_tree_active {
+            let entries = self.choose_tree_entries();
+            let mut list = iced::widget::column![]
+                .spacing(6)
+                .width(Length::Fill);
+            for (index, entry) in entries.iter().take(12).enumerate() {
+                let is_selected = index == self.choose_tree_selected;
+                let label = format!(
+                    "{}{}.{}  {}  {}",
+                    if entry.focused { "*" } else { " " },
+                    entry.tab_index + 1,
+                    entry.pane_index + 1,
+                    if entry.tab_title.is_empty() {
+                        "(untitled)"
+                    } else {
+                        entry.tab_title.as_str()
+                    },
+                    if entry.cwd.is_empty() {
+                        entry.preview.as_str()
+                    } else {
+                        entry.cwd.as_str()
+                    }
+                );
+                let preview = if entry.preview.is_empty() {
+                    String::new()
+                } else {
+                    format!("    {}", entry.preview.replace('\n', "\\n"))
+                };
+                list = list.push(
+                    container(
+                        iced::widget::column![
+                            text(label)
+                                .font(ui_font)
+                                .size(14)
+                                .color(if is_selected {
+                                    Color::WHITE
+                                } else {
+                                    Color::from_rgb(0.86, 0.86, 0.86)
+                                }),
+                            text(preview)
+                                .font(ui_font)
+                                .size(12)
+                                .color(Color::from_rgb(0.68, 0.68, 0.68))
+                        ]
+                        .spacing(2),
+                    )
+                    .padding([6, 10])
+                    .width(Length::Fill)
+                    .style(move |_: &Theme| container::Style {
+                        background: Some(iced::Background::Color(if is_selected {
+                            Color::from_rgba(0.24, 0.32, 0.62, 0.94)
+                        } else {
+                            Color::from_rgba(0.10, 0.10, 0.10, 0.88)
+                        })),
+                        ..Default::default()
+                    }),
+                );
+            }
+            let overlay: Element<'_, Message> = container(
+                iced::widget::column![
+                    text("choose-tree")
+                        .font(ui_font)
+                        .size(16)
+                        .color(Color::from_rgb(0.92, 0.92, 0.92)),
+                    text("enter: select   j/k or arrows: move   esc: close")
+                        .font(ui_font)
+                        .size(12)
+                        .color(Color::from_rgb(0.72, 0.72, 0.72)),
+                    list
+                ]
+                .spacing(8)
+                .width(Length::Fill),
+            )
+            .padding(16)
+            .width(Length::FillPortion(3))
+            .style(|_: &Theme| container::Style {
+                background: Some(iced::Background::Color(Color::from_rgba(
+                    0.06, 0.06, 0.06, 0.96,
+                ))),
+                ..Default::default()
+            })
+            .into();
+            stack([
+                base,
+                container(overlay)
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+            ])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
         } else if self.choose_buffer_active {
             let preview_limit = 48usize;
             let mut list = iced::widget::column![]
@@ -545,6 +684,17 @@ impl BooApp {
 struct DisplayPanesOverlay {
     panes: Vec<control::UiPaneSnapshot>,
     font: Font,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ChooseTreeEntry {
+    pub(crate) tab_index: usize,
+    pub(crate) pane_id: crate::pane::PaneId,
+    pub(crate) pane_index: usize,
+    pub(crate) focused: bool,
+    pub(crate) tab_title: String,
+    pub(crate) cwd: String,
+    pub(crate) preview: String,
 }
 
 impl<Message> canvas::Program<Message> for DisplayPanesOverlay {

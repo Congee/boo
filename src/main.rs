@@ -217,6 +217,8 @@ struct BooApp {
     display_panes_active: bool,
     choose_buffer_active: bool,
     choose_buffer_selected: usize,
+    choose_tree_active: bool,
+    choose_tree_selected: usize,
     copy_mode: Option<CopyModeState>,
     command_prompt: CommandPrompt,
     terminal_font_family: Option<&'static str>,

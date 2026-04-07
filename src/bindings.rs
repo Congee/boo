@@ -25,6 +25,7 @@ pub enum Action {
     Copy,
     Paste,
     ChooseBuffer,
+    ChooseTree,
     SetTabTitle,
     DisplayPanes,
     MarkPane,
@@ -625,6 +626,7 @@ fn parse_action(s: &str) -> Option<Action> {
         "copy" => Some(Action::Copy),
         "paste" => Some(Action::Paste),
         "choose_buffer" => Some(Action::ChooseBuffer),
+        "choose_tree" => Some(Action::ChooseTree),
         "set_tab_title" => Some(Action::SetTabTitle),
         "display_panes" => Some(Action::DisplayPanes),
         "mark_pane" => Some(Action::MarkPane),
@@ -1035,6 +1037,10 @@ keybind = super+/ = search
         assert!(matches!(
             parse_action("choose_buffer"),
             Some(Action::ChooseBuffer)
+        ));
+        assert!(matches!(
+            parse_action("choose_tree"),
+            Some(Action::ChooseTree)
         ));
         assert!(matches!(
             parse_action("rotate_panes_forward"),

@@ -186,6 +186,11 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         args: "",
     },
     CommandDef {
+        name: "choose-tree",
+        description: "pick a pane from the current tab tree or another tab",
+        args: "",
+    },
+    CommandDef {
         name: "paste",
         description: "paste from clipboard",
         args: "",
@@ -353,6 +358,14 @@ mod tests {
         assert!(
             COMMANDS.iter().any(|cmd| cmd.name == "choose-buffer"),
             "choose-buffer command should be exposed in the command prompt"
+        );
+    }
+
+    #[test]
+    fn commands_include_choose_tree() {
+        assert!(
+            COMMANDS.iter().any(|cmd| cmd.name == "choose-tree"),
+            "choose-tree command should be exposed in the command prompt"
         );
     }
 

@@ -259,7 +259,7 @@ nix develop
   - [x] rebalance/spread panes evenly
 - [ ] add interactive tmux-style chooser UIs:
   - [x] display-panes
-  - choose-tree
+  - [x] choose-tree
   - [x] choose-buffer
 - [x] add paste buffer management beyond the system clipboard
 - [ ] add `find-window` style search across titles, names, and visible content
