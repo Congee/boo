@@ -52,6 +52,15 @@ pub struct Scope {
     bytes: u64,
 }
 
+#[derive(Clone, Copy)]
+pub struct Record {
+    pub name: &'static str,
+    pub kind: Kind,
+    pub elapsed: Duration,
+    pub bytes: u64,
+    pub units: u64,
+}
+
 pub fn enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("BOO_PROFILE").is_some())
@@ -88,6 +97,29 @@ pub fn record_bytes_and_units(
     record_with_units(name, kind, elapsed, bytes, units);
 }
 
+pub fn record_batch(records: &[Record]) {
+    if !enabled() || records.is_empty() {
+        return;
+    }
+    LOCAL_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let window_started = *state.window_started.get_or_insert_with(Instant::now);
+        let expired = window_started.elapsed() >= SUMMARY_INTERVAL;
+        for record in records {
+            let entry = local_entry_mut(&mut state, (record.name, record.kind));
+            entry.count += 1;
+            entry.total += record.elapsed;
+            entry.max = entry.max.max(record.elapsed);
+            entry.bytes = entry.bytes.saturating_add(record.bytes);
+            entry.units = entry.units.saturating_add(record.units);
+        }
+
+        if expired {
+            flush_local(&mut state);
+        }
+    });
+}
+
 fn record_with_units(name: &'static str, kind: Kind, elapsed: Duration, bytes: u64, units: u64) {
     if !enabled() {
         return;
@@ -96,31 +128,7 @@ fn record_with_units(name: &'static str, kind: Kind, elapsed: Duration, bytes: u
         let mut state = state.borrow_mut();
         let window_started = *state.window_started.get_or_insert_with(Instant::now);
         let expired = window_started.elapsed() >= SUMMARY_INTERVAL;
-
-        let key = (name, kind);
-        let cached_index = state.last_entry.and_then(|(cached_key, index)| {
-            (cached_key == key && index < state.entries.len()).then_some(index)
-        });
-        let index = if let Some(index) = cached_index {
-            index
-        } else if let Some(index) = state
-            .entries
-            .iter()
-            .position(|((entry_name, entry_kind), _)| *entry_name == name && *entry_kind == kind)
-        {
-            state.last_entry = Some((key, index));
-            index
-        } else {
-            state.entries.push((key, Entry::default()));
-            let index = state.entries.len() - 1;
-            state.last_entry = Some((key, index));
-            index
-        };
-        let entry = if index < state.entries.len() {
-            &mut state.entries[index].1
-        } else {
-            unreachable!("cached profiling entry index out of bounds");
-        };
+        let entry = local_entry_mut(&mut state, (name, kind));
         entry.count += 1;
         entry.total += elapsed;
         entry.max = entry.max.max(elapsed);
@@ -131,6 +139,28 @@ fn record_with_units(name: &'static str, kind: Kind, elapsed: Duration, bytes: u
             flush_local(&mut state);
         }
     });
+}
+
+fn local_entry_mut<'a>(local: &'a mut LocalState, key: (&'static str, Kind)) -> &'a mut Entry {
+    let cached_index = local.last_entry.and_then(|(cached_key, index)| {
+        (cached_key == key && index < local.entries.len()).then_some(index)
+    });
+    let index = if let Some(index) = cached_index {
+        index
+    } else if let Some(index) = local
+        .entries
+        .iter()
+        .position(|((entry_name, entry_kind), _)| *entry_name == key.0 && *entry_kind == key.1)
+    {
+        local.last_entry = Some((key, index));
+        index
+    } else {
+        local.entries.push((key, Entry::default()));
+        let index = local.entries.len() - 1;
+        local.last_entry = Some((key, index));
+        index
+    };
+    &mut local.entries[index].1
 }
 
 impl Scope {

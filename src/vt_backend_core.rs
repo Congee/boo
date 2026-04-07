@@ -64,6 +64,8 @@ pub struct VtPane {
     completed_notifications: Vec<DesktopNotification>,
     pending_pty_chunks: VecDeque<PendingPtyChunk>,
     pending_pty_bytes: usize,
+    pending_pty_profile: PendingPtyProfile,
+    last_exit_check: Instant,
     force_full_snapshot_refresh: bool,
     control_sequence_tail: Vec<u8>,
 }
@@ -184,6 +186,16 @@ struct PendingNotification {
 struct PendingPtyChunk {
     bytes: Vec<u8>,
     offset: usize,
+}
+
+#[derive(Default)]
+struct PendingPtyProfile {
+    polls: u8,
+    read_chunks: u64,
+    write_chunks: u64,
+    backlog_chunks: u64,
+    backlog_bytes: u64,
+    write_chunk_size: u64,
 }
 
 impl VtPaneWorker {
@@ -329,6 +341,7 @@ impl VtPane {
     const PTY_POLL_MAX_DURATION: Duration = Duration::from_millis(2);
     const PTY_BACKLOG_SOFT_LIMIT_BYTES: usize = 16 * 1024;
     const PTY_BACKLOG_HARD_LIMIT_BYTES: usize = 64 * 1024;
+    const EXIT_CHECK_INTERVAL_UNDER_LOAD: Duration = Duration::from_millis(16);
 
     pub fn spawn(
         cols: u16,
@@ -396,6 +409,8 @@ impl VtPane {
             completed_notifications: Vec::new(),
             pending_pty_chunks: VecDeque::new(),
             pending_pty_bytes: 0,
+            pending_pty_profile: PendingPtyProfile::default(),
+            last_exit_check: Instant::now(),
             force_full_snapshot_refresh: false,
             control_sequence_tail: Vec::new(),
         })
@@ -504,36 +519,73 @@ impl VtPane {
             started_at.elapsed(),
             total_bytes,
         );
-        crate::profiling::record_units(
-            "server.backend.poll_pty.read_chunks",
-            crate::profiling::Kind::Cpu,
-            read_chunks,
-        );
-        crate::profiling::record_units(
-            "server.backend.poll_pty.write_chunks",
-            crate::profiling::Kind::Cpu,
-            written_chunks,
-        );
-        crate::profiling::record_units(
-            "server.backend.poll_pty.backlog_chunks",
-            crate::profiling::Kind::Cpu,
-            self.pending_pty_chunks.len() as u64,
-        );
-        crate::profiling::record_bytes(
-            "server.backend.poll_pty.backlog_bytes",
-            crate::profiling::Kind::Cpu,
-            Duration::ZERO,
-            self.pending_pty_bytes as u64,
-        );
-        crate::profiling::record_units(
-            "server.backend.poll_pty.write_chunk_size",
-            crate::profiling::Kind::Cpu,
-            write_chunk_size as u64,
-        );
-        Ok(PollPtyResult {
-            changed,
-            exited: self.pty.try_wait()?,
-        })
+        self.pending_pty_profile.polls = self.pending_pty_profile.polls.wrapping_add(1);
+        self.pending_pty_profile.read_chunks =
+            self.pending_pty_profile.read_chunks.saturating_add(read_chunks);
+        self.pending_pty_profile.write_chunks =
+            self.pending_pty_profile.write_chunks.saturating_add(written_chunks);
+        self.pending_pty_profile.backlog_chunks = self
+            .pending_pty_profile
+            .backlog_chunks
+            .saturating_add(self.pending_pty_chunks.len() as u64);
+        self.pending_pty_profile.backlog_bytes = self
+            .pending_pty_profile
+            .backlog_bytes
+            .saturating_add(self.pending_pty_bytes as u64);
+        self.pending_pty_profile.write_chunk_size = self
+            .pending_pty_profile
+            .write_chunk_size
+            .saturating_add(write_chunk_size as u64);
+        if self.pending_pty_profile.polls >= 8 {
+            crate::profiling::record_batch(&[
+                crate::profiling::Record {
+                    name: "server.backend.poll_pty.read_chunks",
+                    kind: crate::profiling::Kind::Cpu,
+                    elapsed: Duration::ZERO,
+                    bytes: 0,
+                    units: self.pending_pty_profile.read_chunks,
+                },
+                crate::profiling::Record {
+                    name: "server.backend.poll_pty.write_chunks",
+                    kind: crate::profiling::Kind::Cpu,
+                    elapsed: Duration::ZERO,
+                    bytes: 0,
+                    units: self.pending_pty_profile.write_chunks,
+                },
+                crate::profiling::Record {
+                    name: "server.backend.poll_pty.backlog_chunks",
+                    kind: crate::profiling::Kind::Cpu,
+                    elapsed: Duration::ZERO,
+                    bytes: 0,
+                    units: self.pending_pty_profile.backlog_chunks,
+                },
+                crate::profiling::Record {
+                    name: "server.backend.poll_pty.backlog_bytes",
+                    kind: crate::profiling::Kind::Cpu,
+                    elapsed: Duration::ZERO,
+                    bytes: self.pending_pty_profile.backlog_bytes,
+                    units: 0,
+                },
+                crate::profiling::Record {
+                    name: "server.backend.poll_pty.write_chunk_size",
+                    kind: crate::profiling::Kind::Cpu,
+                    elapsed: Duration::ZERO,
+                    bytes: 0,
+                    units: self.pending_pty_profile.write_chunk_size,
+                },
+            ]);
+            self.pending_pty_profile = PendingPtyProfile::default();
+        }
+        let should_check_exit = !changed
+            || self.pending_pty_chunks.is_empty()
+            || self.last_exit_check.elapsed() >= Self::EXIT_CHECK_INTERVAL_UNDER_LOAD;
+        let exited = if should_check_exit {
+            self.last_exit_check = Instant::now();
+            self.pty.try_wait()?
+        } else {
+            false
+        };
+        Ok(PollPtyResult { changed, exited })
     }
 
     pub fn resize(
