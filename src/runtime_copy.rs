@@ -1,6 +1,17 @@
 use super::*;
 
 impl BooApp {
+    fn push_paste_buffer(&mut self, text: String) {
+        if text.is_empty() {
+            return;
+        }
+        self.paste_buffers.retain(|existing| existing != &text);
+        self.paste_buffers.insert(0, text);
+        if self.paste_buffers.len() > 32 {
+            self.paste_buffers.truncate(32);
+        }
+    }
+
     pub(crate) fn dispatch_copy_mode_action(&mut self, action: bindings::CopyModeAction) {
         use bindings::CopyModeAction::*;
 
@@ -719,7 +730,8 @@ impl BooApp {
         if let Some(new_text) = self.read_surface_selection_text(sel) {
             let combined = format!("{existing}{new_text}");
             platform::clipboard_write(&combined);
-            self.last_clipboard_text = combined;
+            self.last_clipboard_text = combined.clone();
+            self.push_paste_buffer(combined);
             log::info!("copy mode: appended {} bytes to clipboard", new_text.len());
         }
     }
@@ -937,6 +949,7 @@ impl BooApp {
         if let Some(text) = self.read_surface_selection_text(sel) {
             platform::clipboard_write(&text);
             self.last_clipboard_text = text.clone();
+            self.push_paste_buffer(text.clone());
             log::info!("copy mode: copied {} bytes", text.len());
         }
     }

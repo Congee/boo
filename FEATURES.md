@@ -260,8 +260,8 @@ nix develop
 - [ ] add interactive tmux-style chooser UIs:
   - [x] display-panes
   - choose-tree
-  - choose-buffer
-- [ ] add paste buffer management beyond the system clipboard
+  - [x] choose-buffer
+- [x] add paste buffer management beyond the system clipboard
 - [ ] add `find-window` style search across titles, names, and visible content
 - [ ] add remain-on-exit / respawn-pane style process lifecycle controls
 - [ ] add marked-pane targeting for pane move/swap/join commands

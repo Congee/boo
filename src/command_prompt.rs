@@ -181,6 +181,11 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         args: "",
     },
     CommandDef {
+        name: "choose-buffer",
+        description: "pick a previously copied buffer and paste it",
+        args: "",
+    },
+    CommandDef {
         name: "paste",
         description: "paste from clipboard",
         args: "",
@@ -340,6 +345,14 @@ mod tests {
         assert!(
             COMMANDS.iter().any(|cmd| cmd.name == "display-panes"),
             "display-panes command should be exposed in the command prompt"
+        );
+    }
+
+    #[test]
+    fn commands_include_choose_buffer() {
+        assert!(
+            COMMANDS.iter().any(|cmd| cmd.name == "choose-buffer"),
+            "choose-buffer command should be exposed in the command prompt"
         );
     }
 

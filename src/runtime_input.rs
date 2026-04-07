@@ -46,6 +46,10 @@ impl BooApp {
         let text = key_char.map(|ch| ch.to_string());
         let iced_mods = ghostty_mods_to_iced(mods);
 
+        if self.choose_buffer_active && self.handle_choose_buffer_key(&keyboard_key, key_char) {
+            return true;
+        }
+
         if self.display_panes_active && self.handle_display_panes_key(&keyboard_key, key_char) {
             return true;
         }
@@ -497,6 +501,10 @@ impl BooApp {
             bindings::Action::Copy => {
                 self.copy_mode_copy();
             }
+            bindings::Action::ChooseBuffer => {
+                self.choose_buffer_active = !self.paste_buffers.is_empty();
+                self.choose_buffer_selected = 0;
+            }
             bindings::Action::DisplayPanes => {
                 self.display_panes_active =
                     self.server.tabs.active_tree().is_some_and(|tree| tree.len() > 1);
@@ -804,6 +812,7 @@ impl BooApp {
             }
             "copy-mode" => self.dispatch_binding_action(bindings::Action::EnterCopyMode),
             "copy" => self.dispatch_binding_action(bindings::Action::Copy),
+            "choose-buffer" => self.dispatch_binding_action(bindings::Action::ChooseBuffer),
             "display-panes" => self.dispatch_binding_action(bindings::Action::DisplayPanes),
             "command-prompt" => self.dispatch_binding_action(bindings::Action::OpenCommandPrompt),
             "search" => self.dispatch_binding_action(bindings::Action::Search),
@@ -945,6 +954,7 @@ impl BooApp {
     }
 
     pub(crate) fn sync_after_tab_change(&mut self) {
+        self.choose_buffer_active = false;
         self.display_panes_active = false;
         let focused = self.server.tabs.focused_pane();
         self.set_pane_focus(focused, true);
@@ -1167,6 +1177,91 @@ fn parse_split_direction_name(name: &str) -> Option<bindings::SplitDirection> {
 }
 
 impl BooApp {
+    fn handle_choose_buffer_key(&mut self, key: &keyboard::Key, key_char: Option<char>) -> bool {
+        use keyboard::key::Named;
+
+        match key {
+            keyboard::Key::Named(Named::Escape) => {
+                self.choose_buffer_active = false;
+                true
+            }
+            keyboard::Key::Named(Named::Enter) => {
+                self.paste_selected_buffer();
+                true
+            }
+            keyboard::Key::Named(Named::ArrowUp) => {
+                self.move_choose_buffer_selection(false);
+                true
+            }
+            keyboard::Key::Named(Named::ArrowDown) => {
+                self.move_choose_buffer_selection(true);
+                true
+            }
+            keyboard::Key::Named(Named::Backspace) | keyboard::Key::Named(Named::Delete) => {
+                self.delete_selected_buffer();
+                true
+            }
+            _ => {
+                match key_char {
+                    Some('k') => self.move_choose_buffer_selection(false),
+                    Some('j') => self.move_choose_buffer_selection(true),
+                    Some('d') => self.delete_selected_buffer(),
+                    Some('p') | Some('\r') => self.paste_selected_buffer(),
+                    _ => self.choose_buffer_active = false,
+                }
+                true
+            }
+        }
+    }
+
+    fn move_choose_buffer_selection(&mut self, forward: bool) {
+        if self.paste_buffers.is_empty() {
+            self.choose_buffer_active = false;
+            self.choose_buffer_selected = 0;
+            return;
+        }
+        let len = self.paste_buffers.len();
+        if forward {
+            self.choose_buffer_selected = (self.choose_buffer_selected + 1) % len;
+        } else {
+            self.choose_buffer_selected = (self.choose_buffer_selected + len - 1) % len;
+        }
+    }
+
+    fn delete_selected_buffer(&mut self) {
+        if self.paste_buffers.is_empty() {
+            self.choose_buffer_active = false;
+            self.choose_buffer_selected = 0;
+            return;
+        }
+        let index = self.choose_buffer_selected.min(self.paste_buffers.len() - 1);
+        self.paste_buffers.remove(index);
+        if self.paste_buffers.is_empty() {
+            self.choose_buffer_active = false;
+            self.choose_buffer_selected = 0;
+        } else if self.choose_buffer_selected >= self.paste_buffers.len() {
+            self.choose_buffer_selected = self.paste_buffers.len() - 1;
+        }
+    }
+
+    fn paste_selected_buffer(&mut self) {
+        let Some(text) = self
+            .paste_buffers
+            .get(self.choose_buffer_selected)
+            .cloned()
+        else {
+            self.choose_buffer_active = false;
+            self.choose_buffer_selected = 0;
+            return;
+        };
+        self.choose_buffer_active = false;
+        self.last_clipboard_text = text.clone();
+        platform::clipboard_write(&text);
+        let _ = self
+            .backend
+            .write_input(self.server.tabs.focused_pane(), text.as_bytes());
+    }
+
     fn handle_display_panes_key(&mut self, key: &keyboard::Key, key_char: Option<char>) -> bool {
         use keyboard::key::Named;
 

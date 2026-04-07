@@ -390,6 +390,77 @@ impl BooApp {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
+        } else if self.choose_buffer_active {
+            let preview_limit = 48usize;
+            let mut list = iced::widget::column![]
+                .spacing(6)
+                .width(Length::Fill);
+            for (index, buffer) in self.paste_buffers.iter().take(8).enumerate() {
+                let is_selected = index == self.choose_buffer_selected;
+                let mut preview = buffer.replace('\n', "\\n");
+                if preview.chars().count() > preview_limit {
+                    preview = preview.chars().take(preview_limit).collect::<String>() + "...";
+                }
+                let label = format!("{:>2}. {}", index + 1, preview);
+                list = list.push(
+                    container(
+                        text(label)
+                            .font(ui_font)
+                            .size(14)
+                            .color(if is_selected {
+                                Color::WHITE
+                            } else {
+                                Color::from_rgb(0.82, 0.82, 0.82)
+                            }),
+                    )
+                    .padding([6, 10])
+                    .width(Length::Fill)
+                    .style(move |_: &Theme| container::Style {
+                        background: Some(iced::Background::Color(if is_selected {
+                            Color::from_rgba(0.24, 0.32, 0.62, 0.94)
+                        } else {
+                            Color::from_rgba(0.10, 0.10, 0.10, 0.88)
+                        })),
+                        ..Default::default()
+                    }),
+                );
+            }
+            let overlay: Element<'_, Message> = container(
+                iced::widget::column![
+                    text("choose-buffer")
+                        .font(ui_font)
+                        .size(16)
+                        .color(Color::from_rgb(0.92, 0.92, 0.92)),
+                    text("enter/p: paste   j/k or arrows: move   d/backspace: delete   esc: close")
+                        .font(ui_font)
+                        .size(12)
+                        .color(Color::from_rgb(0.72, 0.72, 0.72)),
+                    list
+                ]
+                .spacing(8)
+                .width(Length::Fill),
+            )
+            .padding(16)
+            .width(Length::FillPortion(3))
+            .style(|_: &Theme| container::Style {
+                background: Some(iced::Background::Color(Color::from_rgba(
+                    0.06, 0.06, 0.06, 0.96,
+                ))),
+                ..Default::default()
+            })
+            .into();
+            stack([
+                base,
+                container(overlay)
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+            ])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
         } else {
             base
         }
