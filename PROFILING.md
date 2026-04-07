@@ -106,6 +106,11 @@ Notable unit counters now include:
 - `server.stream.encode_full_state.local`
 - `server.stream.encode_delta.local`
 - `server.stream.encode_delta_rows.local`
+- `server.stream.publish_full.local`
+- `server.stream.publish_delta.local`
+- `server.stream.batch_write.frames`
+- `server.stream.batch_write.messages`
+- `server.stream.batch_write.coalesced_screen_updates`
 - `client.control.get_ui_snapshot.ok`
 - `client.control.get_ui_snapshot.err`
 - `client.control.get_ui_snapshot.steady_state`

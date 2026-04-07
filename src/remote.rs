@@ -452,24 +452,37 @@ impl RemoteServer {
     fn send_state_to_client(&self, client_id: u64, state: &RemoteFullState) {
         let _scope =
             crate::profiling::scope("server.stream.encode_state", crate::profiling::Kind::Cpu);
-        let (ty, payload) = {
+        let (ty, payload, is_local) = {
             let mut guard = self.state.lock().expect("remote server state poisoned");
             let Some(client) = guard.clients.get_mut(&client_id) else {
                 return;
             };
             let latest_input_seq = client.latest_input_seq;
+            let is_local = client.is_local;
             let encoded = match client.last_state.as_ref().and_then(|previous| {
-                encode_delta(previous, state, latest_input_seq, client.is_local)
+                encode_delta(previous, state, latest_input_seq, is_local)
             }) {
-                Some(delta) => (MessageType::Delta, delta),
+                Some(delta) => (MessageType::Delta, delta, is_local),
                 None => (
                     MessageType::FullState,
-                    encode_full_state(state, latest_input_seq, client.is_local),
+                    encode_full_state(state, latest_input_seq, is_local),
+                    is_local,
                 ),
             };
             client.last_state = Some(state.clone());
             encoded
         };
+        crate::profiling::record_units(
+            match (ty, is_local) {
+                (MessageType::Delta, true) => "server.stream.publish_delta.local",
+                (MessageType::Delta, false) => "server.stream.publish_delta.remote",
+                (MessageType::FullState, true) => "server.stream.publish_full.local",
+                (MessageType::FullState, false) => "server.stream.publish_full.remote",
+                _ => "server.stream.publish_other",
+            },
+            crate::profiling::Kind::Cpu,
+            1,
+        );
         let frame = encode_message(ty, &payload);
         let state = self.state.lock().expect("remote server state poisoned");
         if let Some(client) = state.clients.get(&client_id) {
@@ -491,8 +504,23 @@ fn writer_loop<W: Write>(mut stream: W, outbound_rx: mpsc::Receiver<OutboundMess
         let mut scope =
             crate::profiling::scope("server.stream.batch_write", crate::profiling::Kind::Io);
         let batch = collect_outbound_batch(message, &outbound_rx);
+        crate::profiling::record_units(
+            "server.stream.batch_write.frames",
+            crate::profiling::Kind::Io,
+            batch.frames.len() as u64,
+        );
+        crate::profiling::record_units(
+            "server.stream.batch_write.messages",
+            crate::profiling::Kind::Io,
+            batch.message_count as u64,
+        );
+        crate::profiling::record_units(
+            "server.stream.batch_write.coalesced_screen_updates",
+            crate::profiling::Kind::Io,
+            batch.coalesced_screen_updates as u64,
+        );
         let mut failed = false;
-        for frame in batch {
+        for frame in batch.frames {
             scope.add_bytes(frame.len() as u64);
             if stream.write_all(&frame).is_err() {
                 failed = true;
@@ -505,21 +533,34 @@ fn writer_loop<W: Write>(mut stream: W, outbound_rx: mpsc::Receiver<OutboundMess
     }
 }
 
+struct OutboundBatch {
+    frames: Vec<Vec<u8>>,
+    message_count: usize,
+    coalesced_screen_updates: usize,
+}
+
 fn collect_outbound_batch(
     first: OutboundMessage,
     outbound_rx: &mpsc::Receiver<OutboundMessage>,
-) -> Vec<Vec<u8>> {
+) -> OutboundBatch {
     let mut frames = Vec::new();
     let mut pending_screen = None;
+    let mut message_count = 0usize;
+    let mut screen_updates = 0usize;
+    let mut emitted_screen_frames = 0usize;
 
     let mut push = |message| match message {
         OutboundMessage::Frame(frame) => {
+            message_count += 1;
             if let Some(screen) = pending_screen.take() {
                 frames.push(screen);
+                emitted_screen_frames += 1;
             }
             frames.push(frame);
         }
         OutboundMessage::ScreenUpdate(frame) => {
+            message_count += 1;
+            screen_updates += 1;
             pending_screen = Some(frame);
         }
     };
@@ -530,8 +571,13 @@ fn collect_outbound_batch(
     }
     if let Some(screen) = pending_screen {
         frames.push(screen);
+        emitted_screen_frames += 1;
     }
-    frames
+    OutboundBatch {
+        frames,
+        message_count,
+        coalesced_screen_updates: screen_updates.saturating_sub(emitted_screen_frames),
+    }
 }
 
 fn read_loop(
@@ -1320,7 +1366,9 @@ mod tests {
         tx.send(OutboundMessage::ScreenUpdate(vec![3])).unwrap();
         let first = rx.recv().unwrap();
         let batch = collect_outbound_batch(first, &rx);
-        assert_eq!(batch, vec![vec![2], vec![9], vec![3]]);
+        assert_eq!(batch.frames, vec![vec![2], vec![9], vec![3]]);
+        assert_eq!(batch.message_count, 4);
+        assert_eq!(batch.coalesced_screen_updates, 1);
     }
 
     #[test]
