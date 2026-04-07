@@ -15,7 +15,7 @@ OUT="${OUT:-/tmp/boo-client-sample.txt}"
 DURATION="${DURATION:-5}"
 INTERVAL_MS="${INTERVAL_MS:-1}"
 READY_TIMEOUT="${READY_TIMEOUT:-20}"
-WORKLOAD="${WORKLOAD:-$'for i in {1..5}; do seq 1 10000; echo __SEP__; done\r'}"
+WORKLOAD="${WORKLOAD:-for i in {1..5}; do seq 1 10000; echo __SEP__; done\\r}"
 SERVER_BIN="${SERVER_BIN:-scripts/profiling-boo.sh}"
 CLIENT_BIN="${CLIENT_BIN:-scripts/profiling-boo.sh}"
 
@@ -28,7 +28,7 @@ Usage:
 
 Examples:
   scripts/profile-macos-sample-client.sh
-  scripts/profile-macos-sample-client.sh --workload $'cat ~/config.json\r'
+  scripts/profile-macos-sample-client.sh --workload 'cat ~/config.json\r'
   scripts/profile-macos-sample-client.sh --client-bin target/debug/boo
 
 Notes:

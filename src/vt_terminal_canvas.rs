@@ -13,8 +13,6 @@ use std::time::{Duration, Instant};
 
 const PADDING_X: f32 = 4.0;
 const PADDING_Y: f32 = 2.0;
-const ROW_CACHE_CHUNK_SIZE: usize = 4;
-
 #[derive(Debug)]
 pub struct TerminalCanvas {
     pub snapshot: Arc<vt_backend_core::TerminalSnapshot>,
@@ -73,38 +71,7 @@ impl TerminalCanvas {
     }
 
     fn draw_row(&self, frame: &mut Frame<Renderer>, row_index: usize, state: &TerminalCanvasState) {
-        let Some(row) = self.snapshot.rows_data.get(row_index) else {
-            return;
-        };
         let y = PADDING_Y + row_index as f32 * self.cell_height;
-        let default_bg = color_from_rgb(self.snapshot.colors.background, self.background_opacity);
-        frame.fill_rectangle(
-            Point::new(PADDING_X, y),
-            Size::new(
-                self.snapshot.cols as f32 * self.cell_width,
-                self.cell_height,
-            ),
-            default_bg,
-        );
-        let row_fingerprint = self.row_fingerprint(row_index);
-        {
-            let mut fingerprints = state.row_artifact_fingerprints.borrow_mut();
-            let mut artifacts = state.row_artifacts.borrow_mut();
-            if fingerprints[row_index] != row_fingerprint {
-                artifacts[row_index] = RowArtifacts {
-                    background_spans: build_background_spans(
-                        row,
-                        self.snapshot.cols as usize,
-                        self.snapshot.colors.background,
-                        self.background_opacity,
-                        self.background_opacity_cells,
-                    ),
-                    text_runs: build_text_runs(row, self.snapshot.cols as usize, self.font_family),
-                };
-                fingerprints[row_index] = row_fingerprint;
-            }
-        }
-
         let artifacts = state.row_artifacts.borrow();
         let artifacts = &artifacts[row_index];
         for span in &artifacts.background_spans {
@@ -149,15 +116,6 @@ impl TerminalCanvas {
         end_row: usize,
         state: &TerminalCanvasState,
     ) {
-        let default_bg = color_from_rgb(self.snapshot.colors.background, self.background_opacity);
-        let chunk_y = (PADDING_Y + start_row as f32 * self.cell_height - 1.0).max(0.0);
-        let chunk_height =
-            ((end_row.saturating_sub(start_row)) as f32 * self.cell_height + 2.0).max(0.0);
-        frame.fill_rectangle(
-            Point::new(PADDING_X, chunk_y),
-            Size::new(self.snapshot.cols as f32 * self.cell_width, chunk_height),
-            default_bg,
-        );
         for row_index in start_row..end_row {
             self.draw_row(frame, row_index, state);
         }
@@ -324,7 +282,8 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
 
         {
             let row_count = self.snapshot.rows_data.len();
-            let chunk_count = row_count.div_ceil(ROW_CACHE_CHUNK_SIZE);
+            let chunk_size = self.row_cache_chunk_size();
+            let chunk_count = row_count.div_ceil(chunk_size);
             let row_style_fingerprint = self.row_style_fingerprint();
             let mut row_chunk_caches = state.row_chunk_caches.borrow_mut();
             if row_chunk_caches.len() < chunk_count {
@@ -351,16 +310,34 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
             row_artifact_fingerprints.truncate(row_count);
             row_artifacts.resize_with(row_count, RowArtifacts::default);
             row_artifacts.truncate(row_count);
-            drop(row_artifact_fingerprints);
-            drop(row_artifacts);
             let mut dirty_rows = 0u64;
             let mut dirty_chunks = 0u64;
+            let mut chunk_has_artifacts = vec![false; chunk_count];
 
             for chunk_index in 0..chunk_count {
-                let start_row = chunk_index * ROW_CACHE_CHUNK_SIZE;
-                let end_row = (start_row + ROW_CACHE_CHUNK_SIZE).min(row_count);
+                let start_row = chunk_index * chunk_size;
+                let end_row = (start_row + chunk_size).min(row_count);
                 let mut chunk_dirty = style_changed;
                 for row_index in start_row..end_row {
+                    let row_fingerprint = self.row_fingerprint(row_index);
+                    if row_artifact_fingerprints[row_index] != row_fingerprint {
+                        let row = &self.snapshot.rows_data[row_index];
+                        row_artifacts[row_index] = RowArtifacts {
+                            background_spans: build_background_spans(
+                                row,
+                                self.snapshot.cols as usize,
+                                self.snapshot.colors.background,
+                                self.background_opacity,
+                                self.background_opacity_cells,
+                            ),
+                            text_runs: build_text_runs(
+                                row,
+                                self.snapshot.cols as usize,
+                                self.font_family,
+                            ),
+                        };
+                        row_artifact_fingerprints[row_index] = row_fingerprint;
+                    }
                     let revision = self.row_revision_value(row_index);
                     if row_seen_revisions[row_index] != revision {
                         row_seen_revisions[row_index] = revision;
@@ -368,10 +345,24 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
                         dirty_rows += 1;
                     }
                 }
+                chunk_has_artifacts[chunk_index] = (start_row..end_row).any(|row_index| {
+                    let artifacts = &row_artifacts[row_index];
+                    !artifacts.background_spans.is_empty() || !artifacts.text_runs.is_empty()
+                });
                 if chunk_dirty {
                     dirty_chunks += 1;
                     row_chunk_caches[chunk_index].clear();
                 }
+            }
+            drop(row_artifact_fingerprints);
+            drop(row_artifacts);
+
+            for (chunk_index, has_artifacts) in chunk_has_artifacts.into_iter().enumerate() {
+                if !has_artifacts {
+                    continue;
+                }
+                let start_row = chunk_index * chunk_size;
+                let end_row = (start_row + chunk_size).min(row_count);
                 geometries.push(row_chunk_caches[chunk_index].draw(
                     renderer,
                     bounds.size(),
@@ -569,6 +560,14 @@ fn render_debug_enabled() -> bool {
 }
 
 impl TerminalCanvas {
+    fn row_cache_chunk_size(&self) -> usize {
+        match self.snapshot.rows as usize {
+            0..=48 => 4,
+            49..=96 => 8,
+            _ => 12,
+        }
+    }
+
     fn base_fingerprint(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.snapshot.cols.hash(&mut hasher);

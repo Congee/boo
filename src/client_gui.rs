@@ -20,6 +20,7 @@ const STATUS_BAR_HEIGHT: f64 = 20.0;
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 const IDLE_TICK_INTERVAL: Duration = Duration::from_secs(1);
 const STREAM_RECONNECT_DELAY: Duration = Duration::from_millis(250);
+const STREAM_BATCH_WINDOW: Duration = Duration::from_millis(2);
 const SNAPSHOT_RETRY_TICKS: u8 = 3;
 const SNAPSHOT_KEEPALIVE_TICKS: u8 = 30;
 
@@ -1018,6 +1019,12 @@ fn local_stream_subscription(
                 });
 
                 while let Some(event) = event_rx.next().await {
+                    if matches!(
+                        event,
+                        LocalStreamEvent::FullState { .. } | LocalStreamEvent::Delta { .. }
+                    ) {
+                        std::thread::sleep(STREAM_BATCH_WINDOW);
+                    }
                     let mut batch = vec![event];
                     let mut saw_disconnect =
                         matches!(batch.last(), Some(LocalStreamEvent::Disconnected));
@@ -1122,7 +1129,7 @@ fn parse_gui_test_command(line: &str) -> Option<GuiTestCommand> {
         return None;
     }
     if let Some(rest) = trimmed.strip_prefix("text ") {
-        return Some(GuiTestCommand::Text(rest.to_string()));
+        return Some(GuiTestCommand::Text(decode_gui_test_text(rest)));
     }
     if let Some(rest) = trimmed.strip_prefix("key ") {
         return Some(GuiTestCommand::Key(rest.to_string()));
@@ -1137,6 +1144,48 @@ fn parse_gui_test_command(line: &str) -> Option<GuiTestCommand> {
         return Some(GuiTestCommand::Refresh);
     }
     None
+}
+
+fn decode_gui_test_text(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('r') => out.push('\r'),
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('\\') => out.push('\\'),
+            Some('0') => out.push('\0'),
+            Some('x') => {
+                let hi = chars.next();
+                let lo = chars.next();
+                if let (Some(hi), Some(lo)) = (hi, lo)
+                    && let Ok(value) = u8::from_str_radix(&format!("{hi}{lo}"), 16)
+                {
+                    out.push(value as char);
+                } else {
+                    out.push('\\');
+                    out.push('x');
+                    if let Some(hi) = hi {
+                        out.push(hi);
+                    }
+                    if let Some(lo) = lo {
+                        out.push(lo);
+                    }
+                }
+            }
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStreamEvent)) {
@@ -1626,6 +1675,14 @@ mod tests {
         assert_eq!(
             parse_gui_test_command("text hello"),
             Some(GuiTestCommand::Text("hello".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_gui_test_text_command_decodes_escapes() {
+        assert_eq!(
+            parse_gui_test_command(r"text line1\rline2\n\t\\\x41"),
+            Some(GuiTestCommand::Text("line1\rline2\n\t\\A".to_string()))
         );
     }
 
