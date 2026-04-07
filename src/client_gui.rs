@@ -27,6 +27,7 @@ const SNAPSHOT_KEEPALIVE_TICKS: u8 = 30;
 #[derive(Debug, Clone)]
 pub enum Message {
     Frame,
+    FlushPassiveStream,
     IcedEvent(Event),
     StreamReady(std::sync::mpsc::Sender<StreamCommand>),
     StreamEvent(LocalStreamEvent),
@@ -91,6 +92,8 @@ pub struct ClientApp {
     tick_counter: u8,
     next_input_seq: u64,
     pending_input_latencies: HashMap<u64, Instant>,
+    pending_passive_stream: Option<LocalStreamEvent>,
+    passive_flush_scheduled: bool,
     steady_state_snapshot_requests: u64,
     should_exit: bool,
 }
@@ -139,6 +142,8 @@ impl ClientApp {
                 tick_counter: 0,
                 next_input_seq: 1,
                 pending_input_latencies: HashMap::new(),
+                pending_passive_stream: None,
+                passive_flush_scheduled: false,
                 steady_state_snapshot_requests: 0,
                 should_exit: false,
             };
@@ -147,16 +152,27 @@ impl ClientApp {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let mut tasks = Vec::new();
         match message {
             Message::Frame => self.on_tick(),
+            Message::FlushPassiveStream => {
+                self.passive_flush_scheduled = false;
+                self.flush_pending_passive_stream();
+            }
             Message::StreamReady(tx) => {
                 self.stream_tx = Some(tx);
                 self.send_stream_command(StreamCommand::ListSessions);
             }
-            Message::StreamEvent(event) => self.handle_stream_event(event),
+            Message::StreamEvent(event) => {
+                if let Some(task) = self.handle_stream_delivery(event) {
+                    tasks.push(task);
+                }
+            }
             Message::StreamBatch(events) => {
                 for event in events {
-                    self.handle_stream_event(event);
+                    if let Some(task) = self.handle_stream_delivery(event) {
+                        tasks.push(task);
+                    }
                 }
             }
             Message::GuiTest(command) => self.handle_gui_test(command),
@@ -172,7 +188,7 @@ impl ClientApp {
         if self.should_exit {
             iced::exit()
         } else {
-            Task::none()
+            Task::batch(tasks)
         }
     }
 
@@ -528,6 +544,39 @@ impl ClientApp {
                 self.last_error = Some(error);
             }
         }
+    }
+
+    fn flush_pending_passive_stream(&mut self) {
+        if let Some(event) = self.pending_passive_stream.take() {
+            self.handle_stream_event(event);
+        }
+    }
+
+    fn handle_stream_delivery(&mut self, event: LocalStreamEvent) -> Option<Task<Message>> {
+        if is_passive_screen_event(&event) && matches!(self.mode, ClientMode::Attached) {
+            self.pending_passive_stream = Some(event);
+            if !self.passive_flush_scheduled {
+                self.passive_flush_scheduled = true;
+                return Some(Task::perform(
+                    async move {
+                        std::thread::sleep(PASSIVE_STREAM_BATCH_WINDOW);
+                    },
+                    |_| Message::FlushPassiveStream,
+                ));
+            }
+            return None;
+        }
+
+        if matches!(
+            event,
+            LocalStreamEvent::FullState { .. } | LocalStreamEvent::Delta { .. }
+        ) {
+            self.pending_passive_stream = None;
+        } else {
+            self.flush_pending_passive_stream();
+        }
+        self.handle_stream_event(event);
+        None
     }
 
     fn handle_gui_test(&mut self, command: GuiTestCommand) {
