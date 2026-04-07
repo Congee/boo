@@ -236,3 +236,6 @@ nix develop
 - `notify-on-command-finish` config and duration thresholds are implemented
 - macOS notifications use `UNUserNotificationCenter`, with an AppleScript fallback if the native path is unavailable
 - Linux notifications are delivered through the desktop notification client path (`notify-send`) with the same Boo policy controls
+
+### Developer Workflow
+- `scripts/git-safe.sh` now provides serialized `status`, `commit`, `push`, and stale `.git/index.lock` cleanup for this repo's local workflow
