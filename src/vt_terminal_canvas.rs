@@ -228,7 +228,7 @@ impl TerminalCanvas {
 pub struct TerminalCanvasState {
     base_cache: Cache,
     base_fingerprint: RefCell<Option<u64>>,
-    row_chunk_caches: RefCell<Vec<Cache>>,
+    row_band_caches: RefCell<Vec<Cache>>,
     row_style_fingerprint: RefCell<Option<u64>>,
     row_seen_revisions: RefCell<Vec<u64>>,
     row_artifact_fingerprints: RefCell<Vec<u64>>,
@@ -242,7 +242,7 @@ impl Default for TerminalCanvasState {
         Self {
             base_cache: Cache::new(),
             base_fingerprint: RefCell::new(None),
-            row_chunk_caches: RefCell::new(Vec::new()),
+            row_band_caches: RefCell::new(Vec::new()),
             row_style_fingerprint: RefCell::new(None),
             row_seen_revisions: RefCell::new(Vec::new()),
             row_artifact_fingerprints: RefCell::new(Vec::new()),
@@ -285,16 +285,11 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
             let chunk_size = self.row_cache_chunk_size();
             let chunk_count = row_count.div_ceil(chunk_size);
             let row_style_fingerprint = self.row_style_fingerprint();
-            let mut row_chunk_caches = state.row_chunk_caches.borrow_mut();
-            if row_chunk_caches.len() < chunk_count {
-                row_chunk_caches.resize_with(chunk_count, Cache::new);
-            }
-            row_chunk_caches.truncate(chunk_count);
             let style_changed = {
                 let mut cached_style = state.row_style_fingerprint.borrow_mut();
                 let changed = cached_style.as_ref() != Some(&row_style_fingerprint);
                 if changed {
-                    for cache in row_chunk_caches.iter_mut() {
+                    for cache in state.row_band_caches.borrow_mut().iter_mut() {
                         cache.clear();
                     }
                 }
@@ -313,6 +308,7 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
             let mut dirty_rows = 0u64;
             let mut dirty_chunks = 0u64;
             let mut chunk_has_artifacts = vec![false; chunk_count];
+            let mut chunk_dirty_flags = vec![style_changed; chunk_count];
 
             for chunk_index in 0..chunk_count {
                 let start_row = chunk_index * chunk_size;
@@ -351,19 +347,43 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
                 });
                 if chunk_dirty {
                     dirty_chunks += 1;
-                    row_chunk_caches[chunk_index].clear();
                 }
+                chunk_dirty_flags[chunk_index] = chunk_dirty;
             }
             drop(row_artifact_fingerprints);
             drop(row_artifacts);
 
-            for (chunk_index, has_artifacts) in chunk_has_artifacts.into_iter().enumerate() {
-                if !has_artifacts {
+            let mut bands = Vec::new();
+            let mut chunk_index = 0usize;
+            while chunk_index < chunk_count {
+                if !chunk_has_artifacts[chunk_index] {
+                    chunk_index += 1;
                     continue;
                 }
-                let start_row = chunk_index * chunk_size;
-                let end_row = (start_row + chunk_size).min(row_count);
-                geometries.push(row_chunk_caches[chunk_index].draw(
+                let band_start = chunk_index;
+                let mut band_end = chunk_index + 1;
+                let mut band_dirty = chunk_dirty_flags[chunk_index];
+                while band_end < chunk_count && chunk_has_artifacts[band_end] {
+                    band_dirty |= chunk_dirty_flags[band_end];
+                    band_end += 1;
+                }
+                bands.push((band_start, band_end, band_dirty));
+                chunk_index = band_end;
+            }
+
+            let mut row_band_caches = state.row_band_caches.borrow_mut();
+            if row_band_caches.len() < bands.len() {
+                row_band_caches.resize_with(bands.len(), Cache::new);
+            }
+            row_band_caches.truncate(bands.len());
+
+            for (band_index, (band_start, band_end, band_dirty)) in bands.into_iter().enumerate() {
+                if band_dirty {
+                    row_band_caches[band_index].clear();
+                }
+                let start_row = band_start * chunk_size;
+                let end_row = (band_end * chunk_size).min(row_count);
+                geometries.push(row_band_caches[band_index].draw(
                     renderer,
                     bounds.size(),
                     |frame| {
@@ -511,9 +531,13 @@ fn build_text_runs(
             continue;
         }
 
+        let underline = cell.underline != 0;
+        if content == " " && !underline {
+            continue;
+        }
+
         let fg = color_from_rgb(cell.fg, 1.0);
         let font = font_for_cell(cell, font_family);
-        let underline = cell.underline != 0;
         let width_cols = usize::from(cell.display_width.max(1));
         runs.push(TextRun {
             start_col: col_index,
@@ -777,6 +801,32 @@ mod tests {
         assert_eq!(runs[1].start_col, 1);
         assert_eq!(runs[2].text, "c");
         assert_eq!(runs[2].start_col, 2);
+    }
+
+    #[test]
+    fn text_runs_skip_plain_spaces_but_keep_underlined_spaces() {
+        let row = vec![
+            vt_backend_core::CellSnapshot {
+                text: "a".to_string(),
+                ..Default::default()
+            },
+            vt_backend_core::CellSnapshot {
+                text: " ".to_string(),
+                ..Default::default()
+            },
+            vt_backend_core::CellSnapshot {
+                text: " ".to_string(),
+                underline: 1,
+                ..Default::default()
+            },
+        ];
+        let runs = build_text_runs(&row, row.len(), None);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].text, "a");
+        assert_eq!(runs[0].start_col, 0);
+        assert_eq!(runs[1].text, " ");
+        assert_eq!(runs[1].start_col, 2);
+        assert!(runs[1].underline);
     }
 
     #[test]

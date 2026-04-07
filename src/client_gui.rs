@@ -283,12 +283,18 @@ impl ClientApp {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch([
-            time::every(IDLE_TICK_INTERVAL).map(|_| Message::Frame),
+        let mut subscriptions = vec![
             iced::event::listen().map(Message::IcedEvent),
             iced::Subscription::run_with(self.socket_path.clone(), local_stream_subscription),
             gui_test_subscription(),
-        ])
+        ];
+        if !matches!(self.mode, ClientMode::Attached)
+            && self.stream_tx.is_none()
+            && !self.has_paintable_terminal()
+        {
+            subscriptions.push(time::every(IDLE_TICK_INTERVAL).map(|_| Message::Frame));
+        }
+        Subscription::batch(subscriptions)
     }
 
     pub fn window_style(&self) -> iced::theme::Style {

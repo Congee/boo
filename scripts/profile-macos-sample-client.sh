@@ -114,7 +114,17 @@ SERVER_PID=$!
 BOO_GUI_TEST_SOCKET="$GUI_TEST_SOCKET" BOO_GUI_TEST_STATUS_PATH="$GUI_TEST_STATUS" "$CLIENT_BIN" --socket "$SOCKET" >/tmp/boo-profile-client-gui.log 2>&1 &
 CLIENT_PID=$!
 
-python3 scripts/ui-test-client.py --socket "$SOCKET" wait-ready --timeout "$READY_TIMEOUT" >/dev/null
+for _ in $(seq 1 $((READY_TIMEOUT * 10))); do
+  if python3 scripts/ui-test-client.py --socket "$SOCKET" snapshot >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.1
+done
+
+if ! python3 scripts/ui-test-client.py --socket "$SOCKET" snapshot >/dev/null 2>&1; then
+  echo "control socket did not become ready: $SOCKET" >&2
+  exit 1
+fi
 
 for _ in $(seq 1 $((READY_TIMEOUT * 10))); do
   if [[ -S "$GUI_TEST_SOCKET" ]]; then
@@ -144,11 +154,20 @@ if [[ "${STATUS:-}" != *"mode=attached"* || "${STATUS:-}" != *"stream_ready=1"* 
   exit 1
 fi
 
-python3 - <<'PY' "$GUI_TEST_SOCKET" "$WORKLOAD"
+SEND_ENTER=0
+WORKLOAD_TEXT="$WORKLOAD"
+if [[ "$WORKLOAD_TEXT" == *\\r ]]; then
+  SEND_ENTER=1
+  WORKLOAD_TEXT="${WORKLOAD_TEXT%\\r}"
+fi
+
+python3 - <<'PY' "$GUI_TEST_SOCKET" "$WORKLOAD_TEXT" "$SEND_ENTER"
 import socket, sys
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 sock.connect(sys.argv[1])
 sock.sendall(f"text {sys.argv[2]}\n".encode())
+if sys.argv[3] == "1":
+    sock.sendall(b"key enter\n")
 sock.close()
 PY
 
