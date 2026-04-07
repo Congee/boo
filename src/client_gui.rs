@@ -1185,9 +1185,13 @@ fn remote_cell_to_snapshot(cell: &remote::RemoteCell) -> vt_backend_core::CellSn
     };
     let default_bg = vt::GhosttyColorRgb { r: 0, g: 0, b: 0 };
     vt_backend_core::CellSnapshot {
-        text: std::char::from_u32(cell.codepoint)
-            .map(|ch| ch.to_string())
-            .unwrap_or_else(|| " ".to_string()),
+        text: if cell.codepoint == 0 {
+            String::new()
+        } else {
+            std::char::from_u32(cell.codepoint)
+                .map(|ch| ch.to_string())
+                .unwrap_or_default()
+        },
         display_width: if cell.wide { 2 } else { 1 },
         fg: if (cell.style_flags & 0x20) != 0 {
             vt::GhosttyColorRgb {
@@ -1371,6 +1375,19 @@ mod tests {
             .map(|row| row.first().map(|cell| cell.text.clone()).unwrap_or_default())
             .collect::<Vec<_>>();
         assert_eq!(texts, vec!["b".to_string(), "c".to_string(), "d".to_string()]);
+    }
+
+    #[test]
+    fn remote_blank_cell_stays_empty() {
+        let snapshot = remote_cell_to_snapshot(&remote::RemoteCell {
+            codepoint: 0,
+            fg: [0, 0, 0],
+            bg: [0, 0, 0],
+            style_flags: 0,
+            wide: false,
+        });
+        assert_eq!(snapshot.text, "");
+        assert_eq!(snapshot.display_width, 1);
     }
 }
 
