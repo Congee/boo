@@ -1161,6 +1161,13 @@ fn decode_remote_full_state(payload: &[u8]) -> Option<(Option<u64>, remote::Remo
         });
         offset += 12;
     }
+    crate::profiling::record_bytes_and_units(
+        "client.stream.decode_full_state",
+        crate::profiling::Kind::Cpu,
+        std::time::Duration::ZERO,
+        payload.len() as u64,
+        cell_count as u64,
+    );
     Some((
         (ack_input_seq != 0).then_some(ack_input_seq),
         remote::RemoteFullState {
@@ -1196,6 +1203,7 @@ fn decode_remote_delta(payload: &[u8]) -> Option<(Option<u64>, RemoteDelta)> {
         0
     };
     let mut changed_rows = Vec::with_capacity(row_count);
+    let mut changed_cells = 0u64;
     for _ in 0..row_count {
         if offset + 6 > payload.len() {
             return None;
@@ -1231,12 +1239,25 @@ fn decode_remote_delta(payload: &[u8]) -> Option<(Option<u64>, RemoteDelta)> {
             });
             offset += 12;
         }
+        changed_cells += cells.len() as u64;
         changed_rows.push(RemoteRowDelta {
             row,
             start_col,
             cells,
         });
     }
+    crate::profiling::record_bytes_and_units(
+        "client.stream.decode_delta",
+        crate::profiling::Kind::Cpu,
+        std::time::Duration::ZERO,
+        payload.len() as u64,
+        changed_cells,
+    );
+    crate::profiling::record_units(
+        "client.stream.decode_delta_rows",
+        crate::profiling::Kind::Cpu,
+        changed_rows.len() as u64,
+    );
     Some((
         (ack_input_seq != 0).then_some(ack_input_seq),
         RemoteDelta {
@@ -1266,6 +1287,8 @@ fn apply_remote_delta_snapshot(
             *revision = revision.wrapping_add(1);
         }
     }
+    let mut applied_rows = 0u64;
+    let mut applied_cells = 0u64;
     for row_delta in &delta.changed_rows {
         let row_index = row_delta.row as usize;
         if row_index >= snapshot.rows_data.len() {
@@ -1286,11 +1309,23 @@ fn apply_remote_delta_snapshot(
             .take(cols.saturating_sub(start_col))
         {
             target_row[start_col + offset] = remote_cell_to_snapshot(cell);
+            applied_cells += 1;
         }
+        applied_rows += 1;
         if let Some(revision) = snapshot.row_revisions.get_mut(row_index) {
             *revision = revision.wrapping_add(1);
         }
     }
+    crate::profiling::record_units(
+        "client.stream.apply_delta_rows",
+        crate::profiling::Kind::Cpu,
+        applied_rows,
+    );
+    crate::profiling::record_units(
+        "client.stream.apply_delta_cells",
+        crate::profiling::Kind::Cpu,
+        applied_cells,
+    );
 }
 
 fn apply_snapshot_scroll(snapshot: &mut vt_backend_core::TerminalSnapshot, scroll_rows: i16) {

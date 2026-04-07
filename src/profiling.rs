@@ -29,6 +29,7 @@ struct Entry {
     total: Duration,
     max: Duration,
     bytes: u64,
+    units: u64,
 }
 
 struct State {
@@ -62,6 +63,24 @@ pub fn record(name: &'static str, kind: Kind, elapsed: Duration) {
 }
 
 pub fn record_bytes(name: &'static str, kind: Kind, elapsed: Duration, bytes: u64) {
+    record_with_units(name, kind, elapsed, bytes, 0);
+}
+
+pub fn record_units(name: &'static str, kind: Kind, units: u64) {
+    record_with_units(name, kind, Duration::ZERO, 0, units);
+}
+
+pub fn record_bytes_and_units(
+    name: &'static str,
+    kind: Kind,
+    elapsed: Duration,
+    bytes: u64,
+    units: u64,
+) {
+    record_with_units(name, kind, elapsed, bytes, units);
+}
+
+fn record_with_units(name: &'static str, kind: Kind, elapsed: Duration, bytes: u64, units: u64) {
     if !enabled() {
         return;
     }
@@ -72,6 +91,7 @@ pub fn record_bytes(name: &'static str, kind: Kind, elapsed: Duration, bytes: u6
     entry.total += elapsed;
     entry.max = entry.max.max(elapsed);
     entry.bytes = entry.bytes.saturating_add(bytes);
+    entry.units = entry.units.saturating_add(units);
 
     if guard.window_started.elapsed() >= SUMMARY_INTERVAL {
         emit_summary(&mut guard);
@@ -110,7 +130,13 @@ fn emit_summary(state: &mut State) {
         .drain()
         .map(|((name, kind), entry)| (name, kind, entry))
         .collect::<Vec<_>>();
-    entries.sort_by(|a, b| b.2.total.cmp(&a.2.total).then_with(|| a.0.cmp(b.0)));
+    entries.sort_by(|a, b| {
+        b.2.total
+            .cmp(&a.2.total)
+            .then_with(|| b.2.bytes.cmp(&a.2.bytes))
+            .then_with(|| b.2.units.cmp(&a.2.units))
+            .then_with(|| a.0.cmp(b.0))
+    });
 
     eprintln!("boo_profile window_ms={window_ms:.1}");
     for (name, kind, entry) in entries.into_iter().take(MAX_LINES) {
@@ -121,11 +147,12 @@ fn emit_summary(state: &mut State) {
             total_ms / entry.count as f64
         };
         let max_ms = entry.max.as_secs_f64() * 1000.0;
-        if entry.bytes > 0 {
+        if entry.bytes > 0 || entry.units > 0 {
             let bytes_per_sec = entry.bytes as f64 / (window_ms / 1000.0).max(0.001);
+            let units_per_sec = entry.units as f64 / (window_ms / 1000.0).max(0.001);
             eprintln!(
-                "boo_profile path={name} kind={kind} count={} total_ms={total_ms:.3} avg_ms={avg_ms:.3} max_ms={max_ms:.3} bytes={} bytes_per_sec={bytes_per_sec:.0}",
-                entry.count, entry.bytes,
+                "boo_profile path={name} kind={kind} count={} total_ms={total_ms:.3} avg_ms={avg_ms:.3} max_ms={max_ms:.3} bytes={} bytes_per_sec={bytes_per_sec:.0} units={} units_per_sec={units_per_sec:.0}",
+                entry.count, entry.bytes, entry.units,
             );
         } else {
             eprintln!(

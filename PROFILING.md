@@ -89,8 +89,23 @@ This prints rolling summaries for named paths with:
 - `cpu`
 - `io`
 - `wait`
+- `bytes`
+- `units`
 
 Use this to correlate sampled hotspots with Boo-specific phases. It is not a replacement for a sampler.
+
+Notable unit counters now include:
+
+- `server.stream.encode_full_state.local`
+- `server.stream.encode_delta.local`
+- `server.stream.encode_delta_rows.local`
+- `client.stream.decode_full_state`
+- `client.stream.decode_delta`
+- `client.stream.decode_delta_rows`
+- `client.stream.apply_delta_rows`
+- `client.stream.apply_delta_cells`
+- `client.canvas.changed_rows`
+- `client.canvas.changed_chunks`
 
 ## Cross-Platform Default: Samply
 

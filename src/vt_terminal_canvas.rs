@@ -353,6 +353,8 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
             row_artifacts.truncate(row_count);
             drop(row_artifact_fingerprints);
             drop(row_artifacts);
+            let mut dirty_rows = 0u64;
+            let mut dirty_chunks = 0u64;
 
             for chunk_index in 0..chunk_count {
                 let start_row = chunk_index * ROW_CACHE_CHUNK_SIZE;
@@ -363,9 +365,11 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
                     if row_seen_revisions[row_index] != revision {
                         row_seen_revisions[row_index] = revision;
                         chunk_dirty = true;
+                        dirty_rows += 1;
                     }
                 }
                 if chunk_dirty {
+                    dirty_chunks += 1;
                     row_chunk_caches[chunk_index].clear();
                 }
                 geometries.push(row_chunk_caches[chunk_index].draw(
@@ -376,6 +380,16 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
                     },
                 ));
             }
+            crate::profiling::record_units(
+                "client.canvas.changed_rows",
+                crate::profiling::Kind::Cpu,
+                dirty_rows,
+            );
+            crate::profiling::record_units(
+                "client.canvas.changed_chunks",
+                crate::profiling::Kind::Cpu,
+                dirty_chunks,
+            );
         }
 
         let overlay_fingerprint = self.overlay_fingerprint();

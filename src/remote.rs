@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -790,6 +791,17 @@ pub fn encode_full_state(
         payload.push(cell.style_flags);
         payload.push(u8::from(cell.wide));
     }
+    crate::profiling::record_bytes_and_units(
+        if local {
+            "server.stream.encode_full_state.local"
+        } else {
+            "server.stream.encode_full_state.remote"
+        },
+        crate::profiling::Kind::Cpu,
+        Duration::ZERO,
+        payload.len() as u64,
+        state.cells.len() as u64,
+    );
     payload
 }
 
@@ -877,6 +889,11 @@ fn encode_delta(
     } else {
         changed_rows
     };
+    let encoded_rows = rows_to_encode.len() as u64;
+    let encoded_cells = rows_to_encode
+        .iter()
+        .map(|(_, (_, cells))| cells.len() as u64)
+        .sum::<u64>();
     payload.extend_from_slice(&(rows_to_encode.len() as u16).to_le_bytes());
     payload.extend_from_slice(&current.cursor_x.to_le_bytes());
     payload.extend_from_slice(&current.cursor_y.to_le_bytes());
@@ -901,6 +918,26 @@ fn encode_delta(
             payload.push(u8::from(cell.wide));
         }
     }
+    crate::profiling::record_bytes_and_units(
+        if local {
+            "server.stream.encode_delta.local"
+        } else {
+            "server.stream.encode_delta.remote"
+        },
+        crate::profiling::Kind::Cpu,
+        Duration::ZERO,
+        payload.len() as u64,
+        encoded_cells,
+    );
+    crate::profiling::record_units(
+        if local {
+            "server.stream.encode_delta_rows.local"
+        } else {
+            "server.stream.encode_delta_rows.remote"
+        },
+        crate::profiling::Kind::Cpu,
+        encoded_rows,
+    );
     Some(payload)
 }
 
