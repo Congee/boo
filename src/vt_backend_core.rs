@@ -63,6 +63,8 @@ pub struct VtPane {
     pending_notifications: HashMap<String, PendingNotification>,
     completed_notifications: Vec<DesktopNotification>,
     pending_pty_chunks: VecDeque<PendingPtyChunk>,
+    force_full_snapshot_refresh: bool,
+    control_sequence_tail: Vec<u8>,
 }
 
 // SAFETY: VtPane and the wrapped libghostty-vt handles are never accessed
@@ -392,6 +394,8 @@ impl VtPane {
             pending_notifications: HashMap::new(),
             completed_notifications: Vec::new(),
             pending_pty_chunks: VecDeque::new(),
+            force_full_snapshot_refresh: false,
+            control_sequence_tail: Vec::new(),
         })
     }
 
@@ -664,6 +668,7 @@ impl VtPane {
         };
 
         let size_changed = snapshot.cols != cols || snapshot.rows != rows;
+        let force_full_refresh = self.force_full_snapshot_refresh;
         if size_changed || snapshot.rows_data.len() != rows as usize {
             snapshot.rows_data.resize_with(rows as usize, Vec::new);
             snapshot.row_revisions.resize(rows as usize, 1);
@@ -672,7 +677,7 @@ impl VtPane {
         let mut row_iter = self.render_state.row_iterator().map_err(vt_to_io)?;
         let mut row_index = 0usize;
         while row_iter.next() {
-            let row_dirty = size_changed || row_iter.dirty().map_err(vt_to_io)?;
+            let row_dirty = force_full_refresh || size_changed || row_iter.dirty().map_err(vt_to_io)?;
             if row_dirty {
                 snapshot.rows_data[row_index] = snapshot_row(&row_iter, cols, colors)?;
                 snapshot.row_revisions[row_index] =
@@ -690,6 +695,7 @@ impl VtPane {
         snapshot.scrollbar = scrollbar;
         snapshot.colors = colors;
         self.dirty = false;
+        self.force_full_snapshot_refresh = false;
         Ok(())
     }
 
@@ -718,6 +724,10 @@ impl VtPane {
     }
 
     fn observe_control_sequences(&mut self, bytes: &[u8]) {
+        if should_force_full_snapshot_refresh(&self.control_sequence_tail, bytes) {
+            self.force_full_snapshot_refresh = true;
+        }
+        update_control_sequence_tail(&mut self.control_sequence_tail, bytes);
         if matches!(self.osc_state.mode, OscMode::Ground) && !bytes.contains(&0x1b) {
             return;
         }
@@ -991,6 +1001,41 @@ fn pane_forward_key(pane: &mut VtPane, request: &VtForwardKey) -> io::Result<()>
         pane.write_input(&bytes)?;
     }
     Ok(())
+}
+
+const FULL_REFRESH_CONTROL_SEQUENCES: &[&[u8]] = &[
+    b"\x1b[?1049h",
+    b"\x1b[?1049l",
+    b"\x1b[?1047h",
+    b"\x1b[?1047l",
+    b"\x1b[?47h",
+    b"\x1b[?47l",
+    b"\x1b[2J",
+    b"\x1b[3J",
+];
+
+fn should_force_full_snapshot_refresh(tail: &[u8], bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return false;
+    }
+    let mut haystack = Vec::with_capacity(tail.len() + bytes.len());
+    haystack.extend_from_slice(tail);
+    haystack.extend_from_slice(bytes);
+    FULL_REFRESH_CONTROL_SEQUENCES
+        .iter()
+        .any(|pattern| haystack.windows(pattern.len()).any(|window| window == *pattern))
+}
+
+fn update_control_sequence_tail(tail: &mut Vec<u8>, bytes: &[u8]) {
+    const MAX_TAIL: usize = 16;
+    if bytes.is_empty() {
+        return;
+    }
+    tail.extend_from_slice(bytes);
+    if tail.len() > MAX_TAIL {
+        let trim = tail.len() - MAX_TAIL;
+        tail.drain(0..trim);
+    }
 }
 
 struct Osc99Metadata {
@@ -1282,5 +1327,13 @@ mod tests {
         assert_eq!(notifications.len(), 1);
         assert_eq!(notifications[0].title, "Build done");
         assert_eq!(notifications[0].body, "All checks passed");
+    }
+
+    #[test]
+    fn full_refresh_detection_catches_alternate_screen_sequences() {
+        assert!(should_force_full_snapshot_refresh(&[], b"\x1b[?1049h"));
+        assert!(should_force_full_snapshot_refresh(b"\x1b[?10", b"49l"));
+        assert!(should_force_full_snapshot_refresh(&[], b"\x1b[2J"));
+        assert!(!should_force_full_snapshot_refresh(&[], b"plain output"));
     }
 }
