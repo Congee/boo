@@ -161,11 +161,22 @@ Use for:
 Suggested flow:
 
 1. Build the profiling profile.
-2. Launch `Instruments`.
-3. Choose `Time Profiler`.
-4. Profile either:
-   - `target/profiling/boo`
-   - `target/profiling/boo server --socket /tmp/boo.sock`
+2. Use the helper wrapper so the profiling build can find `libghostty-vt.dylib`:
+
+```bash
+scripts/profiling-boo.sh server --socket /tmp/boo-prof.sock
+```
+
+3. For a CLI capture, use the repo helper:
+
+```bash
+scripts/profile-macos-instruments.sh --workload $'cat ~/config.json\r'
+```
+
+4. Or launch `Instruments` manually and profile:
+   - `scripts/profiling-boo.sh`
+   - with arguments like `server --socket /tmp/boo-prof.sock`
+
 5. Run a reproducible workload:
    - startup
    - `cat ~/config.json`
