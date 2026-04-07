@@ -20,7 +20,7 @@ const STATUS_BAR_HEIGHT: f64 = 20.0;
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 const IDLE_TICK_INTERVAL: Duration = Duration::from_secs(1);
 const STREAM_RECONNECT_DELAY: Duration = Duration::from_millis(250);
-const STREAM_BATCH_WINDOW: Duration = Duration::from_millis(2);
+const PASSIVE_STREAM_BATCH_WINDOW: Duration = Duration::from_millis(8);
 const SNAPSHOT_RETRY_TICKS: u8 = 3;
 const SNAPSHOT_KEEPALIVE_TICKS: u8 = 30;
 
@@ -919,6 +919,20 @@ pub(crate) struct RemoteDelta {
     changed_rows: Vec<RemoteRowDelta>,
 }
 
+fn stream_batch_window_for_event(event: &LocalStreamEvent) -> Option<Duration> {
+    match event {
+        LocalStreamEvent::FullState { ack_input_seq, .. }
+        | LocalStreamEvent::Delta { ack_input_seq, .. } => {
+            if ack_input_seq.is_none() {
+                Some(PASSIVE_STREAM_BATCH_WINDOW)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RemoteRowDelta {
     row: u16,
@@ -1025,11 +1039,8 @@ fn local_stream_subscription(
                 });
 
                 while let Some(event) = event_rx.next().await {
-                    if matches!(
-                        event,
-                        LocalStreamEvent::FullState { .. } | LocalStreamEvent::Delta { .. }
-                    ) {
-                        std::thread::sleep(STREAM_BATCH_WINDOW);
+                    if let Some(batch_window) = stream_batch_window_for_event(&event) {
+                        std::thread::sleep(batch_window);
                     }
                     let mut batch = vec![event];
                     let mut saw_disconnect =
@@ -1708,6 +1719,40 @@ mod tests {
         assert_eq!(
             parse_gui_test_command("refresh"),
             Some(GuiTestCommand::Refresh)
+        );
+    }
+
+    #[test]
+    fn stream_batch_window_only_applies_to_unacked_screen_updates() {
+        assert_eq!(
+            stream_batch_window_for_event(&LocalStreamEvent::Delta {
+                ack_input_seq: None,
+                delta: RemoteDelta {
+                    cursor_x: 0,
+                    cursor_y: 0,
+                    cursor_visible: true,
+                    scroll_rows: 0,
+                    changed_rows: Vec::new(),
+                },
+            }),
+            Some(PASSIVE_STREAM_BATCH_WINDOW)
+        );
+        assert_eq!(
+            stream_batch_window_for_event(&LocalStreamEvent::Delta {
+                ack_input_seq: Some(1),
+                delta: RemoteDelta {
+                    cursor_x: 0,
+                    cursor_y: 0,
+                    cursor_visible: true,
+                    scroll_rows: 0,
+                    changed_rows: Vec::new(),
+                },
+            }),
+            None
+        );
+        assert_eq!(
+            stream_batch_window_for_event(&LocalStreamEvent::SessionList(Vec::new())),
+            None
         );
     }
 
