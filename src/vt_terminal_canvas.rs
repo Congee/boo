@@ -467,21 +467,14 @@ fn build_text_runs(
     font_family: Option<&'static str>,
 ) -> Vec<TextRun> {
     let mut runs = Vec::new();
-    let mut current: Option<TextRun> = None;
 
     for col_index in 0..cols {
         let Some(cell) = row.get(col_index) else {
-            if let Some(run) = current.take() {
-                runs.push(run);
-            }
             continue;
         };
 
         let content = cell.text.as_str();
         if content.is_empty() || content == "\0" {
-            if let Some(run) = current.take() {
-                runs.push(run);
-            }
             continue;
         }
 
@@ -489,35 +482,14 @@ fn build_text_runs(
         let font = font_for_cell(cell, font_family);
         let underline = cell.underline != 0;
         let width_cols = usize::from(cell.display_width.max(1));
-
-        match current.as_mut() {
-            Some(run)
-                if run.fg == fg
-                    && run.font == font
-                    && run.underline == underline
-                    && run.start_col + run.width_cols == col_index =>
-            {
-                run.text.push_str(content);
-                run.width_cols += width_cols;
-            }
-            _ => {
-                if let Some(run) = current.take() {
-                    runs.push(run);
-                }
-                current = Some(TextRun {
-                    start_col: col_index,
-                    width_cols,
-                    text: content.to_string(),
-                    fg,
-                    font,
-                    underline,
-                });
-            }
-        }
-    }
-
-    if let Some(run) = current {
-        runs.push(run);
+        runs.push(TextRun {
+            start_col: col_index,
+            width_cols,
+            text: content.to_string(),
+            fg,
+            font,
+            underline,
+        });
     }
 
     runs
@@ -754,12 +726,14 @@ mod tests {
             },
         ];
         let runs = build_text_runs(&row, row.len(), None);
-        assert_eq!(runs.len(), 2);
-        assert_eq!(runs[0].text, "ab");
+        assert_eq!(runs.len(), 3);
+        assert_eq!(runs[0].text, "a");
         assert_eq!(runs[0].start_col, 0);
-        assert_eq!(runs[0].width_cols, 2);
-        assert_eq!(runs[1].text, "c");
-        assert_eq!(runs[1].start_col, 2);
+        assert_eq!(runs[0].width_cols, 1);
+        assert_eq!(runs[1].text, "b");
+        assert_eq!(runs[1].start_col, 1);
+        assert_eq!(runs[2].text, "c");
+        assert_eq!(runs[2].start_col, 2);
     }
 
     #[test]
