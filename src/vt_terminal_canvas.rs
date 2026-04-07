@@ -586,7 +586,7 @@ fn render_debug_enabled() -> bool {
 }
 
 fn shaping_for_terminal_text(text: &str) -> iced::widget::text::Shaping {
-    if text.is_ascii() {
+    if text.len() <= 8 && text.is_ascii() {
         iced::widget::text::Shaping::Basic
     } else {
         iced::widget::text::Shaping::Advanced
