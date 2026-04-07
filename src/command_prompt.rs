@@ -176,6 +176,11 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         args: "",
     },
     CommandDef {
+        name: "display-panes",
+        description: "show pane numbers and jump directly to a pane",
+        args: "",
+    },
+    CommandDef {
         name: "paste",
         description: "paste from clipboard",
         args: "",
@@ -327,6 +332,14 @@ mod tests {
         assert!(
             COMMANDS.iter().any(|cmd| cmd.name == "copy"),
             "copy command should be exposed in the command prompt"
+        );
+    }
+
+    #[test]
+    fn commands_include_display_panes() {
+        assert!(
+            COMMANDS.iter().any(|cmd| cmd.name == "display-panes"),
+            "display-panes command should be exposed in the command prompt"
         );
     }
 

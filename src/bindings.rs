@@ -25,6 +25,7 @@ pub enum Action {
     Copy,
     Paste,
     SetTabTitle,
+    DisplayPanes,
     MarkPane,
     ClearMarkedPane,
     JoinMarkedPane(SplitDirection),
@@ -623,6 +624,7 @@ fn parse_action(s: &str) -> Option<Action> {
         "copy" => Some(Action::Copy),
         "paste" => Some(Action::Paste),
         "set_tab_title" => Some(Action::SetTabTitle),
+        "display_panes" => Some(Action::DisplayPanes),
         "mark_pane" => Some(Action::MarkPane),
         "clear_marked_pane" => Some(Action::ClearMarkedPane),
         "join_marked_pane:right" | "move_marked_pane:right" => {
@@ -1023,6 +1025,10 @@ keybind = super+/ = search
         assert!(matches!(
             parse_action("break_pane"),
             Some(Action::BreakPane)
+        ));
+        assert!(matches!(
+            parse_action("display_panes"),
+            Some(Action::DisplayPanes)
         ));
         assert!(matches!(
             parse_action("rotate_panes_forward"),

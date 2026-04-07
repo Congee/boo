@@ -258,7 +258,7 @@ nix develop
   - [x] `previous-layout`
   - [x] rebalance/spread panes evenly
 - [ ] add interactive tmux-style chooser UIs:
-  - display-panes
+  - [x] display-panes
   - choose-tree
   - choose-buffer
 - [ ] add paste buffer management beyond the system clipboard

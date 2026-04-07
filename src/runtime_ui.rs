@@ -1,30 +1,15 @@
 use super::*;
 use crate::command_prompt::COMMANDS;
+use iced::alignment;
+use iced::widget::canvas;
+use iced::widget::stack;
+use iced::{Pixels, Point, Rectangle, Renderer};
 
 impl BooApp {
-    #[allow(dead_code)]
-    pub(crate) fn ui_font(&self) -> Font {
-        configured_font(self.terminal_font_family)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn panel_alpha(&self, base: f32) -> f32 {
-        (base * self.background_opacity.max(0.3)).clamp(0.2, 0.98)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn window_style(&self) -> iced::theme::Style {
-        iced::theme::Style {
-            background_color: Color::TRANSPARENT,
-            text_color: Color::WHITE,
-        }
-    }
-
-    pub(crate) fn ui_snapshot(&self) -> control::UiSnapshot {
+    pub(crate) fn visible_pane_snapshots(&self) -> Vec<control::UiPaneSnapshot> {
         let focused_pane = self.server.tabs.focused_pane();
         let terminal_frame = self.terminal_frame();
-        let visible_panes = self
-            .server
+        self.server
             .tabs
             .active_tree()
             .map(|tree| {
@@ -53,7 +38,31 @@ impl BooApp {
                     })
                     .collect()
             })
-            .unwrap_or_default();
+            .unwrap_or_default()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn ui_font(&self) -> Font {
+        configured_font(self.terminal_font_family)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn panel_alpha(&self, base: f32) -> f32 {
+        (base * self.background_opacity.max(0.3)).clamp(0.2, 0.98)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn window_style(&self) -> iced::theme::Style {
+        iced::theme::Style {
+            background_color: Color::TRANSPARENT,
+            text_color: Color::WHITE,
+        }
+    }
+
+    pub(crate) fn ui_snapshot(&self) -> control::UiSnapshot {
+        let focused_pane = self.server.tabs.focused_pane();
+        let terminal_frame = self.terminal_frame();
+        let visible_panes = self.visible_pane_snapshots();
 
         let copy_mode_frame = terminal_frame;
         let copy_mode = self.copy_mode.as_ref().map_or(
@@ -369,7 +378,21 @@ impl BooApp {
                 .padding([2, 6]),
             );
         }
-        main_col.into()
+        let base: Element<'_, Message> = main_col.into();
+        if self.display_panes_active {
+            let overlay = iced::widget::canvas(DisplayPanesOverlay {
+                panes: self.visible_pane_snapshots(),
+                font: ui_font,
+            })
+            .width(Length::Fill)
+            .height(Length::Fill);
+            stack([base, overlay.into()])
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else {
+            base
+        }
     }
 
     #[allow(dead_code)]
@@ -444,5 +467,72 @@ impl BooApp {
             window::frames().map(|_| Message::Frame),
             iced::event::listen().map(Message::IcedEvent),
         ])
+    }
+}
+
+#[derive(Debug)]
+struct DisplayPanesOverlay {
+    panes: Vec<control::UiPaneSnapshot>,
+    font: Font,
+}
+
+impl<Message> canvas::Program<Message> for DisplayPanesOverlay {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry<Renderer>> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+
+        for (index, pane) in self.panes.iter().enumerate().take(9) {
+            let width = pane.frame.width as f32;
+            let height = pane.frame.height as f32;
+            if width <= 0.0 || height <= 0.0 {
+                continue;
+            }
+
+            let badge_size = 40.0f32.min(width.max(0.0)).min(height.max(0.0)).max(28.0);
+            let x = pane.frame.x as f32 + (width - badge_size) * 0.5;
+            let y = pane.frame.y as f32 + (height - badge_size) * 0.5;
+            let badge = canvas::Path::rounded_rectangle(
+                Point::new(x, y),
+                Size::new(badge_size, badge_size),
+                iced::border::Radius::from(8.0),
+            );
+
+            frame.fill(
+                &badge,
+                if pane.focused {
+                    Color::from_rgba(0.28, 0.38, 0.72, 0.92)
+                } else {
+                    Color::from_rgba(0.08, 0.08, 0.08, 0.88)
+                },
+            );
+            frame.stroke(
+                &badge,
+                canvas::Stroke::default()
+                    .with_width(2.0)
+                    .with_color(Color::from_rgba(0.92, 0.92, 0.92, 0.95)),
+            );
+            frame.fill_text(canvas::Text {
+                content: (index + 1).to_string(),
+                position: Point::new(x + badge_size * 0.5, y + badge_size * 0.5),
+                color: Color::WHITE,
+                size: Pixels((badge_size * 0.56).round()),
+                line_height: iced::widget::text::LineHeight::Relative(1.0),
+                font: self.font,
+                align_x: iced::widget::text::Alignment::Center,
+                align_y: alignment::Vertical::Center,
+                shaping: iced::widget::text::Shaping::Basic,
+                max_width: badge_size,
+            });
+        }
+
+        vec![frame.into_geometry()]
     }
 }

@@ -213,6 +213,7 @@ struct BooApp {
     preedit_text: String,
     last_clipboard_text: String,
     marked_pane_id: Option<crate::pane::PaneId>,
+    display_panes_active: bool,
     copy_mode: Option<CopyModeState>,
     command_prompt: CommandPrompt,
     terminal_font_family: Option<&'static str>,

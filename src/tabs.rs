@@ -151,6 +151,13 @@ impl TabManager {
             .unwrap_or(PaneHandle::null())
     }
 
+    pub fn focus_active_pane_by_id(&mut self, pane_id: crate::pane::PaneId) -> bool {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return false;
+        };
+        tab.tree.set_focus_to_pane(pane_id)
+    }
+
     pub fn len(&self) -> usize {
         self.tabs.len()
     }
@@ -555,5 +562,21 @@ mod tests {
         assert_eq!(tabs.len(), 2);
         assert_eq!(tabs.focused_pane(), b);
         assert_eq!(tabs.tab_tree(0).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn focus_active_pane_by_id_selects_matching_pane() {
+        let mut tabs = TabManager::new();
+        let a = PaneHandle::detached();
+        let b = PaneHandle::detached();
+
+        tabs.add_initial_tab(a);
+        tabs.active_tree_mut()
+            .unwrap()
+            .split_focused(crate::splits::Direction::Horizontal, b);
+
+        assert!(tabs.focus_active_pane_by_id(a.id()));
+        assert_eq!(tabs.focused_pane(), a);
+        assert!(!tabs.focus_active_pane_by_id(999_999));
     }
 }

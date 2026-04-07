@@ -46,6 +46,10 @@ impl BooApp {
         let text = key_char.map(|ch| ch.to_string());
         let iced_mods = ghostty_mods_to_iced(mods);
 
+        if self.display_panes_active && self.handle_display_panes_key(&keyboard_key, key_char) {
+            return true;
+        }
+
         if self.command_prompt.active {
             self.handle_command_key(&keyboard_key, &text, &iced_mods);
             return true;
@@ -61,6 +65,16 @@ impl BooApp {
     }
 
     pub(crate) fn handle_committed_text(&mut self, committed: String) {
+        if self.display_panes_active {
+            let mut consumed = false;
+            for ch in committed.chars() {
+                consumed |= self.handle_display_panes_char(ch);
+            }
+            if consumed {
+                return;
+            }
+        }
+
         if self.command_prompt.active {
             let key = keyboard::Key::Character(committed.clone().into());
             self.handle_command_key(&key, &Some(committed), &keyboard::Modifiers::default());
@@ -483,6 +497,10 @@ impl BooApp {
             bindings::Action::Copy => {
                 self.copy_mode_copy();
             }
+            bindings::Action::DisplayPanes => {
+                self.display_panes_active =
+                    self.server.tabs.active_tree().is_some_and(|tree| tree.len() > 1);
+            }
             bindings::Action::Paste => {
                 self.ghostty_binding_action("paste_from_clipboard");
             }
@@ -786,6 +804,7 @@ impl BooApp {
             }
             "copy-mode" => self.dispatch_binding_action(bindings::Action::EnterCopyMode),
             "copy" => self.dispatch_binding_action(bindings::Action::Copy),
+            "display-panes" => self.dispatch_binding_action(bindings::Action::DisplayPanes),
             "command-prompt" => self.dispatch_binding_action(bindings::Action::OpenCommandPrompt),
             "search" => self.dispatch_binding_action(bindings::Action::Search),
             "paste" => self.dispatch_binding_action(bindings::Action::Paste),
@@ -926,6 +945,7 @@ impl BooApp {
     }
 
     pub(crate) fn sync_after_tab_change(&mut self) {
+        self.display_panes_active = false;
         let focused = self.server.tabs.focused_pane();
         self.set_pane_focus(focused, true);
         self.relayout();
@@ -1142,6 +1162,65 @@ fn parse_split_direction_name(name: &str) -> Option<bindings::SplitDirection> {
         "down" => Some(bindings::SplitDirection::Down),
         "left" => Some(bindings::SplitDirection::Left),
         "up" => Some(bindings::SplitDirection::Up),
+        _ => None,
+    }
+}
+
+impl BooApp {
+    fn handle_display_panes_key(&mut self, key: &keyboard::Key, key_char: Option<char>) -> bool {
+        use keyboard::key::Named;
+
+        match key {
+            keyboard::Key::Named(Named::Escape) => {
+                self.display_panes_active = false;
+                true
+            }
+            keyboard::Key::Named(Named::Enter)
+            | keyboard::Key::Named(Named::Backspace)
+            | keyboard::Key::Named(Named::Tab)
+            | keyboard::Key::Named(Named::ArrowUp)
+            | keyboard::Key::Named(Named::ArrowDown)
+            | keyboard::Key::Named(Named::ArrowLeft)
+            | keyboard::Key::Named(Named::ArrowRight) => {
+                self.display_panes_active = false;
+                true
+            }
+            _ => {
+                if let Some(ch) = key_char {
+                    return self.handle_display_panes_char(ch);
+                }
+                self.display_panes_active = false;
+                true
+            }
+        }
+    }
+
+    fn handle_display_panes_char(&mut self, ch: char) -> bool {
+        let Some(index) = display_panes_digit_index(ch) else {
+            self.display_panes_active = false;
+            return true;
+        };
+        let visible_panes = self.visible_pane_snapshots();
+        let Some(target) = visible_panes.get(index) else {
+            self.display_panes_active = false;
+            return true;
+        };
+        self.display_panes_active = false;
+        let old = self.server.tabs.focused_pane();
+        if self.server.tabs.focus_active_pane_by_id(target.pane_id) {
+            let new = self.server.tabs.focused_pane();
+            if old != new {
+                self.set_pane_focus(old, false);
+                self.set_pane_focus(new, true);
+            }
+        }
+        true
+    }
+}
+
+fn display_panes_digit_index(ch: char) -> Option<usize> {
+    match ch {
+        '1'..='9' => Some(ch as usize - '1' as usize),
         _ => None,
     }
 }
