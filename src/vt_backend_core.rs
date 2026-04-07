@@ -443,6 +443,7 @@ impl VtPane {
                 .pty
                 .try_read_budgeted(Self::PTY_POLL_MAX_CHUNKS, read_budget)
             {
+                let chunk_len = chunk.len();
                 total_bytes = total_bytes.saturating_add(chunk.len() as u64);
                 read_chunks = read_chunks.saturating_add(1);
                 {
@@ -459,7 +460,7 @@ impl VtPane {
                 });
                 self.pending_pty_bytes = self
                     .pending_pty_bytes
-                    .saturating_add(self.pending_pty_chunks.back().map_or(0, |chunk| chunk.bytes.len()));
+                    .saturating_add(chunk_len);
             }
         } else {
             crate::profiling::record_units(
@@ -470,33 +471,30 @@ impl VtPane {
         }
         let write_chunk_size = self.write_chunk_size_for_backlog();
         while started_at.elapsed() < Self::PTY_POLL_MAX_DURATION {
-            let Some(mut chunk) = self.pending_pty_chunks.pop_front() else {
+            let Some(chunk) = self.pending_pty_chunks.front_mut() else {
                 break;
             };
-            self.pending_pty_bytes = self
-                .pending_pty_bytes
-                .saturating_sub(chunk.bytes.len().saturating_sub(chunk.offset));
             let remaining = chunk.bytes.len().saturating_sub(chunk.offset);
             if remaining == 0 {
+                self.pending_pty_chunks.pop_front();
                 continue;
             }
             let end = (chunk.offset + write_chunk_size).min(chunk.bytes.len());
+            let wrote = end.saturating_sub(chunk.offset);
             {
                 let mut scope = crate::profiling::scope(
                     "server.backend.poll_pty.write",
                     crate::profiling::Kind::Cpu,
                 );
-                scope.add_bytes((end - chunk.offset) as u64);
+                scope.add_bytes(wrote as u64);
                 self.terminal.write(&chunk.bytes[chunk.offset..end]);
             }
             written_chunks = written_chunks.saturating_add(1);
             chunk.offset = end;
+            self.pending_pty_bytes = self.pending_pty_bytes.saturating_sub(wrote);
             changed = true;
-            if chunk.offset < chunk.bytes.len() {
-                self.pending_pty_bytes = self
-                    .pending_pty_bytes
-                    .saturating_add(chunk.bytes.len().saturating_sub(chunk.offset));
-                self.pending_pty_chunks.push_front(chunk);
+            if chunk.offset >= chunk.bytes.len() {
+                self.pending_pty_chunks.pop_front();
             }
         }
         if changed {
