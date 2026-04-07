@@ -101,6 +101,8 @@ Notable unit counters now include:
 - `server.backend.poll_pty.write_chunks`
 - `server.backend.poll_pty.backlog_chunks`
 - `server.backend.poll_pty.backlog_bytes`
+- `server.backend.poll_pty.deferred_read_for_backlog`
+- `server.backend.poll_pty.write_chunk_size`
 - `server.backend.snapshot_refresh.rows`
 - `server.backend.snapshot_refresh.cells`
 - `server.backend.snapshot_refresh.full`

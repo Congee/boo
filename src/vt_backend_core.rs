@@ -322,9 +322,12 @@ impl Drop for VtPaneWorker {
 
 impl VtPane {
     const VT_WRITE_CHUNK: usize = 1024;
+    const VT_WRITE_CHUNK_UNDER_BACKLOG: usize = 256;
     const PTY_POLL_MAX_CHUNKS: usize = 8;
     const PTY_POLL_MAX_BYTES: usize = 32 * 1024;
     const PTY_POLL_MAX_DURATION: Duration = Duration::from_millis(2);
+    const PTY_BACKLOG_SOFT_LIMIT_BYTES: usize = 16 * 1024;
+    const PTY_BACKLOG_HARD_LIMIT_BYTES: usize = 64 * 1024;
 
     pub fn spawn(
         cols: u16,
@@ -418,25 +421,37 @@ impl VtPane {
         let mut total_bytes = 0u64;
         let mut read_chunks = 0u64;
         let mut written_chunks = 0u64;
-        for chunk in self
-            .pty
-            .try_read_budgeted(Self::PTY_POLL_MAX_CHUNKS, Self::PTY_POLL_MAX_BYTES)
-        {
-            total_bytes = total_bytes.saturating_add(chunk.len() as u64);
-            read_chunks = read_chunks.saturating_add(1);
+        let backlog_bytes = self.pending_backlog_bytes();
+        if backlog_bytes < Self::PTY_BACKLOG_HARD_LIMIT_BYTES {
+            let read_budget = Self::PTY_POLL_MAX_BYTES
+                .min(Self::PTY_BACKLOG_HARD_LIMIT_BYTES.saturating_sub(backlog_bytes));
+            for chunk in self
+                .pty
+                .try_read_budgeted(Self::PTY_POLL_MAX_CHUNKS, read_budget)
             {
-                let mut scope = crate::profiling::scope(
-                    "server.backend.poll_pty.osc",
-                    crate::profiling::Kind::Cpu,
-                );
-                scope.add_bytes(chunk.len() as u64);
-                self.observe_control_sequences(&chunk);
+                total_bytes = total_bytes.saturating_add(chunk.len() as u64);
+                read_chunks = read_chunks.saturating_add(1);
+                {
+                    let mut scope = crate::profiling::scope(
+                        "server.backend.poll_pty.osc",
+                        crate::profiling::Kind::Cpu,
+                    );
+                    scope.add_bytes(chunk.len() as u64);
+                    self.observe_control_sequences(&chunk);
+                }
+                self.pending_pty_chunks.push_back(PendingPtyChunk {
+                    bytes: chunk,
+                    offset: 0,
+                });
             }
-            self.pending_pty_chunks.push_back(PendingPtyChunk {
-                bytes: chunk,
-                offset: 0,
-            });
+        } else {
+            crate::profiling::record_units(
+                "server.backend.poll_pty.deferred_read_for_backlog",
+                crate::profiling::Kind::Cpu,
+                1,
+            );
         }
+        let write_chunk_size = self.write_chunk_size_for_backlog();
         while started_at.elapsed() < Self::PTY_POLL_MAX_DURATION {
             let Some(mut chunk) = self.pending_pty_chunks.pop_front() else {
                 break;
@@ -445,7 +460,7 @@ impl VtPane {
             if remaining == 0 {
                 continue;
             }
-            let end = (chunk.offset + Self::VT_WRITE_CHUNK).min(chunk.bytes.len());
+            let end = (chunk.offset + write_chunk_size).min(chunk.bytes.len());
             {
                 let mut scope = crate::profiling::scope(
                     "server.backend.poll_pty.write",
@@ -501,6 +516,11 @@ impl VtPane {
                 .iter()
                 .map(|chunk| chunk.bytes.len().saturating_sub(chunk.offset) as u64)
                 .sum(),
+        );
+        crate::profiling::record_units(
+            "server.backend.poll_pty.write_chunk_size",
+            crate::profiling::Kind::Cpu,
+            write_chunk_size as u64,
         );
         Ok(PollPtyResult {
             changed,
@@ -910,6 +930,21 @@ impl VtPane {
             }
         } else {
             self.pending_notifications.insert(id, notification);
+        }
+    }
+
+    fn pending_backlog_bytes(&self) -> usize {
+        self.pending_pty_chunks
+            .iter()
+            .map(|chunk| chunk.bytes.len().saturating_sub(chunk.offset))
+            .sum()
+    }
+
+    fn write_chunk_size_for_backlog(&self) -> usize {
+        if self.pending_backlog_bytes() >= Self::PTY_BACKLOG_SOFT_LIMIT_BYTES {
+            Self::VT_WRITE_CHUNK_UNDER_BACKLOG
+        } else {
+            Self::VT_WRITE_CHUNK
         }
     }
 }
