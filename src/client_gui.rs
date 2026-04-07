@@ -404,6 +404,11 @@ impl ClientApp {
                     if let Some(session) = self.pick_attach_session(&live_sessions) {
                         self.should_exit = false;
                         self.send_stream_command(StreamCommand::Attach(session.id));
+                    } else if matches!(self.mode, ClientMode::Bootstrapping)
+                        && !self.has_paintable_terminal()
+                    {
+                        let _ = self.client.send(&control::Request::NewTab);
+                        self.send_stream_command(StreamCommand::ListSessions);
                     } else {
                         self.should_exit = true;
                     }
@@ -434,12 +439,13 @@ impl ClientApp {
                 }
                 LocalStreamEvent::Disconnected => {
                     self.stream_tx = None;
+                    let had_paintable_terminal = self.has_paintable_terminal();
                     let lost_active_session = self.active_session_id.take();
                     self.mode = ClientMode::Recovering;
                     self.pending_input_latencies.clear();
                     if should_exit_after_stream_disconnect(
                         lost_active_session,
-                        self.client.get_ui_snapshot().is_ok(),
+                        had_paintable_terminal,
                     ) {
                         self.should_exit = true;
                         self.last_error = None;
@@ -555,9 +561,9 @@ impl ClientApp {
 
 fn should_exit_after_stream_disconnect(
     lost_active_session: Option<u32>,
-    snapshot_available: bool,
+    had_paintable_terminal: bool,
 ) -> bool {
-    lost_active_session.is_some() && !snapshot_available
+    lost_active_session.is_some() || had_paintable_terminal
 }
 
 fn should_exit_after_session_exit(active_session_id: Option<u32>, exited_session_id: u32) -> bool {
@@ -1456,7 +1462,8 @@ mod tests {
     #[test]
     fn disconnect_exits_when_active_session_is_gone() {
         assert!(should_exit_after_stream_disconnect(Some(7), false));
-        assert!(!should_exit_after_stream_disconnect(Some(7), true));
+        assert!(should_exit_after_stream_disconnect(Some(7), true));
+        assert!(should_exit_after_stream_disconnect(None, true));
         assert!(!should_exit_after_stream_disconnect(None, false));
     }
 

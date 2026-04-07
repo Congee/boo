@@ -77,6 +77,7 @@ impl BooApp {
             return;
         };
         self.server.tabs.add_initial_tab(pane);
+        self.surface_initialized_once = true;
         self.set_pane_focus(pane, true);
 
         let scale = self.scale_factor();
@@ -194,16 +195,15 @@ impl BooApp {
             self.free_pane_backend(pane);
 
             if tab_empty {
-                if self.server.tabs.len() <= 1 {
-                    self.terminate(0);
-                }
                 let active = self.server.tabs.active_index();
                 self.server.tabs.remove_tab(active);
             }
 
-            let focused = self.server.tabs.focused_pane();
-            self.set_pane_focus(focused, true);
-            self.relayout();
+            if !self.server.tabs.is_empty() {
+                let focused = self.server.tabs.focused_pane();
+                self.set_pane_focus(focused, true);
+                self.relayout();
+            }
             log::info!(
                 "surface closed, {} surfaces in tab, {} tabs",
                 self.server.tabs.active_tree().map(|t| t.len()).unwrap_or(0),
@@ -212,17 +212,16 @@ impl BooApp {
             return;
         }
 
-        if self.server.tabs.len() <= 1 {
-            self.terminate(0);
-        }
         let active = self.server.tabs.active_index();
         let panes = self.server.tabs.remove_tab(active);
         for pane in panes {
             self.free_pane_backend(pane);
         }
-        let focused = self.server.tabs.focused_pane();
-        self.set_pane_focus(focused, true);
-        self.relayout();
+        if !self.server.tabs.is_empty() {
+            let focused = self.server.tabs.focused_pane();
+            self.set_pane_focus(focused, true);
+            self.relayout();
+        }
     }
 
     pub(crate) fn new_tab(&mut self) -> Option<u32> {

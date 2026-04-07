@@ -30,7 +30,7 @@ fn stage_to_profile_path(stage: &str) -> &'static str {
 }
 
 impl BooApp {
-    fn remote_servers(&self) -> impl Iterator<Item = &remote::RemoteServer> {
+    pub(crate) fn remote_servers(&self) -> impl Iterator<Item = &remote::RemoteServer> {
         self.server
             .remote_server
             .iter()

@@ -264,6 +264,21 @@ impl TabManager {
         self.tabs.iter().position(|tab| tab.id == session_id)
     }
 
+    pub fn find_pane_location(&self, pane_id: crate::pane::PaneId) -> Option<(usize, crate::splits::LeafId)> {
+        self.tabs.iter().enumerate().find_map(|(tab_index, tab)| {
+            tab.tree
+                .export_panes()
+                .into_iter()
+                .find(|pane| pane.pane.id() == pane_id)
+                .map(|pane| (tab_index, pane.leaf_id))
+        })
+    }
+
+    pub fn session_id_for_pane_id(&self, pane_id: crate::pane::PaneId) -> Option<u32> {
+        self.find_pane_location(pane_id)
+            .and_then(|(tab_index, _)| self.session_id_for_index(tab_index))
+    }
+
     pub fn tab_info(&self) -> Vec<TabInfo> {
         self.tab_info_with_spinner(0)
     }

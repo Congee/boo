@@ -450,15 +450,14 @@ impl BooApp {
                 self.sync_after_tab_change();
             }
             bindings::Action::CloseTab => {
-                if self.server.tabs.len() <= 1 {
-                    self.terminate(0);
-                }
                 let active = self.server.tabs.active_index();
                 let panes = self.server.tabs.remove_tab(active);
                 for pane in panes {
                     self.free_pane_backend(pane);
                 }
-                self.sync_after_tab_change();
+                if !self.server.tabs.is_empty() {
+                    self.sync_after_tab_change();
+                }
             }
             bindings::Action::GotoTab(target) => {
                 let idx = match target {

@@ -15,48 +15,118 @@ cleanup() {
 cleanup
 trap cleanup EXIT
 
-cargo build >/dev/null
+wait_for_ready() {
+  for _ in $(seq 1 100); do
+    if [ -S "$SOCKET" ] && [ -S "$GUI_TEST_SOCKET" ]; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
 
-BOO_GUI_TEST_SOCKET="$GUI_TEST_SOCKET" target/debug/boo --socket "$SOCKET" >/dev/null 2>&1 &
-GUI_PID=$!
-
-for _ in $(seq 1 100); do
-  if [ -S "$SOCKET" ] && [ -S "$GUI_TEST_SOCKET" ]; then
-    break
-  fi
-  sleep 0.1
-done
-
-if [ ! -S "$SOCKET" ] || [ ! -S "$GUI_TEST_SOCKET" ]; then
-  echo "boo GUI test sockets not ready" >&2
-  exit 1
-fi
-
-python3 - <<'PY' "$GUI_TEST_SOCKET"
+send_gui_text() {
+python3 - <<'PY' "$GUI_TEST_SOCKET" "$1"
 import socket, sys
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 sock.connect(sys.argv[1])
-sock.sendall(b"text abc\n")
+sock.sendall(f"text {sys.argv[2]}\n".encode())
 sock.close()
 PY
+}
 
+send_gui_key() {
+python3 - <<'PY' "$GUI_TEST_SOCKET" "$1"
+import socket, sys
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect(sys.argv[1])
+sock.sendall(f"key {sys.argv[2]}\n".encode())
+sock.close()
+PY
+}
+
+assert_snapshot_contains() {
+for _ in $(seq 1 30); do
+  SNAPSHOT="$(python3 scripts/ui-test-client.py --socket "$SOCKET" snapshot)"
+  if python3 - <<'PY' "$SNAPSHOT" "$1"
+import json, sys
+data = json.loads(sys.argv[1])["snapshot"]
+line = "".join(cell["text"] for cell in data["terminal"]["rows_data"][0]["cells"])
+raise SystemExit(0 if sys.argv[2] in line else 1)
+PY
+  then
+    return 0
+  fi
+  sleep 0.1
+done
+return 1
+}
+
+wait_for_terminal_snapshot() {
 for _ in $(seq 1 30); do
   SNAPSHOT="$(python3 scripts/ui-test-client.py --socket "$SOCKET" snapshot)"
   if python3 - <<'PY' "$SNAPSHOT"
 import json, sys
 data = json.loads(sys.argv[1])["snapshot"]
-line = "".join(cell["text"] for cell in data["terminal"]["rows_data"][0]["cells"])
-raise SystemExit(0 if "abc" in line else 1)
+raise SystemExit(0 if data.get("terminal") else 1)
 PY
   then
-    break
+    return 0
   fi
   sleep 0.1
 done
+return 1
+}
 
-python3 - <<'PY' "$SNAPSHOT"
-import json, sys
-data = json.loads(sys.argv[1])["snapshot"]
-line = "".join(cell["text"] for cell in data["terminal"]["rows_data"][0]["cells"])
-assert "abc" in line, line
-PY
+wait_for_exit() {
+  for _ in $(seq 1 80); do
+    if ! kill -0 "$1" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
+cargo build >/dev/null
+
+BOO_GUI_TEST_SOCKET="$GUI_TEST_SOCKET" target/debug/boo --socket "$SOCKET" >/dev/null 2>&1 &
+GUI_PID=$!
+
+if ! wait_for_ready; then
+  echo "boo GUI test sockets not ready" >&2
+  exit 1
+fi
+
+send_gui_text "abc"
+
+if ! assert_snapshot_contains "abc"; then
+  echo "typed text never appeared in snapshot" >&2
+  exit 1
+fi
+
+kill "$GUI_PID" >/dev/null 2>&1 || true
+wait "$GUI_PID" >/dev/null 2>&1 || true
+target/debug/boo quit-server --socket "$SOCKET" >/dev/null 2>&1 || true
+rm -f "$SOCKET" "$SOCKET.stream" "$GUI_TEST_SOCKET"
+
+BOO_GUI_TEST_SOCKET="$GUI_TEST_SOCKET" target/debug/boo --socket "$SOCKET" >/dev/null 2>&1 &
+GUI_PID=$!
+
+if ! wait_for_ready; then
+  echo "boo GUI test sockets not ready for exit case" >&2
+  exit 1
+fi
+
+if ! wait_for_terminal_snapshot; then
+  echo "boo GUI terminal snapshot not ready for exit case" >&2
+  exit 1
+fi
+
+send_gui_text "exit"
+send_gui_key "enter"
+
+if ! wait_for_exit "$GUI_PID"; then
+  echo "boo GUI did not exit after shell exit" >&2
+  exit 1
+fi

@@ -127,6 +127,7 @@ impl BooApp {
                     background_opacity: appearance.background_opacity,
                     background_opacity_cells: appearance.background_opacity_cells,
                     appearance_revision: 1,
+                    surface_initialized_once: false,
                     app_focused: true,
                     remote_dirty: true,
                     desktop_notifications_enabled: boo_config.desktop_notifications,
@@ -183,6 +184,7 @@ impl BooApp {
                     background_opacity: appearance.background_opacity,
                     background_opacity_cells: appearance.background_opacity_cells,
                     appearance_revision: 1,
+                    surface_initialized_once: false,
                     app_focused: true,
                     remote_dirty: true,
                     desktop_notifications_enabled: boo_config.desktop_notifications,
@@ -375,7 +377,12 @@ impl BooApp {
             }
         }
         for pane_id in poll.exited_panes {
-            self.close_active_pane_by_id(pane_id);
+            if let Some(session_id) = self.server.tabs.session_id_for_pane_id(pane_id) {
+                for server in self.remote_servers() {
+                    server.send_session_exited(session_id);
+                }
+            }
+            self.close_pane_by_id(pane_id);
             remote_dirty = true;
         }
         self.remote_dirty |= remote_dirty;
@@ -401,19 +408,24 @@ impl BooApp {
         std::process::exit(code);
     }
 
-    pub(crate) fn close_active_pane_by_id(&mut self, pane_id: pane::PaneId) {
+    pub(crate) fn close_pane_by_id(&mut self, pane_id: pane::PaneId) {
+        let old_focused = self.server.tabs.focused_pane();
+        let Some((tab_index, leaf_id)) = self.server.tabs.find_pane_location(pane_id) else {
+            return;
+        };
+        let old_active = self.server.tabs.active_index();
+        if old_active != tab_index {
+            self.server.tabs.goto_tab(tab_index);
+        }
         let Some(tree) = self.server.tabs.active_tree_mut() else {
             return;
         };
-        let Some(leaf_id) = tree
-            .export_panes()
-            .into_iter()
-            .find(|pane| pane.pane.id() == pane_id)
-            .map(|pane| pane.leaf_id)
-        else {
-            return;
-        };
         tree.set_focus(leaf_id);
+        let new_focused = self.server.tabs.focused_pane();
+        if old_focused != new_focused {
+            self.set_pane_focus(old_focused, false);
+            self.set_pane_focus(new_focused, true);
+        }
         self.handle_surface_closed();
     }
 
@@ -506,7 +518,9 @@ impl BooApp {
         }
 
         if self.server.tabs.is_empty() {
-            self.init_surface();
+            if !self.surface_initialized_once {
+                self.init_surface();
+            }
             return Task::none();
         }
 

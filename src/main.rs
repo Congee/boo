@@ -219,6 +219,7 @@ struct BooApp {
     background_opacity: f32,
     background_opacity_cells: bool,
     appearance_revision: u64,
+    surface_initialized_once: bool,
     app_focused: bool,
     remote_dirty: bool,
     desktop_notifications_enabled: bool,
