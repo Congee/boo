@@ -184,6 +184,7 @@ struct PendingNotification {
 struct PendingPtyChunk {
     bytes: Vec<u8>,
     offset: usize,
+    has_escape: bool,
 }
 
 #[derive(Default)]
@@ -333,7 +334,9 @@ impl Drop for VtPaneWorker {
 
 impl VtPane {
     const VT_WRITE_CHUNK: usize = 1024;
+    const VT_WRITE_CHUNK_PLAIN: usize = 4096;
     const VT_WRITE_CHUNK_UNDER_BACKLOG: usize = 256;
+    const VT_WRITE_CHUNK_PLAIN_UNDER_BACKLOG: usize = 2048;
     const PTY_POLL_MAX_CHUNKS: usize = 8;
     const PTY_POLL_MAX_BYTES: usize = 32 * 1024;
     const PTY_POLL_MAX_DURATION: Duration = Duration::from_millis(2);
@@ -434,6 +437,7 @@ impl VtPane {
         let mut total_bytes = 0u64;
         let mut read_chunks = 0u64;
         let mut written_chunks = 0u64;
+        let mut write_chunk_units = 0u64;
         let backlog_bytes = self.pending_backlog_bytes();
         if backlog_bytes < Self::PTY_BACKLOG_HARD_LIMIT_BYTES {
             let read_budget = Self::PTY_POLL_MAX_BYTES
@@ -444,6 +448,7 @@ impl VtPane {
                     break;
                 };
                 let chunk_len = chunk.len();
+                let has_escape = chunk.contains(&0x1b);
                 read_bytes = read_bytes.saturating_add(chunk_len);
                 total_bytes = total_bytes.saturating_add(chunk.len() as u64);
                 read_chunks = read_chunks.saturating_add(1);
@@ -453,11 +458,12 @@ impl VtPane {
                         crate::profiling::Kind::Cpu,
                     );
                     scope.add_bytes(chunk.len() as u64);
-                    self.observe_control_sequences(&chunk);
+                    self.observe_control_sequences(&chunk, has_escape);
                 }
                 self.pending_pty_chunks.push_back(PendingPtyChunk {
                     bytes: chunk,
                     offset: 0,
+                    has_escape,
                 });
                 self.pending_pty_bytes = self
                     .pending_pty_bytes
@@ -470,8 +476,11 @@ impl VtPane {
                 1,
             );
         }
-        let write_chunk_size = self.write_chunk_size_for_backlog();
         while started_at.elapsed() < Self::PTY_POLL_MAX_DURATION {
+            let Some(has_escape) = self.pending_pty_chunks.front().map(|chunk| chunk.has_escape) else {
+                break;
+            };
+            let write_chunk_size = self.write_chunk_size_for_chunk(has_escape);
             let Some(chunk) = self.pending_pty_chunks.front_mut() else {
                 break;
             };
@@ -480,6 +489,7 @@ impl VtPane {
                 self.pending_pty_chunks.pop_front();
                 continue;
             }
+            write_chunk_units = write_chunk_units.saturating_add(write_chunk_size as u64);
             let end = (chunk.offset + write_chunk_size).min(chunk.bytes.len());
             let wrote = end.saturating_sub(chunk.offset);
             {
@@ -531,7 +541,7 @@ impl VtPane {
         self.pending_pty_profile.write_chunk_size = self
             .pending_pty_profile
             .write_chunk_size
-            .saturating_add(write_chunk_size as u64);
+            .saturating_add(write_chunk_units);
         if self.pending_pty_profile.polls >= 8 {
             crate::profiling::record_batch(&[
                 crate::profiling::Record {
@@ -614,7 +624,7 @@ impl VtPane {
         if bytes.is_empty() {
             return;
         }
-        self.observe_control_sequences(bytes);
+        self.observe_control_sequences(bytes, bytes.contains(&0x1b));
         for slice in bytes.chunks(Self::VT_WRITE_CHUNK) {
             self.terminal.write(slice);
         }
@@ -845,8 +855,7 @@ impl VtPane {
         !self.pending_pty_chunks.is_empty()
     }
 
-    fn observe_control_sequences(&mut self, bytes: &[u8]) {
-        let has_escape = bytes.contains(&0x1b);
+    fn observe_control_sequences(&mut self, bytes: &[u8], has_escape: bool) {
         if self.control_sequence_tail.is_empty()
             && matches!(self.osc_state.mode, OscMode::Ground)
             && !has_escape
@@ -991,11 +1000,19 @@ impl VtPane {
         self.pending_pty_bytes
     }
 
-    fn write_chunk_size_for_backlog(&self) -> usize {
+    fn write_chunk_size_for_chunk(&self, has_escape: bool) -> usize {
         if self.pending_backlog_bytes() >= Self::PTY_BACKLOG_SOFT_LIMIT_BYTES {
-            Self::VT_WRITE_CHUNK_UNDER_BACKLOG
+            if has_escape {
+                Self::VT_WRITE_CHUNK_UNDER_BACKLOG
+            } else {
+                Self::VT_WRITE_CHUNK_PLAIN_UNDER_BACKLOG
+            }
         } else {
-            Self::VT_WRITE_CHUNK
+            if has_escape {
+                Self::VT_WRITE_CHUNK
+            } else {
+                Self::VT_WRITE_CHUNK_PLAIN
+            }
         }
     }
 
@@ -1498,14 +1515,14 @@ mod tests {
     fn osc_133_running_command_tracks_start_and_finish() {
         let mut pane = VtPane::spawn(2, 1, 8, 16, None, None).expect("pane");
 
-        pane.observe_control_sequences(b"\x1b]133;C;cmdline=make test\x07");
+        pane.observe_control_sequences(b"\x1b]133;C;cmdline=make test\x07", true);
         assert_eq!(
             pane.running_command()
                 .and_then(|running| running.command.as_deref()),
             Some("make test")
         );
 
-        pane.observe_control_sequences(b"\x1b]133;D;0\x07");
+        pane.observe_control_sequences(b"\x1b]133;D;0\x07", true);
         assert!(pane.running_command().is_none());
         let finished = pane.take_finished_commands();
         assert_eq!(finished.len(), 1);
@@ -1516,8 +1533,8 @@ mod tests {
     fn osc_99_emits_desktop_notification() {
         let mut pane = VtPane::spawn(2, 1, 8, 16, None, None).expect("pane");
 
-        pane.observe_control_sequences(b"\x1b]99;i=test:p=title:d=0;Build done\x07");
-        pane.observe_control_sequences(b"\x1b]99;i=test:p=body;All checks passed\x07");
+        pane.observe_control_sequences(b"\x1b]99;i=test:p=title:d=0;Build done\x07", true);
+        pane.observe_control_sequences(b"\x1b]99;i=test:p=body;All checks passed\x07", true);
 
         let notifications = pane.take_desktop_notifications();
         assert_eq!(notifications.len(), 1);
