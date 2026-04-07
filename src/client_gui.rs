@@ -344,6 +344,22 @@ impl ClientApp {
             return;
         };
 
+        if let Some(control_byte) = control_character_from_key(&key, modifiers) {
+            if self.stream_ready_for_terminal_io() {
+                let input_seq = self.record_pending_input();
+                self.send_stream_command(StreamCommand::Input {
+                    input_seq,
+                    bytes: vec![control_byte],
+                });
+            } else {
+                let _ = self.client.send(&control::Request::SendText {
+                    text: String::from_utf8_lossy(&[control_byte]).into_owned(),
+                });
+                self.refresh_snapshot();
+            }
+            return;
+        }
+
         let committed = text
             .as_ref()
             .map(ToString::to_string)
@@ -1313,6 +1329,28 @@ mod tests {
     }
 
     #[test]
+    fn control_character_maps_ctrl_d_to_eot() {
+        let key = keyboard::Key::Character("d".into());
+        assert_eq!(
+            control_character_from_key(&key, keyboard::Modifiers::CTRL),
+            Some(0x04)
+        );
+    }
+
+    #[test]
+    fn control_character_ignores_shifted_or_modified_variants() {
+        let key = keyboard::Key::Character("d".into());
+        assert_eq!(
+            control_character_from_key(&key, keyboard::Modifiers::CTRL | keyboard::Modifiers::SHIFT),
+            None
+        );
+        assert_eq!(
+            control_character_from_key(&key, keyboard::Modifiers::CTRL | keyboard::Modifiers::ALT),
+            None
+        );
+    }
+
+    #[test]
     fn parse_gui_test_text_command() {
         assert_eq!(
             parse_gui_test_command("text hello"),
@@ -1472,4 +1510,21 @@ fn committed_text_from_key(
         keyboard::Key::Character(chars) if !chars.is_empty() => Some(chars.to_string()),
         _ => None,
     }
+}
+
+fn control_character_from_key(
+    key: &keyboard::Key,
+    modifiers: keyboard::Modifiers,
+) -> Option<u8> {
+    if !modifiers.control() || modifiers.alt() || modifiers.logo() || modifiers.shift() {
+        return None;
+    }
+    let keyboard::Key::Character(chars) = key else {
+        return None;
+    };
+    let ch = chars.chars().next()?.to_ascii_lowercase();
+    if !ch.is_ascii_lowercase() {
+        return None;
+    }
+    Some((ch as u8 - b'a') + 1)
 }
