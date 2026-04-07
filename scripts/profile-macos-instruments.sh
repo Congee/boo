@@ -29,6 +29,7 @@ Notes:
   - Uses scripts/profiling-boo.sh so the profiling build can find libghostty-vt.dylib.
   - If --workload is set, the script waits for the control socket to report a populated
     UI snapshot and then injects the given terminal text through scripts/ui-test-client.py.
+  - Readiness/injection failures are treated as hard failures.
   - The output trace is overwritten by removing any existing trace path first.
 EOF
 }
@@ -89,8 +90,8 @@ xcrun xctrace record \
 TRACE_PID=$!
 
 if [[ -n "$WORKLOAD" ]]; then
-  python3 scripts/ui-test-client.py --socket "$SOCKET" wait-ready --timeout "$READY_TIMEOUT" >/dev/null 2>&1 || true
-  python3 scripts/ui-test-client.py --socket "$SOCKET" request send-text "text=$WORKLOAD" >/dev/null 2>&1 || true
+  python3 scripts/ui-test-client.py --socket "$SOCKET" wait-ready --timeout "$READY_TIMEOUT" >/dev/null
+  python3 scripts/ui-test-client.py --socket "$SOCKET" request send-text "text=$WORKLOAD" >/dev/null
 fi
 
 wait "$TRACE_PID"
