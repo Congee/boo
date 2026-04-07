@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone)]
 pub struct Config {
     pub prefix_key: Option<String>,
     pub control_socket: Option<String>,
@@ -17,10 +18,19 @@ pub struct Config {
     pub font_size: Option<f32>,
     pub background_opacity: Option<f32>,
     pub background_opacity_cells: bool,
+    pub cursor_style: Option<CursorStyle>,
+    pub cursor_blink: bool,
     pub desktop_notifications: bool,
     pub notify_on_command_finish: NotifyOnCommandFinish,
     pub notify_on_command_finish_action: NotifyOnCommandFinishAction,
     pub notify_on_command_finish_after_ns: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CursorStyle {
+    Block,
+    Bar,
+    Underline,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +106,12 @@ impl Config {
                 "background-opacity-cells" => {
                     config.background_opacity_cells = parse_bool(value).unwrap_or(false);
                 }
+                "cursor-style" => {
+                    config.cursor_style = parse_cursor_style(value);
+                }
+                "cursor-blink" => {
+                    config.cursor_blink = parse_bool(value).unwrap_or(false);
+                }
                 "desktop-notifications" => {
                     config.desktop_notifications = parse_bool(value).unwrap_or(true);
                 }
@@ -145,6 +161,8 @@ impl Default for Config {
             font_size: None,
             background_opacity: None,
             background_opacity_cells: false,
+            cursor_style: None,
+            cursor_blink: false,
             desktop_notifications: true,
             notify_on_command_finish: NotifyOnCommandFinish::Never,
             notify_on_command_finish_action: NotifyOnCommandFinishAction {
@@ -168,6 +186,15 @@ fn parse_bool(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "true" | "yes" | "on" | "1" => Some(true),
         "false" | "no" | "off" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_cursor_style(value: &str) -> Option<CursorStyle> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "block" => Some(CursorStyle::Block),
+        "bar" | "beam" => Some(CursorStyle::Bar),
+        "underline" => Some(CursorStyle::Underline),
         _ => None,
     }
 }
@@ -253,6 +280,8 @@ font-family = "Fira Code"
 font-size = 14
 background-opacity = 0.9
 background-opacity-cells = true
+cursor-style = underline
+cursor-blink = true
 
 # boo settings
 prefix-key = ctrl+s
@@ -273,6 +302,8 @@ keybind = super+1 = goto_tab:1
         assert_eq!(config.font_size, Some(14.0));
         assert_eq!(config.background_opacity, Some(0.9));
         assert!(config.background_opacity_cells);
+        assert_eq!(config.cursor_style, Some(CursorStyle::Underline));
+        assert!(config.cursor_blink);
         assert_eq!(config.keybinds.len(), 3);
         assert_eq!(
             config.keybinds.get("\"").map(|s| s.as_str()),
@@ -320,6 +351,14 @@ keybind = super+1 = goto_tab:1
 
         let config = Config::parse("background-opacity-cells = off\n");
         assert!(!config.background_opacity_cells);
+    }
+
+    #[test]
+    fn test_parse_cursor_style() {
+        assert_eq!(parse_cursor_style("block"), Some(CursorStyle::Block));
+        assert_eq!(parse_cursor_style("beam"), Some(CursorStyle::Bar));
+        assert_eq!(parse_cursor_style("underline"), Some(CursorStyle::Underline));
+        assert_eq!(parse_cursor_style("weird"), None);
     }
 
     #[test]

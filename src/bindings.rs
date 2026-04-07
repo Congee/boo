@@ -637,6 +637,8 @@ mod tests {
             font_size: None,
             background_opacity: None,
             background_opacity_cells: false,
+            cursor_style: None,
+            cursor_blink: false,
             desktop_notifications: true,
             notify_on_command_finish: crate::config::NotifyOnCommandFinish::Never,
             notify_on_command_finish_action: crate::config::NotifyOnCommandFinishAction {
