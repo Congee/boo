@@ -237,7 +237,7 @@ nix develop
   - [ ] migrate supported keybinds from `~/.config/kitty/kitty.conf` into `~/.config/boo/config.boo`
   - [ ] implement direct copy-to-clipboard action for `cmd+c`
   - [ ] implement configurable macOS option-as-alt behavior
-  - [ ] implement `set_tab_title`
+  - [x] implement `set_tab_title`
   - [ ] implement Boo-native search-pane action to replace the Kitty `search.py` split binding
   - [ ] implement configurable tab bar style/separator/alignment/title template
   - [ ] implement `window-decoration` config instead of ignoring it

@@ -476,6 +476,13 @@ impl BooApp {
             bindings::Action::Paste => {
                 self.ghostty_binding_action("paste_from_clipboard");
             }
+            bindings::Action::SetTabTitle => {
+                self.command_prompt.active = true;
+                self.command_prompt.input = "set-tab-title ".to_string();
+                self.command_prompt.selected_suggestion = 0;
+                self.command_prompt.history_idx = None;
+                self.command_prompt.update_suggestions();
+            }
             bindings::Action::ToggleZoom => {
                 self.ghostty_binding_action("toggle_split_zoom");
                 self.relayout();
@@ -679,6 +686,13 @@ impl BooApp {
             "command-prompt" => self.dispatch_binding_action(bindings::Action::OpenCommandPrompt),
             "search" => self.dispatch_binding_action(bindings::Action::Search),
             "paste" => self.dispatch_binding_action(bindings::Action::Paste),
+            "set-tab-title" => {
+                if parts.len() >= 2 {
+                    self.server.tabs.set_active_title(parts[1..].join(" "));
+                    self.remote_dirty = true;
+                    self.relayout();
+                }
+            }
             "zoom" => self.dispatch_binding_action(bindings::Action::ToggleZoom),
             "reload-config" => self.dispatch_binding_action(bindings::Action::ReloadConfig),
             "goto-line" => {

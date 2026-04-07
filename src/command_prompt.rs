@@ -111,6 +111,11 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         args: "",
     },
     CommandDef {
+        name: "set-tab-title",
+        description: "set the active tab title",
+        args: "<title>",
+    },
+    CommandDef {
         name: "zoom",
         description: "toggle pane zoom",
         args: "",
@@ -228,4 +233,22 @@ pub(crate) fn fuzzy_score(query: &str, target: &str) -> i32 {
     }
 
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn commands_include_set_tab_title() {
+        assert!(
+            COMMANDS.iter().any(|cmd| cmd.name == "set-tab-title"),
+            "set-tab-title command should be exposed in the command prompt"
+        );
+    }
+
+    #[test]
+    fn fuzzy_score_matches_set_tab_title_abbreviation() {
+        assert!(fuzzy_score("stt", "set-tab-title") > 0);
+    }
 }
