@@ -641,6 +641,16 @@ impl VtPane {
             rows_data.push(row);
             let _ = row_iter.clear_dirty();
         }
+        crate::profiling::record_units(
+            "server.backend.snapshot.rows",
+            crate::profiling::Kind::Cpu,
+            rows as u64,
+        );
+        crate::profiling::record_units(
+            "server.backend.snapshot.cells",
+            crate::profiling::Kind::Cpu,
+            rows as u64 * cols as u64,
+        );
 
         self.dirty = false;
 
@@ -701,6 +711,7 @@ impl VtPane {
         let mut row_iter = self.render_state.row_iterator().map_err(vt_to_io)?;
         let mut row_index = 0usize;
         let mut rebuilt_rows = 0u64;
+        let mut rebuilt_cells = 0u64;
         while row_iter.next() {
             let row_dirty =
                 force_full_refresh || size_changed || row_iter.dirty().map_err(vt_to_io)?;
@@ -710,6 +721,7 @@ impl VtPane {
                     snapshot.row_revisions[row_index].wrapping_add(1);
                 let _ = row_iter.clear_dirty();
                 rebuilt_rows = rebuilt_rows.saturating_add(1);
+                rebuilt_cells = rebuilt_cells.saturating_add(cols as u64);
             }
             row_index += 1;
         }
@@ -727,6 +739,11 @@ impl VtPane {
             "server.backend.snapshot_refresh.rows",
             crate::profiling::Kind::Cpu,
             rebuilt_rows,
+        );
+        crate::profiling::record_units(
+            "server.backend.snapshot_refresh.cells",
+            crate::profiling::Kind::Cpu,
+            rebuilt_cells,
         );
         crate::profiling::record_units(
             "server.backend.snapshot_refresh.full",
@@ -763,6 +780,11 @@ impl VtPane {
     fn observe_control_sequences(&mut self, bytes: &[u8]) {
         if should_force_full_snapshot_refresh(&self.control_sequence_tail, bytes) {
             self.force_full_snapshot_refresh = true;
+            crate::profiling::record_units(
+                "server.backend.snapshot_refresh.trigger_full",
+                crate::profiling::Kind::Cpu,
+                1,
+            );
         }
         update_control_sequence_tail(&mut self.control_sequence_tail, bytes);
         if matches!(self.osc_state.mode, OscMode::Ground) && !bytes.contains(&0x1b) {

@@ -102,7 +102,11 @@ Notable unit counters now include:
 - `server.backend.poll_pty.backlog_chunks`
 - `server.backend.poll_pty.backlog_bytes`
 - `server.backend.snapshot_refresh.rows`
+- `server.backend.snapshot_refresh.cells`
 - `server.backend.snapshot_refresh.full`
+- `server.backend.snapshot_refresh.trigger_full`
+- `server.backend.snapshot.rows`
+- `server.backend.snapshot.cells`
 - `server.stream.encode_full_state.local`
 - `server.stream.encode_delta.local`
 - `server.stream.encode_delta_rows.local`
