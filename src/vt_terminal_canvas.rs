@@ -94,7 +94,7 @@ impl TerminalCanvas {
                 font: run.font,
                 align_x: iced::widget::text::Alignment::Left,
                 align_y: alignment::Vertical::Top,
-                shaping: iced::widget::text::Shaping::Basic,
+                shaping: run.shaping,
                 max_width: draw_width,
             });
 
@@ -446,6 +446,7 @@ struct TextRun {
     fg: Color,
     font: Font,
     underline: bool,
+    shaping: iced::widget::text::Shaping,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -546,6 +547,7 @@ fn build_text_runs(
             fg,
             font,
             underline,
+            shaping: shaping_for_terminal_text(content),
         });
     }
 
@@ -581,6 +583,14 @@ fn color_from_rgb(color: crate::vt::GhosttyColorRgb, alpha: f32) -> Color {
 fn render_debug_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("BOO_RENDER_DEBUG").is_some())
+}
+
+fn shaping_for_terminal_text(text: &str) -> iced::widget::text::Shaping {
+    if text.is_ascii() {
+        iced::widget::text::Shaping::Basic
+    } else {
+        iced::widget::text::Shaping::Advanced
+    }
 }
 
 impl TerminalCanvas {
@@ -827,6 +837,25 @@ mod tests {
         assert_eq!(runs[1].text, " ");
         assert_eq!(runs[1].start_col, 2);
         assert!(runs[1].underline);
+    }
+
+    #[test]
+    fn text_runs_use_advanced_shaping_for_non_ascii_text() {
+        let row = vec![
+            vt_backend_core::CellSnapshot {
+                text: "a".to_string(),
+                ..Default::default()
+            },
+            vt_backend_core::CellSnapshot {
+                text: "🙂".to_string(),
+                display_width: 2,
+                ..Default::default()
+            },
+        ];
+        let runs = build_text_runs(&row, row.len(), None);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].shaping, iced::widget::text::Shaping::Basic);
+        assert_eq!(runs[1].shaping, iced::widget::text::Shaping::Advanced);
     }
 
     #[test]
