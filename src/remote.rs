@@ -255,7 +255,9 @@ impl RemoteServer {
         ))
     }
 
-    pub fn start_local(socket_path: impl AsRef<Path>) -> io::Result<(Self, mpsc::Receiver<RemoteCmd>)> {
+    pub fn start_local(
+        socket_path: impl AsRef<Path>,
+    ) -> io::Result<(Self, mpsc::Receiver<RemoteCmd>)> {
         let socket_path = socket_path.as_ref().to_path_buf();
         let _ = std::fs::remove_file(&socket_path);
         let listener = UnixListener::bind(&socket_path)?;
@@ -455,11 +457,9 @@ impl RemoteServer {
                 return;
             };
             let latest_input_seq = client.latest_input_seq;
-            let encoded = match client
-                .last_state
-                .as_ref()
-                .and_then(|previous| encode_delta(previous, state, latest_input_seq, client.is_local))
-            {
+            let encoded = match client.last_state.as_ref().and_then(|previous| {
+                encode_delta(previous, state, latest_input_seq, client.is_local)
+            }) {
                 Some(delta) => (MessageType::Delta, delta),
                 None => (
                     MessageType::FullState,
@@ -577,19 +577,24 @@ fn read_loop(
                 cols,
                 rows,
             }),
-            MessageType::Input => parse_input_payload(&payload, is_local).map(|(input_seq, bytes)| {
-                RemoteCmd::Input {
+            MessageType::Input => {
+                parse_input_payload(&payload, is_local).map(|(input_seq, bytes)| RemoteCmd::Input {
                     client_id,
                     bytes,
                     input_seq,
-                }
-            }),
-            MessageType::Key => parse_key_payload(&payload, is_local)
-                .and_then(|(input_seq, payload)| String::from_utf8(payload).ok().map(|keyspec| RemoteCmd::Key {
-                    client_id,
-                    keyspec,
-                    input_seq,
-                })),
+                })
+            }
+            MessageType::Key => {
+                parse_key_payload(&payload, is_local).and_then(|(input_seq, payload)| {
+                    String::from_utf8(payload)
+                        .ok()
+                        .map(|keyspec| RemoteCmd::Key {
+                            client_id,
+                            keyspec,
+                            input_seq,
+                        })
+                })
+            }
             MessageType::Resize => parse_resize(&payload).map(|(cols, rows)| RemoteCmd::Resize {
                 client_id,
                 cols,
@@ -624,34 +629,35 @@ fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>
 
     if auth_key.is_none() {
         client.authenticated = true;
-        let _ = client
-            .outbound
-            .send(OutboundMessage::Frame(encode_message(MessageType::AuthOk, &[])));
+        let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
+            MessageType::AuthOk,
+            &[],
+        )));
         return;
     }
 
     if payload.is_empty() {
         let challenge = random_challenge();
         client.challenge = Some(challenge);
-        let _ = client
-            .outbound
-            .send(OutboundMessage::Frame(encode_message(
-                MessageType::AuthChallenge,
-                &challenge,
-            )));
+        let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
+            MessageType::AuthChallenge,
+            &challenge,
+        )));
         return;
     }
 
     let Some(challenge) = client.challenge.take() else {
-        let _ = client
-            .outbound
-            .send(OutboundMessage::Frame(encode_message(MessageType::AuthFail, &[])));
+        let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
+            MessageType::AuthFail,
+            &[],
+        )));
         return;
     };
     let Some(key) = auth_key else {
-        let _ = client
-            .outbound
-            .send(OutboundMessage::Frame(encode_message(MessageType::AuthFail, &[])));
+        let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
+            MessageType::AuthFail,
+            &[],
+        )));
         return;
     };
 
@@ -660,14 +666,16 @@ fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>
     match mac.verify_slice(payload) {
         Ok(()) => {
             client.authenticated = true;
-            let _ = client
-                .outbound
-                .send(OutboundMessage::Frame(encode_message(MessageType::AuthOk, &[])));
+            let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
+                MessageType::AuthOk,
+                &[],
+            )));
         }
         Err(_) => {
-            let _ = client
-                .outbound
-                .send(OutboundMessage::Frame(encode_message(MessageType::AuthFail, &[])));
+            let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
+                MessageType::AuthFail,
+                &[],
+            )));
         }
     }
 }
@@ -675,12 +683,10 @@ fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>
 fn send_direct_error(state: &Arc<Mutex<State>>, client_id: u64, message: &str) {
     let state = state.lock().expect("remote server state poisoned");
     if let Some(client) = state.clients.get(&client_id) {
-        let _ = client
-            .outbound
-            .send(OutboundMessage::Frame(encode_message(
-                MessageType::ErrorMsg,
-                message.as_bytes(),
-            )));
+        let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
+            MessageType::ErrorMsg,
+            message.as_bytes(),
+        )));
     }
 }
 
@@ -761,7 +767,11 @@ pub fn encode_session_list(sessions: &[RemoteSessionInfo]) -> Vec<u8> {
     payload
 }
 
-pub fn encode_full_state(state: &RemoteFullState, latest_input_seq: Option<u64>, local: bool) -> Vec<u8> {
+pub fn encode_full_state(
+    state: &RemoteFullState,
+    latest_input_seq: Option<u64>,
+    local: bool,
+) -> Vec<u8> {
     let prefix_len = if local { 8 } else { 0 };
     let mut payload = Vec::with_capacity(prefix_len + 12 + state.cells.len() * 12);
     if local {
@@ -813,7 +823,10 @@ fn encode_delta(
         let start = row * cols;
         let end = start + cols;
         if previous.cells[start..end] != current.cells[start..end] {
-            changed_rows.push(row as u16);
+            changed_rows.push((
+                row as u16,
+                changed_segment(&previous.cells[start..end], &current.cells[start..end]),
+            ));
         }
     }
 
@@ -836,7 +849,12 @@ fn encode_delta(
     } else {
         detect_scroll_rows(previous, current)
     };
-    if changed_rows.len() == rows && scroll_rows.is_none() {
+    if changed_rows.len() == rows
+        && scroll_rows.is_none()
+        && changed_rows
+            .iter()
+            .all(|(_, (start_col, cells))| *start_col == 0 && cells.len() == cols)
+    {
         return None;
     }
 
@@ -846,6 +864,16 @@ fn encode_delta(
     }
     let rows_to_encode = if let Some(scroll_rows) = scroll_rows {
         rows_changed_after_scroll(current.rows as usize, scroll_rows)
+            .into_iter()
+            .map(|row| {
+                let start = row as usize * cols;
+                let end = start + cols;
+                (
+                    row,
+                    changed_segment(&previous.cells[start..end], &current.cells[start..end]),
+                )
+            })
+            .collect::<Vec<_>>()
     } else {
         changed_rows
     };
@@ -861,12 +889,11 @@ fn encode_delta(
     if let Some(scroll_rows) = scroll_rows {
         payload.extend_from_slice(&scroll_rows.to_le_bytes());
     }
-    for row in rows_to_encode {
+    for (row, (start_col, cells)) in rows_to_encode {
         payload.extend_from_slice(&row.to_le_bytes());
-        payload.extend_from_slice(&current.cols.to_le_bytes());
-        let start = row as usize * cols;
-        let end = start + cols;
-        for cell in &current.cells[start..end] {
+        payload.extend_from_slice(&(start_col as u16).to_le_bytes());
+        payload.extend_from_slice(&(cells.len() as u16).to_le_bytes());
+        for cell in &cells {
             payload.extend_from_slice(&cell.codepoint.to_le_bytes());
             payload.extend_from_slice(&cell.fg);
             payload.extend_from_slice(&cell.bg);
@@ -875,6 +902,23 @@ fn encode_delta(
         }
     }
     Some(payload)
+}
+
+fn changed_segment(previous: &[RemoteCell], current: &[RemoteCell]) -> (usize, Vec<RemoteCell>) {
+    debug_assert_eq!(previous.len(), current.len());
+    let first = previous
+        .iter()
+        .zip(current.iter())
+        .position(|(a, b)| a != b);
+    let Some(first) = first else {
+        return (0, Vec::new());
+    };
+    let last = previous
+        .iter()
+        .zip(current.iter())
+        .rposition(|(a, b)| a != b)
+        .unwrap_or(first);
+    (first, current[first..=last].to_vec())
 }
 
 fn detect_scroll_rows(previous: &RemoteFullState, current: &RemoteFullState) -> Option<i16> {
@@ -998,7 +1042,9 @@ pub fn full_state_from_ui(snapshot: &crate::control::UiTerminalSnapshot) -> Remo
     }
 }
 
-pub fn full_state_from_terminal(snapshot: &crate::vt_backend_core::TerminalSnapshot) -> RemoteFullState {
+pub fn full_state_from_terminal(
+    snapshot: &crate::vt_backend_core::TerminalSnapshot,
+) -> RemoteFullState {
     let cells = snapshot
         .rows_data
         .iter()
@@ -1304,5 +1350,42 @@ mod tests {
         };
 
         assert!(encode_delta(&previous, &current, Some(9), true).is_none());
+    }
+
+    #[test]
+    fn encode_delta_trims_unchanged_prefix_and_suffix_within_row() {
+        let cell = |ch: char| RemoteCell {
+            codepoint: u32::from(ch),
+            fg: [1, 2, 3],
+            bg: [0, 0, 0],
+            style_flags: 0,
+            wide: false,
+        };
+        let previous = RemoteFullState {
+            rows: 1,
+            cols: 5,
+            cursor_x: 2,
+            cursor_y: 0,
+            cursor_visible: true,
+            cells: vec![cell('a'), cell('b'), cell('c'), cell('d'), cell('e')],
+        };
+        let current = RemoteFullState {
+            rows: 1,
+            cols: 5,
+            cursor_x: 2,
+            cursor_y: 0,
+            cursor_visible: true,
+            cells: vec![cell('a'), cell('b'), cell('X'), cell('d'), cell('e')],
+        };
+
+        let payload = encode_delta(&previous, &current, Some(5), true).expect("delta payload");
+        assert_eq!(u16::from_le_bytes(payload[8..10].try_into().unwrap()), 1);
+        assert_eq!(u16::from_le_bytes(payload[16..18].try_into().unwrap()), 0);
+        assert_eq!(u16::from_le_bytes(payload[18..20].try_into().unwrap()), 2);
+        assert_eq!(u16::from_le_bytes(payload[20..22].try_into().unwrap()), 1);
+        assert_eq!(
+            u32::from_le_bytes(payload[22..26].try_into().unwrap()),
+            u32::from('X')
+        );
     }
 }

@@ -7,10 +7,10 @@ use iced::futures::{SinkExt, StreamExt};
 use iced::stream;
 use iced::widget::{column, container, row, text};
 use iced::window;
-use iced::{keyboard, time, Color, Element, Event, Font, Length, Size, Subscription, Task, Theme};
+use iced::{Color, Element, Event, Font, Length, Size, Subscription, Task, Theme, keyboard, time};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
 use std::io::Write;
+use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
@@ -334,13 +334,21 @@ impl ClientApp {
         if self.stream_ready_for_terminal_io() {
             self.send_stream_command(StreamCommand::Resize { cols, rows });
         } else {
-            let _ = self.client.send(&control::Request::ResizeFocused { cols, rows });
+            let _ = self
+                .client
+                .send(&control::Request::ResizeFocused { cols, rows });
             self.refresh_snapshot();
         }
     }
 
     fn handle_keyboard(&mut self, event: keyboard::Event) {
-        let keyboard::Event::KeyPressed { key, text, modifiers, .. } = event else {
+        let keyboard::Event::KeyPressed {
+            key,
+            text,
+            modifiers,
+            ..
+        } = event
+        else {
             return;
         };
 
@@ -366,8 +374,8 @@ impl ClientApp {
             .filter(|text| !text.is_empty())
             .or_else(|| committed_text_from_key(&key, modifiers));
 
-        if let Some(committed) = committed
-            .filter(|_| !(modifiers.control() || modifiers.alt() || modifiers.logo()))
+        if let Some(committed) =
+            committed.filter(|_| !(modifiers.control() || modifiers.alt() || modifiers.logo()))
         {
             if self.stream_ready_for_terminal_io() {
                 let input_seq = self.record_pending_input();
@@ -376,7 +384,9 @@ impl ClientApp {
                     bytes: committed.into_bytes(),
                 });
             } else {
-                let _ = self.client.send(&control::Request::SendText { text: committed });
+                let _ = self
+                    .client
+                    .send(&control::Request::SendText { text: committed });
                 self.refresh_snapshot();
             }
             return;
@@ -387,7 +397,9 @@ impl ClientApp {
                 let input_seq = self.record_pending_input();
                 self.send_stream_command(StreamCommand::Key { input_seq, keyspec });
             } else {
-                let _ = self.client.send(&control::Request::SendKey { key: keyspec });
+                let _ = self
+                    .client
+                    .send(&control::Request::SendKey { key: keyspec });
                 self.refresh_snapshot();
             }
         }
@@ -395,83 +407,91 @@ impl ClientApp {
 
     fn handle_stream_event(&mut self, event: LocalStreamEvent) {
         match event {
-                LocalStreamEvent::SessionList(sessions) => {
-                    let live_sessions: Vec<_> = sessions
-                        .iter()
-                        .filter(|session| !session.child_exited)
-                        .collect();
-                    self.apply_remote_sessions(&sessions);
-                    if let Some(session) = self.pick_attach_session(&live_sessions) {
-                        self.should_exit = false;
-                        self.send_stream_command(StreamCommand::Attach(session.id));
-                    } else if matches!(self.mode, ClientMode::Bootstrapping)
-                        && !self.has_paintable_terminal()
-                    {
-                        let _ = self.client.send(&control::Request::NewTab);
-                        self.send_stream_command(StreamCommand::ListSessions);
-                    } else {
-                        self.should_exit = true;
-                    }
+            LocalStreamEvent::SessionList(sessions) => {
+                let live_sessions: Vec<_> = sessions
+                    .iter()
+                    .filter(|session| !session.child_exited)
+                    .collect();
+                self.apply_remote_sessions(&sessions);
+                if let Some(session) = self.pick_attach_session(&live_sessions) {
+                    self.should_exit = false;
+                    self.send_stream_command(StreamCommand::Attach(session.id));
+                } else if matches!(self.mode, ClientMode::Bootstrapping)
+                    && !self.has_paintable_terminal()
+                {
+                    let _ = self.client.send(&control::Request::NewTab);
+                    self.send_stream_command(StreamCommand::ListSessions);
+                } else {
+                    self.should_exit = true;
                 }
-                LocalStreamEvent::Attached(session_id) => {
-                    self.active_session_id = Some(session_id);
-                    self.ui_state.mark_active_session(Some(session_id));
-                }
-                LocalStreamEvent::Detached => {
-                    self.mode = ClientMode::Recovering;
+            }
+            LocalStreamEvent::Attached(session_id) => {
+                self.active_session_id = Some(session_id);
+                self.ui_state.mark_active_session(Some(session_id));
+            }
+            LocalStreamEvent::Detached => {
+                self.mode = ClientMode::Recovering;
+                self.active_session_id = None;
+                self.pending_input_latencies.clear();
+                self.send_stream_command(StreamCommand::ListSessions);
+            }
+            LocalStreamEvent::SessionExited(session_id) => {
+                if should_exit_after_session_exit(self.active_session_id, session_id) {
                     self.active_session_id = None;
-                    self.pending_input_latencies.clear();
-                    self.send_stream_command(StreamCommand::ListSessions);
+                    self.should_exit = true;
+                    self.last_error = None;
+                    return;
                 }
-                LocalStreamEvent::SessionExited(session_id) => {
-                    if should_exit_after_session_exit(self.active_session_id, session_id) {
-                        self.active_session_id = None;
-                        self.should_exit = true;
-                        self.last_error = None;
-                        return;
-                    }
-                    if self.active_session_id == Some(session_id) {
-                        self.active_session_id = None;
-                    }
-                    self.mode = ClientMode::Recovering;
-                    self.pending_input_latencies.clear();
-                    self.send_stream_command(StreamCommand::ListSessions);
+                if self.active_session_id == Some(session_id) {
+                    self.active_session_id = None;
                 }
-                LocalStreamEvent::Disconnected => {
-                    self.stream_tx = None;
-                    let had_paintable_terminal = self.has_paintable_terminal();
-                    let lost_active_session = self.active_session_id.take();
-                    self.mode = ClientMode::Recovering;
-                    self.pending_input_latencies.clear();
-                    if should_exit_after_stream_disconnect(
-                        lost_active_session,
-                        had_paintable_terminal,
-                    ) {
-                        self.should_exit = true;
-                        self.last_error = None;
-                    } else {
-                        self.last_error = Some("boo server stream disconnected".to_string());
-                    }
+                self.mode = ClientMode::Recovering;
+                self.pending_input_latencies.clear();
+                self.send_stream_command(StreamCommand::ListSessions);
+            }
+            LocalStreamEvent::Disconnected => {
+                self.stream_tx = None;
+                let had_paintable_terminal = self.has_paintable_terminal();
+                let lost_active_session = self.active_session_id.take();
+                self.mode = ClientMode::Recovering;
+                self.pending_input_latencies.clear();
+                if should_exit_after_stream_disconnect(lost_active_session, had_paintable_terminal)
+                {
+                    self.should_exit = true;
+                    self.last_error = None;
+                } else {
+                    self.last_error = Some("boo server stream disconnected".to_string());
                 }
-                LocalStreamEvent::FullState { ack_input_seq, state } => {
-                    let _scope =
-                        crate::profiling::scope("client.stream.apply_full", crate::profiling::Kind::Cpu);
-                    self.mode = ClientMode::Attached;
-                    self.stream_snapshot = Some(Arc::new(remote_full_state_to_vt_snapshot(&state)));
-                    self.bootstrap_snapshot = None;
-                    self.acknowledge_input_latency("stream_full_state", ack_input_seq);
+            }
+            LocalStreamEvent::FullState {
+                ack_input_seq,
+                state,
+            } => {
+                let _scope = crate::profiling::scope(
+                    "client.stream.apply_full",
+                    crate::profiling::Kind::Cpu,
+                );
+                self.mode = ClientMode::Attached;
+                self.stream_snapshot = Some(Arc::new(remote_full_state_to_vt_snapshot(&state)));
+                self.bootstrap_snapshot = None;
+                self.acknowledge_input_latency("stream_full_state", ack_input_seq);
+            }
+            LocalStreamEvent::Delta {
+                ack_input_seq,
+                delta,
+            } => {
+                let _scope = crate::profiling::scope(
+                    "client.stream.apply_delta",
+                    crate::profiling::Kind::Cpu,
+                );
+                if let Some(snapshot) = self.stream_snapshot.as_mut() {
+                    apply_remote_delta_snapshot(Arc::make_mut(snapshot), &delta);
                 }
-                LocalStreamEvent::Delta { ack_input_seq, delta } => {
-                    let _scope =
-                        crate::profiling::scope("client.stream.apply_delta", crate::profiling::Kind::Cpu);
-                    if let Some(snapshot) = self.stream_snapshot.as_mut() {
-                        apply_remote_delta_snapshot(Arc::make_mut(snapshot), &delta);
-                    }
-                    self.acknowledge_input_latency("stream_delta", ack_input_seq);
-                }
-                LocalStreamEvent::Error(error) => {
-                    self.last_error = Some(error);
-                }
+                self.acknowledge_input_latency("stream_delta", ack_input_seq);
+            }
+            LocalStreamEvent::Error(error) => {
+                self.last_error = Some(error);
+            }
         }
     }
 
@@ -494,7 +514,9 @@ impl ClientApp {
                     let input_seq = self.record_pending_input();
                     self.send_stream_command(StreamCommand::Key { input_seq, keyspec });
                 } else {
-                    let _ = self.client.send(&control::Request::SendKey { key: keyspec });
+                    let _ = self
+                        .client
+                        .send(&control::Request::SendKey { key: keyspec });
                     self.refresh_snapshot();
                 }
             }
@@ -513,7 +535,9 @@ impl ClientApp {
         if self.stream_ready_for_terminal_io() {
             self.send_stream_command(StreamCommand::Resize { cols, rows });
         } else {
-            let _ = self.client.send(&control::Request::ResizeFocused { cols, rows });
+            let _ = self
+                .client
+                .send(&control::Request::ResizeFocused { cols, rows });
             self.refresh_snapshot();
         }
     }
@@ -553,7 +577,12 @@ impl ClientApp {
         live_sessions: &'a [&remote::RemoteSessionInfo],
     ) -> Option<&'a remote::RemoteSessionInfo> {
         self.active_session_id
-            .and_then(|session_id| live_sessions.iter().copied().find(|session| session.id == session_id))
+            .and_then(|session_id| {
+                live_sessions
+                    .iter()
+                    .copied()
+                    .find(|session| session.id == session_id)
+            })
             .or_else(|| live_sessions.get(self.ui_state.active_tab).copied())
             .or_else(|| live_sessions.first().copied())
     }
@@ -673,14 +702,14 @@ fn log_client_latency(stage: &str, input_seq: u64, started_at: Instant) {
     );
 }
 
-fn remote_full_state_to_vt_snapshot(state: &remote::RemoteFullState) -> vt_backend_core::TerminalSnapshot {
+fn remote_full_state_to_vt_snapshot(
+    state: &remote::RemoteFullState,
+) -> vt_backend_core::TerminalSnapshot {
     let cols = state.cols as usize;
     let rows_data = state
         .cells
         .chunks(cols.max(1))
-        .map(|row| {
-            row.iter().map(remote_cell_to_snapshot).collect()
-        })
+        .map(|row| row.iter().map(remote_cell_to_snapshot).collect())
         .collect();
     vt_backend_core::TerminalSnapshot {
         cols: state.cols,
@@ -714,7 +743,9 @@ fn remote_full_state_to_vt_snapshot(state: &remote::RemoteFullState) -> vt_backe
     }
 }
 
-fn ui_terminal_to_vt_snapshot(snapshot: &control::UiTerminalSnapshot) -> vt_backend_core::TerminalSnapshot {
+fn ui_terminal_to_vt_snapshot(
+    snapshot: &control::UiTerminalSnapshot,
+) -> vt_backend_core::TerminalSnapshot {
     vt_backend_core::TerminalSnapshot {
         cols: snapshot.cols,
         rows: snapshot.rows,
@@ -796,7 +827,14 @@ pub(crate) struct RemoteDelta {
     cursor_y: u16,
     cursor_visible: bool,
     scroll_rows: i16,
-    changed_rows: Vec<(u16, Vec<remote::RemoteCell>)>,
+    changed_rows: Vec<RemoteRowDelta>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RemoteRowDelta {
+    row: u16,
+    start_col: u16,
+    cells: Vec<remote::RemoteCell>,
 }
 
 #[derive(Clone, Debug)]
@@ -808,12 +846,16 @@ pub(crate) enum StreamCommand {
     Resize { cols: u16, rows: u16 },
 }
 
-fn write_stream_message(write: &mut UnixStream, ty: remote::MessageType, payload: &[u8]) -> std::io::Result<()> {
-        let frame = remote::encode_message(ty, payload);
-        let mut scope = crate::profiling::scope("client.stream.write", crate::profiling::Kind::Io);
-        scope.add_bytes(frame.len() as u64);
-        write.write_all(&frame)?;
-        write.flush()
+fn write_stream_message(
+    write: &mut UnixStream,
+    ty: remote::MessageType,
+    payload: &[u8],
+) -> std::io::Result<()> {
+    let frame = remote::encode_message(ty, payload);
+    let mut scope = crate::profiling::scope("client.stream.write", crate::profiling::Kind::Io);
+    scope.add_bytes(frame.len() as u64);
+    write.write_all(&frame)?;
+    write.flush()
 }
 
 fn local_stream_subscription(
@@ -843,17 +885,25 @@ fn local_stream_subscription(
                     let mut write = write;
                     while let Ok(command) = cmd_rx.recv() {
                         let result = match command {
-                            StreamCommand::ListSessions => {
-                                write_stream_message(&mut write, remote::MessageType::ListSessions, &[])
-                            }
-                            StreamCommand::Attach(session_id) => {
-                                write_stream_message(&mut write, remote::MessageType::Attach, &session_id.to_le_bytes())
-                            }
+                            StreamCommand::ListSessions => write_stream_message(
+                                &mut write,
+                                remote::MessageType::ListSessions,
+                                &[],
+                            ),
+                            StreamCommand::Attach(session_id) => write_stream_message(
+                                &mut write,
+                                remote::MessageType::Attach,
+                                &session_id.to_le_bytes(),
+                            ),
                             StreamCommand::Input { input_seq, bytes } => {
                                 let mut payload = Vec::with_capacity(8 + bytes.len());
                                 payload.extend_from_slice(&input_seq.to_le_bytes());
                                 payload.extend_from_slice(&bytes);
-                                write_stream_message(&mut write, remote::MessageType::Input, &payload)
+                                write_stream_message(
+                                    &mut write,
+                                    remote::MessageType::Input,
+                                    &payload,
+                                )
                             }
                             StreamCommand::Key { input_seq, keyspec } => {
                                 let mut payload = Vec::with_capacity(8 + keyspec.len());
@@ -865,7 +915,11 @@ fn local_stream_subscription(
                                 let mut payload = Vec::with_capacity(4);
                                 payload.extend_from_slice(&cols.to_le_bytes());
                                 payload.extend_from_slice(&rows.to_le_bytes());
-                                write_stream_message(&mut write, remote::MessageType::Resize, &payload)
+                                write_stream_message(
+                                    &mut write,
+                                    remote::MessageType::Resize,
+                                    &payload,
+                                )
                             }
                         };
                         if result.is_err() {
@@ -875,9 +929,11 @@ fn local_stream_subscription(
                     }
                 });
 
-                std::thread::spawn(move || read_local_stream_loop(read, move |event| {
-                    let _ = event_tx.unbounded_send(event);
-                }));
+                std::thread::spawn(move || {
+                    read_local_stream_loop(read, move |event| {
+                        let _ = event_tx.unbounded_send(event);
+                    })
+                });
 
                 while let Some(event) = event_rx.next().await {
                     let saw_disconnect = matches!(event, LocalStreamEvent::Disconnected);
@@ -893,7 +949,9 @@ fn local_stream_subscription(
 }
 
 fn gui_test_subscription() -> Subscription<Message> {
-    let Some(socket_path) = std::env::var_os("BOO_GUI_TEST_SOCKET").and_then(|path| path.into_string().ok()) else {
+    let Some(socket_path) =
+        std::env::var_os("BOO_GUI_TEST_SOCKET").and_then(|path| path.into_string().ok())
+    else {
         return Subscription::none();
     };
     iced::Subscription::run_with(socket_path, |socket_path| {
@@ -979,14 +1037,25 @@ fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStream
             remote::MessageType::SessionExited => {
                 decode_u32(&payload).map(LocalStreamEvent::SessionExited)
             }
-            remote::MessageType::FullState => decode_remote_full_state(&payload).map(
-                |(ack_input_seq, state)| LocalStreamEvent::FullState { ack_input_seq, state },
-            ),
-            remote::MessageType::Delta => decode_remote_delta(&payload)
-                .map(|(ack_input_seq, delta)| LocalStreamEvent::Delta { ack_input_seq, delta }),
-            remote::MessageType::ErrorMsg => {
-                Some(LocalStreamEvent::Error(String::from_utf8_lossy(&payload).to_string()))
+            remote::MessageType::FullState => {
+                decode_remote_full_state(&payload).map(|(ack_input_seq, state)| {
+                    LocalStreamEvent::FullState {
+                        ack_input_seq,
+                        state,
+                    }
+                })
             }
+            remote::MessageType::Delta => {
+                decode_remote_delta(&payload).map(|(ack_input_seq, delta)| {
+                    LocalStreamEvent::Delta {
+                        ack_input_seq,
+                        delta,
+                    }
+                })
+            }
+            remote::MessageType::ErrorMsg => Some(LocalStreamEvent::Error(
+                String::from_utf8_lossy(&payload).to_string(),
+            )),
             _ => None,
         };
         if let Some(event) = event {
@@ -997,7 +1066,8 @@ fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStream
 }
 
 fn decode_u32(payload: &[u8]) -> Option<u32> {
-    (payload.len() >= 4).then(|| u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]))
+    (payload.len() >= 4)
+        .then(|| u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]))
 }
 
 fn decode_remote_session_list(payload: &[u8]) -> Option<Vec<remote::RemoteSessionInfo>> {
@@ -1076,8 +1146,16 @@ fn decode_remote_full_state(payload: &[u8]) -> Option<(Option<u64>, remote::Remo
                 payload[offset + 2],
                 payload[offset + 3],
             ]),
-            fg: [payload[offset + 4], payload[offset + 5], payload[offset + 6]],
-            bg: [payload[offset + 7], payload[offset + 8], payload[offset + 9]],
+            fg: [
+                payload[offset + 4],
+                payload[offset + 5],
+                payload[offset + 6],
+            ],
+            bg: [
+                payload[offset + 7],
+                payload[offset + 8],
+                payload[offset + 9],
+            ],
             style_flags: payload[offset + 10],
             wide: payload[offset + 11] != 0,
         });
@@ -1119,12 +1197,13 @@ fn decode_remote_delta(payload: &[u8]) -> Option<(Option<u64>, RemoteDelta)> {
     };
     let mut changed_rows = Vec::with_capacity(row_count);
     for _ in 0..row_count {
-        if offset + 4 > payload.len() {
+        if offset + 6 > payload.len() {
             return None;
         }
         let row = u16::from_le_bytes([payload[offset], payload[offset + 1]]);
-        let cols = u16::from_le_bytes([payload[offset + 2], payload[offset + 3]]) as usize;
-        offset += 4;
+        let start_col = u16::from_le_bytes([payload[offset + 2], payload[offset + 3]]);
+        let cols = u16::from_le_bytes([payload[offset + 4], payload[offset + 5]]) as usize;
+        offset += 6;
         let mut cells = Vec::with_capacity(cols);
         for _ in 0..cols {
             if offset + 12 > payload.len() {
@@ -1137,14 +1216,26 @@ fn decode_remote_delta(payload: &[u8]) -> Option<(Option<u64>, RemoteDelta)> {
                     payload[offset + 2],
                     payload[offset + 3],
                 ]),
-                fg: [payload[offset + 4], payload[offset + 5], payload[offset + 6]],
-                bg: [payload[offset + 7], payload[offset + 8], payload[offset + 9]],
+                fg: [
+                    payload[offset + 4],
+                    payload[offset + 5],
+                    payload[offset + 6],
+                ],
+                bg: [
+                    payload[offset + 7],
+                    payload[offset + 8],
+                    payload[offset + 9],
+                ],
                 style_flags: payload[offset + 10],
                 wide: payload[offset + 11] != 0,
             });
             offset += 12;
         }
-        changed_rows.push((row, cells));
+        changed_rows.push(RemoteRowDelta {
+            row,
+            start_col,
+            cells,
+        });
     }
     Some((
         (ack_input_seq != 0).then_some(ack_input_seq),
@@ -1167,9 +1258,7 @@ fn apply_remote_delta_snapshot(
     snapshot.cursor.visible = delta.cursor_visible;
     let cols = snapshot.cols as usize;
     if snapshot.row_revisions.len() != snapshot.rows_data.len() {
-        snapshot
-            .row_revisions
-            .resize(snapshot.rows_data.len(), 1);
+        snapshot.row_revisions.resize(snapshot.rows_data.len(), 1);
     }
     if delta.scroll_rows != 0 {
         apply_snapshot_scroll(snapshot, delta.scroll_rows);
@@ -1177,8 +1266,8 @@ fn apply_remote_delta_snapshot(
             *revision = revision.wrapping_add(1);
         }
     }
-    for (row, row_cells) in &delta.changed_rows {
-        let row_index = *row as usize;
+    for row_delta in &delta.changed_rows {
+        let row_index = row_delta.row as usize;
         if row_index >= snapshot.rows_data.len() {
             continue;
         }
@@ -1186,8 +1275,17 @@ fn apply_remote_delta_snapshot(
         if target_row.len() < cols {
             target_row.resize_with(cols, Default::default);
         }
-        for (col_index, cell) in row_cells.iter().enumerate().take(cols) {
-            target_row[col_index] = remote_cell_to_snapshot(cell);
+        let start_col = row_delta.start_col as usize;
+        if start_col >= cols {
+            continue;
+        }
+        for (offset, cell) in row_delta
+            .cells
+            .iter()
+            .enumerate()
+            .take(cols.saturating_sub(start_col))
+        {
+            target_row[start_col + offset] = remote_cell_to_snapshot(cell);
         }
         if let Some(revision) = snapshot.row_revisions.get_mut(row_index) {
             *revision = revision.wrapping_add(1);
@@ -1357,7 +1455,10 @@ mod tests {
     fn control_character_ignores_shifted_or_modified_variants() {
         let key = keyboard::Key::Character("d".into());
         assert_eq!(
-            control_character_from_key(&key, keyboard::Modifiers::CTRL | keyboard::Modifiers::SHIFT),
+            control_character_from_key(
+                &key,
+                keyboard::Modifiers::CTRL | keyboard::Modifiers::SHIFT
+            ),
             None
         );
         assert_eq!(
@@ -1378,7 +1479,10 @@ mod tests {
     fn parse_gui_test_resize_command() {
         assert_eq!(
             parse_gui_test_command("resize 120 40"),
-            Some(GuiTestCommand::Resize { cols: 120, rows: 40 })
+            Some(GuiTestCommand::Resize {
+                cols: 120,
+                rows: 40
+            })
         );
     }
 
@@ -1425,25 +1529,33 @@ mod tests {
                 cursor_y: 2,
                 cursor_visible: true,
                 scroll_rows: 1,
-                changed_rows: vec![(
-                    2,
-                    vec![remote::RemoteCell {
+                changed_rows: vec![RemoteRowDelta {
+                    row: 2,
+                    start_col: 0,
+                    cells: vec![remote::RemoteCell {
                         codepoint: u32::from('d'),
                         fg: [0, 0, 0],
                         bg: [0, 0, 0],
                         style_flags: 0,
                         wide: false,
                     }],
-                )],
+                }],
             },
         );
 
         let texts = snapshot
             .rows_data
             .iter()
-            .map(|row| row.first().map(|cell| cell.text.clone()).unwrap_or_default())
+            .map(|row| {
+                row.first()
+                    .map(|cell| cell.text.clone())
+                    .unwrap_or_default()
+            })
             .collect::<Vec<_>>();
-        assert_eq!(texts, vec!["b".to_string(), "c".to_string(), "d".to_string()]);
+        assert_eq!(
+            texts,
+            vec!["b".to_string(), "c".to_string(), "d".to_string()]
+        );
     }
 
     #[test]
@@ -1457,6 +1569,65 @@ mod tests {
         });
         assert_eq!(snapshot.text, "");
         assert_eq!(snapshot.display_width, 1);
+    }
+
+    #[test]
+    fn apply_remote_delta_updates_only_changed_segment() {
+        let mut snapshot = vt_backend_core::TerminalSnapshot {
+            cols: 5,
+            rows: 1,
+            rows_data: vec![vec![
+                vt_backend_core::CellSnapshot {
+                    text: "a".to_string(),
+                    ..Default::default()
+                },
+                vt_backend_core::CellSnapshot {
+                    text: "b".to_string(),
+                    ..Default::default()
+                },
+                vt_backend_core::CellSnapshot {
+                    text: "c".to_string(),
+                    ..Default::default()
+                },
+                vt_backend_core::CellSnapshot {
+                    text: "d".to_string(),
+                    ..Default::default()
+                },
+                vt_backend_core::CellSnapshot {
+                    text: "e".to_string(),
+                    ..Default::default()
+                },
+            ]],
+            row_revisions: vec![1],
+            ..Default::default()
+        };
+
+        apply_remote_delta_snapshot(
+            &mut snapshot,
+            &RemoteDelta {
+                cursor_x: 2,
+                cursor_y: 0,
+                cursor_visible: true,
+                scroll_rows: 0,
+                changed_rows: vec![RemoteRowDelta {
+                    row: 0,
+                    start_col: 2,
+                    cells: vec![remote::RemoteCell {
+                        codepoint: u32::from('X'),
+                        fg: [0, 0, 0],
+                        bg: [0, 0, 0],
+                        style_flags: 0,
+                        wide: false,
+                    }],
+                }],
+            },
+        );
+
+        let texts = snapshot.rows_data[0]
+            .iter()
+            .map(|cell| cell.text.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(texts, vec!["a", "b", "X", "d", "e"]);
     }
 
     #[test]
@@ -1523,10 +1694,7 @@ fn keyspec_from_key(
     Some(parts.join("+"))
 }
 
-fn committed_text_from_key(
-    key: &keyboard::Key,
-    modifiers: keyboard::Modifiers,
-) -> Option<String> {
+fn committed_text_from_key(key: &keyboard::Key, modifiers: keyboard::Modifiers) -> Option<String> {
     if modifiers.control() || modifiers.alt() || modifiers.logo() {
         return None;
     }
@@ -1536,10 +1704,7 @@ fn committed_text_from_key(
     }
 }
 
-fn control_character_from_key(
-    key: &keyboard::Key,
-    modifiers: keyboard::Modifiers,
-) -> Option<u8> {
+fn control_character_from_key(key: &keyboard::Key, modifiers: keyboard::Modifiers) -> Option<u8> {
     if !modifiers.control() || modifiers.alt() || modifiers.logo() || modifiers.shift() {
         return None;
     }
