@@ -105,6 +105,7 @@ chrome, layout, and VT rendering path.
 - Uses the Boo GSP-compatible framing already consumed by the iOS client
 - Supports session listing, attach/detach, create, resize, destroy, text input, and full terminal-state publishing
 - Can require HMAC-SHA256 challenge/response auth when `remote-auth-key` is configured
+- Remaining architecture task: revisit whether PTY ingest should become fully event-driven instead of loop/poll driven once the current profiling work stabilizes
 
 ### iOS Remote Viewer
 - A native SwiftUI iOS app lives under [`ios/`](/Users/example/dev/boo/ios)

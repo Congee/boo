@@ -105,6 +105,7 @@ Notable unit counters now include:
 - `server.backend.snapshot_refresh.cells`
 - `server.backend.snapshot_refresh.full`
 - `server.backend.snapshot_refresh.trigger_full`
+- `server.backend.snapshot_refresh.deferred_for_backlog`
 - `server.backend.snapshot.rows`
 - `server.backend.snapshot.cells`
 - `server.stream.encode_full_state.local`

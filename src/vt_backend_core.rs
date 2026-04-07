@@ -187,6 +187,7 @@ struct PendingPtyChunk {
 
 impl VtPaneWorker {
     const WORKER_IDLE_WAIT: Duration = Duration::from_millis(4);
+    const SNAPSHOT_REFRESH_INTERVAL_UNDER_BACKLOG: Duration = Duration::from_millis(8);
 
     pub fn spawn(
         cols: u16,
@@ -921,6 +922,7 @@ fn worker_loop(
     pending_work: Arc<AtomicBool>,
 ) {
     let mut disconnected = false;
+    let mut last_snapshot_refresh = Instant::now();
     loop {
         let timeout = if pane.has_pending_pty_work() {
             Duration::ZERO
@@ -952,19 +954,40 @@ fn worker_loop(
             }
         };
 
-        let snapshot_changed = if pane.is_dirty() {
+        let should_refresh_snapshot = if pane.is_dirty() {
+            if pane.has_pending_pty_work() {
+                last_snapshot_refresh.elapsed()
+                    >= VtPaneWorker::SNAPSHOT_REFRESH_INTERVAL_UNDER_BACKLOG
+            } else {
+                true
+            }
+        } else {
+            false
+        };
+
+        let snapshot_changed = if should_refresh_snapshot {
             let _scope = crate::profiling::scope(
                 "server.backend.snapshot_refresh",
                 crate::profiling::Kind::Cpu,
             );
             match pane.refresh_snapshot(&mut snapshot) {
-                Ok(()) => true,
+                Ok(()) => {
+                    last_snapshot_refresh = Instant::now();
+                    true
+                }
                 Err(error) => {
                     log::warn!("vt pane worker snapshot refresh failed: {error}");
                     false
                 }
             }
         } else {
+            if pane.is_dirty() && pane.has_pending_pty_work() {
+                crate::profiling::record_units(
+                    "server.backend.snapshot_refresh.deferred_for_backlog",
+                    crate::profiling::Kind::Cpu,
+                    1,
+                );
+            }
             false
         };
 
