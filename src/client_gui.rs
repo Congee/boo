@@ -419,6 +419,12 @@ impl ClientApp {
                     self.send_stream_command(StreamCommand::ListSessions);
                 }
                 LocalStreamEvent::SessionExited(session_id) => {
+                    if should_exit_after_session_exit(self.active_session_id, session_id) {
+                        self.active_session_id = None;
+                        self.should_exit = true;
+                        self.last_error = None;
+                        return;
+                    }
                     if self.active_session_id == Some(session_id) {
                         self.active_session_id = None;
                     }
@@ -552,6 +558,10 @@ fn should_exit_after_stream_disconnect(
     snapshot_available: bool,
 ) -> bool {
     lost_active_session.is_some() && !snapshot_available
+}
+
+fn should_exit_after_session_exit(active_session_id: Option<u32>, exited_session_id: u32) -> bool {
+    active_session_id == Some(exited_session_id)
 }
 
 impl ClientUiState {
@@ -1448,6 +1458,13 @@ mod tests {
         assert!(should_exit_after_stream_disconnect(Some(7), false));
         assert!(!should_exit_after_stream_disconnect(Some(7), true));
         assert!(!should_exit_after_stream_disconnect(None, false));
+    }
+
+    #[test]
+    fn session_exit_closes_active_gui_session() {
+        assert!(should_exit_after_session_exit(Some(7), 7));
+        assert!(!should_exit_after_session_exit(Some(7), 8));
+        assert!(!should_exit_after_session_exit(None, 7));
     }
 }
 
