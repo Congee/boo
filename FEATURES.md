@@ -231,6 +231,7 @@ nix develop
 - Boo shell integration now ships for bash, zsh, and fish in [shell-integration/README.md](/Users/example/dev/boo/shell-integration/README.md)
 - These scripts emit `OSC 133` prompt markers and `cmdline_url` command metadata for the tab spinner/title path
 - `boo completions bash|zsh|fish` prints shell completions for the server/client lifecycle commands
+- Remaining integration task: migrate `~/.config/kitty/watcher.py` behavior into `~/.config/boo/config.boo`
 
 ### Command Finish Notifications
 - `notify-on-command-finish` config and duration thresholds are implemented
