@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 const PADDING_X: f32 = 4.0;
 const PADDING_Y: f32 = 2.0;
-const ROW_CACHE_CHUNK_SIZE: usize = 8;
+const ROW_CACHE_CHUNK_SIZE: usize = 4;
 
 #[derive(Debug)]
 pub struct TerminalCanvas {
