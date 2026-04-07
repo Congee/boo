@@ -1,12 +1,12 @@
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 #![allow(dead_code)]
 
+use crossbeam_channel as channel;
 use std::ffi::{CStr, CString};
 use std::io;
 use std::os::fd::RawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
-use std::sync::mpsc;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -35,7 +35,7 @@ pub struct PtyProcess {
     master_fd: RawFd,
     reader_fd: RawFd,
     child_pid: libc::pid_t,
-    rx: mpsc::Receiver<Vec<u8>>,
+    rx: channel::Receiver<Vec<u8>>,
     reader_closed: Arc<AtomicBool>,
     reaped: bool,
 }
@@ -67,7 +67,7 @@ impl PtyProcess {
         let reader_fd = dup_fd(master_fd)?;
         set_cloexec(reader_fd)?;
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = channel::unbounded();
         let reader_closed = Arc::new(AtomicBool::new(false));
         std::thread::spawn({
             let reader_closed = Arc::clone(&reader_closed);
@@ -343,7 +343,7 @@ fn set_env(key: &str, value: &str) {
     }
 }
 
-fn read_loop(fd: RawFd, tx: mpsc::Sender<Vec<u8>>, reader_closed: Arc<AtomicBool>) {
+fn read_loop(fd: RawFd, tx: channel::Sender<Vec<u8>>, reader_closed: Arc<AtomicBool>) {
     let mut buf = vec![0u8; 8192];
     loop {
         let rc = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut _, buf.len()) };
@@ -374,7 +374,7 @@ mod tests {
 
     #[test]
     fn budgeted_read_limits_chunks_and_bytes() {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = channel::unbounded();
         tx.send(vec![0; 4]).unwrap();
         tx.send(vec![0; 4]).unwrap();
         tx.send(vec![0; 4]).unwrap();
