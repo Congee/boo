@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 const PADDING_X: f32 = 4.0;
 const PADDING_Y: f32 = 2.0;
+const ROW_CACHE_CHUNK_SIZE: usize = 8;
 
 #[derive(Debug)]
 pub struct TerminalCanvas {
@@ -117,6 +118,12 @@ impl TerminalCanvas {
         }
     }
 
+    fn draw_row_chunk(&self, frame: &mut Frame<Renderer>, start_row: usize, end_row: usize) {
+        for row_index in start_row..end_row {
+            self.draw_row(frame, row_index);
+        }
+    }
+
     fn draw_overlay(&self, frame: &mut Frame<Renderer>) {
         let default_fg = color_from_rgb(self.snapshot.colors.foreground, 1.0);
         let cursor_bg = if self.snapshot.colors.cursor_has_value {
@@ -216,8 +223,8 @@ impl TerminalCanvas {
 pub struct TerminalCanvasState {
     base_cache: Cache,
     base_fingerprint: RefCell<Option<u64>>,
-    row_caches: RefCell<Vec<Cache>>,
-    row_fingerprints: RefCell<Vec<u64>>,
+    row_chunk_caches: RefCell<Vec<Cache>>,
+    row_chunk_fingerprints: RefCell<Vec<u64>>,
     overlay_cache: Cache,
     overlay_fingerprint: RefCell<Option<u64>>,
 }
@@ -227,8 +234,8 @@ impl Default for TerminalCanvasState {
         Self {
             base_cache: Cache::new(),
             base_fingerprint: RefCell::new(None),
-            row_caches: RefCell::new(Vec::new()),
-            row_fingerprints: RefCell::new(Vec::new()),
+            row_chunk_caches: RefCell::new(Vec::new()),
+            row_chunk_fingerprints: RefCell::new(Vec::new()),
             overlay_cache: Cache::new(),
             overlay_fingerprint: RefCell::new(None),
         }
@@ -264,24 +271,29 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
 
         {
             let row_count = self.snapshot.rows_data.len();
-            let mut row_caches = state.row_caches.borrow_mut();
-            let mut row_fingerprints = state.row_fingerprints.borrow_mut();
-            if row_caches.len() < row_count {
-                row_caches.resize_with(row_count, Cache::new);
+            let chunk_count = row_count.div_ceil(ROW_CACHE_CHUNK_SIZE);
+            let mut row_chunk_caches = state.row_chunk_caches.borrow_mut();
+            let mut row_chunk_fingerprints = state.row_chunk_fingerprints.borrow_mut();
+            if row_chunk_caches.len() < chunk_count {
+                row_chunk_caches.resize_with(chunk_count, Cache::new);
             }
-            row_caches.truncate(row_count);
-            row_fingerprints.resize(row_count, 0);
-            row_fingerprints.truncate(row_count);
+            row_chunk_caches.truncate(chunk_count);
+            row_chunk_fingerprints.resize(chunk_count, 0);
+            row_chunk_fingerprints.truncate(chunk_count);
 
-            for row_index in 0..row_count {
-                let row_fingerprint = self.row_fingerprint(row_index);
-                if row_fingerprints[row_index] != row_fingerprint {
-                    row_caches[row_index].clear();
-                    row_fingerprints[row_index] = row_fingerprint;
+            for chunk_index in 0..chunk_count {
+                let chunk_fingerprint = self.row_chunk_fingerprint(chunk_index);
+                if row_chunk_fingerprints[chunk_index] != chunk_fingerprint {
+                    row_chunk_caches[chunk_index].clear();
+                    row_chunk_fingerprints[chunk_index] = chunk_fingerprint;
                 }
-                geometries.push(row_caches[row_index].draw(renderer, bounds.size(), |frame| {
-                    self.draw_row(frame, row_index);
-                }));
+                let start_row = chunk_index * ROW_CACHE_CHUNK_SIZE;
+                let end_row = (start_row + ROW_CACHE_CHUNK_SIZE).min(row_count);
+                geometries.push(
+                    row_chunk_caches[chunk_index].draw(renderer, bounds.size(), |frame| {
+                        self.draw_row_chunk(frame, start_row, end_row);
+                    }),
+                );
             }
         }
 
@@ -521,6 +533,17 @@ impl TerminalCanvas {
                 cell.italic.hash(&mut hasher);
                 cell.underline.hash(&mut hasher);
             }
+        }
+        hasher.finish()
+    }
+
+    fn row_chunk_fingerprint(&self, chunk_index: usize) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        chunk_index.hash(&mut hasher);
+        let start_row = chunk_index * ROW_CACHE_CHUNK_SIZE;
+        let end_row = (start_row + ROW_CACHE_CHUNK_SIZE).min(self.snapshot.rows_data.len());
+        for row_index in start_row..end_row {
+            self.row_fingerprint(row_index).hash(&mut hasher);
         }
         hasher.finish()
     }
