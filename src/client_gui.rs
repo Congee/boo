@@ -933,6 +933,43 @@ fn stream_batch_window_for_event(event: &LocalStreamEvent) -> Option<Duration> {
     }
 }
 
+fn is_passive_screen_event(event: &LocalStreamEvent) -> bool {
+    matches!(
+        event,
+        LocalStreamEvent::FullState {
+            ack_input_seq: None,
+            ..
+        } | LocalStreamEvent::Delta {
+            ack_input_seq: None,
+            ..
+        }
+    )
+}
+
+fn push_coalesced_stream_event(
+    batch: &mut Vec<LocalStreamEvent>,
+    pending_passive_screen: &mut Option<LocalStreamEvent>,
+    event: LocalStreamEvent,
+) {
+    if is_passive_screen_event(&event) {
+        *pending_passive_screen = Some(event);
+        return;
+    }
+    if let Some(pending) = pending_passive_screen.take() {
+        batch.push(pending);
+    }
+    batch.push(event);
+}
+
+fn flush_pending_passive_stream_event(
+    batch: &mut Vec<LocalStreamEvent>,
+    pending_passive_screen: &mut Option<LocalStreamEvent>,
+) {
+    if let Some(pending) = pending_passive_screen.take() {
+        batch.push(pending);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RemoteRowDelta {
     row: u16,
@@ -1042,14 +1079,22 @@ fn local_stream_subscription(
                     if let Some(batch_window) = stream_batch_window_for_event(&event) {
                         std::thread::sleep(batch_window);
                     }
-                    let mut batch = vec![event];
-                    let mut saw_disconnect =
-                        matches!(batch.last(), Some(LocalStreamEvent::Disconnected));
+                    let mut batch = Vec::new();
+                    let mut pending_passive_screen = None;
+                    push_coalesced_stream_event(&mut batch, &mut pending_passive_screen, event);
+                    let mut saw_disconnect = matches!(
+                        batch.last().or(pending_passive_screen.as_ref()),
+                        Some(LocalStreamEvent::Disconnected)
+                    );
                     while batch.len() < 64 {
                         match event_rx.try_recv() {
                             Ok(event) => {
                                 saw_disconnect |= matches!(event, LocalStreamEvent::Disconnected);
-                                batch.push(event);
+                                push_coalesced_stream_event(
+                                    &mut batch,
+                                    &mut pending_passive_screen,
+                                    event,
+                                );
                                 if saw_disconnect {
                                     break;
                                 }
@@ -1057,6 +1102,7 @@ fn local_stream_subscription(
                             Err(_) => break,
                         }
                     }
+                    flush_pending_passive_stream_event(&mut batch, &mut pending_passive_screen);
                     let message = if batch.len() == 1 {
                         Message::StreamEvent(batch.pop().expect("single event batch"))
                     } else {
@@ -1754,6 +1800,61 @@ mod tests {
             stream_batch_window_for_event(&LocalStreamEvent::SessionList(Vec::new())),
             None
         );
+    }
+
+    #[test]
+    fn coalesces_only_superseded_passive_screen_updates() {
+        let passive_a = LocalStreamEvent::Delta {
+            ack_input_seq: None,
+            delta: RemoteDelta {
+                cursor_x: 0,
+                cursor_y: 0,
+                cursor_visible: true,
+                scroll_rows: 0,
+                changed_rows: Vec::new(),
+            },
+        };
+        let passive_b = LocalStreamEvent::FullState {
+            ack_input_seq: None,
+            state: remote::RemoteFullState {
+                rows: 1,
+                cols: 1,
+                cursor_x: 0,
+                cursor_y: 0,
+                cursor_visible: true,
+                cells: vec![remote::RemoteCell {
+                    codepoint: 0,
+                    fg: [0, 0, 0],
+                    bg: [0, 0, 0],
+                    style_flags: 0,
+                    wide: false,
+                }],
+            },
+        };
+        let acked = LocalStreamEvent::Delta {
+            ack_input_seq: Some(1),
+            delta: RemoteDelta {
+                cursor_x: 1,
+                cursor_y: 0,
+                cursor_visible: true,
+                scroll_rows: 0,
+                changed_rows: Vec::new(),
+            },
+        };
+        let barrier = LocalStreamEvent::Attached(7);
+
+        let mut batch = Vec::new();
+        let mut pending = None;
+        push_coalesced_stream_event(&mut batch, &mut pending, passive_a);
+        push_coalesced_stream_event(&mut batch, &mut pending, passive_b);
+        push_coalesced_stream_event(&mut batch, &mut pending, acked.clone());
+        push_coalesced_stream_event(&mut batch, &mut pending, barrier.clone());
+        flush_pending_passive_stream_event(&mut batch, &mut pending);
+
+        assert_eq!(batch.len(), 3);
+        assert!(matches!(batch[0], LocalStreamEvent::FullState { ack_input_seq: None, .. }));
+        assert!(matches!(batch[1], LocalStreamEvent::Delta { ack_input_seq: Some(1), .. }));
+        assert!(matches!(batch[2], LocalStreamEvent::Attached(7)));
     }
 
     #[test]
