@@ -206,7 +206,9 @@ impl BooApp {
             main_col = main_col.push(search);
         }
         if self.focused_surface().is_null() {
-            if let Some(snapshot) = self.backend.render_snapshot(self.server.tabs.focused_pane().id())
+            if let Some(snapshot) = self
+                .backend
+                .render_snapshot(self.server.tabs.focused_pane().id())
             {
                 let selection_rects = self
                     .copy_mode
@@ -229,12 +231,14 @@ impl BooApp {
                     })
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|(x, y, width, height)| vt_terminal_canvas::TerminalSelectionRect {
-                        x: x as f32,
-                        y: y as f32,
-                        width: width as f32,
-                        height: height as f32,
-                    })
+                    .map(
+                        |(x, y, width, height)| vt_terminal_canvas::TerminalSelectionRect {
+                            x: x as f32,
+                            y: y as f32,
+                            width: width as f32,
+                            height: height as f32,
+                        },
+                    )
                     .collect::<Vec<_>>();
 
                 let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(

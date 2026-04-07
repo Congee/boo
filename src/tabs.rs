@@ -264,7 +264,10 @@ impl TabManager {
         self.tabs.iter().position(|tab| tab.id == session_id)
     }
 
-    pub fn find_pane_location(&self, pane_id: crate::pane::PaneId) -> Option<(usize, crate::splits::LeafId)> {
+    pub fn find_pane_location(
+        &self,
+        pane_id: crate::pane::PaneId,
+    ) -> Option<(usize, crate::splits::LeafId)> {
         self.tabs.iter().enumerate().find_map(|(tab_index, tab)| {
             tab.tree
                 .export_panes()

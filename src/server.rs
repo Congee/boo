@@ -121,7 +121,8 @@ impl State {
             (None, rx)
         };
 
-        let (local_gui_server, local_gui_rx) = if let Some(socket_path) = control_socket.as_deref() {
+        let (local_gui_server, local_gui_rx) = if let Some(socket_path) = control_socket.as_deref()
+        {
             let gui_socket_path = format!("{socket_path}.stream");
             match remote::RemoteServer::start_local(&gui_socket_path) {
                 Ok((server, rx)) => {

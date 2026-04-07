@@ -249,7 +249,11 @@ impl BooApp {
             log::warn!("session not found: {name}");
             return;
         };
-        log::info!("loading session: {} ({} tabs)", layout.name, layout.tabs.len());
+        log::info!(
+            "loading session: {} ({} tabs)",
+            layout.name,
+            layout.tabs.len()
+        );
         let Some(frame) = self.pane_parent_frame() else {
             return;
         };

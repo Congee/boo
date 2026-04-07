@@ -208,7 +208,9 @@ impl VtPaneWorker {
         let state = Arc::new(Mutex::new(WorkerState {
             snapshot: Arc::new(snapshot.clone()),
             version: 1,
-            running_command: pane.running_command().map(|running| running.command.clone()),
+            running_command: pane
+                .running_command()
+                .map(|running| running.command.clone()),
             finished_commands: Vec::new(),
             desktop_notifications: Vec::new(),
             exited: false,
@@ -245,13 +247,7 @@ impl VtPaneWorker {
         self.pending_work.load(Ordering::Relaxed)
     }
 
-    pub fn resize(
-        &self,
-        cols: u16,
-        rows: u16,
-        cell_width_px: u32,
-        cell_height_px: u32,
-    ) {
+    pub fn resize(&self, cols: u16, rows: u16, cell_width_px: u32, cell_height_px: u32) {
         let _ = self.tx.send(WorkerCommand::Resize {
             cols,
             rows,
@@ -681,7 +677,8 @@ impl VtPane {
         let mut row_iter = self.render_state.row_iterator().map_err(vt_to_io)?;
         let mut row_index = 0usize;
         while row_iter.next() {
-            let row_dirty = force_full_refresh || size_changed || row_iter.dirty().map_err(vt_to_io)?;
+            let row_dirty =
+                force_full_refresh || size_changed || row_iter.dirty().map_err(vt_to_io)?;
             if row_dirty {
                 snapshot.rows_data[row_index] = snapshot_row(&row_iter, cols, colors)?;
                 snapshot.row_revisions[row_index] =
@@ -898,8 +895,10 @@ fn worker_loop(
         };
 
         let snapshot_changed = if pane.is_dirty() {
-            let _scope =
-                crate::profiling::scope("server.backend.snapshot_refresh", crate::profiling::Kind::Cpu);
+            let _scope = crate::profiling::scope(
+                "server.backend.snapshot_refresh",
+                crate::profiling::Kind::Cpu,
+            );
             match pane.refresh_snapshot(&mut snapshot) {
                 Ok(()) => true,
                 Err(error) => {
@@ -918,8 +917,12 @@ fn worker_loop(
                 shared.snapshot = Arc::new(snapshot.clone());
                 shared.version = shared.version.wrapping_add(1);
             }
-            shared.running_command = pane.running_command().map(|running| running.command.clone());
-            shared.finished_commands.extend(pane.take_finished_commands());
+            shared.running_command = pane
+                .running_command()
+                .map(|running| running.command.clone());
+            shared
+                .finished_commands
+                .extend(pane.take_finished_commands());
             shared
                 .desktop_notifications
                 .extend(pane.take_desktop_notifications());
@@ -1025,9 +1028,11 @@ fn should_force_full_snapshot_refresh(tail: &[u8], bytes: &[u8]) -> bool {
     let mut haystack = Vec::with_capacity(tail.len() + bytes.len());
     haystack.extend_from_slice(tail);
     haystack.extend_from_slice(bytes);
-    FULL_REFRESH_CONTROL_SEQUENCES
-        .iter()
-        .any(|pattern| haystack.windows(pattern.len()).any(|window| window == *pattern))
+    FULL_REFRESH_CONTROL_SEQUENCES.iter().any(|pattern| {
+        haystack
+            .windows(pattern.len())
+            .any(|window| window == *pattern)
+    })
 }
 
 fn update_control_sequence_tail(tail: &mut Vec<u8>, bytes: &[u8]) {

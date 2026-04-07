@@ -125,8 +125,7 @@ fn emit_summary(state: &mut State) {
             let bytes_per_sec = entry.bytes as f64 / (window_ms / 1000.0).max(0.001);
             eprintln!(
                 "boo_profile path={name} kind={kind} count={} total_ms={total_ms:.3} avg_ms={avg_ms:.3} max_ms={max_ms:.3} bytes={} bytes_per_sec={bytes_per_sec:.0}",
-                entry.count,
-                entry.bytes,
+                entry.count, entry.bytes,
             );
         } else {
             eprintln!(

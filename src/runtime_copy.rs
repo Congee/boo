@@ -242,7 +242,10 @@ impl BooApp {
                 self.relayout();
             }
             SearchAgain => {
-                let forward = self.copy_mode.as_ref().map_or(true, |cm| cm.last_search_forward);
+                let forward = self
+                    .copy_mode
+                    .as_ref()
+                    .map_or(true, |cm| cm.last_search_forward);
                 if forward {
                     self.ghostty_binding_action("navigate_search:next");
                 } else {
@@ -250,7 +253,10 @@ impl BooApp {
                 }
             }
             SearchReverse => {
-                let forward = self.copy_mode.as_ref().map_or(true, |cm| cm.last_search_forward);
+                let forward = self
+                    .copy_mode
+                    .as_ref()
+                    .map_or(true, |cm| cm.last_search_forward);
                 if forward {
                     self.ghostty_binding_action("navigate_search:previous");
                 } else {

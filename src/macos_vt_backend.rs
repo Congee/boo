@@ -76,14 +76,20 @@ impl crate::backend::TerminalBackend for MacVtBackend {
         let pane = PaneHandle::new(std::ptr::null_mut(), view);
         let wd_path = working_directory
             .map(|wd| std::path::Path::new(std::ffi::OsStr::from_bytes(wd.to_bytes())));
-        let backend =
-            match VtPaneWorker::spawn(cols, rows, cell_width_px, cell_height_px, command, wd_path) {
-                Ok(backend) => backend,
-                Err(error) => {
-                    log::warn!("failed to spawn macOS VT pane: {error}");
-                    return None;
-                }
-            };
+        let backend = match VtPaneWorker::spawn(
+            cols,
+            rows,
+            cell_width_px,
+            cell_height_px,
+            command,
+            wd_path,
+        ) {
+            Ok(backend) => backend,
+            Err(error) => {
+                log::warn!("failed to spawn macOS VT pane: {error}");
+                return None;
+            }
+        };
 
         let update = backend.poll_update();
         self.snapshot_versions.insert(pane.id(), update.version);
@@ -318,14 +324,18 @@ impl crate::backend::TerminalBackend for MacVtBackend {
         &self,
         pane_id: pane::PaneId,
     ) -> Option<crate::vt_backend_core::TerminalSnapshot> {
-        self.snapshots.get(&pane_id).map(|snapshot| snapshot.as_ref().clone())
+        self.snapshots
+            .get(&pane_id)
+            .map(|snapshot| snapshot.as_ref().clone())
     }
 
     fn render_snapshot_ref(
         &self,
         pane_id: pane::PaneId,
     ) -> Option<&crate::vt_backend_core::TerminalSnapshot> {
-        self.snapshots.get(&pane_id).map(|snapshot| snapshot.as_ref())
+        self.snapshots
+            .get(&pane_id)
+            .map(|snapshot| snapshot.as_ref())
     }
 
     fn forward_vt_key(

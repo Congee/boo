@@ -16,7 +16,8 @@ pub fn run_headless() {
     let mut app = BooApp::new_headless();
     loop {
         {
-            let _scope = crate::profiling::scope("server.headless.update", crate::profiling::Kind::Cpu);
+            let _scope =
+                crate::profiling::scope("server.headless.update", crate::profiling::Kind::Cpu);
             let _ = app.update(Message::Frame);
         }
         let sleep_duration = if app.backend.has_pending_terminal_work() {
@@ -25,7 +26,8 @@ pub fn run_headless() {
             std::time::Duration::from_millis(16)
         };
         {
-            let _scope = crate::profiling::scope("server.headless.sleep", crate::profiling::Kind::Wait);
+            let _scope =
+                crate::profiling::scope("server.headless.sleep", crate::profiling::Kind::Wait);
             std::thread::sleep(sleep_duration);
         }
     }
@@ -224,8 +226,13 @@ impl BooApp {
         }
     }
 
-
-    pub(crate) fn resize_pane_backend(&mut self, pane: PaneHandle, scale: f64, width: u32, height: u32) {
+    pub(crate) fn resize_pane_backend(
+        &mut self,
+        pane: PaneHandle,
+        scale: f64,
+        width: u32,
+        height: u32,
+    ) {
         self.backend.resize_pane(
             pane,
             scale,
@@ -339,7 +346,8 @@ impl BooApp {
                 .iter()
                 .any(|running| running.pane_id == *pane_id)
             {
-                remote_dirty |= self.server
+                remote_dirty |= self
+                    .server
                     .tabs
                     .set_running_command_for_pane(*pane_id, None);
             }
@@ -436,11 +444,13 @@ impl BooApp {
         }
 
         {
-            let _scope = crate::profiling::scope("server.backend.tick", crate::profiling::Kind::Cpu);
+            let _scope =
+                crate::profiling::scope("server.backend.tick", crate::profiling::Kind::Cpu);
             self.backend.tick();
         }
         {
-            let _scope = crate::profiling::scope("server.backend.poll", crate::profiling::Kind::Cpu);
+            let _scope =
+                crate::profiling::scope("server.backend.poll", crate::profiling::Kind::Cpu);
             self.poll_backend();
         }
         {
@@ -562,7 +572,6 @@ impl BooApp {
 
         Task::none()
     }
-
 }
 
 impl Drop for BooApp {

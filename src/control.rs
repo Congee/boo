@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
-use std::time::Duration;
 use std::sync::mpsc;
+use std::time::Duration;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "kebab-case")]

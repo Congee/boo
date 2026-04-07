@@ -80,7 +80,10 @@ impl TerminalCanvas {
         let default_bg = color_from_rgb(self.snapshot.colors.background, self.background_opacity);
         frame.fill_rectangle(
             Point::new(PADDING_X, y),
-            Size::new(self.snapshot.cols as f32 * self.cell_width, self.cell_height),
+            Size::new(
+                self.snapshot.cols as f32 * self.cell_width,
+                self.cell_height,
+            ),
             default_bg,
         );
         let row_fingerprint = self.row_fingerprint(row_index);
@@ -203,13 +206,21 @@ impl TerminalCanvas {
                         },
                     );
                     let thickness = 1.5;
-                    frame.fill_rectangle(Point::new(x, y), Size::new(self.cell_width, thickness), cursor_bg);
+                    frame.fill_rectangle(
+                        Point::new(x, y),
+                        Size::new(self.cell_width, thickness),
+                        cursor_bg,
+                    );
                     frame.fill_rectangle(
                         Point::new(x, y + self.cell_height - thickness),
                         Size::new(self.cell_width, thickness),
                         cursor_bg,
                     );
-                    frame.fill_rectangle(Point::new(x, y), Size::new(thickness, self.cell_height), cursor_bg);
+                    frame.fill_rectangle(
+                        Point::new(x, y),
+                        Size::new(thickness, self.cell_height),
+                        cursor_bg,
+                    );
                     frame.fill_rectangle(
                         Point::new(x + self.cell_width - thickness, y),
                         Size::new(thickness, self.cell_height),
@@ -357,11 +368,13 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
                 if chunk_dirty {
                     row_chunk_caches[chunk_index].clear();
                 }
-                geometries.push(
-                    row_chunk_caches[chunk_index].draw(renderer, bounds.size(), |frame| {
+                geometries.push(row_chunk_caches[chunk_index].draw(
+                    renderer,
+                    bounds.size(),
+                    |frame| {
                         self.draw_row_chunk(frame, start_row, end_row, state);
-                    }),
-                );
+                    },
+                ));
             }
         }
 
@@ -557,7 +570,9 @@ impl TerminalCanvas {
     fn row_fingerprint(&self, row_index: usize) -> u64 {
         let row_style_fingerprint = self.row_style_fingerprint();
         if let Some(revision) = self.snapshot.row_revisions.get(row_index).copied() {
-            return row_style_fingerprint ^ revision.rotate_left(17) ^ (row_index as u64).rotate_left(33);
+            return row_style_fingerprint
+                ^ revision.rotate_left(17)
+                ^ (row_index as u64).rotate_left(33);
         }
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();

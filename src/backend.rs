@@ -444,14 +444,18 @@ impl TerminalBackend for LinuxBackend {
         &self,
         pane_id: pane::PaneId,
     ) -> Option<crate::vt_backend_core::TerminalSnapshot> {
-        self.snapshots.get(&pane_id).map(|snapshot| snapshot.as_ref().clone())
+        self.snapshots
+            .get(&pane_id)
+            .map(|snapshot| snapshot.as_ref().clone())
     }
 
     fn render_snapshot_ref(
         &self,
         pane_id: pane::PaneId,
     ) -> Option<&crate::vt_backend_core::TerminalSnapshot> {
-        self.snapshots.get(&pane_id).map(|snapshot| snapshot.as_ref())
+        self.snapshots
+            .get(&pane_id)
+            .map(|snapshot| snapshot.as_ref())
     }
 
     fn forward_vt_key(

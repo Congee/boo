@@ -7,7 +7,10 @@ const CLI_SUBCOMMANDS: &[(&str, &str)] = &[
     ("completions", "print shell completion scripts"),
     ("kill-server", "stop the local Boo server"),
     ("ls", "list live sessions on the local Boo server"),
-    ("new-session", "create a new live session on the local Boo server"),
+    (
+        "new-session",
+        "create a new live session on the local Boo server",
+    ),
     ("quit-server", "stop the local Boo server"),
     ("server", "run the Boo session server without a GUI"),
 ];

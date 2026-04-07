@@ -39,27 +39,153 @@ pub(crate) fn shifted_codepoint(keycode: u32, mods: i32) -> u32 {
         0x31 => ' ',
         0x24 => '\r',
         0x30 => '\t',
-        0x12 => if has_shift { '!' } else { '1' },
-        0x13 => if has_shift { '@' } else { '2' },
-        0x14 => if has_shift { '#' } else { '3' },
-        0x15 => if has_shift { '$' } else { '4' },
-        0x17 => if has_shift { '%' } else { '5' },
-        0x16 => if has_shift { '^' } else { '6' },
-        0x1A => if has_shift { '&' } else { '7' },
-        0x1C => if has_shift { '*' } else { '8' },
-        0x19 => if has_shift { '(' } else { '9' },
-        0x1D => if has_shift { ')' } else { '0' },
-        0x27 => if has_shift { '"' } else { '\'' },
-        0x2A => if has_shift { '|' } else { '\\' },
-        0x2B => if has_shift { '<' } else { ',' },
-        0x2F => if has_shift { '>' } else { '.' },
-        0x2C => if has_shift { '?' } else { '/' },
-        0x29 => if has_shift { ':' } else { ';' },
-        0x1B => if has_shift { '_' } else { '-' },
-        0x18 => if has_shift { '+' } else { '=' },
-        0x21 => if has_shift { '{' } else { '[' },
-        0x1E => if has_shift { '}' } else { ']' },
-        0x32 => if has_shift { '~' } else { '`' },
+        0x12 => {
+            if has_shift {
+                '!'
+            } else {
+                '1'
+            }
+        }
+        0x13 => {
+            if has_shift {
+                '@'
+            } else {
+                '2'
+            }
+        }
+        0x14 => {
+            if has_shift {
+                '#'
+            } else {
+                '3'
+            }
+        }
+        0x15 => {
+            if has_shift {
+                '$'
+            } else {
+                '4'
+            }
+        }
+        0x17 => {
+            if has_shift {
+                '%'
+            } else {
+                '5'
+            }
+        }
+        0x16 => {
+            if has_shift {
+                '^'
+            } else {
+                '6'
+            }
+        }
+        0x1A => {
+            if has_shift {
+                '&'
+            } else {
+                '7'
+            }
+        }
+        0x1C => {
+            if has_shift {
+                '*'
+            } else {
+                '8'
+            }
+        }
+        0x19 => {
+            if has_shift {
+                '('
+            } else {
+                '9'
+            }
+        }
+        0x1D => {
+            if has_shift {
+                ')'
+            } else {
+                '0'
+            }
+        }
+        0x27 => {
+            if has_shift {
+                '"'
+            } else {
+                '\''
+            }
+        }
+        0x2A => {
+            if has_shift {
+                '|'
+            } else {
+                '\\'
+            }
+        }
+        0x2B => {
+            if has_shift {
+                '<'
+            } else {
+                ','
+            }
+        }
+        0x2F => {
+            if has_shift {
+                '>'
+            } else {
+                '.'
+            }
+        }
+        0x2C => {
+            if has_shift {
+                '?'
+            } else {
+                '/'
+            }
+        }
+        0x29 => {
+            if has_shift {
+                ':'
+            } else {
+                ';'
+            }
+        }
+        0x1B => {
+            if has_shift {
+                '_'
+            } else {
+                '-'
+            }
+        }
+        0x18 => {
+            if has_shift {
+                '+'
+            } else {
+                '='
+            }
+        }
+        0x21 => {
+            if has_shift {
+                '{'
+            } else {
+                '['
+            }
+        }
+        0x1E => {
+            if has_shift {
+                '}'
+            } else {
+                ']'
+            }
+        }
+        0x32 => {
+            if has_shift {
+                '~'
+            } else {
+                '`'
+            }
+        }
         _ => return 0,
     };
     #[cfg(target_os = "linux")]
@@ -104,27 +230,153 @@ pub(crate) fn shifted_codepoint_vt(keycode: u32, mods: i32) -> u32 {
         63 => ' ',
         58 => '\r',
         64 => '\t',
-        7 => if has_shift { '!' } else { '1' },
-        8 => if has_shift { '@' } else { '2' },
-        9 => if has_shift { '#' } else { '3' },
-        10 => if has_shift { '$' } else { '4' },
-        11 => if has_shift { '%' } else { '5' },
-        12 => if has_shift { '^' } else { '6' },
-        13 => if has_shift { '&' } else { '7' },
-        14 => if has_shift { '*' } else { '8' },
-        15 => if has_shift { '(' } else { '9' },
-        6 => if has_shift { ')' } else { '0' },
-        48 => if has_shift { '"' } else { '\'' },
-        2 => if has_shift { '|' } else { '\\' },
-        5 => if has_shift { '<' } else { ',' },
-        47 => if has_shift { '>' } else { '.' },
-        50 => if has_shift { '?' } else { '/' },
-        49 => if has_shift { ':' } else { ';' },
-        46 => if has_shift { '_' } else { '-' },
-        16 => if has_shift { '+' } else { '=' },
-        3 => if has_shift { '{' } else { '[' },
-        4 => if has_shift { '}' } else { ']' },
-        1 => if has_shift { '~' } else { '`' },
+        7 => {
+            if has_shift {
+                '!'
+            } else {
+                '1'
+            }
+        }
+        8 => {
+            if has_shift {
+                '@'
+            } else {
+                '2'
+            }
+        }
+        9 => {
+            if has_shift {
+                '#'
+            } else {
+                '3'
+            }
+        }
+        10 => {
+            if has_shift {
+                '$'
+            } else {
+                '4'
+            }
+        }
+        11 => {
+            if has_shift {
+                '%'
+            } else {
+                '5'
+            }
+        }
+        12 => {
+            if has_shift {
+                '^'
+            } else {
+                '6'
+            }
+        }
+        13 => {
+            if has_shift {
+                '&'
+            } else {
+                '7'
+            }
+        }
+        14 => {
+            if has_shift {
+                '*'
+            } else {
+                '8'
+            }
+        }
+        15 => {
+            if has_shift {
+                '('
+            } else {
+                '9'
+            }
+        }
+        6 => {
+            if has_shift {
+                ')'
+            } else {
+                '0'
+            }
+        }
+        48 => {
+            if has_shift {
+                '"'
+            } else {
+                '\''
+            }
+        }
+        2 => {
+            if has_shift {
+                '|'
+            } else {
+                '\\'
+            }
+        }
+        5 => {
+            if has_shift {
+                '<'
+            } else {
+                ','
+            }
+        }
+        47 => {
+            if has_shift {
+                '>'
+            } else {
+                '.'
+            }
+        }
+        50 => {
+            if has_shift {
+                '?'
+            } else {
+                '/'
+            }
+        }
+        49 => {
+            if has_shift {
+                ':'
+            } else {
+                ';'
+            }
+        }
+        46 => {
+            if has_shift {
+                '_'
+            } else {
+                '-'
+            }
+        }
+        16 => {
+            if has_shift {
+                '+'
+            } else {
+                '='
+            }
+        }
+        3 => {
+            if has_shift {
+                '{'
+            } else {
+                '['
+            }
+        }
+        4 => {
+            if has_shift {
+                '}'
+            } else {
+                ']'
+            }
+        }
+        1 => {
+            if has_shift {
+                '~'
+            } else {
+                '`'
+            }
+        }
         _ => return 0,
     };
     if has_shift && base.is_ascii_lowercase() {
@@ -163,27 +415,101 @@ pub(crate) fn parse_keyspec(spec: &str) -> Option<(u32, i32)> {
     }
     #[cfg(target_os = "macos")]
     let keycode = match key_part {
-        "a" => 0x00, "s" => 0x01, "d" => 0x02, "f" => 0x03, "h" => 0x04, "g" => 0x05,
-        "z" => 0x06, "x" => 0x07, "c" => 0x08, "v" => 0x09, "b" => 0x0B, "q" => 0x0C,
-        "w" => 0x0D, "e" => 0x0E, "r" => 0x0F, "y" => 0x10, "t" => 0x11, "u" => 0x20,
-        "i" => 0x22, "o" => 0x1F, "p" => 0x23, "l" => 0x25, "j" => 0x26, "k" => 0x28,
-        "n" => 0x2D, "m" => 0x2E, "enter" | "return" => 0x24, "tab" => 0x30,
-        "space" => 0x31, "escape" | "esc" => 0x35, "backspace" => 0x33, "delete" => 0x75,
-        "up" => 0x7E, "down" => 0x7D, "left" => 0x7B, "right" => 0x7C, "pageup" => 0x74,
-        "pagedown" => 0x79, "home" => 0x73, "end" => 0x77,
+        "a" => 0x00,
+        "s" => 0x01,
+        "d" => 0x02,
+        "f" => 0x03,
+        "h" => 0x04,
+        "g" => 0x05,
+        "z" => 0x06,
+        "x" => 0x07,
+        "c" => 0x08,
+        "v" => 0x09,
+        "b" => 0x0B,
+        "q" => 0x0C,
+        "w" => 0x0D,
+        "e" => 0x0E,
+        "r" => 0x0F,
+        "y" => 0x10,
+        "t" => 0x11,
+        "u" => 0x20,
+        "i" => 0x22,
+        "o" => 0x1F,
+        "p" => 0x23,
+        "l" => 0x25,
+        "j" => 0x26,
+        "k" => 0x28,
+        "n" => 0x2D,
+        "m" => 0x2E,
+        "enter" | "return" => 0x24,
+        "tab" => 0x30,
+        "space" => 0x31,
+        "escape" | "esc" => 0x35,
+        "backspace" => 0x33,
+        "delete" => 0x75,
+        "up" => 0x7E,
+        "down" => 0x7D,
+        "left" => 0x7B,
+        "right" => 0x7C,
+        "pageup" => 0x74,
+        "pagedown" => 0x79,
+        "home" => 0x73,
+        "end" => 0x77,
         _ if key_part.starts_with("0x") => u32::from_str_radix(&key_part[2..], 16).ok()?,
         _ => return None,
     };
     #[cfg(target_os = "linux")]
     let keycode = match key_part {
-        "a" => 20, "b" => 21, "c" => 22, "d" => 23, "e" => 24, "f" => 25, "g" => 26, "h" => 27,
-        "i" => 28, "j" => 29, "k" => 30, "l" => 31, "m" => 32, "n" => 33, "o" => 34, "p" => 35,
-        "q" => 36, "r" => 37, "s" => 38, "t" => 39, "u" => 40, "v" => 41, "w" => 42, "x" => 43,
-        "y" => 44, "z" => 45, "0" => 6, "1" => 7, "2" => 8, "3" => 9, "4" => 10, "5" => 11,
-        "6" => 12, "7" => 13, "8" => 14, "9" => 15, "enter" | "return" => 58, "tab" => 64,
-        "space" => 63, "escape" | "esc" => 120, "backspace" => 53, "delete" => 119,
-        "up" => 111, "down" => 116, "left" => 113, "right" => 114, "pageup" => 112,
-        "pagedown" => 117, "home" => 110, "end" => 115,
+        "a" => 20,
+        "b" => 21,
+        "c" => 22,
+        "d" => 23,
+        "e" => 24,
+        "f" => 25,
+        "g" => 26,
+        "h" => 27,
+        "i" => 28,
+        "j" => 29,
+        "k" => 30,
+        "l" => 31,
+        "m" => 32,
+        "n" => 33,
+        "o" => 34,
+        "p" => 35,
+        "q" => 36,
+        "r" => 37,
+        "s" => 38,
+        "t" => 39,
+        "u" => 40,
+        "v" => 41,
+        "w" => 42,
+        "x" => 43,
+        "y" => 44,
+        "z" => 45,
+        "0" => 6,
+        "1" => 7,
+        "2" => 8,
+        "3" => 9,
+        "4" => 10,
+        "5" => 11,
+        "6" => 12,
+        "7" => 13,
+        "8" => 14,
+        "9" => 15,
+        "enter" | "return" => 58,
+        "tab" => 64,
+        "space" => 63,
+        "escape" | "esc" => 120,
+        "backspace" => 53,
+        "delete" => 119,
+        "up" => 111,
+        "down" => 116,
+        "left" => 113,
+        "right" => 114,
+        "pageup" => 112,
+        "pagedown" => 117,
+        "home" => 110,
+        "end" => 115,
         _ if key_part.starts_with("0x") => u32::from_str_radix(&key_part[2..], 16).ok()?,
         _ => return None,
     };
@@ -212,14 +538,56 @@ pub(crate) fn parse_vt_keyspec(spec: &str) -> Option<(u32, i32)> {
         }
     }
     let keycode = match key_part {
-        "a" => 20, "b" => 21, "c" => 22, "d" => 23, "e" => 24, "f" => 25, "g" => 26, "h" => 27,
-        "i" => 28, "j" => 29, "k" => 30, "l" => 31, "m" => 32, "n" => 33, "o" => 34, "p" => 35,
-        "q" => 36, "r" => 37, "s" => 38, "t" => 39, "u" => 40, "v" => 41, "w" => 42, "x" => 43,
-        "y" => 44, "z" => 45, "0" => 6, "1" => 7, "2" => 8, "3" => 9, "4" => 10, "5" => 11,
-        "6" => 12, "7" => 13, "8" => 14, "9" => 15, "enter" | "return" => 58, "tab" => 64,
-        "space" => 63, "escape" | "esc" => 120, "backspace" => 53, "delete" => 68,
-        "up" => 73, "down" => 74, "left" => 71, "right" => 72, "pageup" => 75, "pagedown" => 78,
-        "home" => 69, "end" => 70,
+        "a" => 20,
+        "b" => 21,
+        "c" => 22,
+        "d" => 23,
+        "e" => 24,
+        "f" => 25,
+        "g" => 26,
+        "h" => 27,
+        "i" => 28,
+        "j" => 29,
+        "k" => 30,
+        "l" => 31,
+        "m" => 32,
+        "n" => 33,
+        "o" => 34,
+        "p" => 35,
+        "q" => 36,
+        "r" => 37,
+        "s" => 38,
+        "t" => 39,
+        "u" => 40,
+        "v" => 41,
+        "w" => 42,
+        "x" => 43,
+        "y" => 44,
+        "z" => 45,
+        "0" => 6,
+        "1" => 7,
+        "2" => 8,
+        "3" => 9,
+        "4" => 10,
+        "5" => 11,
+        "6" => 12,
+        "7" => 13,
+        "8" => 14,
+        "9" => 15,
+        "enter" | "return" => 58,
+        "tab" => 64,
+        "space" => 63,
+        "escape" | "esc" => 120,
+        "backspace" => 53,
+        "delete" => 68,
+        "up" => 73,
+        "down" => 74,
+        "left" => 71,
+        "right" => 72,
+        "pageup" => 75,
+        "pagedown" => 78,
+        "home" => 69,
+        "end" => 70,
         _ if key_part.starts_with("0x") => u32::from_str_radix(&key_part[2..], 16).ok()?,
         _ => return None,
     };
@@ -273,7 +641,10 @@ pub(crate) fn native_keycode_to_named_key(keycode: u32) -> Option<bindings::Name
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn native_keycode_to_keyboard_key(keycode: u32, key_char: Option<char>) -> keyboard::Key {
+pub(crate) fn native_keycode_to_keyboard_key(
+    keycode: u32,
+    key_char: Option<char>,
+) -> keyboard::Key {
     use keyboard::key::Named;
     match keycode {
         0x24 => keyboard::Key::Named(Named::Enter),
@@ -375,7 +746,12 @@ pub(crate) fn split_direction_name(direction: splits::Direction) -> &'static str
 }
 
 pub(crate) fn ui_rect_snapshot(x: f64, y: f64, width: f64, height: f64) -> control::UiRectSnapshot {
-    control::UiRectSnapshot { x, y, width, height }
+    control::UiRectSnapshot {
+        x,
+        y,
+        width,
+        height,
+    }
 }
 
 pub(crate) fn format_command_finished_message(exit_code: Option<u8>, duration_ns: u64) -> String {
@@ -421,7 +797,10 @@ pub(crate) fn command_finish_notification(
         Some(_) => "Command Failed",
         None => "Command Finished",
     };
-    Some((title, format_command_finished_message(event.exit_code, event.duration_ns)))
+    Some((
+        title,
+        format_command_finished_message(event.exit_code, event.duration_ns),
+    ))
 }
 
 pub(crate) fn apply_text_input_event(

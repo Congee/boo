@@ -224,10 +224,7 @@ impl BooApp {
                         return;
                     };
                     #[cfg(target_os = "macos")]
-                    if should_route_macos_vt_key_via_appkit(
-                        vt_keycode, mods,
-                    )
-                    {
+                    if should_route_macos_vt_key_via_appkit(vt_keycode, mods) {
                         return;
                     }
                     let _ = self.backend.forward_vt_key(
@@ -293,8 +290,7 @@ impl BooApp {
                     if should_route_macos_vt_key_via_appkit(
                         vt_keycode,
                         iced_mods_to_ghostty(&modifiers),
-                    )
-                    {
+                    ) {
                         return;
                     }
                     let _ = self.backend.forward_vt_key(
@@ -591,8 +587,7 @@ impl BooApp {
                 } else if let Some(idx) = self.command_prompt.history_idx {
                     if idx + 1 < self.command_prompt.history.len() {
                         self.command_prompt.history_idx = Some(idx + 1);
-                        self.command_prompt.input =
-                            self.command_prompt.history[idx + 1].clone();
+                        self.command_prompt.input = self.command_prompt.history[idx + 1].clone();
                     } else {
                         self.command_prompt.history_idx = None;
                         self.command_prompt.input.clear();
