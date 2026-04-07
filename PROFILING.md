@@ -258,6 +258,8 @@ Repo-local wrappers:
   - launches the profiling build with the right `DYLD_LIBRARY_PATH` on macOS
 - `scripts/profile-macos-sample.sh`
   - launches one Boo server, waits for a real ready control socket, injects workload, captures `sample`, and cleans up
+- `scripts/profile-macos-sample-client.sh`
+  - launches one Boo server and one Boo GUI client, injects workload through the GUI test socket, captures `sample` from the GUI process, and cleans up
 - `scripts/profile-macos-instruments.sh`
   - records an Instruments trace and now fails fast if readiness or workload injection fails
 - `scripts/profile-samply.sh`
