@@ -106,6 +106,7 @@ chrome, layout, and VT rendering path.
 - Supports session listing, attach/detach, create, resize, destroy, text input, and full terminal-state publishing
 - Can require HMAC-SHA256 challenge/response auth when `remote-auth-key` is configured
 - Remaining architecture task: revisit whether PTY ingest should become fully event-driven instead of loop/poll driven once the current profiling work stabilizes
+- Remaining architecture task: move process exit/reap handling to an explicit PTY EOF/worker event path so the hot PTY ingest loop never probes for child exit status
 
 ### iOS Remote Viewer
 - A native SwiftUI iOS app lives under [`ios/`](/Users/example/dev/boo/ios)

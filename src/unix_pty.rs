@@ -111,14 +111,20 @@ impl PtyProcess {
         out
     }
 
+    pub fn try_read_chunk(&self) -> Option<Vec<u8>> {
+        self.rx.try_recv().ok()
+    }
+
     pub fn try_read_budgeted(&self, max_chunks: usize, max_bytes: usize) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
         let mut total_bytes = 0usize;
-        while out.len() < max_chunks && total_bytes < max_bytes {
-            let Ok(chunk) = self.rx.try_recv() else {
+        let mut chunks = 0usize;
+        while chunks < max_chunks && total_bytes < max_bytes {
+            let Some(chunk) = self.try_read_chunk() else {
                 break;
             };
             total_bytes = total_bytes.saturating_add(chunk.len());
+            chunks += 1;
             out.push(chunk);
         }
         out

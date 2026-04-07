@@ -76,7 +76,6 @@ unsafe impl Send for VtPane {}
 
 pub struct PollPtyResult {
     pub changed: bool,
-    pub exited: bool,
 }
 
 pub struct VtPaneUpdate {
@@ -439,11 +438,13 @@ impl VtPane {
         if backlog_bytes < Self::PTY_BACKLOG_HARD_LIMIT_BYTES {
             let read_budget = Self::PTY_POLL_MAX_BYTES
                 .min(Self::PTY_BACKLOG_HARD_LIMIT_BYTES.saturating_sub(backlog_bytes));
-            for chunk in self
-                .pty
-                .try_read_budgeted(Self::PTY_POLL_MAX_CHUNKS, read_budget)
-            {
+            let mut read_bytes = 0usize;
+            while read_chunks < Self::PTY_POLL_MAX_CHUNKS as u64 && read_bytes < read_budget {
+                let Some(chunk) = self.pty.try_read_chunk() else {
+                    break;
+                };
                 let chunk_len = chunk.len();
+                read_bytes = read_bytes.saturating_add(chunk_len);
                 total_bytes = total_bytes.saturating_add(chunk.len() as u64);
                 read_chunks = read_chunks.saturating_add(1);
                 {
@@ -571,13 +572,7 @@ impl VtPane {
             ]);
             self.pending_pty_profile = PendingPtyProfile::default();
         }
-        let active_io = total_bytes > 0 || written_chunks > 0 || !self.pending_pty_chunks.is_empty();
-        let exited = if !active_io {
-            self.pty.try_wait()?
-        } else {
-            false
-        };
-        Ok(PollPtyResult { changed, exited })
+        Ok(PollPtyResult { changed })
     }
 
     pub fn resize(
@@ -851,6 +846,13 @@ impl VtPane {
     }
 
     fn observe_control_sequences(&mut self, bytes: &[u8]) {
+        let has_escape = bytes.contains(&0x1b);
+        if self.control_sequence_tail.is_empty()
+            && matches!(self.osc_state.mode, OscMode::Ground)
+            && !has_escape
+        {
+            return;
+        }
         if should_force_full_snapshot_refresh(&self.control_sequence_tail, bytes) {
             self.force_full_snapshot_refresh = true;
             crate::profiling::record_units(
@@ -860,7 +862,7 @@ impl VtPane {
             );
         }
         update_control_sequence_tail(&mut self.control_sequence_tail, bytes);
-        if matches!(self.osc_state.mode, OscMode::Ground) && !bytes.contains(&0x1b) {
+        if matches!(self.osc_state.mode, OscMode::Ground) && !has_escape {
             return;
         }
         for &byte in bytes {
@@ -996,6 +998,10 @@ impl VtPane {
             Self::VT_WRITE_CHUNK
         }
     }
+
+    fn try_reap_exited(&mut self) -> io::Result<bool> {
+        self.pty.try_wait()
+    }
 }
 
 fn worker_loop(
@@ -1007,6 +1013,7 @@ fn worker_loop(
 ) {
     let mut disconnected = false;
     let mut last_snapshot_refresh = Instant::now();
+    let mut last_exit_check = Instant::now();
     loop {
         let timeout = if pane.has_pending_pty_work() {
             Duration::ZERO
@@ -1031,11 +1038,26 @@ fn worker_loop(
         }
 
         let exited = match pane.poll_pty() {
-            Ok(poll) => poll.exited,
+            Ok(_poll) => false,
             Err(error) => {
                 log::warn!("vt pane worker PTY poll failed: {error}");
                 true
             }
+        };
+        let exited = if exited {
+            true
+        } else if !pane.has_pending_pty_work() && last_exit_check.elapsed() >= Duration::from_millis(64)
+        {
+            last_exit_check = Instant::now();
+            match pane.try_reap_exited() {
+                Ok(exited) => exited,
+                Err(error) => {
+                    log::warn!("vt pane worker PTY wait failed: {error}");
+                    true
+                }
+            }
+        } else {
+            false
         };
 
         let should_refresh_snapshot = if pane.is_dirty() {
