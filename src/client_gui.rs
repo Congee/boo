@@ -412,10 +412,18 @@ impl ClientApp {
                 }
                 LocalStreamEvent::Disconnected => {
                     self.stream_tx = None;
+                    let lost_active_session = self.active_session_id.take();
                     self.mode = ClientMode::Recovering;
-                    self.active_session_id = None;
                     self.pending_input_latencies.clear();
-                    self.last_error = Some("boo server stream disconnected".to_string());
+                    if should_exit_after_stream_disconnect(
+                        lost_active_session,
+                        self.client.get_ui_snapshot().is_ok(),
+                    ) {
+                        self.should_exit = true;
+                        self.last_error = None;
+                    } else {
+                        self.last_error = Some("boo server stream disconnected".to_string());
+                    }
                 }
                 LocalStreamEvent::FullState { ack_input_seq, state } => {
                     let _scope =
@@ -521,6 +529,13 @@ impl ClientApp {
             .or_else(|| live_sessions.get(self.ui_state.active_tab).copied())
             .or_else(|| live_sessions.first().copied())
     }
+}
+
+fn should_exit_after_stream_disconnect(
+    lost_active_session: Option<u32>,
+    snapshot_available: bool,
+) -> bool {
+    lost_active_session.is_some() && !snapshot_available
 }
 
 impl ClientUiState {
@@ -1388,6 +1403,13 @@ mod tests {
         });
         assert_eq!(snapshot.text, "");
         assert_eq!(snapshot.display_width, 1);
+    }
+
+    #[test]
+    fn disconnect_exits_when_active_session_is_gone() {
+        assert!(should_exit_after_stream_disconnect(Some(7), false));
+        assert!(!should_exit_after_stream_disconnect(Some(7), true));
+        assert!(!should_exit_after_stream_disconnect(None, false));
     }
 }
 
