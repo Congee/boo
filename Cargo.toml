@@ -33,3 +33,8 @@ libghostty-vt = "0.1.1"
 
 [patch.crates-io]
 libghostty-vt-sys = { path = "vendor/libghostty-vt-sys" }
+
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+codegen-units = 1
