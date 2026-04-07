@@ -72,18 +72,33 @@ impl TerminalCanvas {
         frame.fill_rectangle(Point::ORIGIN, frame.size(), default_bg);
     }
 
-    fn draw_row(&self, frame: &mut Frame<Renderer>, row_index: usize) {
+    fn draw_row(&self, frame: &mut Frame<Renderer>, row_index: usize, state: &TerminalCanvasState) {
         let Some(row) = self.snapshot.rows_data.get(row_index) else {
             return;
         };
         let y = PADDING_Y + row_index as f32 * self.cell_height;
-        for span in build_background_spans(
-            row,
-            self.snapshot.cols as usize,
-            self.snapshot.colors.background,
-            self.background_opacity,
-            self.background_opacity_cells,
-        ) {
+        let row_fingerprint = self.row_fingerprint(row_index);
+        {
+            let mut fingerprints = state.row_artifact_fingerprints.borrow_mut();
+            let mut artifacts = state.row_artifacts.borrow_mut();
+            if fingerprints[row_index] != row_fingerprint {
+                artifacts[row_index] = RowArtifacts {
+                    background_spans: build_background_spans(
+                        row,
+                        self.snapshot.cols as usize,
+                        self.snapshot.colors.background,
+                        self.background_opacity,
+                        self.background_opacity_cells,
+                    ),
+                    text_runs: build_text_runs(row, self.snapshot.cols as usize, self.font_family),
+                };
+                fingerprints[row_index] = row_fingerprint;
+            }
+        }
+
+        let artifacts = state.row_artifacts.borrow();
+        let artifacts = &artifacts[row_index];
+        for span in &artifacts.background_spans {
             frame.fill_rectangle(
                 Point::new(PADDING_X + span.start_col as f32 * self.cell_width, y),
                 Size::new(span.width_cols as f32 * self.cell_width, self.cell_height),
@@ -91,11 +106,11 @@ impl TerminalCanvas {
             );
         }
 
-        for run in build_text_runs(row, self.snapshot.cols as usize, self.font_family) {
+        for run in &artifacts.text_runs {
             let x = PADDING_X + run.start_col as f32 * self.cell_width;
             let draw_width = run.width_cols as f32 * self.cell_width;
             frame.fill_text(canvas::Text {
-                content: run.text,
+                content: run.text.clone(),
                 position: Point::new(x, y),
                 color: run.fg,
                 size: Pixels(self.font_size),
@@ -118,9 +133,15 @@ impl TerminalCanvas {
         }
     }
 
-    fn draw_row_chunk(&self, frame: &mut Frame<Renderer>, start_row: usize, end_row: usize) {
+    fn draw_row_chunk(
+        &self,
+        frame: &mut Frame<Renderer>,
+        start_row: usize,
+        end_row: usize,
+        state: &TerminalCanvasState,
+    ) {
         for row_index in start_row..end_row {
-            self.draw_row(frame, row_index);
+            self.draw_row(frame, row_index, state);
         }
     }
 
@@ -225,6 +246,8 @@ pub struct TerminalCanvasState {
     base_fingerprint: RefCell<Option<u64>>,
     row_chunk_caches: RefCell<Vec<Cache>>,
     row_chunk_fingerprints: RefCell<Vec<u64>>,
+    row_artifact_fingerprints: RefCell<Vec<u64>>,
+    row_artifacts: RefCell<Vec<RowArtifacts>>,
     overlay_cache: Cache,
     overlay_fingerprint: RefCell<Option<u64>>,
 }
@@ -236,6 +259,8 @@ impl Default for TerminalCanvasState {
             base_fingerprint: RefCell::new(None),
             row_chunk_caches: RefCell::new(Vec::new()),
             row_chunk_fingerprints: RefCell::new(Vec::new()),
+            row_artifact_fingerprints: RefCell::new(Vec::new()),
+            row_artifacts: RefCell::new(Vec::new()),
             overlay_cache: Cache::new(),
             overlay_fingerprint: RefCell::new(None),
         }
@@ -280,6 +305,14 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
             row_chunk_caches.truncate(chunk_count);
             row_chunk_fingerprints.resize(chunk_count, 0);
             row_chunk_fingerprints.truncate(chunk_count);
+            let mut row_artifact_fingerprints = state.row_artifact_fingerprints.borrow_mut();
+            let mut row_artifacts = state.row_artifacts.borrow_mut();
+            row_artifact_fingerprints.resize(row_count, 0);
+            row_artifact_fingerprints.truncate(row_count);
+            row_artifacts.resize_with(row_count, RowArtifacts::default);
+            row_artifacts.truncate(row_count);
+            drop(row_artifact_fingerprints);
+            drop(row_artifacts);
 
             for chunk_index in 0..chunk_count {
                 let chunk_fingerprint = self.row_chunk_fingerprint(chunk_index);
@@ -291,7 +324,7 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
                 let end_row = (start_row + ROW_CACHE_CHUNK_SIZE).min(row_count);
                 geometries.push(
                     row_chunk_caches[chunk_index].draw(renderer, bounds.size(), |frame| {
-                        self.draw_row_chunk(frame, start_row, end_row);
+                        self.draw_row_chunk(frame, start_row, end_row, state);
                     }),
                 );
             }
@@ -340,6 +373,12 @@ struct TextRun {
     fg: Color,
     font: Font,
     underline: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RowArtifacts {
+    background_spans: Vec<BackgroundSpan>,
+    text_runs: Vec<TextRun>,
 }
 
 fn build_background_spans(
