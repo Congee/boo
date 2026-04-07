@@ -13,7 +13,7 @@ use std::io::Write;
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const STATUS_BAR_HEIGHT: f64 = 20.0;
@@ -29,6 +29,7 @@ pub enum Message {
     IcedEvent(Event),
     StreamReady(std::sync::mpsc::Sender<StreamCommand>),
     StreamEvent(LocalStreamEvent),
+    StreamBatch(Vec<LocalStreamEvent>),
     GuiTest(GuiTestCommand),
 }
 
@@ -38,6 +39,13 @@ pub enum GuiTestCommand {
     Key(String),
     Resize { cols: u16, rows: u16 },
     Refresh,
+}
+
+#[derive(Debug, Clone, Default)]
+struct GuiTestStatus {
+    mode: &'static str,
+    stream_ready: bool,
+    has_terminal: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,8 +120,7 @@ impl ClientApp {
             .as_ref()
             .map(ClientUiState::from_snapshot)
             .unwrap_or_default();
-        (
-            Self {
+        let app = Self {
                 socket_path,
                 client,
                 stream_tx: None,
@@ -133,9 +140,9 @@ impl ClientApp {
                 pending_input_latencies: HashMap::new(),
                 steady_state_snapshot_requests: 0,
                 should_exit: false,
-            },
-            Task::none(),
-        )
+            };
+        app.update_gui_test_status();
+        (app, Task::none())
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -146,6 +153,11 @@ impl ClientApp {
                 self.send_stream_command(StreamCommand::ListSessions);
             }
             Message::StreamEvent(event) => self.handle_stream_event(event),
+            Message::StreamBatch(events) => {
+                for event in events {
+                    self.handle_stream_event(event);
+                }
+            }
             Message::GuiTest(command) => self.handle_gui_test(command),
             Message::IcedEvent(event) => match event {
                 Event::Window(window::Event::Resized(size)) => {
@@ -155,6 +167,7 @@ impl ClientApp {
                 _ => {}
             },
         }
+        self.update_gui_test_status();
         if self.should_exit {
             iced::exit()
         } else {
@@ -601,6 +614,60 @@ impl ClientApp {
             .or_else(|| live_sessions.get(self.ui_state.active_tab).copied())
             .or_else(|| live_sessions.first().copied())
     }
+
+    fn update_gui_test_status(&self) {
+        let status_value = GuiTestStatus {
+            mode: match self.mode {
+                ClientMode::Bootstrapping => "bootstrapping",
+                ClientMode::Attached => "attached",
+                ClientMode::Recovering => "recovering",
+            },
+            stream_ready: self.stream_ready_for_terminal_io(),
+            has_terminal: self.has_paintable_terminal(),
+        };
+        if let Some(status) = gui_test_status_handle()
+            && let Ok(mut guard) = status.lock()
+        {
+            *guard = status_value.clone();
+        }
+        if let Some(path) = gui_test_status_path() {
+            let line = format!(
+                "mode={} stream_ready={} has_terminal={}\n",
+                status_value.mode,
+                u8::from(status_value.stream_ready),
+                u8::from(status_value.has_terminal)
+            );
+            if let Ok(mut last_written) = gui_test_status_last_written().lock()
+                && last_written.as_deref() != Some(line.as_str())
+            {
+                let _ = std::fs::write(path, &line);
+                *last_written = Some(line);
+            }
+        }
+    }
+}
+
+fn gui_test_status_handle() -> Option<&'static Arc<Mutex<GuiTestStatus>>> {
+    static STATUS: OnceLock<Option<Arc<Mutex<GuiTestStatus>>>> = OnceLock::new();
+    STATUS
+        .get_or_init(|| {
+            std::env::var_os("BOO_GUI_TEST_SOCKET")
+                .map(|_| Arc::new(Mutex::new(GuiTestStatus::default())))
+        })
+        .as_ref()
+}
+
+fn gui_test_status_path() -> Option<&'static str> {
+    static PATH: OnceLock<Option<String>> = OnceLock::new();
+    PATH.get_or_init(|| {
+        std::env::var_os("BOO_GUI_TEST_STATUS_PATH").and_then(|path| path.into_string().ok())
+    })
+    .as_deref()
+}
+
+fn gui_test_status_last_written() -> &'static Mutex<Option<String>> {
+    static LAST: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    LAST.get_or_init(|| Mutex::new(None))
 }
 
 fn should_exit_after_stream_disconnect(
@@ -951,8 +1018,27 @@ fn local_stream_subscription(
                 });
 
                 while let Some(event) = event_rx.next().await {
-                    let saw_disconnect = matches!(event, LocalStreamEvent::Disconnected);
-                    let _ = output.send(Message::StreamEvent(event)).await;
+                    let mut batch = vec![event];
+                    let mut saw_disconnect =
+                        matches!(batch.last(), Some(LocalStreamEvent::Disconnected));
+                    while batch.len() < 64 {
+                        match event_rx.try_recv() {
+                            Ok(event) => {
+                                saw_disconnect |= matches!(event, LocalStreamEvent::Disconnected);
+                                batch.push(event);
+                                if saw_disconnect {
+                                    break;
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    let message = if batch.len() == 1 {
+                        Message::StreamEvent(batch.pop().expect("single event batch"))
+                    } else {
+                        Message::StreamBatch(batch)
+                    };
+                    let _ = output.send(message).await;
                     if saw_disconnect {
                         break;
                     }
@@ -971,6 +1057,7 @@ fn gui_test_subscription() -> Subscription<Message> {
     };
     iced::Subscription::run_with(socket_path, |socket_path| {
         let socket_path = socket_path.clone();
+        let status = gui_test_status_handle().cloned();
         Box::pin(stream::channel(
             100,
             move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
@@ -982,7 +1069,11 @@ fn gui_test_subscription() -> Subscription<Message> {
                         return;
                     };
                     while let Ok((stream, _addr)) = listener.accept() {
-                        let mut reader = BufReader::new(stream);
+                        let mut writer = stream;
+                        let Ok(read_stream) = writer.try_clone() else {
+                            continue;
+                        };
+                        let mut reader = BufReader::new(read_stream);
                         let mut line = String::new();
                         loop {
                             line.clear();
@@ -992,9 +1083,22 @@ fn gui_test_subscription() -> Subscription<Message> {
                             if bytes == 0 {
                                 break;
                             }
-                            if let Some(command) =
-                                parse_gui_test_command(line.trim_end_matches(['\r', '\n']))
-                            {
+                            let line = line.trim_end_matches(['\r', '\n']);
+                            if line == "status" {
+                                if let Some(status) = status.as_ref()
+                                    && let Ok(guard) = status.lock()
+                                {
+                                    let _ = writeln!(
+                                        writer,
+                                        "mode={} stream_ready={} has_terminal={}",
+                                        guard.mode,
+                                        u8::from(guard.stream_ready),
+                                        u8::from(guard.has_terminal)
+                                    );
+                                }
+                                continue;
+                            }
+                            if let Some(command) = parse_gui_test_command(line) {
                                 let _ = event_tx.unbounded_send(command);
                             }
                         }

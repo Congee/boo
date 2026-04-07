@@ -10,6 +10,7 @@ fi
 
 SOCKET="${SOCKET:-/tmp/boo-prof.sock}"
 GUI_TEST_SOCKET="${GUI_TEST_SOCKET:-/tmp/boo-gui-input.sock}"
+GUI_TEST_STATUS="${GUI_TEST_STATUS:-/tmp/boo-gui-status.txt}"
 OUT="${OUT:-/tmp/boo-client-sample.txt}"
 DURATION="${DURATION:-5}"
 INTERVAL_MS="${INTERVAL_MS:-1}"
@@ -100,17 +101,17 @@ cleanup() {
     kill "$SERVER_PID" >/dev/null 2>&1 || true
     wait "$SERVER_PID" >/dev/null 2>&1 || true
   fi
-  rm -f "$SOCKET" "$SOCKET.stream" "$GUI_TEST_SOCKET"
+  rm -f "$SOCKET" "$SOCKET.stream" "$GUI_TEST_SOCKET" "$GUI_TEST_STATUS"
 }
 
 trap cleanup EXIT
 
-rm -f "$SOCKET" "$SOCKET.stream" "$GUI_TEST_SOCKET" "$OUT"
+rm -f "$SOCKET" "$SOCKET.stream" "$GUI_TEST_SOCKET" "$GUI_TEST_STATUS" "$OUT"
 
 "$SERVER_BIN" server --socket "$SOCKET" >/tmp/boo-profile-client-server.log 2>&1 &
 SERVER_PID=$!
 
-BOO_GUI_TEST_SOCKET="$GUI_TEST_SOCKET" "$CLIENT_BIN" --socket "$SOCKET" >/tmp/boo-profile-client-gui.log 2>&1 &
+BOO_GUI_TEST_SOCKET="$GUI_TEST_SOCKET" BOO_GUI_TEST_STATUS_PATH="$GUI_TEST_STATUS" "$CLIENT_BIN" --socket "$SOCKET" >/tmp/boo-profile-client-gui.log 2>&1 &
 CLIENT_PID=$!
 
 python3 scripts/ui-test-client.py --socket "$SOCKET" wait-ready --timeout "$READY_TIMEOUT" >/dev/null
@@ -124,6 +125,22 @@ done
 
 if [[ ! -S "$GUI_TEST_SOCKET" ]]; then
   echo "GUI test socket did not become ready: $GUI_TEST_SOCKET" >&2
+  exit 1
+fi
+
+STATUS=""
+for _ in $(seq 1 $((READY_TIMEOUT * 10))); do
+  if [[ -f "$GUI_TEST_STATUS" ]]; then
+    STATUS="$(cat "$GUI_TEST_STATUS")"
+  fi
+  if [[ "$STATUS" == *"mode=attached"* && "$STATUS" == *"stream_ready=1"* ]]; then
+    break
+  fi
+  sleep 0.1
+done
+
+if [[ "${STATUS:-}" != *"mode=attached"* || "${STATUS:-}" != *"stream_ready=1"* ]]; then
+  echo "GUI client did not reach attached stream state: ${STATUS:-<none>}" >&2
   exit 1
 fi
 
