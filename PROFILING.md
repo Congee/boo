@@ -97,9 +97,18 @@ Use this to correlate sampled hotspots with Boo-specific phases. It is not a rep
 
 Notable unit counters now include:
 
+- `server.backend.poll_pty.read_chunks`
+- `server.backend.poll_pty.write_chunks`
+- `server.backend.poll_pty.backlog_chunks`
+- `server.backend.poll_pty.backlog_bytes`
+- `server.backend.snapshot_refresh.rows`
+- `server.backend.snapshot_refresh.full`
 - `server.stream.encode_full_state.local`
 - `server.stream.encode_delta.local`
 - `server.stream.encode_delta_rows.local`
+- `client.control.get_ui_snapshot.ok`
+- `client.control.get_ui_snapshot.err`
+- `client.control.get_ui_snapshot.steady_state`
 - `client.stream.decode_full_state`
 - `client.stream.decode_delta`
 - `client.stream.decode_delta_rows`

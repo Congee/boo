@@ -415,11 +415,14 @@ impl VtPane {
         let mut changed = false;
         let started_at = Instant::now();
         let mut total_bytes = 0u64;
+        let mut read_chunks = 0u64;
+        let mut written_chunks = 0u64;
         for chunk in self
             .pty
             .try_read_budgeted(Self::PTY_POLL_MAX_CHUNKS, Self::PTY_POLL_MAX_BYTES)
         {
             total_bytes = total_bytes.saturating_add(chunk.len() as u64);
+            read_chunks = read_chunks.saturating_add(1);
             {
                 let mut scope = crate::profiling::scope(
                     "server.backend.poll_pty.osc",
@@ -450,6 +453,7 @@ impl VtPane {
                 scope.add_bytes((end - chunk.offset) as u64);
                 self.terminal.write(&chunk.bytes[chunk.offset..end]);
             }
+            written_chunks = written_chunks.saturating_add(1);
             chunk.offset = end;
             changed = true;
             if chunk.offset < chunk.bytes.len() {
@@ -472,6 +476,30 @@ impl VtPane {
             crate::profiling::Kind::Cpu,
             started_at.elapsed(),
             total_bytes,
+        );
+        crate::profiling::record_units(
+            "server.backend.poll_pty.read_chunks",
+            crate::profiling::Kind::Cpu,
+            read_chunks,
+        );
+        crate::profiling::record_units(
+            "server.backend.poll_pty.write_chunks",
+            crate::profiling::Kind::Cpu,
+            written_chunks,
+        );
+        crate::profiling::record_units(
+            "server.backend.poll_pty.backlog_chunks",
+            crate::profiling::Kind::Cpu,
+            self.pending_pty_chunks.len() as u64,
+        );
+        crate::profiling::record_bytes(
+            "server.backend.poll_pty.backlog_bytes",
+            crate::profiling::Kind::Cpu,
+            Duration::ZERO,
+            self.pending_pty_chunks
+                .iter()
+                .map(|chunk| chunk.bytes.len().saturating_sub(chunk.offset) as u64)
+                .sum(),
         );
         Ok(PollPtyResult {
             changed,
@@ -672,6 +700,7 @@ impl VtPane {
 
         let mut row_iter = self.render_state.row_iterator().map_err(vt_to_io)?;
         let mut row_index = 0usize;
+        let mut rebuilt_rows = 0u64;
         while row_iter.next() {
             let row_dirty =
                 force_full_refresh || size_changed || row_iter.dirty().map_err(vt_to_io)?;
@@ -680,6 +709,7 @@ impl VtPane {
                 snapshot.row_revisions[row_index] =
                     snapshot.row_revisions[row_index].wrapping_add(1);
                 let _ = row_iter.clear_dirty();
+                rebuilt_rows = rebuilt_rows.saturating_add(1);
             }
             row_index += 1;
         }
@@ -693,6 +723,16 @@ impl VtPane {
         snapshot.colors = colors;
         self.dirty = false;
         self.force_full_snapshot_refresh = false;
+        crate::profiling::record_units(
+            "server.backend.snapshot_refresh.rows",
+            crate::profiling::Kind::Cpu,
+            rebuilt_rows,
+        );
+        crate::profiling::record_units(
+            "server.backend.snapshot_refresh.full",
+            crate::profiling::Kind::Cpu,
+            u64::from(force_full_refresh || size_changed),
+        );
         Ok(())
     }
 

@@ -292,7 +292,17 @@ impl ClientApp {
                 if matches!(self.mode, ClientMode::Attached) {
                     self.steady_state_snapshot_requests =
                         self.steady_state_snapshot_requests.saturating_add(1);
+                    crate::profiling::record_units(
+                        "client.control.get_ui_snapshot.steady_state",
+                        crate::profiling::Kind::Io,
+                        1,
+                    );
                 }
+                crate::profiling::record_units(
+                    "client.control.get_ui_snapshot.ok",
+                    crate::profiling::Kind::Io,
+                    1,
+                );
                 self.font_size = snapshot.appearance.font_size.max(8.0);
                 self.background_opacity = snapshot.appearance.background_opacity;
                 self.background_opacity_cells = snapshot.appearance.background_opacity_cells;
@@ -302,6 +312,11 @@ impl ClientApp {
                 self.last_error = None;
             }
             Err(error) => {
+                crate::profiling::record_units(
+                    "client.control.get_ui_snapshot.err",
+                    crate::profiling::Kind::Io,
+                    1,
+                );
                 self.last_error = Some(error);
             }
         }
