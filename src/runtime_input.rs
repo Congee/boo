@@ -638,18 +638,26 @@ impl BooApp {
                 self.relayout();
             }
             bindings::Action::NextPane => {
+                let old = self.server.tabs.focused_pane();
                 if let Some(tree) = self.server.tabs.active_tree_mut() {
                     tree.focus_next();
                 }
                 let new = self.server.tabs.focused_pane();
-                self.set_pane_focus(new, true);
+                if old != new {
+                    self.set_pane_focus(old, false);
+                    self.set_pane_focus(new, true);
+                }
             }
             bindings::Action::PreviousPane => {
+                let old = self.server.tabs.focused_pane();
                 if let Some(tree) = self.server.tabs.active_tree_mut() {
                     tree.focus_prev();
                 }
                 let new = self.server.tabs.focused_pane();
-                self.set_pane_focus(new, true);
+                if old != new {
+                    self.set_pane_focus(old, false);
+                    self.set_pane_focus(new, true);
+                }
             }
             bindings::Action::SwapPaneNext => {
                 if self.server.tabs.swap_active_pane_with_adjacent(true) {

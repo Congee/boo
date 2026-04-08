@@ -13,7 +13,7 @@ chrome, layout, and VT rendering path.
 | Split pane creation | yes | yes | yes | yes | `bash scripts/test-gui-client.sh` |
 | Split pane visibility | n/a | yes | yes | yes | `bash scripts/test-gui-client.sh` |
 | Directional pane focus (`goto_split:*`) | yes | yes | yes | yes | `bash scripts/test-gui-client.sh` |
-| Next/previous pane focus | yes | yes | yes | partial | not yet |
+| Next/previous pane focus | yes | yes | yes | yes | `bash scripts/test-gui-client.sh` |
 | Click-to-focus pane | n/a | yes | yes | yes | `bash scripts/test-gui-client.sh` |
 | Plain alphanumeric typing | n/a | yes | yes | yes | `bash scripts/test-gui-client.sh` |
 | Tab switching | yes | yes | yes | yes | `bash scripts/test-gui-client.sh` |

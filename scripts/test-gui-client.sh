@@ -298,6 +298,20 @@ if ! assert_focused_pane "$RIGHT_PANE"; then
   exit 1
 fi
 
+send_gui_command "next-pane"
+
+if ! assert_focused_pane "$LEFT_PANE"; then
+  echo "next-pane did not cycle focus to the left pane" >&2
+  exit 1
+fi
+
+send_gui_command "prev-pane"
+
+if ! assert_focused_pane "$RIGHT_PANE"; then
+  echo "prev-pane did not cycle focus back to the right pane" >&2
+  exit 1
+fi
+
 send_gui_appkey "ctrl+s"
 send_gui_appkey "h"
 
