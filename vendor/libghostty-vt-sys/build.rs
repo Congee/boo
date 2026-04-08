@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -16,6 +17,8 @@ fn main() {
 
     println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_SYS_NO_VENDOR");
     println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_SYS_OPTIMIZE");
+    println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_SYS_LIBDIR");
+    println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_SYS_INCLUDEDIR");
     println!("cargo:rerun-if-env-changed=GHOSTTY_SOURCE_DIR");
     println!("cargo:rerun-if-env-changed=TARGET");
     println!("cargo:rerun-if-env-changed=HOST");
@@ -25,43 +28,11 @@ fn main() {
     let target = env::var("TARGET").expect("TARGET must be set");
     let host = env::var("HOST").expect("HOST must be set");
 
-    // Locate ghostty source: env override > fetch into OUT_DIR.
-    let ghostty_dir = match env::var("GHOSTTY_SOURCE_DIR") {
-        Ok(dir) => {
-            let p = PathBuf::from(dir);
-            assert!(
-                p.join("build.zig").exists(),
-                "GHOSTTY_SOURCE_DIR does not contain build.zig: {}",
-                p.display()
-            );
-            p
-        }
-        Err(_) => find_cached_ghostty_source(&out_dir).unwrap_or_else(|| fetch_ghostty(&out_dir)),
+    let (lib_dir, include_dir) = if let Some(paths) = externally_provided_paths() {
+        paths
+    } else {
+        ensure_cached_install_prefix(&out_dir, &target, &host)
     };
-
-    // Build libghostty-vt via zig.
-    let install_prefix = out_dir.join("ghostty-install");
-
-    let mut build = Command::new("zig");
-    build
-        .arg("build")
-        .arg("-Demit-lib-vt")
-        .arg(format!("-Doptimize={}", zig_optimize_mode()))
-        .arg("--prefix")
-        .arg(&install_prefix)
-        .current_dir(&ghostty_dir);
-
-    // Only pass -Dtarget when cross-compiling. For native builds, let zig
-    // auto-detect the host (matches how ghostty's own CMakeLists.txt works).
-    if target != host {
-        let zig_target = zig_target(&target);
-        build.arg(format!("-Dtarget={zig_target}"));
-    }
-
-    run(build, "zig build");
-
-    let lib_dir = install_prefix.join("lib");
-    let include_dir = install_prefix.join("include");
 
     let lib_name = if target.contains("darwin") {
         "libghostty-vt.0.1.0.dylib"
@@ -83,6 +54,84 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=dylib=ghostty-vt");
     println!("cargo:include={}", include_dir.display());
+    println!("cargo:libdir={}", lib_dir.display());
+}
+
+fn externally_provided_paths() -> Option<(PathBuf, PathBuf)> {
+    let lib_dir = env::var("LIBGHOSTTY_VT_SYS_LIBDIR").ok().map(PathBuf::from)?;
+    let include_dir = env::var("LIBGHOSTTY_VT_SYS_INCLUDEDIR")
+        .ok()
+        .map(PathBuf::from)?;
+    Some((lib_dir, include_dir))
+}
+
+fn ensure_cached_install_prefix(out_dir: &Path, target: &str, host: &str) -> (PathBuf, PathBuf) {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(|path| path.parent())
+        .expect("workspace root");
+    let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+    let optimize = zig_optimize_mode();
+    let install_prefix = workspace_root
+        .join("target")
+        .join("libghostty-vt")
+        .join(target)
+        .join(profile);
+    let stamp_path = install_prefix.join(".build-stamp");
+
+    let expected_stamp = format!("{GHOSTTY_COMMIT}\n{optimize}\n{target}\n");
+    let lib_dir = install_prefix.join("lib");
+    let include_dir = install_prefix.join("include");
+    let lib_name = if target.contains("darwin") {
+        "libghostty-vt.0.1.0.dylib"
+    } else {
+        "libghostty-vt.so.0.1.0"
+    };
+    let ready = lib_dir.join(lib_name).exists()
+        && include_dir.join("ghostty").join("vt.h").exists()
+        && fs::read_to_string(&stamp_path).ok().as_deref() == Some(expected_stamp.as_str());
+    if !ready {
+        if install_prefix.exists() {
+            let _ = fs::remove_dir_all(&install_prefix);
+        }
+        fs::create_dir_all(&install_prefix)
+            .unwrap_or_else(|e| panic!("failed to create {}: {e}", install_prefix.display()));
+
+        let ghostty_dir = match env::var("GHOSTTY_SOURCE_DIR") {
+            Ok(dir) => {
+                let p = PathBuf::from(dir);
+                assert!(
+                    p.join("build.zig").exists(),
+                    "GHOSTTY_SOURCE_DIR does not contain build.zig: {}",
+                    p.display()
+                );
+                p
+            }
+            Err(_) => find_cached_ghostty_source(out_dir).unwrap_or_else(|| fetch_ghostty(out_dir)),
+        };
+
+        let mut build = Command::new("zig");
+        build
+            .arg("build")
+            .arg("-Demit-lib-vt")
+            .arg(format!("-Doptimize={optimize}"))
+            .arg("--prefix")
+            .arg(&install_prefix)
+            .current_dir(&ghostty_dir);
+
+        if target != host {
+            let zig_target = zig_target(target);
+            build.arg(format!("-Dtarget={zig_target}"));
+        }
+
+        run(build, "zig build");
+        let _ = fs::remove_dir_all(install_prefix.join("Ghostty.app"));
+        fs::write(&stamp_path, expected_stamp)
+            .unwrap_or_else(|e| panic!("failed to write {}: {e}", stamp_path.display()));
+    }
+
+    (lib_dir, include_dir)
 }
 
 fn zig_optimize_mode() -> &'static str {
