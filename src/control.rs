@@ -26,6 +26,7 @@ pub enum Request {
     ListTabs,
     GetClipboard,
     GetUiSnapshot,
+    AppAction { action: crate::bindings::Action },
     ExecuteCommand { input: String },
     SendText { text: String },
     SendVt { text: String },
@@ -187,6 +188,7 @@ pub enum ControlCmd {
     ListTabs { reply: mpsc::Sender<Response> },
     GetClipboard { reply: mpsc::Sender<Response> },
     GetUiSnapshot { reply: mpsc::Sender<Response> },
+    AppAction { action: crate::bindings::Action },
     ExecuteCommand { input: String },
     SendKey { keyspec: String },
     SendText { text: String },
@@ -343,6 +345,10 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
         }
         Request::ExecuteCommand { input } => {
             let _ = tx.send(ControlCmd::ExecuteCommand { input });
+            Response::Ok { ok: true }
+        }
+        Request::AppAction { action } => {
+            let _ = tx.send(ControlCmd::AppAction { action });
             Response::Ok { ok: true }
         }
         Request::SendText { text } => {
@@ -526,6 +532,26 @@ mod tests {
         assert!(matches!(
             rx.recv().unwrap(),
             ControlCmd::ExecuteCommand { input } if input == "search"
+        ));
+    }
+
+    #[test]
+    fn app_action_request_maps_to_control_command() {
+        let (tx, rx) = mpsc::channel();
+
+        let response = dispatch_request(
+            Request::AppAction {
+                action: crate::bindings::Action::NewSplit(crate::bindings::SplitDirection::Right),
+            },
+            &tx,
+        );
+
+        assert!(matches!(response, Response::Ok { ok: true }));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            ControlCmd::AppAction {
+                action: crate::bindings::Action::NewSplit(crate::bindings::SplitDirection::Right),
+            }
         ));
     }
 

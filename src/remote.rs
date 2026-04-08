@@ -36,6 +36,7 @@ pub enum MessageType {
     Scroll = 0x0a,
     Key = 0x0b,
     ExecuteCommand = 0x0c,
+    AppAction = 0x0d,
 
     AuthOk = 0x80,
     AuthFail = 0x81,
@@ -69,6 +70,7 @@ impl TryFrom<u8> for MessageType {
             0x0a => Self::Scroll,
             0x0b => Self::Key,
             0x0c => Self::ExecuteCommand,
+            0x0d => Self::AppAction,
             0x80 => Self::AuthOk,
             0x81 => Self::AuthFail,
             0x82 => Self::SessionList,
@@ -159,6 +161,10 @@ pub enum RemoteCmd {
     ExecuteCommand {
         client_id: u64,
         input: String,
+    },
+    AppAction {
+        client_id: u64,
+        action: crate::bindings::Action,
     },
     Destroy {
         client_id: u64,
@@ -656,6 +662,9 @@ fn read_loop(
             MessageType::ExecuteCommand => String::from_utf8(payload)
                 .ok()
                 .map(|input| RemoteCmd::ExecuteCommand { client_id, input }),
+            MessageType::AppAction => serde_json::from_slice::<crate::bindings::Action>(&payload)
+                .ok()
+                .map(|action| RemoteCmd::AppAction { client_id, action }),
             MessageType::Destroy => Some(RemoteCmd::Destroy {
                 client_id,
                 session_id: parse_session_id(&payload),

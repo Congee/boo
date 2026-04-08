@@ -8,7 +8,7 @@ use crate::config::Config;
 use crate::ffi;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Action {
     NewSplit(SplitDirection),
     GotoSplit(PaneFocusDirection),
@@ -48,13 +48,13 @@ pub enum Action {
     ReloadConfig,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum TabTarget {
     Index(usize),
     Last,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum Direction {
     Left,
     Right,
@@ -62,7 +62,7 @@ pub enum Direction {
     Down,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SplitDirection {
     Right,
     Down,
@@ -70,7 +70,7 @@ pub enum SplitDirection {
     Up,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PaneFocusDirection {
     Previous,
     Next,

@@ -19,6 +19,9 @@ pub enum Command {
     GetUiSnapshot {
         reply: mpsc::Sender<control::Response>,
     },
+    AppAction {
+        action: crate::bindings::Action,
+    },
     ExecuteCommand {
         input: String,
     },
@@ -80,6 +83,10 @@ pub enum Command {
     RemoteExecuteCommand {
         client_id: u64,
         input: String,
+    },
+    RemoteAppAction {
+        client_id: u64,
+        action: crate::bindings::Action,
     },
     RemoteDestroy {
         client_id: u64,
@@ -165,6 +172,7 @@ impl From<control::ControlCmd> for Command {
             control::ControlCmd::ListTabs { reply } => Self::ListTabs { reply },
             control::ControlCmd::GetClipboard { reply } => Self::GetClipboard { reply },
             control::ControlCmd::GetUiSnapshot { reply } => Self::GetUiSnapshot { reply },
+            control::ControlCmd::AppAction { action } => Self::AppAction { action },
             control::ControlCmd::ExecuteCommand { input } => Self::ExecuteCommand { input },
             control::ControlCmd::SendKey { keyspec } => Self::SendKey { keyspec },
             control::ControlCmd::SendText { text } => Self::SendText { text },
@@ -231,6 +239,9 @@ impl From<remote::RemoteCmd> for Command {
             },
             remote::RemoteCmd::ExecuteCommand { client_id, input } => {
                 Self::RemoteExecuteCommand { client_id, input }
+            }
+            remote::RemoteCmd::AppAction { client_id, action } => {
+                Self::RemoteAppAction { client_id, action }
             }
             remote::RemoteCmd::Destroy {
                 client_id,

@@ -93,6 +93,9 @@ impl BooApp {
             server::Command::ExecuteCommand { input } => {
                 self.execute_command(&input);
             }
+            server::Command::AppAction { action } => {
+                self.dispatch_binding_action(action);
+            }
             server::Command::SendText { text } => {
                 let _ = self
                     .backend
@@ -302,6 +305,21 @@ impl BooApp {
             }
             server::Command::RemoteExecuteCommand { client_id, input } => {
                 self.execute_command(&input);
+                let focused_session_id = self.server.tabs.active_session_id();
+                if let Some(server) = self
+                    .remote_server_for_client(client_id)
+                    .or(self.server.local_gui_server.as_ref())
+                    .or(self.server.remote_server.as_ref())
+                {
+                    server.send_session_list(client_id, &self.remote_sessions());
+                    if let Some(session_id) = focused_session_id {
+                        server.send_attached(client_id, session_id);
+                        self.publish_remote_session(session_id);
+                    }
+                }
+            }
+            server::Command::RemoteAppAction { client_id, action } => {
+                self.dispatch_binding_action(action);
                 let focused_session_id = self.server.tabs.active_session_id();
                 if let Some(server) = self
                     .remote_server_for_client(client_id)

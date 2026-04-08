@@ -506,25 +506,16 @@ impl ClientApp {
     }
 
     fn dispatch_binding_action(&mut self, action: bindings::Action) {
-        let command = match &action {
-            bindings::Action::GotoTab(bindings::TabTarget::Index(index)) => {
-                Some(format!("goto-tab {}", index + 1))
-            }
-            bindings::Action::GotoTab(bindings::TabTarget::Last) => Some("last-tab".to_string()),
-            _ => action_command(&action).map(ToString::to_string),
-        };
-        if let Some(command) = command {
-            self.send_stream_or_control(
-                StreamCommand::ExecuteCommand {
-                    input: command.clone(),
-                },
-                control::Request::ExecuteCommand {
-                    input: command,
-                },
-            );
-            if matches!(action, bindings::Action::ReloadConfig) {
-                self.bindings = bindings::Bindings::from_config(&config::Config::load());
-            }
+        self.send_stream_or_control(
+            StreamCommand::AppAction {
+                action: action.clone(),
+            },
+            control::Request::AppAction {
+                action: action.clone(),
+            },
+        );
+        if matches!(action, bindings::Action::ReloadConfig) {
+            self.bindings = bindings::Bindings::from_config(&config::Config::load());
         }
     }
 
@@ -1200,6 +1191,7 @@ pub(crate) struct RemoteRowDelta {
 pub(crate) enum StreamCommand {
     ListSessions,
     Attach(u32),
+    AppAction { action: bindings::Action },
     ExecuteCommand { input: String },
     Input { input_seq: u64, bytes: Vec<u8> },
     Key { input_seq: u64, keyspec: String },
@@ -1255,6 +1247,18 @@ fn local_stream_subscription(
                                 remote::MessageType::Attach,
                                 &session_id.to_le_bytes(),
                             ),
+                            StreamCommand::AppAction { action } => {
+                                let Ok(payload) = serde_json::to_vec(&action) else {
+                                    let _ = writer_event_tx
+                                        .unbounded_send(LocalStreamEvent::Disconnected);
+                                    break;
+                                };
+                                write_stream_message(
+                                    &mut write,
+                                    remote::MessageType::AppAction,
+                                    &payload,
+                                )
+                            }
                             StreamCommand::ExecuteCommand { input } => write_stream_message(
                                 &mut write,
                                 remote::MessageType::ExecuteCommand,
@@ -2007,6 +2011,26 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_binding_action_sends_typed_split_action_over_stream() {
+        let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.stream_tx = Some(tx);
+        app.mode = ClientMode::Attached;
+
+        app.dispatch_binding_action(bindings::Action::NewSplit(
+            bindings::SplitDirection::Right,
+        ));
+
+        match rx.recv().unwrap() {
+            StreamCommand::AppAction { action } => match action {
+                bindings::Action::NewSplit(bindings::SplitDirection::Right) => {}
+                other => panic!("unexpected action: {other:?}"),
+            },
+            other => panic!("unexpected stream command: {other:?}"),
+        }
+    }
+
+    #[test]
     fn stream_batch_window_only_applies_to_unacked_screen_updates() {
         assert_eq!(
             stream_batch_window_for_event(&LocalStreamEvent::Delta {
@@ -2427,39 +2451,6 @@ fn named_key_from_iced_key(key: &keyboard::Key) -> Option<bindings::NamedKey> {
         keyboard::Key::Named(Named::Home) => Some(bindings::NamedKey::Home),
         keyboard::Key::Named(Named::End) => Some(bindings::NamedKey::End),
         keyboard::Key::Named(Named::Escape) => Some(bindings::NamedKey::Escape),
-        _ => None,
-    }
-}
-
-fn action_command(action: &bindings::Action) -> Option<&'static str> {
-    match action {
-        bindings::Action::NewTab => Some("new-tab"),
-        bindings::Action::NextTab => Some("next-tab"),
-        bindings::Action::PrevTab | bindings::Action::PreviousTab => Some("prev-tab"),
-        bindings::Action::ReloadConfig => Some("reload-config"),
-        bindings::Action::ChooseBuffer => Some("choose-buffer"),
-        bindings::Action::ChooseTree => Some("choose-tree"),
-        bindings::Action::FindWindow => Some("find-window"),
-        bindings::Action::DisplayPanes => Some("display-panes"),
-        bindings::Action::OpenCommandPrompt => Some("command-prompt"),
-        bindings::Action::Search => Some("search"),
-        bindings::Action::Paste => Some("paste"),
-        bindings::Action::MarkPane => Some("mark-pane"),
-        bindings::Action::ClearMarkedPane => Some("clear-marked-pane"),
-        bindings::Action::BreakPane => Some("break-pane"),
-        bindings::Action::CloseTab => Some("close-tab"),
-        bindings::Action::EnterCopyMode => Some("copy-mode"),
-        bindings::Action::Copy => Some("copy"),
-        bindings::Action::ToggleZoom => Some("zoom"),
-        bindings::Action::NextLayout => Some("next-layout"),
-        bindings::Action::PreviousLayout => Some("prev-layout"),
-        bindings::Action::RebalanceLayout => Some("rebalance-layout"),
-        bindings::Action::NextPane => Some("next-pane"),
-        bindings::Action::PreviousPane => Some("prev-pane"),
-        bindings::Action::SwapPaneNext => Some("swap-pane-next"),
-        bindings::Action::SwapPanePrevious => Some("swap-pane-prev"),
-        bindings::Action::RotatePanesForward => Some("rotate-panes-forward"),
-        bindings::Action::RotatePanesBackward => Some("rotate-panes-backward"),
         _ => None,
     }
 }

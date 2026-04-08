@@ -21,7 +21,7 @@ pub struct SessionTab {
 }
 
 /// How panes in a tab are arranged.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum TabLayout {
     /// Manual splits — each pane after the first has an explicit SplitDir.
     Manual,
