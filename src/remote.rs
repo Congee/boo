@@ -16,6 +16,13 @@ const MAGIC: [u8; 2] = [0x47, 0x53];
 const HEADER_LEN: usize = 7;
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 
+const LOCAL_INPUT_SEQ_LEN: usize = 8;
+const REMOTE_FULL_STATE_HEADER_LEN: usize = 14;
+const REMOTE_DELTA_HEADER_LEN: usize = 13;
+#[cfg(test)]
+const LOCAL_DELTA_HEADER_LEN: usize = LOCAL_INPUT_SEQ_LEN + REMOTE_DELTA_HEADER_LEN;
+const REMOTE_CELL_ENCODED_LEN: usize = 12;
+
 enum OutboundMessage {
     Frame(Vec<u8>),
     ScreenUpdate(Vec<u8>),
@@ -129,6 +136,8 @@ pub struct RemoteFullState {
     pub cursor_x: u16,
     pub cursor_y: u16,
     pub cursor_visible: bool,
+    pub cursor_blinking: bool,
+    pub cursor_style: i32,
     pub cells: Vec<RemoteCell>,
 }
 
@@ -874,8 +883,10 @@ pub fn encode_full_state(
     latest_input_seq: Option<u64>,
     local: bool,
 ) -> Vec<u8> {
-    let prefix_len = if local { 8 } else { 0 };
-    let mut payload = Vec::with_capacity(prefix_len + 12 + state.cells.len() * 12);
+    let prefix_len = if local { LOCAL_INPUT_SEQ_LEN } else { 0 };
+    let mut payload = Vec::with_capacity(
+        prefix_len + REMOTE_FULL_STATE_HEADER_LEN + state.cells.len() * REMOTE_CELL_ENCODED_LEN,
+    );
     if local {
         payload.extend_from_slice(&latest_input_seq.unwrap_or(0).to_le_bytes());
     }
@@ -884,7 +895,8 @@ pub fn encode_full_state(
     payload.extend_from_slice(&state.cursor_x.to_le_bytes());
     payload.extend_from_slice(&state.cursor_y.to_le_bytes());
     payload.push(u8::from(state.cursor_visible));
-    payload.extend_from_slice(&[0, 0, 0]);
+    payload.push(u8::from(state.cursor_blinking));
+    payload.extend_from_slice(&state.cursor_style.to_le_bytes());
     for cell in &state.cells {
         payload.extend_from_slice(&cell.codepoint.to_le_bytes());
         payload.extend_from_slice(&cell.fg);
@@ -916,8 +928,8 @@ fn encode_delta(
         return None;
     }
     if previous == current {
-        let prefix_len = if local { 8 } else { 0 };
-        let mut payload = Vec::with_capacity(prefix_len + 8);
+        let prefix_len = if local { LOCAL_INPUT_SEQ_LEN } else { 0 };
+        let mut payload = Vec::with_capacity(prefix_len + REMOTE_DELTA_HEADER_LEN);
         if local {
             payload.extend_from_slice(&latest_input_seq.unwrap_or(0).to_le_bytes());
         }
@@ -925,7 +937,9 @@ fn encode_delta(
         payload.extend_from_slice(&current.cursor_x.to_le_bytes());
         payload.extend_from_slice(&current.cursor_y.to_le_bytes());
         payload.push(u8::from(current.cursor_visible));
+        payload.push(u8::from(current.cursor_blinking));
         payload.push(0);
+        payload.extend_from_slice(&current.cursor_style.to_le_bytes());
         return Some(payload);
     }
 
@@ -944,8 +958,8 @@ fn encode_delta(
     }
 
     if changed_rows.is_empty() {
-        let prefix_len = if local { 8 } else { 0 };
-        let mut payload = Vec::with_capacity(prefix_len + 8);
+        let prefix_len = if local { LOCAL_INPUT_SEQ_LEN } else { 0 };
+        let mut payload = Vec::with_capacity(prefix_len + REMOTE_DELTA_HEADER_LEN);
         if local {
             payload.extend_from_slice(&latest_input_seq.unwrap_or(0).to_le_bytes());
         }
@@ -953,7 +967,9 @@ fn encode_delta(
         payload.extend_from_slice(&current.cursor_x.to_le_bytes());
         payload.extend_from_slice(&current.cursor_y.to_le_bytes());
         payload.push(u8::from(current.cursor_visible));
+        payload.push(u8::from(current.cursor_blinking));
         payload.push(0);
+        payload.extend_from_slice(&current.cursor_style.to_le_bytes());
         return Some(payload);
     }
 
@@ -999,11 +1015,13 @@ fn encode_delta(
     payload.extend_from_slice(&current.cursor_x.to_le_bytes());
     payload.extend_from_slice(&current.cursor_y.to_le_bytes());
     payload.push(u8::from(current.cursor_visible));
+    payload.push(u8::from(current.cursor_blinking));
     let mut flags = 0u8;
     if scroll_rows.is_some() {
         flags |= 0x01;
     }
     payload.push(flags);
+    payload.extend_from_slice(&current.cursor_style.to_le_bytes());
     if let Some(scroll_rows) = scroll_rows {
         payload.extend_from_slice(&scroll_rows.to_le_bytes());
     }
@@ -1176,6 +1194,8 @@ pub fn full_state_from_ui(snapshot: &crate::control::UiTerminalSnapshot) -> Remo
         cursor_x: snapshot.cursor.x,
         cursor_y: snapshot.cursor.y,
         cursor_visible: snapshot.cursor.visible,
+        cursor_blinking: snapshot.cursor.blinking,
+        cursor_style: snapshot.cursor.style,
         cells,
     }
 }
@@ -1222,6 +1242,8 @@ pub fn full_state_from_terminal(
         cursor_x: snapshot.cursor.x,
         cursor_y: snapshot.cursor.y,
         cursor_visible: snapshot.cursor.visible,
+        cursor_blinking: snapshot.cursor.blinking,
+        cursor_style: snapshot.cursor.style,
         cells,
     }
 }
@@ -1257,6 +1279,8 @@ mod tests {
                 cursor_x: 1,
                 cursor_y: 0,
                 cursor_visible: true,
+                cursor_blinking: true,
+                cursor_style: 5,
                 cells: vec![
                     RemoteCell {
                         codepoint: u32::from('A'),
@@ -1277,21 +1301,22 @@ mod tests {
             None,
             false,
         );
-        assert_eq!(payload.len(), 12 + 2 * 12);
+        assert_eq!(payload.len(), REMOTE_FULL_STATE_HEADER_LEN + 2 * REMOTE_CELL_ENCODED_LEN);
         assert_eq!(u16::from_le_bytes(payload[0..2].try_into().unwrap()), 1);
         assert_eq!(u16::from_le_bytes(payload[2..4].try_into().unwrap()), 2);
         assert_eq!(
-            u32::from_le_bytes(payload[12..16].try_into().unwrap()),
+            u32::from_le_bytes(payload[REMOTE_FULL_STATE_HEADER_LEN..REMOTE_FULL_STATE_HEADER_LEN + 4].try_into().unwrap()),
             u32::from('A')
         );
-        assert_eq!(payload[22], 0x21);
-        assert_eq!(payload[23], 0);
+        let second_offset = REMOTE_FULL_STATE_HEADER_LEN + REMOTE_CELL_ENCODED_LEN;
+        assert_eq!(payload[REMOTE_FULL_STATE_HEADER_LEN + 10], 0x21);
+        assert_eq!(payload[REMOTE_FULL_STATE_HEADER_LEN + 11], 0);
         assert_eq!(
-            u32::from_le_bytes(payload[24..28].try_into().unwrap()),
+            u32::from_le_bytes(payload[second_offset..second_offset + 4].try_into().unwrap()),
             u32::from('好')
         );
-        assert_eq!(payload[34], 0x42);
-        assert_eq!(payload[35], 1);
+        assert_eq!(payload[second_offset + 10], 0x42);
+        assert_eq!(payload[second_offset + 11], 1);
     }
 
     #[test]
@@ -1303,6 +1328,8 @@ mod tests {
                 cursor_x: 0,
                 cursor_y: 0,
                 cursor_visible: true,
+                cursor_blinking: false,
+                cursor_style: 1,
                 cells: vec![RemoteCell {
                     codepoint: u32::from('A'),
                     fg: [1, 2, 3],
@@ -1328,6 +1355,7 @@ mod tests {
             pwd: String::new(),
             cursor: control::UiCursorSnapshot {
                 visible: true,
+                blinking: false,
                 x: 1,
                 y: 0,
                 style: 0,
@@ -1371,6 +1399,7 @@ mod tests {
             rows: 1,
             cursor: crate::vt_backend_core::CursorSnapshot {
                 visible: true,
+                blinking: true,
                 x: 1,
                 y: 0,
                 style: 0,
@@ -1443,6 +1472,8 @@ mod tests {
             cursor_x: 0,
             cursor_y: 2,
             cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 1,
             cells: [row('a'), row('b'), row('c')].concat(),
         };
         let current = RemoteFullState {
@@ -1451,14 +1482,30 @@ mod tests {
             cursor_x: 0,
             cursor_y: 2,
             cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 1,
             cells: [row('b'), row('c'), row('d')].concat(),
         };
 
         let payload = encode_delta(&previous, &current, Some(7), false).expect("delta payload");
         assert_eq!(u16::from_le_bytes(payload[0..2].try_into().unwrap()), 1);
-        assert_eq!(payload[7] & 0x01, 0x01);
-        assert_eq!(i16::from_le_bytes(payload[8..10].try_into().unwrap()), 1);
-        assert_eq!(u16::from_le_bytes(payload[10..12].try_into().unwrap()), 2);
+        assert_eq!(payload[8] & 0x01, 0x01);
+        assert_eq!(
+            i16::from_le_bytes(
+                payload[REMOTE_DELTA_HEADER_LEN..REMOTE_DELTA_HEADER_LEN + 2]
+                    .try_into()
+                    .unwrap()
+            ),
+            1
+        );
+        assert_eq!(
+            u16::from_le_bytes(
+                payload[REMOTE_DELTA_HEADER_LEN + 2..REMOTE_DELTA_HEADER_LEN + 4]
+                    .try_into()
+                    .unwrap()
+            ),
+            2
+        );
     }
 
     #[test]
@@ -1478,6 +1525,8 @@ mod tests {
             cursor_x: 0,
             cursor_y: 3,
             cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 1,
             cells: [row('a'), row('b'), row('c'), row('d')].concat(),
         };
         let current = RemoteFullState {
@@ -1486,6 +1535,8 @@ mod tests {
             cursor_x: 0,
             cursor_y: 3,
             cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 1,
             cells: [row('b'), row('c'), row('d'), row('e')].concat(),
         };
 
@@ -1507,6 +1558,8 @@ mod tests {
             cursor_x: 2,
             cursor_y: 0,
             cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 1,
             cells: vec![cell('a'), cell('b'), cell('c'), cell('d'), cell('e')],
         };
         let current = RemoteFullState {
@@ -1515,16 +1568,24 @@ mod tests {
             cursor_x: 2,
             cursor_y: 0,
             cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 1,
             cells: vec![cell('a'), cell('b'), cell('X'), cell('d'), cell('e')],
         };
 
         let payload = encode_delta(&previous, &current, Some(5), true).expect("delta payload");
-        assert_eq!(u16::from_le_bytes(payload[8..10].try_into().unwrap()), 1);
-        assert_eq!(u16::from_le_bytes(payload[16..18].try_into().unwrap()), 0);
-        assert_eq!(u16::from_le_bytes(payload[18..20].try_into().unwrap()), 2);
-        assert_eq!(u16::from_le_bytes(payload[20..22].try_into().unwrap()), 1);
+        let row_offset = LOCAL_DELTA_HEADER_LEN;
+        assert_eq!(u16::from_le_bytes(payload[row_offset..row_offset + 2].try_into().unwrap()), 0);
         assert_eq!(
-            u32::from_le_bytes(payload[22..26].try_into().unwrap()),
+            u16::from_le_bytes(payload[row_offset + 2..row_offset + 4].try_into().unwrap()),
+            2
+        );
+        assert_eq!(
+            u16::from_le_bytes(payload[row_offset + 4..row_offset + 6].try_into().unwrap()),
+            1
+        );
+        assert_eq!(
+            u32::from_le_bytes(payload[row_offset + 6..row_offset + 10].try_into().unwrap()),
             u32::from('X')
         );
     }

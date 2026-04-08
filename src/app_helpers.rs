@@ -1,9 +1,35 @@
 use crate::{bindings, config, control, ffi, mouse, platform, splits, vt};
 use iced::keyboard;
+use std::time::{Duration, Instant};
 
 pub(crate) enum TextInputAction {
     Commit(String),
     Command(platform::TextInputCommand),
+}
+
+pub(crate) fn cursor_blink_visible(epoch: Instant, interval: Duration) -> bool {
+    if interval.is_zero() {
+        return true;
+    }
+    let cycle_ns = interval.as_nanos().saturating_mul(2);
+    if cycle_ns == 0 {
+        return true;
+    }
+    epoch.elapsed().as_nanos() % cycle_ns < interval.as_nanos()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cursor_blink_visibility_cycles_between_visible_and_hidden() {
+        let interval = Duration::from_millis(100);
+        let visible_epoch = Instant::now() - Duration::from_millis(50);
+        let hidden_epoch = Instant::now() - Duration::from_millis(150);
+        assert!(cursor_blink_visible(visible_epoch, interval));
+        assert!(!cursor_blink_visible(hidden_epoch, interval));
+    }
 }
 
 pub(crate) fn shifted_codepoint(keycode: u32, mods: i32) -> u32 {

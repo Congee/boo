@@ -1,5 +1,6 @@
 use crate::bindings;
 use crate::control;
+use crate::cursor_blink_visible;
 use crate::{AppKeyEvent, AppMouseButton, AppMouseEvent};
 use crate::iced_mods_to_ghostty;
 use crate::keymap;
@@ -26,10 +27,17 @@ use std::time::{Duration, Instant};
 const STATUS_BAR_HEIGHT: f64 = 20.0;
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 const IDLE_TICK_INTERVAL: Duration = Duration::from_secs(1);
+const DEFAULT_CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(600);
 const STREAM_RECONNECT_DELAY: Duration = Duration::from_millis(250);
 const PASSIVE_STREAM_BATCH_WINDOW: Duration = Duration::from_millis(24);
 const SNAPSHOT_RETRY_TICKS: u8 = 3;
 const SNAPSHOT_KEEPALIVE_TICKS: u8 = 30;
+const LOCAL_STREAM_INPUT_SEQ_LEN: usize = 8;
+const REMOTE_FULL_STATE_HEADER_LEN: usize = 14;
+const LOCAL_FULL_STATE_HEADER_LEN: usize = LOCAL_STREAM_INPUT_SEQ_LEN + REMOTE_FULL_STATE_HEADER_LEN;
+const REMOTE_DELTA_HEADER_LEN: usize = 13;
+const LOCAL_DELTA_HEADER_LEN: usize = LOCAL_STREAM_INPUT_SEQ_LEN + REMOTE_DELTA_HEADER_LEN;
+const REMOTE_CELL_ENCODED_LEN: usize = 12;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -102,6 +110,9 @@ pub struct ClientApp {
     font_size: f32,
     background_opacity: f32,
     background_opacity_cells: bool,
+    cursor_blink_interval: Duration,
+    app_focused: bool,
+    cursor_blink_epoch: Instant,
     tick_counter: u8,
     next_input_seq: u64,
     pending_input_latencies: HashMap<u64, Instant>,
@@ -120,6 +131,12 @@ impl ClientApp {
         !self.pane_snapshots.is_empty()
     }
 
+    fn has_blinking_cursor(&self) -> bool {
+        self.pane_snapshots
+            .values()
+            .any(|snapshot| snapshot.cursor.visible && snapshot.cursor.blinking)
+    }
+
     fn stream_ready_for_terminal_io(&self) -> bool {
         self.stream_tx.is_some() && matches!(self.mode, ClientMode::Attached)
     }
@@ -131,6 +148,17 @@ impl ClientApp {
             .as_ref()
             .map(|snapshot| snapshot.appearance.font_size)
             .unwrap_or(DEFAULT_FONT_SIZE);
+        let background_opacity = snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.appearance.background_opacity)
+            .unwrap_or(1.0);
+        let background_opacity_cells = snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.appearance.background_opacity_cells);
+        let cursor_blink_interval = snapshot
+            .as_ref()
+            .map(|snapshot| Duration::from_nanos(snapshot.appearance.cursor_blink_interval_ns))
+            .unwrap_or(DEFAULT_CURSOR_BLINK_INTERVAL);
         let (cell_width, cell_height) = terminal_metrics(font_size);
         let ui_state = snapshot
             .as_ref()
@@ -155,8 +183,11 @@ impl ClientApp {
                 cell_width,
                 cell_height,
                 font_size,
-                background_opacity: 1.0,
-                background_opacity_cells: false,
+                background_opacity,
+                background_opacity_cells,
+                cursor_blink_interval,
+                app_focused: true,
+                cursor_blink_epoch: Instant::now(),
                 tick_counter: 0,
                 next_input_seq: 1,
                 pending_input_latencies: HashMap::new(),
@@ -201,6 +232,14 @@ impl ClientApp {
             Message::IcedEvent(event) => match event {
                 Event::Window(window::Event::Resized(size)) => {
                     self.send_resize(size);
+                }
+                Event::Window(window::Event::Focused) => {
+                    self.app_focused = true;
+                    self.cursor_blink_epoch = Instant::now();
+                }
+                Event::Window(window::Event::Unfocused) => {
+                    self.app_focused = false;
+                    self.cursor_blink_epoch = Instant::now();
                 }
                 Event::Keyboard(event) => self.handle_keyboard(event),
                 Event::Mouse(event) => self.handle_mouse(event),
@@ -296,6 +335,10 @@ impl ClientApp {
                 1,
                 self.background_opacity,
                 self.background_opacity_cells,
+                !terminal_snapshot.cursor.blinking
+                    || self.cursor_blink_interval.is_zero()
+                    || !self.app_focused
+                    || cursor_blink_visible(self.cursor_blink_epoch, self.cursor_blink_interval),
                 Vec::new(),
                 Color::from_rgba(0.65, 0.72, 0.95, 0.35),
                 None,
@@ -340,6 +383,12 @@ impl ClientApp {
         {
             subscriptions.push(time::every(IDLE_TICK_INTERVAL).map(|_| Message::Frame));
         }
+        if !self.cursor_blink_interval.is_zero()
+            && self.has_blinking_cursor()
+            && self.has_paintable_terminal()
+        {
+            subscriptions.push(time::every(self.cursor_blink_interval).map(|_| Message::Frame));
+        }
         Subscription::batch(subscriptions)
     }
 
@@ -372,6 +421,9 @@ impl ClientApp {
                 self.font_size = snapshot.appearance.font_size.max(8.0);
                 self.background_opacity = snapshot.appearance.background_opacity;
                 self.background_opacity_cells = snapshot.appearance.background_opacity_cells;
+                self.cursor_blink_interval =
+                    Duration::from_nanos(snapshot.appearance.cursor_blink_interval_ns);
+                self.cursor_blink_epoch = Instant::now();
                 (self.cell_width, self.cell_height) = terminal_metrics(self.font_size);
                 self.ui_state = ClientUiState::from_snapshot(&snapshot);
                 self.focused_pane_id = snapshot.focused_pane;
@@ -1046,9 +1098,10 @@ fn remote_full_state_to_vt_snapshot(
         pwd: String::new(),
         cursor: vt_backend_core::CursorSnapshot {
             visible: state.cursor_visible,
+            blinking: state.cursor_blinking,
             x: state.cursor_x,
             y: state.cursor_y,
-            style: 1,
+            style: state.cursor_style,
         },
         rows_data,
         row_revisions,
@@ -1081,6 +1134,7 @@ fn ui_terminal_to_vt_snapshot(
         pwd: snapshot.pwd.clone(),
         cursor: vt_backend_core::CursorSnapshot {
             visible: snapshot.cursor.visible,
+            blinking: snapshot.cursor.blinking,
             x: snapshot.cursor.x,
             y: snapshot.cursor.y,
             style: snapshot.cursor.style,
@@ -1208,6 +1262,8 @@ pub(crate) struct RemoteDelta {
     cursor_x: u16,
     cursor_y: u16,
     cursor_visible: bool,
+    cursor_blinking: bool,
+    cursor_style: i32,
     scroll_rows: i16,
     changed_rows: Vec<RemoteRowDelta>,
 }
@@ -1741,7 +1797,7 @@ fn decode_remote_string(payload: &[u8], offset: &mut usize) -> Option<String> {
 }
 
 fn decode_remote_full_state(payload: &[u8]) -> Option<(Option<u64>, remote::RemoteFullState)> {
-    if payload.len() < 20 {
+    if payload.len() < LOCAL_FULL_STATE_HEADER_LEN {
         return None;
     }
     let ack_input_seq = u64::from_le_bytes(payload[..8].try_into().ok()?);
@@ -1750,12 +1806,16 @@ fn decode_remote_full_state(payload: &[u8]) -> Option<(Option<u64>, remote::Remo
     let cursor_x = u16::from_le_bytes([payload[12], payload[13]]);
     let cursor_y = u16::from_le_bytes([payload[14], payload[15]]);
     let cursor_visible = payload[16] != 0;
+    let cursor_blinking = payload[17] != 0;
+    let cursor_style = i32::from_le_bytes([payload[18], payload[19], payload[20], payload[21]]);
     let cell_count = rows as usize * cols as usize;
-    if payload.len() < 20 + cell_count * 12 {
+    if payload.len()
+        < LOCAL_FULL_STATE_HEADER_LEN + cell_count * REMOTE_CELL_ENCODED_LEN
+    {
         return None;
     }
     let mut cells = Vec::with_capacity(cell_count);
-    let mut offset = 20usize;
+    let mut offset = LOCAL_FULL_STATE_HEADER_LEN;
     for _ in 0..cell_count {
         cells.push(remote::RemoteCell {
             codepoint: u32::from_le_bytes([
@@ -1794,13 +1854,15 @@ fn decode_remote_full_state(payload: &[u8]) -> Option<(Option<u64>, remote::Remo
             cursor_x,
             cursor_y,
             cursor_visible,
+            cursor_blinking,
+            cursor_style,
             cells,
         },
     ))
 }
 
 fn decode_remote_delta(payload: &[u8]) -> Option<(Option<u64>, RemoteDelta)> {
-    if payload.len() < 16 {
+    if payload.len() < LOCAL_DELTA_HEADER_LEN {
         return None;
     }
     let ack_input_seq = u64::from_le_bytes(payload[..8].try_into().ok()?);
@@ -1808,8 +1870,10 @@ fn decode_remote_delta(payload: &[u8]) -> Option<(Option<u64>, RemoteDelta)> {
     let cursor_x = u16::from_le_bytes([payload[10], payload[11]]);
     let cursor_y = u16::from_le_bytes([payload[12], payload[13]]);
     let cursor_visible = payload[14] != 0;
-    let flags = payload[15];
-    let mut offset = 16usize;
+    let cursor_blinking = payload[15] != 0;
+    let flags = payload[16];
+    let cursor_style = i32::from_le_bytes([payload[17], payload[18], payload[19], payload[20]]);
+    let mut offset = LOCAL_DELTA_HEADER_LEN;
     let scroll_rows = if (flags & 0x01) != 0 {
         if offset + 2 > payload.len() {
             return None;
@@ -1882,6 +1946,8 @@ fn decode_remote_delta(payload: &[u8]) -> Option<(Option<u64>, RemoteDelta)> {
             cursor_x,
             cursor_y,
             cursor_visible,
+            cursor_blinking,
+            cursor_style,
             scroll_rows,
             changed_rows,
         },
@@ -1895,6 +1961,8 @@ fn apply_remote_delta_snapshot(
     snapshot.cursor.x = delta.cursor_x;
     snapshot.cursor.y = delta.cursor_y;
     snapshot.cursor.visible = delta.cursor_visible;
+    snapshot.cursor.blinking = delta.cursor_blinking;
+    snapshot.cursor.style = delta.cursor_style;
     let cols = snapshot.cols as usize;
     if snapshot.row_revisions.len() != snapshot.rows_data.len() {
         snapshot.row_revisions.resize(snapshot.rows_data.len(), 1);
@@ -2176,6 +2244,8 @@ mod tests {
                     cursor_x: 0,
                     cursor_y: 0,
                     cursor_visible: true,
+                    cursor_blinking: false,
+                    cursor_style: 1,
                     scroll_rows: 0,
                     changed_rows: Vec::new(),
                 },
@@ -2189,6 +2259,8 @@ mod tests {
                     cursor_x: 0,
                     cursor_y: 0,
                     cursor_visible: true,
+                    cursor_blinking: false,
+                    cursor_style: 1,
                     scroll_rows: 0,
                     changed_rows: Vec::new(),
                 },
@@ -2209,6 +2281,8 @@ mod tests {
                 cursor_x: 0,
                 cursor_y: 0,
                 cursor_visible: true,
+                cursor_blinking: false,
+                cursor_style: 1,
                 scroll_rows: 0,
                 changed_rows: Vec::new(),
             },
@@ -2221,6 +2295,8 @@ mod tests {
                 cursor_x: 0,
                 cursor_y: 0,
                 cursor_visible: true,
+                cursor_blinking: false,
+                cursor_style: 1,
                 cells: vec![remote::RemoteCell {
                     codepoint: 0,
                     fg: [0, 0, 0],
@@ -2236,6 +2312,8 @@ mod tests {
                 cursor_x: 1,
                 cursor_y: 0,
                 cursor_visible: true,
+                cursor_blinking: false,
+                cursor_style: 1,
                 scroll_rows: 0,
                 changed_rows: Vec::new(),
             },
@@ -2264,6 +2342,8 @@ mod tests {
                 cursor_x: 0,
                 cursor_y: 0,
                 cursor_visible: true,
+                cursor_blinking: false,
+                cursor_style: 1,
                 scroll_rows: 0,
                 changed_rows: vec![RemoteRowDelta {
                     row: 0,
@@ -2278,6 +2358,8 @@ mod tests {
                 cursor_x: 1,
                 cursor_y: 1,
                 cursor_visible: true,
+                cursor_blinking: false,
+                cursor_style: 1,
                 scroll_rows: 0,
                 changed_rows: vec![RemoteRowDelta {
                     row: 1,
@@ -2317,6 +2399,7 @@ mod tests {
             rows: 3,
             cursor: vt_backend_core::CursorSnapshot {
                 visible: true,
+                blinking: false,
                 x: 0,
                 y: 2,
                 style: 0,
@@ -2344,6 +2427,8 @@ mod tests {
                 cursor_x: 0,
                 cursor_y: 2,
                 cursor_visible: true,
+                cursor_blinking: false,
+                cursor_style: 0,
                 scroll_rows: 1,
                 changed_rows: vec![RemoteRowDelta {
                     row: 2,
@@ -2424,6 +2509,8 @@ mod tests {
                 cursor_x: 2,
                 cursor_y: 0,
                 cursor_visible: true,
+                cursor_blinking: false,
+                cursor_style: 1,
                 scroll_rows: 0,
                 changed_rows: vec![RemoteRowDelta {
                     row: 0,

@@ -91,7 +91,8 @@ chrome, layout, and VT rendering path.
 - Status bar (20pt height)
 - Search overlay for in-terminal find
 - Background transparency support
-- Remaining UI task: configurable cursor shape and optional blinking cursor
+- Configurable default cursor shape, blink enablement, and blink interval
+- Terminal programs can still change cursor shape/blink dynamically (for example `vim` mode changes)
 
 ### Control Socket
 - Unix domain socket IPC at configurable path (default `/tmp/boo.sock`)
@@ -242,41 +243,21 @@ nix develop
 - Boo shell integration now ships for bash, zsh, and fish in [shell-integration/README.md](/Users/example/dev/boo/shell-integration/README.md)
 - These scripts emit `OSC 133` prompt markers and `cmdline_url` command metadata for the tab spinner/title path
 - `boo completions bash|zsh|fish` prints shell completions for the server/client lifecycle commands
-- Remaining integration task: migrate `~/.config/kitty/watcher.py` behavior into `~/.config/boo/config.boo`
 - Kitty config migration backlog:
   - [x] support Kitty-style direct punctuation bindings needed by the config, such as `ctrl+super+,`
   - [ ] migrate supported keybinds from `~/.config/kitty/kitty.conf` into `~/.config/boo/config.boo`
   - [x] expose a bindable copy-to-clipboard action for the current Boo selection
   - [ ] implement configurable macOS option-as-alt behavior
   - [x] implement `set_tab_title`
-  - [ ] implement Boo-native search-pane action to replace the Kitty `search.py` split binding
   - [ ] implement configurable tab bar style/separator/alignment/title template
   - [ ] implement `window-decoration` config instead of ignoring it
   - [ ] decide how to map Kitty’s `close_on_child_death` / `macos_quit_when_last_window_closed` semantics onto Boo’s client/server model
   - [ ] audit Kitty theme/include settings and decide which visual settings Boo should support directly
 
 ### tmux Parity Backlog
-- [x] support `set-tab-title`
-- [x] expose a bindable `copy` action for the current Boo selection
-- [ ] add pane lifecycle commands:
-  - [x] `break-pane`
-  - [x] `join-pane` / `move-pane` using a marked pane
-  - [x] `swap-pane`
-  - [x] `rotate-window`
-- [ ] add live preset layout commands:
-  - [x] `select-layout`
-  - [x] `next-layout`
-  - [x] `previous-layout`
-  - [x] rebalance/spread panes evenly
-- [ ] add interactive tmux-style chooser UIs:
-  - [x] display-panes
-  - [x] choose-tree
-  - [x] choose-buffer
-- [x] add paste buffer management beyond the system clipboard
-- [x] add `find-window` style search across titles, names, and visible content
 - [ ] add remain-on-exit / respawn-pane style process lifecycle controls
-- [ ] add marked-pane targeting for pane move/swap/join commands
 - [ ] add session/window rename and move/link semantics closer to tmux
+- [ ] add hooks, formats, `run-shell`, and `if-shell`
 
 ### Command Finish Notifications
 - `notify-on-command-finish` config and duration thresholds are implemented

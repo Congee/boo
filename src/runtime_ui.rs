@@ -233,6 +233,9 @@ impl BooApp {
                 font_size: self.terminal_font_size,
                 background_opacity: self.background_opacity,
                 background_opacity_cells: self.background_opacity_cells,
+                cursor_style: self.cursor_style,
+                cursor_blink: self.cursor_blink,
+                cursor_blink_interval_ns: self.cursor_blink_interval.as_nanos() as u64,
             },
             tabs,
             visible_panes,
@@ -336,6 +339,13 @@ impl BooApp {
                     )
                     .collect::<Vec<_>>();
 
+                let cursor_blink_visible = !snapshot.cursor.blinking
+                    || self.cursor_blink_interval.is_zero()
+                    || !self.app_focused
+                    || crate::app_helpers::cursor_blink_visible(
+                        self.cursor_blink_epoch,
+                        self.cursor_blink_interval,
+                    );
                 let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
                     std::sync::Arc::new(snapshot),
                     self.cell_width as f32,
@@ -346,6 +356,7 @@ impl BooApp {
                     self.appearance_revision,
                     self.background_opacity,
                     self.background_opacity_cells,
+                    cursor_blink_visible,
                     selection_rects,
                     Color::from_rgba(0.65, 0.72, 0.95, 0.35),
                     (!self.preedit_text.is_empty()).then(|| self.preedit_text.clone()),

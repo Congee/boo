@@ -53,6 +53,9 @@ impl BooApp {
                 .unwrap_or(DEFAULT_BACKGROUND_OPACITY)
                 .clamp(0.0, 1.0),
             background_opacity_cells: config.background_opacity_cells,
+            cursor_style: config.cursor_style.map(config::CursorStyle::vt_visual_style),
+            cursor_blink: config.cursor_blink,
+            cursor_blink_interval: std::time::Duration::from_nanos(config.cursor_blink_interval_ns),
             #[cfg(target_os = "linux")]
             font_bytes,
         }
@@ -138,6 +141,10 @@ impl BooApp {
                     terminal_font_size: appearance.font_size,
                     background_opacity: appearance.background_opacity,
                     background_opacity_cells: appearance.background_opacity_cells,
+                    cursor_style: appearance.cursor_style,
+                    cursor_blink: appearance.cursor_blink,
+                    cursor_blink_interval: appearance.cursor_blink_interval,
+                    cursor_blink_epoch: std::time::Instant::now(),
                     appearance_revision: 1,
                     surface_initialized_once: false,
                     app_focused: true,
@@ -205,6 +212,10 @@ impl BooApp {
                     terminal_font_size: appearance.font_size,
                     background_opacity: appearance.background_opacity,
                     background_opacity_cells: appearance.background_opacity_cells,
+                    cursor_style: appearance.cursor_style,
+                    cursor_blink: appearance.cursor_blink,
+                    cursor_blink_interval: appearance.cursor_blink_interval,
+                    cursor_blink_epoch: std::time::Instant::now(),
                     appearance_revision: 1,
                     surface_initialized_once: false,
                     app_focused: true,
@@ -421,6 +432,10 @@ impl BooApp {
         self.terminal_font_size = appearance.font_size;
         self.background_opacity = appearance.background_opacity;
         self.background_opacity_cells = appearance.background_opacity_cells;
+        self.cursor_style = appearance.cursor_style;
+        self.cursor_blink = appearance.cursor_blink;
+        self.cursor_blink_interval = appearance.cursor_blink_interval;
+        self.cursor_blink_epoch = std::time::Instant::now();
         let (cell_width, cell_height) = terminal_metrics(self.terminal_font_size);
         self.cell_width = cell_width;
         self.cell_height = cell_height;
@@ -429,6 +444,7 @@ impl BooApp {
         {
             self.pending_font_bytes = appearance.font_bytes;
         }
+        self.apply_cursor_defaults_to_all_panes();
     }
 
     pub(crate) fn terminate(&self, code: i32) -> ! {
@@ -579,11 +595,13 @@ impl BooApp {
             }
             Event::Window(window::Event::Focused) => {
                 self.app_focused = true;
+                self.cursor_blink_epoch = std::time::Instant::now();
                 self.set_pane_focus(self.server.tabs.focused_pane(), true);
                 self.backend.set_app_focus(true);
             }
             Event::Window(window::Event::Unfocused) => {
                 self.app_focused = false;
+                self.cursor_blink_epoch = std::time::Instant::now();
                 self.set_pane_focus(self.server.tabs.focused_pane(), false);
                 self.backend.set_app_focus(false);
             }

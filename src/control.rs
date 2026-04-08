@@ -84,6 +84,9 @@ pub struct UiAppearanceSnapshot {
     pub font_size: f32,
     pub background_opacity: f32,
     pub background_opacity_cells: bool,
+    pub cursor_style: Option<i32>,
+    pub cursor_blink: bool,
+    pub cursor_blink_interval_ns: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -168,6 +171,7 @@ pub struct UiTerminalSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UiCursorSnapshot {
     pub visible: bool,
+    pub blinking: bool,
     pub x: u16,
     pub y: u16,
     pub style: i32,
@@ -764,6 +768,9 @@ mod tests {
                                 font_size: 14.0,
                                 background_opacity: 0.8,
                                 background_opacity_cells: true,
+                                cursor_style: Some(3),
+                                cursor_blink: true,
+                                cursor_blink_interval_ns: 600_000_000,
                             },
                             tabs: vec![UiTabSnapshot {
                                 index: 0,
@@ -847,6 +854,9 @@ mod tests {
                     font_size: 15.0,
                     background_opacity: 0.7,
                     background_opacity_cells: false,
+                    cursor_style: Some(0),
+                    cursor_blink: false,
+                    cursor_blink_interval_ns: 600_000_000,
                 },
                 tabs: vec![
                     UiTabSnapshot {

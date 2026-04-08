@@ -28,6 +28,7 @@ pub struct CellSnapshot {
 #[derive(Debug, Clone, Default)]
 pub struct CursorSnapshot {
     pub visible: bool,
+    pub blinking: bool,
     pub x: u16,
     pub y: u16,
     pub style: i32,
@@ -669,6 +670,10 @@ impl VtPane {
                 .render_state
                 .get_bool(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VISIBLE)
                 .map_err(vt_to_io)?,
+            blinking: self
+                .render_state
+                .get_bool(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_BLINKING)
+                .unwrap_or(false),
             x: self
                 .render_state
                 .get_u16(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X)
@@ -736,6 +741,10 @@ impl VtPane {
                 .render_state
                 .get_bool(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VISIBLE)
                 .map_err(vt_to_io)?,
+            blinking: self
+                .render_state
+                .get_bool(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_BLINKING)
+                .unwrap_or(false),
             x: self
                 .render_state
                 .get_u16(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X)

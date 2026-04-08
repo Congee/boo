@@ -40,7 +40,7 @@ mod vt_snapshot;
 mod vt_terminal_canvas;
 
 use app_helpers::{
-    TextInputAction, apply_text_input_event, command_finish_notification,
+    TextInputAction, apply_text_input_event, command_finish_notification, cursor_blink_visible,
     control_key_to_keyboard_key, ghostty_mods_to_iced, iced_button_to_ghostty, iced_button_to_vt,
     iced_mods_to_ghostty, native_keycode_to_named_key, parse_keyspec, parse_vt_keyspec,
     shifted_char, shifted_codepoint, shifted_codepoint_vt,
@@ -94,6 +94,9 @@ struct ResolvedAppearance {
     font_size: f32,
     background_opacity: f32,
     background_opacity_cells: bool,
+    cursor_style: Option<i32>,
+    cursor_blink: bool,
+    cursor_blink_interval: std::time::Duration,
     #[cfg(target_os = "linux")]
     font_bytes: Option<Vec<u8>>,
 }
@@ -232,6 +235,10 @@ struct BooApp {
     terminal_font_size: f32,
     background_opacity: f32,
     background_opacity_cells: bool,
+    cursor_style: Option<i32>,
+    cursor_blink: bool,
+    cursor_blink_interval: std::time::Duration,
+    cursor_blink_epoch: std::time::Instant,
     appearance_revision: u64,
     surface_initialized_once: bool,
     app_focused: bool,

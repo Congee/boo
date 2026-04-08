@@ -24,6 +24,7 @@ pub struct TerminalCanvas {
     pub appearance_revision: u64,
     pub background_opacity: f32,
     pub background_opacity_cells: bool,
+    pub cursor_blink_visible: bool,
     pub selection_rects: Vec<TerminalSelectionRect>,
     pub selection_color: Color,
     pub preedit_text: Option<String>,
@@ -57,6 +58,7 @@ impl TerminalCanvas {
         appearance_revision: u64,
         background_opacity: f32,
         background_opacity_cells: bool,
+        cursor_blink_visible: bool,
         selection_rects: Vec<TerminalSelectionRect>,
         selection_color: Color,
         preedit_text: Option<String>,
@@ -71,6 +73,7 @@ impl TerminalCanvas {
             appearance_revision,
             background_opacity,
             background_opacity_cells,
+            cursor_blink_visible,
             selection_rects,
             selection_color,
             preedit_text,
@@ -166,6 +169,7 @@ impl TerminalCanvas {
         }
 
         if self.snapshot.cursor.visible
+            && self.cursor_blink_visible
             && self.snapshot.cursor.y < self.snapshot.rows
             && self.snapshot.cursor.x < self.snapshot.cols
         {
@@ -704,6 +708,7 @@ impl TerminalCanvas {
         self.snapshot.cursor.x.hash(&mut hasher);
         self.snapshot.cursor.y.hash(&mut hasher);
         self.snapshot.cursor.style.hash(&mut hasher);
+        self.cursor_blink_visible.hash(&mut hasher);
         self.snapshot.colors.cursor_has_value.hash(&mut hasher);
         self.snapshot.colors.cursor.r.hash(&mut hasher);
         self.snapshot.colors.cursor.g.hash(&mut hasher);
@@ -777,6 +782,7 @@ mod tests {
             revision,
             0.8,
             true,
+            true,
             Vec::new(),
             Color::from_rgba(0.65, 0.72, 0.95, 0.35),
             None,
@@ -807,6 +813,24 @@ mod tests {
     }
 
     #[test]
+    fn overlay_fingerprint_changes_when_cursor_style_changes() {
+        let before = sample_canvas(1).overlay_fingerprint();
+        let mut after = sample_canvas(1);
+        let mut snapshot = (*after.snapshot).clone();
+        snapshot.cursor.style = 3;
+        after.snapshot = Arc::new(snapshot);
+        assert_ne!(before, after.overlay_fingerprint());
+    }
+
+    #[test]
+    fn overlay_fingerprint_changes_when_cursor_blink_visibility_changes() {
+        let before = sample_canvas(1).overlay_fingerprint();
+        let mut after = sample_canvas(1);
+        after.cursor_blink_visible = false;
+        assert_ne!(before, after.overlay_fingerprint());
+    }
+
+    #[test]
     fn row_fingerprint_ignores_global_content_revision() {
         let mut before = sample_canvas(1);
         before.snapshot = Arc::new(vt_backend_core::TerminalSnapshot {
@@ -834,6 +858,7 @@ mod tests {
             before.appearance_revision,
             before.background_opacity,
             before.background_opacity_cells,
+            before.cursor_blink_visible,
             before.selection_rects.clone(),
             before.selection_color,
             before.preedit_text.clone(),

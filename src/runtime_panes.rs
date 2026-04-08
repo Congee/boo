@@ -1,6 +1,53 @@
 use super::*;
 
 impl BooApp {
+    fn default_cursor_vt_sequence(&self) -> Option<Vec<u8>> {
+        match self.cursor_style {
+            Some(style) => {
+                let blink = self.cursor_blink;
+                let param = match style {
+                    0 => {
+                        if blink {
+                            5
+                        } else {
+                            6
+                        }
+                    }
+                    3 => {
+                        if blink {
+                            3
+                        } else {
+                            4
+                        }
+                    }
+                    _ => {
+                        if blink {
+                            1
+                        } else {
+                            2
+                        }
+                    }
+                };
+                Some(format!("\x1b[{param} q").into_bytes())
+            }
+            None if !self.cursor_blink => Some(b"\x1b[?12l".to_vec()),
+            None => None,
+        }
+    }
+
+    fn apply_cursor_defaults_to_pane(&mut self, pane: PaneHandle) {
+        let Some(bytes) = self.default_cursor_vt_sequence() else {
+            return;
+        };
+        self.backend.write_vt_bytes(pane, &bytes);
+    }
+
+    pub(crate) fn apply_cursor_defaults_to_all_panes(&mut self) {
+        for pane in self.server.tabs.all_panes() {
+            self.apply_cursor_defaults_to_pane(pane);
+        }
+    }
+
     pub(crate) fn terminal_frame(&self) -> platform::Rect {
         let search_offset = if self.search_active {
             STATUS_BAR_HEIGHT
@@ -113,7 +160,7 @@ impl BooApp {
         command: Option<&CStr>,
         working_directory: Option<&CStr>,
     ) -> Option<PaneHandle> {
-        self.backend.create_pane(
+        let pane = self.backend.create_pane(
             ptr::null_mut(),
             self.parent_view,
             self.scale_factor(),
@@ -123,7 +170,13 @@ impl BooApp {
             working_directory,
             self.cell_width,
             self.cell_height,
-        )
+        );
+        if let Some(pane) = pane {
+            self.apply_cursor_defaults_to_pane(pane);
+            Some(pane)
+        } else {
+            None
+        }
     }
 
     pub(crate) fn create_split(&mut self, direction: bindings::SplitDirection) {

@@ -716,7 +716,8 @@ mod tests {
             background_opacity: None,
             background_opacity_cells: false,
             cursor_style: None,
-            cursor_blink: false,
+            cursor_blink: true,
+            cursor_blink_interval_ns: 600_000_000,
             desktop_notifications: true,
             notify_on_command_finish: crate::config::NotifyOnCommandFinish::Never,
             notify_on_command_finish_action: crate::config::NotifyOnCommandFinishAction {

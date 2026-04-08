@@ -488,6 +488,7 @@ fn ui_terminal_snapshot(snapshot: &TerminalSnapshot) -> control::UiTerminalSnaps
         pwd: snapshot.pwd.clone(),
         cursor: control::UiCursorSnapshot {
             visible: snapshot.cursor.visible,
+            blinking: snapshot.cursor.blinking,
             x: snapshot.cursor.x,
             y: snapshot.cursor.y,
             style: snapshot.cursor.style,
