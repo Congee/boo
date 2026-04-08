@@ -72,8 +72,10 @@ pub enum SplitDirection {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PaneFocusDirection {
-    Previous,
-    Next,
+    Left,
+    Right,
+    Up,
+    Down,
 }
 
 /// Actions emitted while in copy mode (tmux vi copy-mode compatible).
@@ -611,7 +613,6 @@ fn single_char_to_keycode(key: &str) -> Option<u32> {
 }
 
 fn parse_action(s: &str) -> Option<Action> {
-    use PaneFocusDirection::*;
     use SplitDirection::*;
 
     match s {
@@ -669,9 +670,10 @@ fn parse_action(s: &str) -> Option<Action> {
         "next_pane" => Some(Action::NextPane),
         "previous_pane" => Some(Action::PreviousPane),
         "previous_tab" => Some(Action::PreviousTab),
-        "goto_split:left" => Some(Action::GotoSplit(Previous)),
-        "goto_split:right" | "goto_split:bottom" => Some(Action::GotoSplit(Next)),
-        "goto_split:top" => Some(Action::GotoSplit(Previous)),
+        "goto_split:left" => Some(Action::GotoSplit(PaneFocusDirection::Left)),
+        "goto_split:right" => Some(Action::GotoSplit(PaneFocusDirection::Right)),
+        "goto_split:top" => Some(Action::GotoSplit(PaneFocusDirection::Up)),
+        "goto_split:bottom" => Some(Action::GotoSplit(PaneFocusDirection::Down)),
         "new_split:right" => Some(Action::NewSplit(Right)),
         "new_split:down" => Some(Action::NewSplit(Down)),
         "new_split:left" => Some(Action::NewSplit(Left)),
