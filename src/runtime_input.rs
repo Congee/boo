@@ -35,16 +35,17 @@ impl BooApp {
         }
     }
 
-    pub(crate) fn route_app_key(
+    fn dispatch_app_key(
         &mut self,
+        event: &AppKeyEvent,
         key_char: Option<char>,
-        keycode: u32,
-        mods: i32,
-        named_key: Option<bindings::NamedKey>,
         keyboard_key: keyboard::Key,
     ) -> bool {
-        let text = key_char.map(|ch| ch.to_string());
-        let iced_mods = ghostty_mods_to_iced(mods);
+        let text = event
+            .text
+            .clone()
+            .or_else(|| key_char.map(|ch| ch.to_string()));
+        let iced_mods = ghostty_mods_to_iced(event.mods);
 
         if self.find_window_active && self.handle_find_window_key(&keyboard_key, key_char) {
             return true;
@@ -72,8 +73,89 @@ impl BooApp {
             return true;
         }
 
-        let result = self.bindings.handle_key(key_char, keycode, mods, named_key);
+        let result = self
+            .bindings
+            .handle_key(key_char, event.keycode, event.mods, event.named_key);
         self.dispatch_binding_result(result)
+    }
+
+    pub(crate) fn handle_app_key_event(&mut self, event: AppKeyEvent) {
+        let key_char = event.key_char();
+        let keyboard_key = event.keyboard_key();
+
+        if self.dispatch_app_key(&event, key_char, keyboard_key) {
+            return;
+        }
+
+        let surface = self.focused_surface();
+        let unshifted_codepoint = event
+            .key_char()
+            .map(|ch| ch as u32)
+            .unwrap_or_else(|| shifted_codepoint(event.keycode, 0));
+
+        if surface.is_null() {
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            {
+                let Some(vt_keycode) = keymap::native_to_vt_keycode(event.keycode) else {
+                    return;
+                };
+                #[cfg(target_os = "macos")]
+                if should_route_macos_vt_key_via_appkit(vt_keycode, event.mods) {
+                    return;
+                }
+                let _ = self.backend.forward_vt_key(
+                    self.server.tabs.focused_pane(),
+                    if event.repeat {
+                        vt::GHOSTTY_KEY_ACTION_REPEAT
+                    } else {
+                        vt::GHOSTTY_KEY_ACTION_PRESS
+                    },
+                    vt_keycode,
+                    event.mods as vt::GhosttyMods,
+                    (event.mods & ffi::GHOSTTY_MODS_SHIFT) as vt::GhosttyMods,
+                    key_char,
+                    event.text.as_deref().unwrap_or(""),
+                    false,
+                    shifted_codepoint_vt(vt_keycode, 0),
+                );
+            }
+            return;
+        }
+
+        let translation_mods = self.surface_key_translation_mods(surface, event.mods);
+        let consumed_mods = translation_mods & !(ffi::GHOSTTY_MODS_CTRL | ffi::GHOSTTY_MODS_SUPER);
+        let text_cstring = event
+            .text
+            .as_ref()
+            .filter(|t| t.as_bytes().first().is_some_and(|&b| b >= 0x20))
+            .and_then(|t| CString::new(t.as_str()).ok());
+        let text_ptr = text_cstring
+            .as_ref()
+            .map(|c| c.as_ptr())
+            .unwrap_or(ptr::null());
+        let key_event = ffi::ghostty_input_key_s {
+            action: if event.repeat {
+                ffi::ghostty_input_action_e::GHOSTTY_ACTION_REPEAT
+            } else {
+                ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS
+            },
+            mods: event.mods,
+            consumed_mods,
+            keycode: event.keycode,
+            text: text_ptr,
+            unshifted_codepoint,
+            composing: false,
+        };
+        let consumed = self.forward_surface_key(key_event);
+        if self.dump_keys {
+            log::info!(
+                "→ghostty: keycode=0x{:02x} mods={:#x} cp={:#x} text={:?} consumed={consumed}",
+                event.keycode,
+                event.mods,
+                unshifted_codepoint,
+                event.text.as_deref()
+            );
+        }
     }
 
     pub(crate) fn handle_committed_text(&mut self, committed: String) {
@@ -114,35 +196,15 @@ impl BooApp {
 
     #[cfg(target_os = "macos")]
     pub(crate) fn handle_platform_key_event(&mut self, event: platform::KeyEvent) {
-        let keycode = event.keycode;
-        let mods = event.mods;
-        let key_char = shifted_char(keycode, mods);
-        let named_key = native_keycode_to_named_key(keycode);
-        let keyboard_key = native_keycode_to_keyboard_key(keycode, key_char);
-
-        if self.route_app_key(key_char, keycode, mods, named_key, keyboard_key) {
-            return;
-        }
-
-        let Some(vt_keycode) = keymap::native_to_vt_keycode(keycode) else {
-            return;
-        };
-        let unshifted_codepoint = shifted_codepoint_vt(vt_keycode, 0);
-        let _ = self.backend.forward_vt_key(
-            self.server.tabs.focused_pane(),
-            if event.repeat {
-                vt::GHOSTTY_KEY_ACTION_REPEAT
-            } else {
-                vt::GHOSTTY_KEY_ACTION_PRESS
-            },
-            vt_keycode,
-            mods as vt::GhosttyMods,
-            (mods & ffi::GHOSTTY_MODS_SHIFT) as vt::GhosttyMods,
-            key_char,
-            "",
-            false,
-            unshifted_codepoint,
-        );
+        self.handle_app_key_event(AppKeyEvent {
+            keycode: event.keycode,
+            mods: event.mods,
+            text: None,
+            modified_text: None,
+            named_key: native_keycode_to_named_key(event.keycode),
+            repeat: event.repeat,
+            input_seq: None,
+        });
     }
 
     pub(crate) fn surface_key_translation_mods(
@@ -210,12 +272,6 @@ impl BooApp {
                     return;
                 };
                 let mods = iced_mods_to_ghostty(&modifiers);
-                let key_char = shifted_char(keycode, mods)
-                    .or_else(|| text.as_ref().and_then(|t| t.chars().next()))
-                    .or_else(|| match &modified_key {
-                        keyboard::Key::Character(s) => s.chars().next(),
-                        _ => None,
-                    });
                 let named_key = match &key {
                     keyboard::Key::Named(n) => {
                         use keyboard::key::Named;
@@ -235,70 +291,18 @@ impl BooApp {
                     _ => None,
                 };
 
-                if self.route_app_key(key_char, keycode, mods, named_key, key.clone()) {
-                    return;
-                }
-
-                let surface = self.focused_surface();
-                let translation_mods = self.surface_key_translation_mods(surface, mods);
-                let unshifted_codepoint = key_to_codepoint(&key);
-                let consumed_mods =
-                    translation_mods & !(ffi::GHOSTTY_MODS_CTRL | ffi::GHOSTTY_MODS_SUPER);
-
-                if surface.is_null() {
-                    let Some(vt_keycode) = keymap::physical_to_vt_keycode(&physical_key) else {
-                        return;
-                    };
-                    #[cfg(target_os = "macos")]
-                    if should_route_macos_vt_key_via_appkit(vt_keycode, mods) {
-                        return;
-                    }
-                    let _ = self.backend.forward_vt_key(
-                        self.server.tabs.focused_pane(),
-                        if repeat {
-                            vt::GHOSTTY_KEY_ACTION_REPEAT
-                        } else {
-                            vt::GHOSTTY_KEY_ACTION_PRESS
-                        },
-                        vt_keycode,
-                        mods as vt::GhosttyMods,
-                        consumed_mods as vt::GhosttyMods,
-                        key_char,
-                        text.as_deref().unwrap_or(""),
-                        false,
-                        unshifted_codepoint,
-                    );
-                    return;
-                }
-
-                let text_cstring = text
-                    .as_ref()
-                    .filter(|t| t.as_bytes().first().is_some_and(|&b| b >= 0x20))
-                    .and_then(|t| CString::new(t.as_str()).ok());
-                let text_ptr = text_cstring
-                    .as_ref()
-                    .map(|c| c.as_ptr())
-                    .unwrap_or(ptr::null());
-                let key_event = ffi::ghostty_input_key_s {
-                    action: if repeat {
-                        ffi::ghostty_input_action_e::GHOSTTY_ACTION_REPEAT
-                    } else {
-                        ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS
-                    },
-                    mods,
-                    consumed_mods,
+                self.handle_app_key_event(AppKeyEvent {
                     keycode,
-                    text: text_ptr,
-                    unshifted_codepoint,
-                    composing: false,
-                };
-                let consumed = self.forward_surface_key(key_event);
-                if self.dump_keys {
-                    log::info!(
-                        "→ghostty: keycode=0x{keycode:02x} mods={mods:#x} cp={unshifted_codepoint:#x} text={:?} consumed={consumed}",
-                        text.as_deref()
-                    );
-                }
+                    mods,
+                    text: text.as_ref().map(ToString::to_string).filter(|t| !t.is_empty()),
+                    modified_text: match &modified_key {
+                        keyboard::Key::Character(s) if !s.is_empty() => Some(s.to_string()),
+                        _ => None,
+                    },
+                    named_key,
+                    repeat,
+                    input_seq: None,
+                });
             }
             keyboard::Event::KeyReleased {
                 physical_key,

@@ -55,6 +55,16 @@ sock.close()
 PY
 }
 
+send_gui_appkey() {
+python3 - <<'PY' "$GUI_TEST_SOCKET" "$1"
+import socket, sys
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect(sys.argv[1])
+sock.sendall(f"appkey {sys.argv[2]}\n".encode())
+sock.close()
+PY
+}
+
 assert_snapshot_contains() {
 for _ in $(seq 1 30); do
   SNAPSHOT="$(python3 scripts/ui-test-client.py --socket "$SOCKET" snapshot)"
@@ -109,6 +119,22 @@ done
 return 1
 }
 
+assert_visible_pane_count() {
+for _ in $(seq 1 40); do
+  SNAPSHOT="$(python3 scripts/ui-test-client.py --socket "$SOCKET" snapshot)"
+  if python3 - <<'PY' "$SNAPSHOT" "$1"
+import json, sys
+data = json.loads(sys.argv[1])["snapshot"]
+raise SystemExit(0 if len(data["visible_panes"]) == int(sys.argv[2]) else 1)
+PY
+  then
+    return 0
+  fi
+  sleep 0.1
+done
+return 1
+}
+
 wait_for_exit() {
   for _ in $(seq 1 80); do
     if ! kill -0 "$1" 2>/dev/null; then
@@ -150,6 +176,14 @@ send_gui_command "new-tab"
 
 if ! assert_active_tab_and_row0 "~/" 1; then
   echo "new tab did not become active with a fresh prompt" >&2
+  exit 1
+fi
+
+send_gui_appkey "ctrl+s"
+send_gui_appkey "shift+0x27"
+
+if ! assert_visible_pane_count 2; then
+  echo "prefix split key did not create a second pane" >&2
   exit 1
 fi
 

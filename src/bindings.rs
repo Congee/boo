@@ -439,7 +439,7 @@ impl Bindings {
 }
 
 /// Named keys that copy mode cares about.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NamedKey {
     ArrowUp,
     ArrowDown,

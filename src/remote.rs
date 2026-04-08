@@ -37,6 +37,7 @@ pub enum MessageType {
     Key = 0x0b,
     ExecuteCommand = 0x0c,
     AppAction = 0x0d,
+    AppKeyEvent = 0x0e,
 
     AuthOk = 0x80,
     AuthFail = 0x81,
@@ -71,6 +72,7 @@ impl TryFrom<u8> for MessageType {
             0x0b => Self::Key,
             0x0c => Self::ExecuteCommand,
             0x0d => Self::AppAction,
+            0x0e => Self::AppKeyEvent,
             0x80 => Self::AuthOk,
             0x81 => Self::AuthFail,
             0x82 => Self::SessionList,
@@ -161,6 +163,10 @@ pub enum RemoteCmd {
     ExecuteCommand {
         client_id: u64,
         input: String,
+    },
+    AppKeyEvent {
+        client_id: u64,
+        event: crate::AppKeyEvent,
     },
     AppAction {
         client_id: u64,
@@ -662,6 +668,11 @@ fn read_loop(
             MessageType::ExecuteCommand => String::from_utf8(payload)
                 .ok()
                 .map(|input| RemoteCmd::ExecuteCommand { client_id, input }),
+            MessageType::AppKeyEvent => {
+                serde_json::from_slice::<crate::AppKeyEvent>(&payload)
+                    .ok()
+                    .map(|event| RemoteCmd::AppKeyEvent { client_id, event })
+            }
             MessageType::AppAction => serde_json::from_slice::<crate::bindings::Action>(&payload)
                 .ok()
                 .map(|action| RemoteCmd::AppAction { client_id, action }),

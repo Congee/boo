@@ -1,3 +1,4 @@
+mod app_input;
 mod app_helpers;
 mod backend;
 mod bindings;
@@ -41,11 +42,14 @@ mod vt_terminal_canvas;
 use app_helpers::{
     TextInputAction, apply_text_input_event, command_finish_notification,
     control_key_to_keyboard_key, ghostty_mods_to_iced, iced_button_to_ghostty, iced_button_to_vt,
-    iced_mods_to_ghostty, key_to_codepoint, native_keycode_to_keyboard_key,
-    native_keycode_to_named_key, parse_keyspec, parse_vt_keyspec, shifted_char, shifted_codepoint,
-    shifted_codepoint_vt, should_route_macos_vt_key_via_appkit, split_direction_name,
-    text_input_command_key, ui_rect_snapshot,
+    iced_mods_to_ghostty, native_keycode_to_named_key, parse_keyspec, parse_vt_keyspec,
+    shifted_char, shifted_codepoint, shifted_codepoint_vt,
+    should_route_macos_vt_key_via_appkit, split_direction_name, text_input_command_key,
+    ui_rect_snapshot,
 };
+#[cfg(test)]
+use app_helpers::native_keycode_to_keyboard_key;
+pub(crate) use app_input::AppKeyEvent;
 use backend::TerminalBackend;
 use command_prompt::CommandPrompt;
 #[cfg(test)]

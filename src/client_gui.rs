@@ -1,6 +1,6 @@
 use crate::bindings;
-use crate::config;
 use crate::control;
+use crate::AppKeyEvent;
 use crate::iced_mods_to_ghostty;
 use crate::keymap;
 use crate::remote;
@@ -43,6 +43,7 @@ pub enum Message {
 pub enum GuiTestCommand {
     Text(String),
     Key(String),
+    AppKey(String),
     Command(String),
     Resize { cols: u16, rows: u16 },
     Refresh,
@@ -103,7 +104,6 @@ pub struct ClientApp {
     passive_flush_scheduled: bool,
     steady_state_snapshot_requests: u64,
     should_exit: bool,
-    bindings: bindings::Bindings,
     terminal_snapshot_generation: u64,
     next_full_snapshot_revision: u64,
     next_snapshot_generation: u64,
@@ -157,7 +157,6 @@ impl ClientApp {
                 passive_flush_scheduled: false,
                 steady_state_snapshot_requests: 0,
                 should_exit: false,
-                bindings: bindings::Bindings::from_config(&config::Config::load()),
                 terminal_snapshot_generation: 1,
                 next_full_snapshot_revision: 1,
                 next_snapshot_generation: 2,
@@ -413,110 +412,58 @@ impl ClientApp {
     fn handle_keyboard(&mut self, event: keyboard::Event) {
         let keyboard::Event::KeyPressed {
             key,
+            modified_key,
             physical_key,
             text,
             modifiers,
+            repeat,
             ..
         } = event
         else {
             return;
         };
 
-        if let Some(keycode) = keymap::physical_to_native_keycode(&physical_key) {
-            let key_char = text
-                .as_ref()
-                .and_then(|text| text.chars().next())
-                .or_else(|| committed_text_from_key(&key, modifiers).and_then(|s| s.chars().next()));
-            let named_key = named_key_from_iced_key(&key);
-            let result = self.bindings.handle_key(
-                key_char,
-                keycode,
-                iced_mods_to_ghostty(&modifiers),
-                named_key,
-            );
-            if self.handle_binding_result(result) {
-                return;
-            }
-        }
-
-        if let Some(control_byte) = control_character_from_key(&key, modifiers) {
-            if self.stream_ready_for_terminal_io() {
-                let input_seq = self.record_pending_input();
-                self.send_stream_command(StreamCommand::Input {
-                    input_seq,
-                    bytes: vec![control_byte],
-                });
-            } else {
-                let _ = self.client.send(&control::Request::SendText {
-                    text: String::from_utf8_lossy(&[control_byte]).into_owned(),
-                });
-                self.refresh_snapshot();
-            }
+        if matches!(
+            physical_key,
+            keyboard::key::Physical::Code(
+                keyboard::key::Code::ShiftLeft
+                    | keyboard::key::Code::ShiftRight
+                    | keyboard::key::Code::ControlLeft
+                    | keyboard::key::Code::ControlRight
+                    | keyboard::key::Code::AltLeft
+                    | keyboard::key::Code::AltRight
+                    | keyboard::key::Code::SuperLeft
+                    | keyboard::key::Code::SuperRight
+                    | keyboard::key::Code::CapsLock
+            )
+        ) {
             return;
         }
 
-        let committed = text
-            .as_ref()
-            .map(ToString::to_string)
-            .filter(|text| !text.is_empty())
-            .or_else(|| committed_text_from_key(&key, modifiers));
-
-        if let Some(committed) =
-            committed.filter(|_| !(modifiers.control() || modifiers.alt() || modifiers.logo()))
-        {
-            if self.stream_ready_for_terminal_io() {
-                let input_seq = self.record_pending_input();
-                self.send_stream_command(StreamCommand::Input {
-                    input_seq,
-                    bytes: committed.into_bytes(),
-                });
-            } else {
-                let _ = self
-                    .client
-                    .send(&control::Request::SendText { text: committed });
-                self.refresh_snapshot();
-            }
+        let Some(keycode) = keymap::physical_to_native_keycode(&physical_key) else {
             return;
-        }
-
-        if let Some(keyspec) = keyspec_from_key(&key, modifiers, text.as_deref()) {
-            if self.stream_ready_for_terminal_io() {
-                let input_seq = self.record_pending_input();
-                self.send_stream_command(StreamCommand::Key { input_seq, keyspec });
-            } else {
-                let _ = self
-                    .client
-                    .send(&control::Request::SendKey { key: keyspec });
-                self.refresh_snapshot();
-            }
-        }
-    }
-
-    fn handle_binding_result(&mut self, result: bindings::KeyResult) -> bool {
-        match result {
-            bindings::KeyResult::Consumed(action) => {
-                if let Some(action) = action {
-                    self.dispatch_binding_action(action);
-                }
-                true
-            }
-            bindings::KeyResult::CopyMode(_) => true,
-            bindings::KeyResult::Forward => false,
-        }
-    }
-
-    fn dispatch_binding_action(&mut self, action: bindings::Action) {
-        self.send_stream_or_control(
-            StreamCommand::AppAction {
-                action: action.clone(),
+        };
+        let input_seq = self.record_pending_input();
+        let app_event = AppKeyEvent {
+            keycode,
+            mods: iced_mods_to_ghostty(&modifiers),
+            text: text.as_ref().map(ToString::to_string).filter(|text| !text.is_empty()),
+            modified_text: match &modified_key {
+                keyboard::Key::Character(chars) if !chars.is_empty() => Some(chars.to_string()),
+                _ => None,
             },
-            control::Request::AppAction {
-                action: action.clone(),
+            named_key: named_key_from_iced_key(&key),
+            repeat,
+            input_seq: Some(input_seq),
+        };
+        self.send_stream_or_control(
+            StreamCommand::AppKeyEvent {
+                event: app_event.clone(),
+            },
+            control::Request::AppKeyEvent {
+                event: app_event,
             },
         );
-        if matches!(action, bindings::Action::ReloadConfig) {
-            self.bindings = bindings::Bindings::from_config(&config::Config::load());
-        }
     }
 
     fn send_stream_or_control(&mut self, stream: StreamCommand, control: control::Request) {
@@ -693,6 +640,16 @@ impl ClientApp {
                         .client
                         .send(&control::Request::SendKey { key: keyspec });
                     self.refresh_snapshot();
+                }
+            }
+            GuiTestCommand::AppKey(keyspec) => {
+                if let Some(event) = gui_test_app_key_event(&keyspec, self.record_pending_input()) {
+                    self.send_stream_or_control(
+                        StreamCommand::AppKeyEvent {
+                            event: event.clone(),
+                        },
+                        control::Request::AppKeyEvent { event },
+                    );
                 }
             }
             GuiTestCommand::Command(input) => self.send_stream_or_control(
@@ -1191,7 +1148,7 @@ pub(crate) struct RemoteRowDelta {
 pub(crate) enum StreamCommand {
     ListSessions,
     Attach(u32),
-    AppAction { action: bindings::Action },
+    AppKeyEvent { event: AppKeyEvent },
     ExecuteCommand { input: String },
     Input { input_seq: u64, bytes: Vec<u8> },
     Key { input_seq: u64, keyspec: String },
@@ -1247,15 +1204,15 @@ fn local_stream_subscription(
                                 remote::MessageType::Attach,
                                 &session_id.to_le_bytes(),
                             ),
-                            StreamCommand::AppAction { action } => {
-                                let Ok(payload) = serde_json::to_vec(&action) else {
+                            StreamCommand::AppKeyEvent { event } => {
+                                let Ok(payload) = serde_json::to_vec(&event) else {
                                     let _ = writer_event_tx
                                         .unbounded_send(LocalStreamEvent::Disconnected);
                                     break;
                                 };
                                 write_stream_message(
                                     &mut write,
-                                    remote::MessageType::AppAction,
+                                    remote::MessageType::AppKeyEvent,
                                     &payload,
                                 )
                             }
@@ -1428,6 +1385,9 @@ fn parse_gui_test_command(line: &str) -> Option<GuiTestCommand> {
     if let Some(rest) = trimmed.strip_prefix("key ") {
         return Some(GuiTestCommand::Key(rest.to_string()));
     }
+    if let Some(rest) = trimmed.strip_prefix("appkey ") {
+        return Some(GuiTestCommand::AppKey(rest.to_string()));
+    }
     if let Some(rest) = trimmed.strip_prefix("command ") {
         return Some(GuiTestCommand::Command(rest.to_string()));
     }
@@ -1483,6 +1443,25 @@ fn decode_gui_test_text(input: &str) -> String {
         }
     }
     out
+}
+
+fn gui_test_app_key_event(spec: &str, input_seq: u64) -> Option<AppKeyEvent> {
+    let (keycode, mods) = crate::parse_keyspec(spec)?;
+    let key_char = crate::shifted_char(keycode, mods);
+    let text = if mods & (crate::ffi::GHOSTTY_MODS_CTRL | crate::ffi::GHOSTTY_MODS_ALT) == 0 {
+        key_char.map(|ch| ch.to_string())
+    } else {
+        None
+    };
+    Some(AppKeyEvent {
+        keycode,
+        mods,
+        text: text.clone(),
+        modified_text: text,
+        named_key: None,
+        repeat: false,
+        input_seq: Some(input_seq),
+    })
 }
 
 fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStreamEvent)) {
@@ -1925,49 +1904,6 @@ mod tests {
     }
 
     #[test]
-    fn committed_text_from_character_key_without_text_payload() {
-        let key = keyboard::Key::Character("a".into());
-        assert_eq!(
-            committed_text_from_key(&key, keyboard::Modifiers::default()),
-            Some("a".to_string())
-        );
-    }
-
-    #[test]
-    fn committed_text_from_key_ignores_control_modified_input() {
-        let key = keyboard::Key::Character("d".into());
-        assert_eq!(
-            committed_text_from_key(&key, keyboard::Modifiers::CTRL),
-            None
-        );
-    }
-
-    #[test]
-    fn control_character_maps_ctrl_d_to_eot() {
-        let key = keyboard::Key::Character("d".into());
-        assert_eq!(
-            control_character_from_key(&key, keyboard::Modifiers::CTRL),
-            Some(0x04)
-        );
-    }
-
-    #[test]
-    fn control_character_ignores_shifted_or_modified_variants() {
-        let key = keyboard::Key::Character("d".into());
-        assert_eq!(
-            control_character_from_key(
-                &key,
-                keyboard::Modifiers::CTRL | keyboard::Modifiers::SHIFT
-            ),
-            None
-        );
-        assert_eq!(
-            control_character_from_key(&key, keyboard::Modifiers::CTRL | keyboard::Modifiers::ALT),
-            None
-        );
-    }
-
-    #[test]
     fn parse_gui_test_text_command() {
         assert_eq!(
             parse_gui_test_command("text hello"),
@@ -2011,21 +1947,37 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_binding_action_sends_typed_split_action_over_stream() {
+    fn parse_gui_test_appkey_command() {
+        assert_eq!(
+            parse_gui_test_command("appkey shift+0x27"),
+            Some(GuiTestCommand::AppKey("shift+0x27".to_string()))
+        );
+    }
+
+    #[test]
+    fn handle_keyboard_sends_raw_app_key_event_over_stream() {
         let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
         let (tx, rx) = std::sync::mpsc::channel();
         app.stream_tx = Some(tx);
         app.mode = ClientMode::Attached;
 
-        app.dispatch_binding_action(bindings::Action::NewSplit(
-            bindings::SplitDirection::Right,
-        ));
+        app.handle_keyboard(keyboard::Event::KeyPressed {
+            key: keyboard::Key::Character("'".into()),
+            modified_key: keyboard::Key::Character("\"".into()),
+            physical_key: keyboard::key::Physical::Code(keyboard::key::Code::Quote),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::SHIFT,
+            text: Some("\"".into()),
+            repeat: false,
+        });
 
         match rx.recv().unwrap() {
-            StreamCommand::AppAction { action } => match action {
-                bindings::Action::NewSplit(bindings::SplitDirection::Right) => {}
-                other => panic!("unexpected action: {other:?}"),
-            },
+            StreamCommand::AppKeyEvent { event } => {
+                assert_eq!(event.keycode, 0x27);
+                assert_eq!(event.text.as_deref(), Some("\""));
+                assert_eq!(event.modified_text.as_deref(), Some("\""));
+                assert_eq!(event.named_key, None);
+            }
             other => panic!("unexpected stream command: {other:?}"),
         }
     }
@@ -2390,54 +2342,6 @@ mod tests {
     }
 }
 
-fn keyspec_from_key(
-    key: &keyboard::Key,
-    modifiers: keyboard::Modifiers,
-    text: Option<&str>,
-) -> Option<String> {
-    use keyboard::key::Named;
-
-    let mut parts = Vec::new();
-    if modifiers.control() {
-        parts.push("ctrl");
-    }
-    if modifiers.alt() {
-        parts.push("alt");
-    }
-    if modifiers.shift() {
-        parts.push("shift");
-    }
-    if modifiers.logo() {
-        parts.push("super");
-    }
-
-    let base = match key {
-        keyboard::Key::Named(Named::Enter) => "enter".to_string(),
-        keyboard::Key::Named(Named::Tab) => "tab".to_string(),
-        keyboard::Key::Named(Named::Space) => "space".to_string(),
-        keyboard::Key::Named(Named::Escape) => "escape".to_string(),
-        keyboard::Key::Named(Named::Backspace) => "backspace".to_string(),
-        keyboard::Key::Named(Named::Delete) => "delete".to_string(),
-        keyboard::Key::Named(Named::ArrowUp) => "up".to_string(),
-        keyboard::Key::Named(Named::ArrowDown) => "down".to_string(),
-        keyboard::Key::Named(Named::ArrowLeft) => "left".to_string(),
-        keyboard::Key::Named(Named::ArrowRight) => "right".to_string(),
-        keyboard::Key::Named(Named::PageUp) => "pageup".to_string(),
-        keyboard::Key::Named(Named::PageDown) => "pagedown".to_string(),
-        keyboard::Key::Named(Named::Home) => "home".to_string(),
-        keyboard::Key::Named(Named::End) => "end".to_string(),
-        keyboard::Key::Character(chars) => chars
-            .chars()
-            .next()
-            .map(|ch| ch.to_ascii_lowercase().to_string())
-            .or_else(|| text.and_then(|text| text.chars().next().map(|ch| ch.to_string())))?,
-        _ => return None,
-    };
-
-    parts.push(base.as_str());
-    Some(parts.join("+"))
-}
-
 fn named_key_from_iced_key(key: &keyboard::Key) -> Option<bindings::NamedKey> {
     use keyboard::key::Named;
 
@@ -2453,28 +2357,4 @@ fn named_key_from_iced_key(key: &keyboard::Key) -> Option<bindings::NamedKey> {
         keyboard::Key::Named(Named::Escape) => Some(bindings::NamedKey::Escape),
         _ => None,
     }
-}
-
-fn committed_text_from_key(key: &keyboard::Key, modifiers: keyboard::Modifiers) -> Option<String> {
-    if modifiers.control() || modifiers.alt() || modifiers.logo() {
-        return None;
-    }
-    match key {
-        keyboard::Key::Character(chars) if !chars.is_empty() => Some(chars.to_string()),
-        _ => None,
-    }
-}
-
-fn control_character_from_key(key: &keyboard::Key, modifiers: keyboard::Modifiers) -> Option<u8> {
-    if !modifiers.control() || modifiers.alt() || modifiers.logo() || modifiers.shift() {
-        return None;
-    }
-    let keyboard::Key::Character(chars) = key else {
-        return None;
-    };
-    let ch = chars.chars().next()?.to_ascii_lowercase();
-    if !ch.is_ascii_lowercase() {
-        return None;
-    }
-    Some((ch as u8 - b'a') + 1)
 }

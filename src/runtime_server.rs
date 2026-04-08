@@ -93,6 +93,9 @@ impl BooApp {
             server::Command::ExecuteCommand { input } => {
                 self.execute_command(&input);
             }
+            server::Command::AppKeyEvent { event } => {
+                self.handle_app_key_event(event);
+            }
             server::Command::AppAction { action } => {
                 self.dispatch_binding_action(action);
             }
@@ -305,6 +308,54 @@ impl BooApp {
             }
             server::Command::RemoteExecuteCommand { client_id, input } => {
                 self.execute_command(&input);
+                let focused_session_id = self.server.tabs.active_session_id();
+                if let Some(server) = self
+                    .remote_server_for_client(client_id)
+                    .or(self.server.local_gui_server.as_ref())
+                    .or(self.server.remote_server.as_ref())
+                {
+                    server.send_session_list(client_id, &self.remote_sessions());
+                    if let Some(session_id) = focused_session_id {
+                        server.send_attached(client_id, session_id);
+                        self.publish_remote_session(session_id);
+                    }
+                }
+            }
+            server::Command::RemoteAppKeyEvent { client_id, event } => {
+                let Some(session_id) = self
+                    .remote_server_for_client(client_id)
+                    .and_then(|server| server.client_session(client_id))
+                else {
+                    if let Some(server) = self
+                        .remote_server_for_client(client_id)
+                        .or(self.server.local_gui_server.as_ref())
+                        .or(self.server.remote_server.as_ref())
+                    {
+                        server.send_error(client_id, "not attached");
+                    }
+                    return;
+                };
+                let Some(tab_index) = self.server.tabs.find_index_by_session_id(session_id) else {
+                    if let Some(server) = self
+                        .remote_server_for_client(client_id)
+                        .or(self.server.local_gui_server.as_ref())
+                        .or(self.server.remote_server.as_ref())
+                    {
+                        server.send_session_exited(session_id);
+                    }
+                    return;
+                };
+                let old = self.server.tabs.focused_pane();
+                self.server.tabs.goto_tab(tab_index);
+                let new = self.server.tabs.focused_pane();
+                if old != new {
+                    self.set_pane_focus(old, false);
+                    self.set_pane_focus(new, true);
+                }
+                if let Some(server) = self.remote_server_for_client(client_id) {
+                    server.record_input_seq(client_id, event.input_seq);
+                }
+                self.handle_app_key_event(event);
                 let focused_session_id = self.server.tabs.active_session_id();
                 if let Some(server) = self
                     .remote_server_for_client(client_id)

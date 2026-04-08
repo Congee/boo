@@ -26,6 +26,7 @@ pub enum Request {
     ListTabs,
     GetClipboard,
     GetUiSnapshot,
+    AppKeyEvent { event: crate::AppKeyEvent },
     AppAction { action: crate::bindings::Action },
     ExecuteCommand { input: String },
     SendText { text: String },
@@ -188,6 +189,7 @@ pub enum ControlCmd {
     ListTabs { reply: mpsc::Sender<Response> },
     GetClipboard { reply: mpsc::Sender<Response> },
     GetUiSnapshot { reply: mpsc::Sender<Response> },
+    AppKeyEvent { event: crate::AppKeyEvent },
     AppAction { action: crate::bindings::Action },
     ExecuteCommand { input: String },
     SendKey { keyspec: String },
@@ -345,6 +347,10 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
         }
         Request::ExecuteCommand { input } => {
             let _ = tx.send(ControlCmd::ExecuteCommand { input });
+            Response::Ok { ok: true }
+        }
+        Request::AppKeyEvent { event } => {
+            let _ = tx.send(ControlCmd::AppKeyEvent { event });
             Response::Ok { ok: true }
         }
         Request::AppAction { action } => {
@@ -532,6 +538,35 @@ mod tests {
         assert!(matches!(
             rx.recv().unwrap(),
             ControlCmd::ExecuteCommand { input } if input == "search"
+        ));
+    }
+
+    #[test]
+    fn app_key_event_request_maps_to_control_command() {
+        let (tx, rx) = mpsc::channel();
+
+        let response = dispatch_request(
+            Request::AppKeyEvent {
+                event: crate::AppKeyEvent {
+                    keycode: 0x27,
+                    mods: crate::ffi::GHOSTTY_MODS_SHIFT,
+                    text: Some("\"".to_string()),
+                    modified_text: Some("\"".to_string()),
+                    named_key: None,
+                    repeat: false,
+                    input_seq: Some(7),
+                },
+            },
+            &tx,
+        );
+
+        assert!(matches!(response, Response::Ok { ok: true }));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            ControlCmd::AppKeyEvent { event }
+                if event.keycode == 0x27
+                    && event.input_seq == Some(7)
+                    && event.text.as_deref() == Some("\"")
         ));
     }
 

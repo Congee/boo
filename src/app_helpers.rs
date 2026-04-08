@@ -640,7 +640,7 @@ pub(crate) fn native_keycode_to_named_key(keycode: u32) -> Option<bindings::Name
     })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", test))]
 pub(crate) fn native_keycode_to_keyboard_key(
     keycode: u32,
     key_char: Option<char>,
@@ -681,25 +681,6 @@ pub(crate) fn ghostty_mods_to_iced(mods: i32) -> keyboard::Modifiers {
         result.insert(Modifiers::LOGO);
     }
     result
-}
-
-pub(crate) fn key_to_codepoint(key: &keyboard::Key) -> u32 {
-    match key {
-        keyboard::Key::Character(s) => s.chars().next().map(|c| c as u32).unwrap_or(0),
-        keyboard::Key::Named(named) => {
-            use keyboard::key::Named;
-            match named {
-                Named::Enter => '\r' as u32,
-                Named::Tab => '\t' as u32,
-                Named::Space => ' ' as u32,
-                Named::Backspace => 0x08,
-                Named::Escape => 0x1b,
-                Named::Delete => 0x7f,
-                _ => 0,
-            }
-        }
-        _ => 0,
-    }
 }
 
 pub(crate) fn iced_mods_to_ghostty(mods: &keyboard::Modifiers) -> ffi::ghostty_input_mods_e {
