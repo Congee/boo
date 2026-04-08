@@ -71,7 +71,7 @@ pub fn run_gui_client() {
     )
     .title("boo")
     .decorations(false)
-    .transparent(false)
+    .transparent(true)
     .style(|state, _theme| state.window_style())
     .theme(client_gui::ClientApp::theme)
     .subscription(client_gui::ClientApp::subscription)
