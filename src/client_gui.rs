@@ -215,6 +215,18 @@ impl ClientApp {
                         .width(Length::Fill)
                         .height(Length::Fill),
                 )
+                .style({
+                    let background_opacity = self.background_opacity;
+                    move |_: &Theme| container::Style {
+                        background: Some(iced::Background::Color(Color::from_rgba(
+                            0.0,
+                            0.0,
+                            0.0,
+                            background_opacity.clamp(0.0, 1.0),
+                        ))),
+                        ..Default::default()
+                    }
+                })
                 .width(Length::Fill)
                 .height(Length::Fill),
             );
@@ -239,6 +251,18 @@ impl ClientApp {
                             .width(Length::Fill)
                             .height(Length::Fill),
                     )
+                    .style({
+                        let background_opacity = self.background_opacity;
+                        move |_: &Theme| container::Style {
+                            background: Some(iced::Background::Color(Color::from_rgba(
+                                0.0,
+                                0.0,
+                                0.0,
+                                background_opacity.clamp(0.0, 1.0),
+                            ))),
+                            ..Default::default()
+                        }
+                    })
                     .width(Length::Fill)
                     .height(Length::Fill),
                 );
