@@ -77,6 +77,10 @@ pub enum Command {
         cols: u16,
         rows: u16,
     },
+    RemoteExecuteCommand {
+        client_id: u64,
+        input: String,
+    },
     RemoteDestroy {
         client_id: u64,
         session_id: Option<u32>,
@@ -225,6 +229,9 @@ impl From<remote::RemoteCmd> for Command {
                 cols,
                 rows,
             },
+            remote::RemoteCmd::ExecuteCommand { client_id, input } => {
+                Self::RemoteExecuteCommand { client_id, input }
+            }
             remote::RemoteCmd::Destroy {
                 client_id,
                 session_id,

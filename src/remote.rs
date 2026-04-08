@@ -35,6 +35,7 @@ pub enum MessageType {
     AuthChallenge = 0x09,
     Scroll = 0x0a,
     Key = 0x0b,
+    ExecuteCommand = 0x0c,
 
     AuthOk = 0x80,
     AuthFail = 0x81,
@@ -67,6 +68,7 @@ impl TryFrom<u8> for MessageType {
             0x09 => Self::AuthChallenge,
             0x0a => Self::Scroll,
             0x0b => Self::Key,
+            0x0c => Self::ExecuteCommand,
             0x80 => Self::AuthOk,
             0x81 => Self::AuthFail,
             0x82 => Self::SessionList,
@@ -153,6 +155,10 @@ pub enum RemoteCmd {
         client_id: u64,
         cols: u16,
         rows: u16,
+    },
+    ExecuteCommand {
+        client_id: u64,
+        input: String,
     },
     Destroy {
         client_id: u64,
@@ -647,6 +653,9 @@ fn read_loop(
                 cols,
                 rows,
             }),
+            MessageType::ExecuteCommand => String::from_utf8(payload)
+                .ok()
+                .map(|input| RemoteCmd::ExecuteCommand { client_id, input }),
             MessageType::Destroy => Some(RemoteCmd::Destroy {
                 client_id,
                 session_id: parse_session_id(&payload),

@@ -174,6 +174,10 @@ impl TabManager {
         self.active
     }
 
+    pub fn active_session_id(&self) -> Option<u32> {
+        self.tabs.get(self.active).map(|tab| tab.id)
+    }
+
     pub fn set_active_title(&mut self, title: String) {
         if let Some(tab) = self.tabs.get_mut(self.active) {
             tab.title = title;

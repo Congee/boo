@@ -1,4 +1,8 @@
+use crate::bindings;
+use crate::config;
 use crate::control;
+use crate::iced_mods_to_ghostty;
+use crate::keymap;
 use crate::remote;
 use crate::vt;
 use crate::vt_backend_core;
@@ -96,6 +100,7 @@ pub struct ClientApp {
     passive_flush_scheduled: bool,
     steady_state_snapshot_requests: u64,
     should_exit: bool,
+    bindings: bindings::Bindings,
 }
 
 impl ClientApp {
@@ -146,6 +151,7 @@ impl ClientApp {
                 passive_flush_scheduled: false,
                 steady_state_snapshot_requests: 0,
                 should_exit: false,
+                bindings: bindings::Bindings::from_config(&config::Config::load()),
             };
         app.update_gui_test_status();
         (app, Task::none())
@@ -419,6 +425,7 @@ impl ClientApp {
     fn handle_keyboard(&mut self, event: keyboard::Event) {
         let keyboard::Event::KeyPressed {
             key,
+            physical_key,
             text,
             modifiers,
             ..
@@ -426,6 +433,23 @@ impl ClientApp {
         else {
             return;
         };
+
+        if let Some(keycode) = keymap::physical_to_native_keycode(&physical_key) {
+            let key_char = text
+                .as_ref()
+                .and_then(|text| text.chars().next())
+                .or_else(|| committed_text_from_key(&key, modifiers).and_then(|s| s.chars().next()));
+            let named_key = named_key_from_iced_key(&key);
+            let result = self.bindings.handle_key(
+                key_char,
+                keycode,
+                iced_mods_to_ghostty(&modifiers),
+                named_key,
+            );
+            if self.handle_binding_result(result) {
+                return;
+            }
+        }
 
         if let Some(control_byte) = control_character_from_key(&key, modifiers) {
             if self.stream_ready_for_terminal_io() {
@@ -480,6 +504,51 @@ impl ClientApp {
         }
     }
 
+    fn handle_binding_result(&mut self, result: bindings::KeyResult) -> bool {
+        match result {
+            bindings::KeyResult::Consumed(action) => {
+                if let Some(action) = action {
+                    self.dispatch_binding_action(action);
+                }
+                true
+            }
+            bindings::KeyResult::CopyMode(_) => true,
+            bindings::KeyResult::Forward => false,
+        }
+    }
+
+    fn dispatch_binding_action(&mut self, action: bindings::Action) {
+        let command = match &action {
+            bindings::Action::GotoTab(bindings::TabTarget::Index(index)) => {
+                Some(format!("goto-tab {}", index + 1))
+            }
+            bindings::Action::GotoTab(bindings::TabTarget::Last) => Some("last-tab".to_string()),
+            _ => action_command(&action).map(ToString::to_string),
+        };
+        if let Some(command) = command {
+            self.send_stream_or_control(
+                StreamCommand::ExecuteCommand {
+                    input: command.clone(),
+                },
+                control::Request::ExecuteCommand {
+                    input: command,
+                },
+            );
+            if matches!(action, bindings::Action::ReloadConfig) {
+                self.bindings = bindings::Bindings::from_config(&config::Config::load());
+            }
+        }
+    }
+
+    fn send_stream_or_control(&mut self, stream: StreamCommand, control: control::Request) {
+        if self.stream_ready_for_terminal_io() {
+            self.send_stream_command(stream);
+        } else {
+            let _ = self.client.send(&control);
+            self.refresh_snapshot();
+        }
+    }
+
     fn handle_stream_event(&mut self, event: LocalStreamEvent) {
         match event {
             LocalStreamEvent::SessionList(sessions) => {
@@ -488,9 +557,18 @@ impl ClientApp {
                     .filter(|session| !session.child_exited)
                     .collect();
                 self.apply_remote_sessions(&sessions);
-                if let Some(session) = self.pick_attach_session(&live_sessions) {
+                if let Some(session_id) =
+                    session_list_attach_target(self.mode, self.active_session_id, &live_sessions)
+                {
                     self.should_exit = false;
-                    self.send_stream_command(StreamCommand::Attach(session.id));
+                    self.send_stream_command(StreamCommand::Attach(session_id));
+                } else if matches!(self.mode, ClientMode::Attached)
+                    && self
+                        .active_session_id
+                        .map(|session_id| live_sessions.iter().any(|session| session.id == session_id))
+                        .unwrap_or(false)
+                {
+                    self.should_exit = false;
                 } else if matches!(self.mode, ClientMode::Bootstrapping)
                     && !self.has_paintable_terminal()
                 {
@@ -680,21 +758,6 @@ impl ClientApp {
         self.ui_state = ClientUiState::from_remote_sessions(sessions, self.active_session_id);
     }
 
-    fn pick_attach_session<'a>(
-        &self,
-        live_sessions: &'a [&remote::RemoteSessionInfo],
-    ) -> Option<&'a remote::RemoteSessionInfo> {
-        self.active_session_id
-            .and_then(|session_id| {
-                live_sessions
-                    .iter()
-                    .copied()
-                    .find(|session| session.id == session_id)
-            })
-            .or_else(|| live_sessions.get(self.ui_state.active_tab).copied())
-            .or_else(|| live_sessions.first().copied())
-    }
-
     fn update_gui_test_status(&self) {
         let status_value = GuiTestStatus {
             mode: match self.mode {
@@ -759,6 +822,30 @@ fn should_exit_after_stream_disconnect(
 
 fn should_exit_after_session_exit(active_session_id: Option<u32>, exited_session_id: u32) -> bool {
     active_session_id == Some(exited_session_id)
+}
+
+fn session_list_attach_target(
+    mode: ClientMode,
+    active_session_id: Option<u32>,
+    live_sessions: &[&remote::RemoteSessionInfo],
+) -> Option<u32> {
+    if matches!(mode, ClientMode::Attached)
+        && active_session_id
+            .map(|session_id| live_sessions.iter().any(|session| session.id == session_id))
+            .unwrap_or(false)
+    {
+        return None;
+    }
+
+    active_session_id
+        .and_then(|session_id| {
+            live_sessions
+                .iter()
+                .copied()
+                .find(|session| session.id == session_id)
+        })
+        .or_else(|| live_sessions.first().copied())
+        .map(|session| session.id)
 }
 
 impl ClientUiState {
@@ -1054,6 +1141,7 @@ pub(crate) struct RemoteRowDelta {
 pub(crate) enum StreamCommand {
     ListSessions,
     Attach(u32),
+    ExecuteCommand { input: String },
     Input { input_seq: u64, bytes: Vec<u8> },
     Key { input_seq: u64, keyspec: String },
     Resize { cols: u16, rows: u16 },
@@ -1107,6 +1195,11 @@ fn local_stream_subscription(
                                 &mut write,
                                 remote::MessageType::Attach,
                                 &session_id.to_le_bytes(),
+                            ),
+                            StreamCommand::ExecuteCommand { input } => write_stream_message(
+                                &mut write,
+                                remote::MessageType::ExecuteCommand,
+                                input.as_bytes(),
                             ),
                             StreamCommand::Input { input_seq, bytes } => {
                                 let mut payload = Vec::with_capacity(8 + bytes.len());
@@ -2080,6 +2173,60 @@ mod tests {
         assert!(!should_exit_after_session_exit(Some(7), 8));
         assert!(!should_exit_after_session_exit(None, 7));
     }
+
+    #[test]
+    fn attached_mode_session_list_does_not_force_reattach_to_existing_active_session() {
+        let sessions = vec![
+            remote::RemoteSessionInfo {
+                id: 7,
+                name: "one".to_string(),
+                title: "".to_string(),
+                pwd: "".to_string(),
+                attached: true,
+                child_exited: false,
+            },
+            remote::RemoteSessionInfo {
+                id: 8,
+                name: "two".to_string(),
+                title: "".to_string(),
+                pwd: "".to_string(),
+                attached: false,
+                child_exited: false,
+            },
+        ];
+        let live = sessions.iter().collect::<Vec<_>>();
+        assert_eq!(
+            session_list_attach_target(ClientMode::Attached, Some(7), &live),
+            None
+        );
+    }
+
+    #[test]
+    fn recovering_mode_session_list_reattaches_to_existing_active_session() {
+        let sessions = vec![
+            remote::RemoteSessionInfo {
+                id: 7,
+                name: "one".to_string(),
+                title: "".to_string(),
+                pwd: "".to_string(),
+                attached: true,
+                child_exited: false,
+            },
+            remote::RemoteSessionInfo {
+                id: 8,
+                name: "two".to_string(),
+                title: "".to_string(),
+                pwd: "".to_string(),
+                attached: false,
+                child_exited: false,
+            },
+        ];
+        let live = sessions.iter().collect::<Vec<_>>();
+        assert_eq!(
+            session_list_attach_target(ClientMode::Recovering, Some(7), &live),
+            Some(7)
+        );
+    }
 }
 
 fn keyspec_from_key(
@@ -2128,6 +2275,56 @@ fn keyspec_from_key(
 
     parts.push(base.as_str());
     Some(parts.join("+"))
+}
+
+fn named_key_from_iced_key(key: &keyboard::Key) -> Option<bindings::NamedKey> {
+    use keyboard::key::Named;
+
+    match key {
+        keyboard::Key::Named(Named::ArrowUp) => Some(bindings::NamedKey::ArrowUp),
+        keyboard::Key::Named(Named::ArrowDown) => Some(bindings::NamedKey::ArrowDown),
+        keyboard::Key::Named(Named::ArrowLeft) => Some(bindings::NamedKey::ArrowLeft),
+        keyboard::Key::Named(Named::ArrowRight) => Some(bindings::NamedKey::ArrowRight),
+        keyboard::Key::Named(Named::PageUp) => Some(bindings::NamedKey::PageUp),
+        keyboard::Key::Named(Named::PageDown) => Some(bindings::NamedKey::PageDown),
+        keyboard::Key::Named(Named::Home) => Some(bindings::NamedKey::Home),
+        keyboard::Key::Named(Named::End) => Some(bindings::NamedKey::End),
+        keyboard::Key::Named(Named::Escape) => Some(bindings::NamedKey::Escape),
+        _ => None,
+    }
+}
+
+fn action_command(action: &bindings::Action) -> Option<&'static str> {
+    match action {
+        bindings::Action::NewTab => Some("new-tab"),
+        bindings::Action::NextTab => Some("next-tab"),
+        bindings::Action::PrevTab | bindings::Action::PreviousTab => Some("prev-tab"),
+        bindings::Action::ReloadConfig => Some("reload-config"),
+        bindings::Action::ChooseBuffer => Some("choose-buffer"),
+        bindings::Action::ChooseTree => Some("choose-tree"),
+        bindings::Action::FindWindow => Some("find-window"),
+        bindings::Action::DisplayPanes => Some("display-panes"),
+        bindings::Action::OpenCommandPrompt => Some("command-prompt"),
+        bindings::Action::Search => Some("search"),
+        bindings::Action::Paste => Some("paste"),
+        bindings::Action::MarkPane => Some("mark-pane"),
+        bindings::Action::ClearMarkedPane => Some("clear-marked-pane"),
+        bindings::Action::BreakPane => Some("break-pane"),
+        bindings::Action::CloseTab => Some("close-tab"),
+        bindings::Action::EnterCopyMode => Some("copy-mode"),
+        bindings::Action::Copy => Some("copy"),
+        bindings::Action::ToggleZoom => Some("zoom"),
+        bindings::Action::NextLayout => Some("next-layout"),
+        bindings::Action::PreviousLayout => Some("prev-layout"),
+        bindings::Action::RebalanceLayout => Some("rebalance-layout"),
+        bindings::Action::NextPane => Some("next-pane"),
+        bindings::Action::PreviousPane => Some("prev-pane"),
+        bindings::Action::SwapPaneNext => Some("swap-pane-next"),
+        bindings::Action::SwapPanePrevious => Some("swap-pane-prev"),
+        bindings::Action::RotatePanesForward => Some("rotate-panes-forward"),
+        bindings::Action::RotatePanesBackward => Some("rotate-panes-backward"),
+        _ => None,
+    }
 }
 
 fn committed_text_from_key(key: &keyboard::Key, modifiers: keyboard::Modifiers) -> Option<String> {

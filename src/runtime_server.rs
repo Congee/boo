@@ -300,6 +300,21 @@ impl BooApp {
                 let (width, height) = self.session_size_pixels(cols, rows);
                 self.resize_pane_backend(pane, self.scale_factor(), width, height);
             }
+            server::Command::RemoteExecuteCommand { client_id, input } => {
+                self.execute_command(&input);
+                let focused_session_id = self.server.tabs.active_session_id();
+                if let Some(server) = self
+                    .remote_server_for_client(client_id)
+                    .or(self.server.local_gui_server.as_ref())
+                    .or(self.server.remote_server.as_ref())
+                {
+                    server.send_session_list(client_id, &self.remote_sessions());
+                    if let Some(session_id) = focused_session_id {
+                        server.send_attached(client_id, session_id);
+                        self.publish_remote_session(session_id);
+                    }
+                }
+            }
             server::Command::RemoteDestroy {
                 client_id,
                 session_id,
