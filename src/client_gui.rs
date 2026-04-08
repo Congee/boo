@@ -101,6 +101,7 @@ pub struct ClientApp {
     steady_state_snapshot_requests: u64,
     should_exit: bool,
     bindings: bindings::Bindings,
+    next_full_snapshot_revision: u64,
 }
 
 impl ClientApp {
@@ -152,6 +153,7 @@ impl ClientApp {
                 steady_state_snapshot_requests: 0,
                 should_exit: false,
                 bindings: bindings::Bindings::from_config(&config::Config::load()),
+                next_full_snapshot_revision: 1,
             };
         app.update_gui_test_status();
         (app, Task::none())
@@ -589,16 +591,12 @@ impl ClientApp {
                 self.send_stream_command(StreamCommand::ListSessions);
             }
             LocalStreamEvent::SessionExited(session_id) => {
-                if should_exit_after_session_exit(self.active_session_id, session_id) {
-                    self.active_session_id = None;
-                    self.should_exit = true;
-                    self.last_error = None;
-                    return;
-                }
                 if self.active_session_id == Some(session_id) {
                     self.active_session_id = None;
                 }
                 self.mode = ClientMode::Recovering;
+                self.should_exit = false;
+                self.last_error = None;
                 self.pending_input_latencies.clear();
                 self.send_stream_command(StreamCommand::ListSessions);
             }
@@ -625,7 +623,11 @@ impl ClientApp {
                     crate::profiling::Kind::Cpu,
                 );
                 self.mode = ClientMode::Attached;
-                self.stream_snapshot = Some(Arc::new(remote_full_state_to_vt_snapshot(&state)));
+                let revision_seed = self.allocate_full_snapshot_revision_seed(state.rows as usize);
+                self.stream_snapshot = Some(Arc::new(remote_full_state_to_vt_snapshot(
+                    &state,
+                    revision_seed,
+                )));
                 self.bootstrap_snapshot = None;
                 self.acknowledge_input_latency("stream_full_state", ack_input_seq);
             }
@@ -736,6 +738,14 @@ impl ClientApp {
         input_seq
     }
 
+    fn allocate_full_snapshot_revision_seed(&mut self, row_count: usize) -> u64 {
+        let seed = self.next_full_snapshot_revision;
+        self.next_full_snapshot_revision = self
+            .next_full_snapshot_revision
+            .wrapping_add(row_count.max(1) as u64);
+        seed
+    }
+
     fn acknowledge_input_latency(&mut self, stage: &str, ack_input_seq: Option<u64>) {
         let Some(ack_input_seq) = ack_input_seq else {
             return;
@@ -818,10 +828,6 @@ fn should_exit_after_stream_disconnect(
     had_paintable_terminal: bool,
 ) -> bool {
     lost_active_session.is_some() || had_paintable_terminal
-}
-
-fn should_exit_after_session_exit(active_session_id: Option<u32>, exited_session_id: u32) -> bool {
-    active_session_id == Some(exited_session_id)
 }
 
 fn session_list_attach_target(
@@ -953,12 +959,16 @@ fn log_client_latency(stage: &str, input_seq: u64, started_at: Instant) {
 
 fn remote_full_state_to_vt_snapshot(
     state: &remote::RemoteFullState,
+    revision_seed: u64,
 ) -> vt_backend_core::TerminalSnapshot {
     let cols = state.cols as usize;
     let rows_data = state
         .cells
         .chunks(cols.max(1))
         .map(|row| row.iter().map(remote_cell_to_snapshot).collect())
+        .collect();
+    let row_revisions = (0..state.rows as usize)
+        .map(|index| revision_seed.wrapping_add(index as u64))
         .collect();
     vt_backend_core::TerminalSnapshot {
         cols: state.cols,
@@ -972,7 +982,7 @@ fn remote_full_state_to_vt_snapshot(
             style: 1,
         },
         rows_data,
-        row_revisions: vec![1; state.rows as usize],
+        row_revisions,
         scrollbar: Default::default(),
         colors: vt::GhosttyRenderStateColors {
             foreground: vt::GhosttyColorRgb {
@@ -2168,13 +2178,6 @@ mod tests {
     }
 
     #[test]
-    fn session_exit_closes_active_gui_session() {
-        assert!(should_exit_after_session_exit(Some(7), 7));
-        assert!(!should_exit_after_session_exit(Some(7), 8));
-        assert!(!should_exit_after_session_exit(None, 7));
-    }
-
-    #[test]
     fn attached_mode_session_list_does_not_force_reattach_to_existing_active_session() {
         let sessions = vec![
             remote::RemoteSessionInfo {
@@ -2226,6 +2229,24 @@ mod tests {
             session_list_attach_target(ClientMode::Recovering, Some(7), &live),
             Some(7)
         );
+    }
+
+    #[test]
+    fn session_exit_relists_sessions_instead_of_immediately_exiting() {
+        let (mut app, _) = ClientApp::new("/tmp/test.sock".to_string());
+        let (tx, _rx) = std::sync::mpsc::channel();
+        app.stream_tx = Some(tx);
+        app.mode = ClientMode::Attached;
+        app.active_session_id = Some(7);
+        app.should_exit = true;
+        app.last_error = Some("stale".to_string());
+
+        app.handle_stream_event(LocalStreamEvent::SessionExited(7));
+
+        assert!(matches!(app.mode, ClientMode::Recovering));
+        assert_eq!(app.active_session_id, None);
+        assert!(!app.should_exit);
+        assert_eq!(app.last_error, None);
     }
 }
 
