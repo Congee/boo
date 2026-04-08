@@ -1,14 +1,13 @@
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
+#[cfg(target_os = "macos")]
+use std::os::unix::fs::symlink;
 
 const MACOS_APP_BUNDLE_ID: &str = "me.congee.boo";
 const MACOS_APP_NAME: &str = "boo";
 const MACOS_APP_DISPLAY_NAME: &str = "boo";
-const GHOSTTY_APP_DIR_NAME: &str = "Ghostty.app";
 const BOO_APP_DIR_NAME: &str = "boo.app";
-const GHOSTTY_EXECUTABLE_NAME: &str = "ghostty";
 const BOO_EXECUTABLE_NAME: &str = "boo";
 
 fn main() {
@@ -21,7 +20,7 @@ fn main() {
                 vt_lib_dir.display()
             );
         }
-        migrate_macos_app_bundle(&manifest_dir);
+        ensure_macos_app_bundle(&manifest_dir);
     }
 
     println!("cargo:rerun-if-changed=build.rs");
@@ -48,113 +47,114 @@ fn libghostty_vt_lib_dir(manifest_dir: &std::path::Path) -> Option<PathBuf> {
     None
 }
 
-fn migrate_macos_app_bundle(manifest_dir: &std::path::Path) {
-    for bundle_dir in macos_app_bundle_dirs(manifest_dir) {
-        let final_bundle_dir = rename_bundle_dir_if_needed(&bundle_dir).unwrap_or(bundle_dir);
-        let contents_dir = final_bundle_dir.join("Contents");
-        let info_plist = contents_dir.join("Info.plist");
-        if !info_plist.exists() {
-            continue;
-        }
-        rename_executable_if_needed(&contents_dir);
-        patch_info_plist(&info_plist);
-    }
-}
-
-fn macos_app_bundle_dirs(manifest_dir: &std::path::Path) -> Vec<PathBuf> {
-    let target_dir = env::var("CARGO_TARGET_DIR")
+fn ensure_macos_app_bundle(manifest_dir: &std::path::Path) {
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+    let profile_dir = out_dir
+        .ancestors()
+        .nth(3)
         .map(PathBuf::from)
-        .unwrap_or_else(|_| manifest_dir.join("target"));
-    let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
-    let build_dir = target_dir.join(profile).join("build");
-    let mut bundles = Vec::new();
-    let Ok(entries) = fs::read_dir(build_dir) else {
-        return bundles;
-    };
-    for entry in entries.flatten() {
-        let out_dir = entry.path().join("out/ghostty-install");
-        let boo_bundle = out_dir.join(BOO_APP_DIR_NAME);
-        if boo_bundle.exists() {
-            bundles.push(boo_bundle);
-            continue;
-        }
-        let ghostty_bundle = out_dir.join(GHOSTTY_APP_DIR_NAME);
-        if ghostty_bundle.exists() {
-            bundles.push(ghostty_bundle);
-        }
-    }
-    bundles
-}
-
-fn rename_bundle_dir_if_needed(bundle_dir: &std::path::Path) -> Option<PathBuf> {
-    if bundle_dir.file_name().and_then(|name| name.to_str()) != Some(GHOSTTY_APP_DIR_NAME) {
-        return None;
-    }
-    let target = bundle_dir.with_file_name(BOO_APP_DIR_NAME);
-    if target.exists() {
-        return Some(target);
-    }
-    if fs::rename(bundle_dir, &target).is_ok() {
-        Some(target)
-    } else {
-        None
-    }
-}
-
-fn rename_executable_if_needed(contents_dir: &std::path::Path) {
+        .unwrap_or_else(|| {
+            let target_dir = env::var("CARGO_TARGET_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| manifest_dir.join("target"));
+            let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+            target_dir.join(profile)
+        });
+    let bundle_dir = profile_dir.join(BOO_APP_DIR_NAME);
+    let contents_dir = bundle_dir.join("Contents");
     let macos_dir = contents_dir.join("MacOS");
-    let ghostty = macos_dir.join(GHOSTTY_EXECUTABLE_NAME);
-    let boo = macos_dir.join(BOO_EXECUTABLE_NAME);
-    if ghostty.exists() && !boo.exists() {
-        let _ = fs::rename(ghostty, boo);
+    let resources_dir = contents_dir.join("Resources");
+
+    let legacy_bundle_root = out_dir.join("ghostty-install");
+    if legacy_bundle_root.exists() {
+        let _ = fs::remove_dir_all(&legacy_bundle_root);
     }
+
+    fs::create_dir_all(&macos_dir)
+        .unwrap_or_else(|e| panic!("failed to create {}: {e}", macos_dir.display()));
+    fs::create_dir_all(&resources_dir)
+        .unwrap_or_else(|e| panic!("failed to create {}: {e}", resources_dir.display()));
+
+    let info_plist = contents_dir.join("Info.plist");
+    fs::write(&info_plist, macos_info_plist())
+        .unwrap_or_else(|e| panic!("failed to write {}: {e}", info_plist.display()));
+
+    let executable_link = macos_dir.join(BOO_EXECUTABLE_NAME);
+    if executable_link.exists() {
+        let _ = fs::remove_file(&executable_link);
+    }
+    let relative_binary = PathBuf::from("../../../").join(BOO_EXECUTABLE_NAME);
+    symlink(&relative_binary, &executable_link).unwrap_or_else(|e| {
+        panic!(
+            "failed to create symlink {} -> {}: {e}",
+            executable_link.display(),
+            relative_binary.display()
+        )
+    });
+
+    let pkg_info = contents_dir.join("PkgInfo");
+    fs::write(&pkg_info, "APPL????")
+        .unwrap_or_else(|e| panic!("failed to write {}: {e}", pkg_info.display()));
 }
 
-fn patch_info_plist(info_plist: &std::path::Path) {
-    let replacements = [
-        ("CFBundleIdentifier", MACOS_APP_BUNDLE_ID),
-        ("CFBundleExecutable", BOO_EXECUTABLE_NAME),
-        ("CFBundleName", MACOS_APP_NAME),
-        ("CFBundleDisplayName", MACOS_APP_DISPLAY_NAME),
-        ("NSAppleEventsUsageDescription", "A program running within boo would like to use AppleScript."),
-        ("NSBluetoothAlwaysUsageDescription", "A program running within boo would like to use Bluetooth."),
-        ("NSCalendarsUsageDescription", "A program running within boo would like to access your Calendar."),
-        ("NSCameraUsageDescription", "A program running within boo would like to use the camera."),
-        ("NSContactsUsageDescription", "A program running within boo would like to access your Contacts."),
-        ("NSLocalNetworkUsageDescription", "A program running within boo would like to access the local network."),
-        ("NSLocationUsageDescription", "A program running within boo would like to access your location information."),
-        ("NSMicrophoneUsageDescription", "A program running within boo would like to use your microphone."),
-        ("NSMotionUsageDescription", "A program running within boo would like to access motion data."),
-        ("NSPhotoLibraryUsageDescription", "A program running within boo would like to access your Photo Library."),
-        ("NSRemindersUsageDescription", "A program running within boo would like to access your reminders."),
-        ("NSSpeechRecognitionUsageDescription", "A program running within boo would like to use speech recognition."),
-        ("NSSystemAdministrationUsageDescription", "A program running within boo requires elevated privileges."),
-    ];
-    for (key, value) in replacements {
-        let _ = set_plist_string(info_plist, key, value);
-    }
-    let _ = set_plist_string(info_plist, "NSServices:0:NSMenuItem:default", "New boo Tab Here");
-    let _ = set_plist_string(info_plist, "NSServices:1:NSMenuItem:default", "New boo Window Here");
-    let _ = set_plist_string(
-        info_plist,
-        "UTExportedTypeDeclarations:0:UTTypeIdentifier",
-        "me.congee.booSurfaceId",
-    );
-}
-
-fn set_plist_string(info_plist: &std::path::Path, key_path: &str, value: &str) -> std::io::Result<()> {
-    let status = Command::new("/usr/libexec/PlistBuddy")
-        .arg("-c")
-        .arg(format!("Set :{key_path} {value}"))
-        .arg(info_plist)
-        .status()?;
-    if status.success() {
-        return Ok(());
-    }
-    Command::new("/usr/libexec/PlistBuddy")
-        .arg("-c")
-        .arg(format!("Add :{key_path} string {value}"))
-        .arg(info_plist)
-        .status()?;
-    Ok(())
+fn macos_info_plist() -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>{display_name}</string>
+  <key>CFBundleExecutable</key>
+  <string>{executable}</string>
+  <key>CFBundleIdentifier</key>
+  <string>{bundle_id}</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>{name}</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.0</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>A program running within boo would like to use AppleScript.</string>
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>A program running within boo would like to use Bluetooth.</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>A program running within boo would like to access your Calendar.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>A program running within boo would like to use the camera.</string>
+  <key>NSContactsUsageDescription</key>
+  <string>A program running within boo would like to access your Contacts.</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>A program running within boo would like to access the local network.</string>
+  <key>NSLocationUsageDescription</key>
+  <string>A program running within boo would like to access your location information.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>A program running within boo would like to use your microphone.</string>
+  <key>NSMotionUsageDescription</key>
+  <string>A program running within boo would like to access motion data.</string>
+  <key>NSPhotoLibraryUsageDescription</key>
+  <string>A program running within boo would like to access your Photo Library.</string>
+  <key>NSRemindersUsageDescription</key>
+  <string>A program running within boo would like to access your reminders.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>A program running within boo would like to use speech recognition.</string>
+  <key>NSSystemAdministrationUsageDescription</key>
+  <string>A program running within boo requires elevated privileges.</string>
+</dict>
+</plist>
+"#,
+        bundle_id = MACOS_APP_BUNDLE_ID,
+        executable = BOO_EXECUTABLE_NAME,
+        name = MACOS_APP_NAME,
+        display_name = MACOS_APP_DISPLAY_NAME,
+    )
 }

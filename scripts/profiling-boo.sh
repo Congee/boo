@@ -8,9 +8,9 @@ if [[ ! -x target/profiling/boo ]]; then
   exit 1
 fi
 
-LIB_DIR="$(find "$PWD/target/profiling/build" -path '*/out/ghostty-install/lib' | head -n 1)"
+LIB_DIR="$(find "$PWD/target/libghostty-vt" -path '*/profiling/lib' | head -n 1)"
 if [[ -z "${LIB_DIR:-}" ]]; then
-  echo "could not locate libghostty-vt dylib directory under target/profiling/build" >&2
+  echo "could not locate libghostty-vt dylib directory under target/libghostty-vt" >&2
   exit 1
 fi
 

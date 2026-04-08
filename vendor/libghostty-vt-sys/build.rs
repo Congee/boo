@@ -97,6 +97,16 @@ fn ensure_cached_install_prefix(out_dir: &Path, target: &str, host: &str) -> (Pa
         }
         fs::create_dir_all(&install_prefix)
             .unwrap_or_else(|e| panic!("failed to create {}: {e}", install_prefix.display()));
+        let raw_install_prefix = out_dir.join("ghostty-install-raw");
+        if raw_install_prefix.exists() {
+            let _ = fs::remove_dir_all(&raw_install_prefix);
+        }
+        fs::create_dir_all(&raw_install_prefix).unwrap_or_else(|e| {
+            panic!(
+                "failed to create temporary install prefix {}: {e}",
+                raw_install_prefix.display()
+            )
+        });
 
         let ghostty_dir = match env::var("GHOSTTY_SOURCE_DIR") {
             Ok(dir) => {
@@ -117,7 +127,7 @@ fn ensure_cached_install_prefix(out_dir: &Path, target: &str, host: &str) -> (Pa
             .arg("-Demit-lib-vt")
             .arg(format!("-Doptimize={optimize}"))
             .arg("--prefix")
-            .arg(&install_prefix)
+            .arg(&raw_install_prefix)
             .current_dir(&ghostty_dir);
 
         if target != host {
@@ -126,12 +136,42 @@ fn ensure_cached_install_prefix(out_dir: &Path, target: &str, host: &str) -> (Pa
         }
 
         run(build, "zig build");
-        let _ = fs::remove_dir_all(install_prefix.join("Ghostty.app"));
+        copy_dir_all(&raw_install_prefix.join("lib"), &lib_dir);
+        copy_dir_all(&raw_install_prefix.join("include"), &include_dir);
+        let _ = fs::remove_dir_all(&raw_install_prefix);
         fs::write(&stamp_path, expected_stamp)
             .unwrap_or_else(|e| panic!("failed to write {}: {e}", stamp_path.display()));
     }
+    let _ = fs::remove_dir_all(install_prefix.join("share"));
+    let _ = fs::remove_dir_all(install_prefix.join("Ghostty.app"));
+    let _ = fs::remove_dir_all(install_prefix.join("boo.app"));
 
     (lib_dir, include_dir)
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst)
+        .unwrap_or_else(|e| panic!("failed to create {}: {e}", dst.display()));
+    let entries =
+        fs::read_dir(src).unwrap_or_else(|e| panic!("failed to read {}: {e}", src.display()));
+    for entry in entries.flatten() {
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .unwrap_or_else(|e| panic!("failed to stat {}: {e}", src_path.display()));
+        if file_type.is_dir() {
+            copy_dir_all(&src_path, &dst_path);
+        } else if file_type.is_file() {
+            fs::copy(&src_path, &dst_path).unwrap_or_else(|e| {
+                panic!(
+                    "failed to copy {} to {}: {e}",
+                    src_path.display(),
+                    dst_path.display()
+                )
+            });
+        }
+    }
 }
 
 fn zig_optimize_mode() -> &'static str {
