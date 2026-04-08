@@ -160,17 +160,30 @@ impl BooApp {
 
     pub(crate) fn switch_focus(&mut self, dir: bindings::PaneFocusDirection) {
         let old = self.server.tabs.focused_pane();
+        let frame = self.terminal_frame();
         if let Some(tree) = self.server.tabs.active_tree_mut() {
-            match dir {
-                bindings::PaneFocusDirection::Next => tree.focus_next(),
-                bindings::PaneFocusDirection::Previous => tree.focus_prev(),
-            }
+            tree.focus_direction(frame, dir);
         }
         let new = self.server.tabs.focused_pane();
         if old != new {
             self.set_pane_focus(old, false);
             self.set_pane_focus(new, true);
         }
+    }
+
+    pub(crate) fn focus_pane_by_id(&mut self, pane_id: crate::pane::PaneId) -> bool {
+        let old = self.server.tabs.focused_pane();
+        let mut changed = false;
+        if let Some(tree) = self.server.tabs.active_tree_mut() {
+            changed = tree.set_focus_to_pane(pane_id);
+        }
+        let new = self.server.tabs.focused_pane();
+        if old != new {
+            self.set_pane_focus(old, false);
+            self.set_pane_focus(new, true);
+            return true;
+        }
+        changed
     }
 
     pub(crate) fn relayout(&mut self) {

@@ -22,8 +22,14 @@ pub enum Command {
     AppKeyEvent {
         event: crate::AppKeyEvent,
     },
+    AppMouseEvent {
+        event: crate::AppMouseEvent,
+    },
     AppAction {
         action: crate::bindings::Action,
+    },
+    FocusPane {
+        pane_id: u64,
     },
     ExecuteCommand {
         input: String,
@@ -91,9 +97,17 @@ pub enum Command {
         client_id: u64,
         event: crate::AppKeyEvent,
     },
+    RemoteAppMouseEvent {
+        client_id: u64,
+        event: crate::AppMouseEvent,
+    },
     RemoteAppAction {
         client_id: u64,
         action: crate::bindings::Action,
+    },
+    RemoteFocusPane {
+        client_id: u64,
+        pane_id: u64,
     },
     RemoteDestroy {
         client_id: u64,
@@ -180,7 +194,9 @@ impl From<control::ControlCmd> for Command {
             control::ControlCmd::GetClipboard { reply } => Self::GetClipboard { reply },
             control::ControlCmd::GetUiSnapshot { reply } => Self::GetUiSnapshot { reply },
             control::ControlCmd::AppKeyEvent { event } => Self::AppKeyEvent { event },
+            control::ControlCmd::AppMouseEvent { event } => Self::AppMouseEvent { event },
             control::ControlCmd::AppAction { action } => Self::AppAction { action },
+            control::ControlCmd::FocusPane { pane_id } => Self::FocusPane { pane_id },
             control::ControlCmd::ExecuteCommand { input } => Self::ExecuteCommand { input },
             control::ControlCmd::SendKey { keyspec } => Self::SendKey { keyspec },
             control::ControlCmd::SendText { text } => Self::SendText { text },
@@ -251,8 +267,14 @@ impl From<remote::RemoteCmd> for Command {
             remote::RemoteCmd::AppKeyEvent { client_id, event } => {
                 Self::RemoteAppKeyEvent { client_id, event }
             }
+            remote::RemoteCmd::AppMouseEvent { client_id, event } => {
+                Self::RemoteAppMouseEvent { client_id, event }
+            }
             remote::RemoteCmd::AppAction { client_id, action } => {
                 Self::RemoteAppAction { client_id, action }
+            }
+            remote::RemoteCmd::FocusPane { client_id, pane_id } => {
+                Self::RemoteFocusPane { client_id, pane_id }
             }
             remote::RemoteCmd::Destroy {
                 client_id,
@@ -299,6 +321,35 @@ mod tests {
                 assert_eq!(session_id, 11);
             }
             other => panic!("expected remote attach mapping, got {other:?}"),
+        }
+
+        match Command::from(remote::RemoteCmd::AppMouseEvent {
+            client_id: 8,
+            event: crate::AppMouseEvent::CursorMoved {
+                x: 1.0,
+                y: 2.0,
+                mods: 0,
+            },
+        }) {
+            Command::RemoteAppMouseEvent { client_id, event } => {
+                assert_eq!(client_id, 8);
+                assert!(matches!(
+                    event,
+                    crate::AppMouseEvent::CursorMoved { x, y, .. } if x == 1.0 && y == 2.0
+                ));
+            }
+            other => panic!("expected remote app-mouse mapping, got {other:?}"),
+        }
+
+        match Command::from(remote::RemoteCmd::FocusPane {
+            client_id: 9,
+            pane_id: 77,
+        }) {
+            Command::RemoteFocusPane { client_id, pane_id } => {
+                assert_eq!(client_id, 9);
+                assert_eq!(pane_id, 77);
+            }
+            other => panic!("expected remote focus-pane mapping, got {other:?}"),
         }
     }
 }

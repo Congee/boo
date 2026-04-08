@@ -1,6 +1,6 @@
 use crate::bindings;
 use crate::control;
-use crate::AppKeyEvent;
+use crate::{AppKeyEvent, AppMouseButton, AppMouseEvent};
 use crate::iced_mods_to_ghostty;
 use crate::keymap;
 use crate::remote;
@@ -11,7 +11,10 @@ use iced::futures::{SinkExt, StreamExt};
 use iced::stream;
 use iced::widget::{column, container, row, stack, text};
 use iced::window;
-use iced::{Color, Element, Event, Font, Length, Size, Subscription, Task, Theme, keyboard, time};
+use iced::{
+    Color, Element, Event, Font, Length, Point, Size, Subscription, Task, Theme, keyboard, mouse,
+    time,
+};
 use std::collections::HashMap;
 use std::io::Write;
 use std::io::{BufRead, BufReader};
@@ -39,12 +42,13 @@ pub enum Message {
     GuiTest(GuiTestCommand),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum GuiTestCommand {
     Text(String),
     Key(String),
     AppKey(String),
     Command(String),
+    Click { x: f64, y: f64 },
     Resize { cols: u16, rows: u16 },
     Refresh,
 }
@@ -108,6 +112,7 @@ pub struct ClientApp {
     terminal_snapshot_generation: u64,
     next_full_snapshot_revision: u64,
     next_snapshot_generation: u64,
+    last_mouse_pos: Point,
 }
 
 impl ClientApp {
@@ -162,6 +167,7 @@ impl ClientApp {
                 terminal_snapshot_generation: 1,
                 next_full_snapshot_revision: 1,
                 next_snapshot_generation: 2,
+                last_mouse_pos: Point::ORIGIN,
             };
         app.update_gui_test_status();
         (app, Task::none())
@@ -197,6 +203,7 @@ impl ClientApp {
                     self.send_resize(size);
                 }
                 Event::Keyboard(event) => self.handle_keyboard(event),
+                Event::Mouse(event) => self.handle_mouse(event),
                 _ => {}
             },
         }
@@ -475,6 +482,60 @@ impl ClientApp {
         );
     }
 
+    fn handle_mouse(&mut self, event: mouse::Event) {
+        match event {
+            mouse::Event::CursorMoved { position } => {
+                self.last_mouse_pos = position;
+                self.send_mouse_event(AppMouseEvent::CursorMoved {
+                    x: position.x as f64,
+                    y: position.y as f64,
+                    mods: 0,
+                });
+            }
+            mouse::Event::ButtonPressed(button) => {
+                self.send_mouse_event(AppMouseEvent::ButtonPressed {
+                    button: app_mouse_button(button),
+                    x: self.last_mouse_pos.x as f64,
+                    y: self.last_mouse_pos.y as f64,
+                    mods: 0,
+                });
+            }
+            mouse::Event::ButtonReleased(button) => {
+                self.send_mouse_event(AppMouseEvent::ButtonReleased {
+                    button: app_mouse_button(button),
+                    x: self.last_mouse_pos.x as f64,
+                    y: self.last_mouse_pos.y as f64,
+                    mods: 0,
+                });
+            }
+            mouse::Event::WheelScrolled { delta } => {
+                let event = match delta {
+                    mouse::ScrollDelta::Lines { x, y } => AppMouseEvent::WheelScrolledLines {
+                        x: x as f64,
+                        y: y as f64,
+                        mods: 0,
+                    },
+                    mouse::ScrollDelta::Pixels { x, y } => AppMouseEvent::WheelScrolledPixels {
+                        x: x as f64,
+                        y: y as f64,
+                        mods: 0,
+                    },
+                };
+                self.send_mouse_event(event);
+            }
+            _ => {}
+        }
+    }
+
+    fn send_mouse_event(&mut self, event: AppMouseEvent) {
+        self.send_stream_or_control(
+            StreamCommand::AppMouseEvent {
+                event: event.clone(),
+            },
+            control::Request::AppMouseEvent { event },
+        );
+    }
+
     fn send_stream_or_control(&mut self, stream: StreamCommand, control: control::Request) {
         if self.stream_ready_for_terminal_io() {
             self.send_stream_command(stream);
@@ -669,6 +730,21 @@ impl ClientApp {
                 },
                 control::Request::ExecuteCommand { input },
             ),
+            GuiTestCommand::Click { x, y } => {
+                self.last_mouse_pos = Point::new(x as f32, y as f32);
+                self.send_mouse_event(AppMouseEvent::ButtonPressed {
+                    button: AppMouseButton::Left,
+                    x,
+                    y,
+                    mods: 0,
+                });
+                self.send_mouse_event(AppMouseEvent::ButtonReleased {
+                    button: AppMouseButton::Left,
+                    x,
+                    y,
+                    mods: 0,
+                });
+            }
             GuiTestCommand::Resize { cols, rows } => self.send_resize_cells(cols, rows),
             GuiTestCommand::Refresh => self.refresh_snapshot(),
         }
@@ -1219,6 +1295,7 @@ pub(crate) enum StreamCommand {
     ListSessions,
     Attach(u32),
     AppKeyEvent { event: AppKeyEvent },
+    AppMouseEvent { event: AppMouseEvent },
     ExecuteCommand { input: String },
     Input { input_seq: u64, bytes: Vec<u8> },
     Key { input_seq: u64, keyspec: String },
@@ -1283,6 +1360,18 @@ fn local_stream_subscription(
                                 write_stream_message(
                                     &mut write,
                                     remote::MessageType::AppKeyEvent,
+                                    &payload,
+                                )
+                            }
+                            StreamCommand::AppMouseEvent { event } => {
+                                let Ok(payload) = serde_json::to_vec(&event) else {
+                                    let _ = writer_event_tx
+                                        .unbounded_send(LocalStreamEvent::Disconnected);
+                                    break;
+                                };
+                                write_stream_message(
+                                    &mut write,
+                                    remote::MessageType::AppMouseEvent,
                                     &payload,
                                 )
                             }
@@ -1461,6 +1550,12 @@ fn parse_gui_test_command(line: &str) -> Option<GuiTestCommand> {
     if let Some(rest) = trimmed.strip_prefix("command ") {
         return Some(GuiTestCommand::Command(rest.to_string()));
     }
+    if let Some(rest) = trimmed.strip_prefix("click ") {
+        let mut parts = rest.split_whitespace();
+        let x = parts.next()?.parse().ok()?;
+        let y = parts.next()?.parse().ok()?;
+        return Some(GuiTestCommand::Click { x, y });
+    }
     if let Some(rest) = trimmed.strip_prefix("resize ") {
         let mut parts = rest.split_whitespace();
         let cols = parts.next()?.parse().ok()?;
@@ -1532,6 +1627,15 @@ fn gui_test_app_key_event(spec: &str, input_seq: u64) -> Option<AppKeyEvent> {
         repeat: false,
         input_seq: Some(input_seq),
     })
+}
+
+fn app_mouse_button(button: mouse::Button) -> AppMouseButton {
+    match button {
+        mouse::Button::Left => AppMouseButton::Left,
+        mouse::Button::Right => AppMouseButton::Right,
+        mouse::Button::Middle => AppMouseButton::Middle,
+        _ => AppMouseButton::Other,
+    }
 }
 
 fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStreamEvent)) {
@@ -2013,6 +2117,17 @@ mod tests {
         assert_eq!(
             parse_gui_test_command("command new-tab"),
             Some(GuiTestCommand::Command("new-tab".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_gui_test_click_command() {
+        assert_eq!(
+            parse_gui_test_command("click 120.5 33.25"),
+            Some(GuiTestCommand::Click {
+                x: 120.5,
+                y: 33.25,
+            })
         );
     }
 

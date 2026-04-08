@@ -94,6 +94,19 @@ impl BooApp {
             .unwrap_or_else(|| shifted_codepoint(event.keycode, 0));
 
         if surface.is_null() {
+            if event.mods & (ffi::GHOSTTY_MODS_CTRL | ffi::GHOSTTY_MODS_ALT | ffi::GHOSTTY_MODS_SUPER)
+                == 0
+            {
+                if let Some(committed) = event
+                    .text
+                    .clone()
+                    .or_else(|| event.modified_text.clone())
+                    .filter(|text| !text.is_empty())
+                {
+                    self.handle_committed_text(committed);
+                    return false;
+                }
+            }
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             {
                 let Some(vt_keycode) = keymap::native_to_vt_keycode(event.keycode) else {
@@ -193,6 +206,46 @@ impl BooApp {
         let _ = self
             .backend
             .write_input(self.server.tabs.focused_pane(), committed.as_bytes());
+    }
+
+    pub(crate) fn handle_app_mouse_event(&mut self, event: AppMouseEvent) -> bool {
+        let old_focus = self.server.tabs.focused_pane();
+        let old_divider_drag = self.divider_drag;
+        let old_scrollbar_drag = self.scrollbar_drag;
+        match event {
+            AppMouseEvent::CursorMoved { x, y, .. } => {
+                self.handle_mouse(mouse::Event::CursorMoved {
+                    position: iced::Point::new(x as f32, y as f32),
+                });
+            }
+            AppMouseEvent::ButtonPressed { button, x, y, .. } => {
+                self.last_mouse_pos = (x, y);
+                self.handle_mouse(mouse::Event::ButtonPressed(button.to_iced()));
+            }
+            AppMouseEvent::ButtonReleased { button, x, y, .. } => {
+                self.last_mouse_pos = (x, y);
+                self.handle_mouse(mouse::Event::ButtonReleased(button.to_iced()));
+            }
+            AppMouseEvent::WheelScrolledLines { x, y, .. } => {
+                self.handle_mouse(mouse::Event::WheelScrolled {
+                    delta: mouse::ScrollDelta::Lines {
+                        x: x as f32,
+                        y: y as f32,
+                    },
+                });
+            }
+            AppMouseEvent::WheelScrolledPixels { x, y, .. } => {
+                self.handle_mouse(mouse::Event::WheelScrolled {
+                    delta: mouse::ScrollDelta::Pixels {
+                        x: x as f32,
+                        y: y as f32,
+                    },
+                });
+            }
+        }
+        old_focus != self.server.tabs.focused_pane()
+            || old_divider_drag != self.divider_drag
+            || old_scrollbar_drag != self.scrollbar_drag
     }
 
     #[cfg(target_os = "macos")]
@@ -452,15 +505,19 @@ impl BooApp {
                 self.switch_focus(dir);
             }
             bindings::Action::ResizeSplit(dir, amount) => {
-                let delta = amount as f64 / 100.0;
                 let (axis, sign) = match dir {
-                    bindings::Direction::Right => (splits::Direction::Horizontal, 1.0),
-                    bindings::Direction::Left => (splits::Direction::Horizontal, -1.0),
-                    bindings::Direction::Down => (splits::Direction::Vertical, 1.0),
-                    bindings::Direction::Up => (splits::Direction::Vertical, -1.0),
+                    bindings::Direction::Right => (splits::Direction::Horizontal, 1),
+                    bindings::Direction::Left => (splits::Direction::Horizontal, -1),
+                    bindings::Direction::Down => (splits::Direction::Vertical, 1),
+                    bindings::Direction::Up => (splits::Direction::Vertical, -1),
+                };
+                let frame = self.terminal_frame();
+                let cell_extent = match axis {
+                    splits::Direction::Horizontal => self.cell_width,
+                    splits::Direction::Vertical => self.cell_height,
                 };
                 if let Some(tree) = self.server.tabs.active_tree_mut() {
-                    tree.resize_focused(axis, delta * sign);
+                    tree.resize_focused_by_cells(frame, axis, sign * i32::from(amount), cell_extent);
                 }
                 self.relayout();
             }

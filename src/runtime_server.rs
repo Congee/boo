@@ -96,8 +96,14 @@ impl BooApp {
             server::Command::AppKeyEvent { event } => {
                 self.handle_app_key_event(event);
             }
+            server::Command::AppMouseEvent { event } => {
+                self.handle_app_mouse_event(event);
+            }
             server::Command::AppAction { action } => {
                 self.dispatch_binding_action(action);
+            }
+            server::Command::FocusPane { pane_id } => {
+                self.focus_pane_by_id(pane_id);
             }
             server::Command::SendText { text } => {
                 let _ = self
@@ -371,6 +377,49 @@ impl BooApp {
                     }
                 }
             }
+            server::Command::RemoteAppMouseEvent { client_id, event } => {
+                let Some(session_id) = self
+                    .remote_server_for_client(client_id)
+                    .and_then(|server| server.client_session(client_id))
+                else {
+                    if let Some(server) = self
+                        .remote_server_for_client(client_id)
+                        .or(self.server.local_gui_server.as_ref())
+                        .or(self.server.remote_server.as_ref())
+                    {
+                        server.send_error(client_id, "not attached");
+                    }
+                    return;
+                };
+                let Some(tab_index) = self.server.tabs.find_index_by_session_id(session_id) else {
+                    if let Some(server) = self
+                        .remote_server_for_client(client_id)
+                        .or(self.server.local_gui_server.as_ref())
+                        .or(self.server.remote_server.as_ref())
+                    {
+                        server.send_session_exited(session_id);
+                    }
+                    return;
+                };
+                let old = self.server.tabs.focused_pane();
+                self.server.tabs.goto_tab(tab_index);
+                let new = self.server.tabs.focused_pane();
+                if old != new {
+                    self.set_pane_focus(old, false);
+                    self.set_pane_focus(new, true);
+                }
+                let changed_ui = self.handle_app_mouse_event(event);
+                if changed_ui
+                    && let Some(server) = self
+                        .remote_server_for_client(client_id)
+                        .or(self.server.local_gui_server.as_ref())
+                        .or(self.server.remote_server.as_ref())
+                {
+                    server.send_session_list(client_id, &self.remote_sessions());
+                    server.send_attached(client_id, session_id);
+                    self.publish_remote_session(session_id);
+                }
+            }
             server::Command::RemoteAppAction { client_id, action } => {
                 self.dispatch_binding_action(action);
                 let focused_session_id = self.server.tabs.active_session_id();
@@ -384,6 +433,48 @@ impl BooApp {
                         server.send_attached(client_id, session_id);
                         self.publish_remote_session(session_id);
                     }
+                }
+            }
+            server::Command::RemoteFocusPane { client_id, pane_id } => {
+                let Some(session_id) = self
+                    .remote_server_for_client(client_id)
+                    .and_then(|server| server.client_session(client_id))
+                else {
+                    if let Some(server) = self
+                        .remote_server_for_client(client_id)
+                        .or(self.server.local_gui_server.as_ref())
+                        .or(self.server.remote_server.as_ref())
+                    {
+                        server.send_error(client_id, "not attached");
+                    }
+                    return;
+                };
+                let Some(tab_index) = self.server.tabs.find_index_by_session_id(session_id) else {
+                    if let Some(server) = self
+                        .remote_server_for_client(client_id)
+                        .or(self.server.local_gui_server.as_ref())
+                        .or(self.server.remote_server.as_ref())
+                    {
+                        server.send_session_exited(session_id);
+                    }
+                    return;
+                };
+                let old = self.server.tabs.focused_pane();
+                self.server.tabs.goto_tab(tab_index);
+                let new = self.server.tabs.focused_pane();
+                if old != new {
+                    self.set_pane_focus(old, false);
+                    self.set_pane_focus(new, true);
+                }
+                if self.focus_pane_by_id(pane_id)
+                    && let Some(server) = self
+                        .remote_server_for_client(client_id)
+                        .or(self.server.local_gui_server.as_ref())
+                        .or(self.server.remote_server.as_ref())
+                {
+                    server.send_session_list(client_id, &self.remote_sessions());
+                    server.send_attached(client_id, session_id);
+                    self.publish_remote_session(session_id);
                 }
             }
             server::Command::RemoteDestroy {

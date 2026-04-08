@@ -7,10 +7,21 @@ chrome, layout, and VT rendering path.
 
 ## Features
 
+### Capability Matrix
+| Feature | Config | Core | Desktop | GUI Client | Verified |
+|--------|--------|------|---------|------------|----------|
+| Split pane creation | yes | yes | yes | yes | `bash scripts/test-gui-client.sh` |
+| Split pane visibility | n/a | yes | yes | yes | `bash scripts/test-gui-client.sh` |
+| Directional pane focus (`goto_split:*`) | yes | yes | yes | yes | `bash scripts/test-gui-client.sh` |
+| Next/previous pane focus | yes | yes | yes | partial | not yet |
+| Click-to-focus pane | n/a | yes | yes | yes | `bash scripts/test-gui-client.sh` |
+| Plain alphanumeric typing | n/a | yes | yes | yes | `bash scripts/test-gui-client.sh` |
+| Tab switching | yes | yes | yes | yes | `bash scripts/test-gui-client.sh` |
+
 ### Tab & Pane Management
 - Multiple tabs, each with an independent binary split tree of panes
 - 4-directional splits (up/down/left/right) with configurable ratios
-- Vim-style focus navigation between panes (h/j/k/l)
+- Directional focus navigation between panes when `goto_split:*` is bound
 - Pane resize in any direction with configurable step size
 - Per-tab layout modes: even-horizontal, even-vertical, main-horizontal, main-vertical, tiled, manual
 - Automatic relayout when panes are created, closed, or resized

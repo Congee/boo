@@ -225,9 +225,15 @@ impl SplitTree {
     }
 
     /// Resize the nearest matching split ancestor of the focused leaf.
-    pub fn resize_focused(&mut self, axis: Direction, delta: f64) {
+    pub fn resize_focused_by_cells(
+        &mut self,
+        frame: Rect,
+        axis: Direction,
+        delta_cells: i32,
+        cell_extent: f64,
+    ) {
         if let Some(ref mut root) = self.root {
-            resize_toward_leaf(root, self.focused_id, axis, delta);
+            resize_toward_leaf_by_cells(root, frame, self.focused_id, axis, delta_cells, cell_extent);
         }
     }
 
@@ -347,6 +353,107 @@ impl SplitTree {
                     self.focused_id = id;
                     return true;
                 }
+            }
+        }
+        false
+    }
+
+    pub fn focus_direction(
+        &mut self,
+        frame: Rect,
+        direction: crate::bindings::PaneFocusDirection,
+    ) -> bool {
+        let panes = self.export_panes_with_frames(frame);
+        let Some(current) = panes
+            .iter()
+            .find(|pane| pane.leaf_id == self.focused_id)
+            .and_then(|pane| pane.frame.map(|frame| (pane.leaf_id, frame)))
+        else {
+            return false;
+        };
+
+        let current_center_x = current.1.origin.x + current.1.size.width / 2.0;
+        let current_center_y = current.1.origin.y + current.1.size.height / 2.0;
+        let current_min_x = current.1.origin.x;
+        let current_max_x = current.1.origin.x + current.1.size.width;
+        let current_min_y = current.1.origin.y;
+        let current_max_y = current.1.origin.y + current.1.size.height;
+
+        let mut best: Option<(LeafId, f64, f64)> = None;
+        for pane in panes {
+            if pane.leaf_id == current.0 {
+                continue;
+            }
+            let Some(frame) = pane.frame else {
+                continue;
+            };
+            let center_x = frame.origin.x + frame.size.width / 2.0;
+            let center_y = frame.origin.y + frame.size.height / 2.0;
+            let min_x = frame.origin.x;
+            let max_x = frame.origin.x + frame.size.width;
+            let min_y = frame.origin.y;
+            let max_y = frame.origin.y + frame.size.height;
+
+            let (primary_distance, secondary_distance) = match direction {
+                crate::bindings::PaneFocusDirection::Left => {
+                    if max_x > current_min_x {
+                        continue;
+                    }
+                    (
+                        current_min_x - max_x,
+                        axis_separation(current_min_y, current_max_y, min_y, max_y)
+                            .min((center_y - current_center_y).abs()),
+                    )
+                }
+                crate::bindings::PaneFocusDirection::Right => {
+                    if min_x < current_max_x {
+                        continue;
+                    }
+                    (
+                        min_x - current_max_x,
+                        axis_separation(current_min_y, current_max_y, min_y, max_y)
+                            .min((center_y - current_center_y).abs()),
+                    )
+                }
+                crate::bindings::PaneFocusDirection::Up => {
+                    if max_y > current_min_y {
+                        continue;
+                    }
+                    (
+                        current_min_y - max_y,
+                        axis_separation(current_min_x, current_max_x, min_x, max_x)
+                            .min((center_x - current_center_x).abs()),
+                    )
+                }
+                crate::bindings::PaneFocusDirection::Down => {
+                    if min_y < current_max_y {
+                        continue;
+                    }
+                    (
+                        min_y - current_max_y,
+                        axis_separation(current_min_x, current_max_x, min_x, max_x)
+                            .min((center_x - current_center_x).abs()),
+                    )
+                }
+            };
+
+            let candidate = (pane.leaf_id, primary_distance, secondary_distance);
+            if best
+                .as_ref()
+                .map(|best| {
+                    candidate.1 < best.1
+                        || ((candidate.1 - best.1).abs() < f64::EPSILON && candidate.2 < best.2)
+                })
+                .unwrap_or(true)
+            {
+                best = Some(candidate);
+            }
+        }
+
+        if let Some((leaf_id, _, _)) = best {
+            if leaf_id != self.focused_id {
+                self.focused_id = leaf_id;
+                return true;
             }
         }
         false
@@ -640,12 +747,13 @@ fn remove_leaf(node: Node, target_id: LeafId) -> RemoveResult {
     }
 }
 
-/// Find the nearest ancestor split matching `axis` that contains the focused leaf.
-fn resize_toward_leaf(
+fn resize_toward_leaf_by_cells(
     node: &mut Node,
+    frame: Rect,
     target: LeafId,
     axis: Direction,
-    delta: f64,
+    delta_cells: i32,
+    cell_extent: f64,
 ) -> (bool, bool) {
     match node {
         Node::Leaf { id, .. } => (*id == target, false),
@@ -655,7 +763,15 @@ fn resize_toward_leaf(
             first,
             second,
         } => {
-            let (found, done) = resize_toward_leaf(first, target, axis, delta);
+            let (first_frame, second_frame) = split_frame(frame, *direction, *ratio);
+            let (found, done) = resize_toward_leaf_by_cells(
+                first,
+                first_frame,
+                target,
+                axis,
+                delta_cells,
+                cell_extent,
+            );
             if found && done {
                 return (true, true);
             }
@@ -663,7 +779,14 @@ fn resize_toward_leaf(
             let (found, done) = if found {
                 (true, false)
             } else {
-                resize_toward_leaf(second, target, axis, delta)
+                resize_toward_leaf_by_cells(
+                    second,
+                    second_frame,
+                    target,
+                    axis,
+                    delta_cells,
+                    cell_extent,
+                )
             };
 
             if !found {
@@ -674,6 +797,11 @@ fn resize_toward_leaf(
             }
 
             if *direction == axis {
+                let usable_extent = match axis {
+                    Direction::Horizontal => (frame.size.width - SPLIT_BORDER).max(1.0),
+                    Direction::Vertical => (frame.size.height - SPLIT_BORDER).max(1.0),
+                };
+                let delta = (delta_cells as f64 * cell_extent) / usable_extent;
                 *ratio = (*ratio + delta).clamp(0.1, 0.9);
                 (true, true)
             } else {
@@ -840,6 +968,16 @@ fn export_node_with_frame(
             export_node_with_frame(first, first_frame, Some((*direction, *ratio)), out);
             export_node_with_frame(second, second_frame, Some((*direction, *ratio)), out);
         }
+    }
+}
+
+fn axis_separation(a_min: f64, a_max: f64, b_min: f64, b_max: f64) -> f64 {
+    if a_max < b_min {
+        b_min - a_max
+    } else if b_max < a_min {
+        a_min - b_max
+    } else {
+        0.0
     }
 }
 
@@ -1021,5 +1159,65 @@ mod tests {
             panes[0].frame.unwrap().size.width + panes[1].frame.unwrap().size.width + SPLIT_BORDER,
             120.0
         );
+    }
+
+    #[test]
+    fn directional_focus_moves_to_adjacent_pane() {
+        let mut tree = SplitTree::new();
+        let left = PaneHandle::detached();
+        let right = PaneHandle::detached();
+        let frame = Rect::new(Point::new(0.0, 0.0), Size::new(120.0, 40.0));
+
+        tree.add_root(left);
+        tree.split_focused(Direction::Horizontal, right);
+
+        assert_eq!(tree.focused_pane(), right);
+        assert!(tree.focus_direction(frame, crate::bindings::PaneFocusDirection::Left));
+        assert_eq!(tree.focused_pane(), left);
+        assert!(tree.focus_direction(frame, crate::bindings::PaneFocusDirection::Right));
+        assert_eq!(tree.focused_pane(), right);
+    }
+
+    #[test]
+    fn directional_focus_prefers_nearest_pane_in_requested_direction() {
+        let mut tree = SplitTree::new();
+        let top_left = PaneHandle::detached();
+        let bottom_left = PaneHandle::detached();
+        let right = PaneHandle::detached();
+        let frame = Rect::new(Point::new(0.0, 0.0), Size::new(160.0, 80.0));
+
+        tree.add_root(top_left);
+        tree.split_focused(Direction::Vertical, bottom_left);
+        assert!(tree.focus_direction(frame, crate::bindings::PaneFocusDirection::Up));
+        tree.split_focused(Direction::Horizontal, right);
+
+        assert_eq!(tree.focused_pane(), right);
+        assert!(tree.focus_direction(frame, crate::bindings::PaneFocusDirection::Left));
+        assert_eq!(tree.focused_pane(), top_left);
+        assert!(tree.focus_direction(frame, crate::bindings::PaneFocusDirection::Down));
+        assert_eq!(tree.focused_pane(), bottom_left);
+    }
+
+    #[test]
+    fn resize_focused_by_cells_uses_cell_count_not_percent() {
+        let mut tree = SplitTree::new();
+        let left = PaneHandle::detached();
+        let right = PaneHandle::detached();
+        let frame = Rect::new(Point::new(0.0, 0.0), Size::new(200.0, 40.0));
+
+        tree.add_root(left);
+        tree.split_focused(Direction::Horizontal, right);
+
+        let before = tree.export_panes_with_frames(frame);
+        let before_left_width = before[0].frame.unwrap().size.width;
+
+        tree.resize_focused_by_cells(frame, Direction::Horizontal, -2, 10.0);
+
+        let after = tree.export_panes_with_frames(frame);
+        let after_left_width = after[0].frame.unwrap().size.width;
+        let after_right_width = after[1].frame.unwrap().size.width;
+
+        assert!((after_left_width - (before_left_width - 20.0)).abs() < 1.0);
+        assert!((after_right_width - (before[1].frame.unwrap().size.width + 20.0)).abs() < 1.0);
     }
 }

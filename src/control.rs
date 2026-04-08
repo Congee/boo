@@ -27,7 +27,9 @@ pub enum Request {
     GetClipboard,
     GetUiSnapshot,
     AppKeyEvent { event: crate::AppKeyEvent },
+    AppMouseEvent { event: crate::AppMouseEvent },
     AppAction { action: crate::bindings::Action },
+    FocusPane { pane_id: u64 },
     ExecuteCommand { input: String },
     SendText { text: String },
     SendVt { text: String },
@@ -197,7 +199,9 @@ pub enum ControlCmd {
     GetClipboard { reply: mpsc::Sender<Response> },
     GetUiSnapshot { reply: mpsc::Sender<Response> },
     AppKeyEvent { event: crate::AppKeyEvent },
+    AppMouseEvent { event: crate::AppMouseEvent },
     AppAction { action: crate::bindings::Action },
+    FocusPane { pane_id: u64 },
     ExecuteCommand { input: String },
     SendKey { keyspec: String },
     SendText { text: String },
@@ -360,8 +364,16 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
             let _ = tx.send(ControlCmd::AppKeyEvent { event });
             Response::Ok { ok: true }
         }
+        Request::AppMouseEvent { event } => {
+            let _ = tx.send(ControlCmd::AppMouseEvent { event });
+            Response::Ok { ok: true }
+        }
         Request::AppAction { action } => {
             let _ = tx.send(ControlCmd::AppAction { action });
+            Response::Ok { ok: true }
+        }
+        Request::FocusPane { pane_id } => {
+            let _ = tx.send(ControlCmd::FocusPane { pane_id });
             Response::Ok { ok: true }
         }
         Request::SendText { text } => {
@@ -594,6 +606,44 @@ mod tests {
             ControlCmd::AppAction {
                 action: crate::bindings::Action::NewSplit(crate::bindings::SplitDirection::Right),
             }
+        ));
+    }
+
+    #[test]
+    fn app_mouse_event_request_maps_to_control_command() {
+        let (tx, rx) = mpsc::channel();
+
+        let response = dispatch_request(
+            Request::AppMouseEvent {
+                event: crate::AppMouseEvent::ButtonPressed {
+                    button: crate::AppMouseButton::Left,
+                    x: 10.0,
+                    y: 20.0,
+                    mods: 0,
+                },
+            },
+            &tx,
+        );
+
+        assert!(matches!(response, Response::Ok { ok: true }));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            ControlCmd::AppMouseEvent {
+                event: crate::AppMouseEvent::ButtonPressed { x, y, .. },
+            } if x == 10.0 && y == 20.0
+        ));
+    }
+
+    #[test]
+    fn focus_pane_request_maps_to_control_command() {
+        let (tx, rx) = mpsc::channel();
+
+        let response = dispatch_request(Request::FocusPane { pane_id: 42 }, &tx);
+
+        assert!(matches!(response, Response::Ok { ok: true }));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            ControlCmd::FocusPane { pane_id } if pane_id == 42
         ));
     }
 

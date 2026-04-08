@@ -1,5 +1,5 @@
 use crate::{bindings, shifted_char};
-use iced::keyboard;
+use iced::{keyboard, mouse};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct AppKeyEvent {
@@ -10,6 +10,44 @@ pub struct AppKeyEvent {
     pub named_key: Option<bindings::NamedKey>,
     pub repeat: bool,
     pub input_seq: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub enum AppMouseButton {
+    Left,
+    Right,
+    Middle,
+    Other,
+}
+
+impl AppMouseButton {
+    pub fn to_iced(self) -> mouse::Button {
+        match self {
+            Self::Left => mouse::Button::Left,
+            Self::Right => mouse::Button::Right,
+            Self::Middle => mouse::Button::Middle,
+            Self::Other => mouse::Button::Other(0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub enum AppMouseEvent {
+    CursorMoved { x: f64, y: f64, mods: i32 },
+    ButtonPressed {
+        button: AppMouseButton,
+        x: f64,
+        y: f64,
+        mods: i32,
+    },
+    ButtonReleased {
+        button: AppMouseButton,
+        x: f64,
+        y: f64,
+        mods: i32,
+    },
+    WheelScrolledLines { x: f64, y: f64, mods: i32 },
+    WheelScrolledPixels { x: f64, y: f64, mods: i32 },
 }
 
 impl AppKeyEvent {

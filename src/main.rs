@@ -49,7 +49,7 @@ use app_helpers::{
 };
 #[cfg(test)]
 use app_helpers::native_keycode_to_keyboard_key;
-pub(crate) use app_input::AppKeyEvent;
+pub(crate) use app_input::{AppKeyEvent, AppMouseButton, AppMouseEvent};
 use backend::TerminalBackend;
 use command_prompt::CommandPrompt;
 #[cfg(test)]

@@ -38,6 +38,8 @@ pub enum MessageType {
     ExecuteCommand = 0x0c,
     AppAction = 0x0d,
     AppKeyEvent = 0x0e,
+    FocusPane = 0x0f,
+    AppMouseEvent = 0x10,
 
     AuthOk = 0x80,
     AuthFail = 0x81,
@@ -73,6 +75,8 @@ impl TryFrom<u8> for MessageType {
             0x0c => Self::ExecuteCommand,
             0x0d => Self::AppAction,
             0x0e => Self::AppKeyEvent,
+            0x0f => Self::FocusPane,
+            0x10 => Self::AppMouseEvent,
             0x80 => Self::AuthOk,
             0x81 => Self::AuthFail,
             0x82 => Self::SessionList,
@@ -168,9 +172,17 @@ pub enum RemoteCmd {
         client_id: u64,
         event: crate::AppKeyEvent,
     },
+    AppMouseEvent {
+        client_id: u64,
+        event: crate::AppMouseEvent,
+    },
     AppAction {
         client_id: u64,
         action: crate::bindings::Action,
+    },
+    FocusPane {
+        client_id: u64,
+        pane_id: u64,
     },
     Destroy {
         client_id: u64,
@@ -673,9 +685,14 @@ fn read_loop(
                     .ok()
                     .map(|event| RemoteCmd::AppKeyEvent { client_id, event })
             }
+            MessageType::AppMouseEvent => serde_json::from_slice::<crate::AppMouseEvent>(&payload)
+                .ok()
+                .map(|event| RemoteCmd::AppMouseEvent { client_id, event }),
             MessageType::AppAction => serde_json::from_slice::<crate::bindings::Action>(&payload)
                 .ok()
                 .map(|action| RemoteCmd::AppAction { client_id, action }),
+            MessageType::FocusPane => parse_pane_id(&payload)
+                .map(|pane_id| RemoteCmd::FocusPane { client_id, pane_id }),
             MessageType::Destroy => Some(RemoteCmd::Destroy {
                 client_id,
                 session_id: parse_session_id(&payload),
@@ -788,6 +805,15 @@ pub(crate) fn read_message(stream: &mut impl Read) -> io::Result<(MessageType, V
 fn parse_session_id(payload: &[u8]) -> Option<u32> {
     (payload.len() >= 4)
         .then(|| u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]))
+}
+
+fn parse_pane_id(payload: &[u8]) -> Option<u64> {
+    (payload.len() >= 8).then(|| {
+        u64::from_le_bytes([
+            payload[0], payload[1], payload[2], payload[3], payload[4], payload[5], payload[6],
+            payload[7],
+        ])
+    })
 }
 
 fn parse_resize(payload: &[u8]) -> Option<(u16, u16)> {

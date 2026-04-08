@@ -55,6 +55,16 @@ sock.close()
 PY
 }
 
+send_gui_click() {
+python3 - <<'PY' "$GUI_TEST_SOCKET" "$1" "$2"
+import socket, sys
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect(sys.argv[1])
+sock.sendall(f"click {sys.argv[2]} {sys.argv[3]}\n".encode())
+sock.close()
+PY
+}
+
 send_gui_appkey() {
 python3 - <<'PY' "$GUI_TEST_SOCKET" "$1"
 import socket, sys
@@ -63,6 +73,10 @@ sock.connect(sys.argv[1])
 sock.sendall(f"appkey {sys.argv[2]}\n".encode())
 sock.close()
 PY
+}
+
+snapshot_json() {
+  python3 scripts/ui-test-client.py --socket "$SOCKET" snapshot
 }
 
 assert_snapshot_contains() {
@@ -135,6 +149,85 @@ done
 return 1
 }
 
+assert_focused_pane() {
+for _ in $(seq 1 40); do
+  SNAPSHOT="$(snapshot_json)"
+  if python3 - <<'PY' "$SNAPSHOT" "$1"
+import json, sys
+data = json.loads(sys.argv[1])["snapshot"]
+raise SystemExit(0 if data["focused_pane"] == int(sys.argv[2]) else 1)
+PY
+  then
+    return 0
+  fi
+  sleep 0.1
+done
+return 1
+}
+
+pane_info() {
+python3 - <<'PY' "$1" "$2"
+import json, sys
+data = json.loads(sys.argv[1])["snapshot"]
+side = sys.argv[2]
+panes = sorted(data["visible_panes"], key=lambda pane: pane["frame"]["x"])
+pane = panes[0 if side == "left" else -1]
+frame = pane["frame"]
+print(
+    pane["pane_id"],
+    frame["x"] + frame["width"] / 2.0,
+    frame["y"] + frame["height"] / 2.0,
+    frame["width"],
+)
+PY
+}
+
+assert_pane_contains() {
+for _ in $(seq 1 40); do
+  SNAPSHOT="$(snapshot_json)"
+  if python3 - <<'PY' "$SNAPSHOT" "$1" "$2"
+import json, sys
+data = json.loads(sys.argv[1])["snapshot"]
+pane_id = int(sys.argv[2])
+needle = sys.argv[3]
+pane = next((pane for pane in data["pane_terminals"] if pane["pane_id"] == pane_id), None)
+if pane is None:
+    raise SystemExit(1)
+rows = pane["terminal"]["rows_data"]
+text = "\n".join("".join(cell["text"] for cell in row["cells"]) for row in rows)
+raise SystemExit(0 if needle in text else 1)
+PY
+  then
+    return 0
+  fi
+  sleep 0.1
+done
+return 1
+}
+
+assert_pane_width_increased() {
+for _ in $(seq 1 40); do
+  SNAPSHOT="$(snapshot_json)"
+  if python3 - <<'PY' "$SNAPSHOT" "$1" "$2" "$3"
+import json, sys
+data = json.loads(sys.argv[1])["snapshot"]
+pane_id = int(sys.argv[2])
+before = float(sys.argv[3])
+minimum_delta = float(sys.argv[4])
+pane = next((pane for pane in data["visible_panes"] if pane["pane_id"] == pane_id), None)
+if pane is None:
+    raise SystemExit(1)
+after = float(pane["frame"]["width"])
+raise SystemExit(0 if after > before + minimum_delta else 1)
+PY
+  then
+    return 0
+  fi
+  sleep 0.1
+done
+return 1
+}
+
 wait_for_exit() {
   for _ in $(seq 1 80); do
     if ! kill -0 "$1" 2>/dev/null; then
@@ -164,6 +257,15 @@ fi
 
 send_gui_key "enter"
 
+send_gui_appkey "q"
+send_gui_appkey "w"
+send_gui_appkey "e"
+
+if ! assert_snapshot_contains "qwe"; then
+  echo "raw appkey typing never appeared in snapshot" >&2
+  exit 1
+fi
+
 send_gui_text "printf TAB1_MARKER_123"
 send_gui_key "enter"
 
@@ -184,6 +286,54 @@ send_gui_appkey "shift+0x27"
 
 if ! assert_visible_pane_count 2; then
   echo "prefix split key did not create a second pane" >&2
+  exit 1
+fi
+
+SNAPSHOT="$(snapshot_json)"
+read -r LEFT_PANE LEFT_X LEFT_Y LEFT_W <<<"$(pane_info "$SNAPSHOT" left)"
+read -r RIGHT_PANE RIGHT_X RIGHT_Y RIGHT_W <<<"$(pane_info "$SNAPSHOT" right)"
+
+if ! assert_focused_pane "$RIGHT_PANE"; then
+  echo "new split did not focus the new pane" >&2
+  exit 1
+fi
+
+send_gui_appkey "ctrl+s"
+send_gui_appkey "h"
+
+if ! assert_focused_pane "$LEFT_PANE"; then
+  echo "directional pane focus did not move left" >&2
+  exit 1
+fi
+
+send_gui_text "printf LEFTPANE"
+send_gui_key "enter"
+
+if ! assert_pane_contains "$LEFT_PANE" "LEFTPANE"; then
+  echo "left pane never received focused text" >&2
+  exit 1
+fi
+
+send_gui_click "$RIGHT_X" "$RIGHT_Y"
+
+if ! assert_focused_pane "$RIGHT_PANE"; then
+  echo "click-to-focus did not move focus to right pane" >&2
+  exit 1
+fi
+
+send_gui_appkey "ctrl+s"
+send_gui_appkey "shift+h"
+
+if ! assert_pane_width_increased "$RIGHT_PANE" "$RIGHT_W" 20.0; then
+  echo "tmux-style resize did not expand the focused pane by cell count" >&2
+  exit 1
+fi
+
+send_gui_text "printf RIGHTPANE"
+send_gui_key "enter"
+
+if ! assert_pane_contains "$RIGHT_PANE" "RIGHTPANE"; then
+  echo "right pane never received clicked text" >&2
   exit 1
 fi
 
