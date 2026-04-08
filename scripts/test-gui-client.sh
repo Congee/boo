@@ -45,14 +45,25 @@ sock.close()
 PY
 }
 
+send_gui_command() {
+python3 - <<'PY' "$GUI_TEST_SOCKET" "$1"
+import socket, sys
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect(sys.argv[1])
+sock.sendall(f"command {sys.argv[2]}\n".encode())
+sock.close()
+PY
+}
+
 assert_snapshot_contains() {
 for _ in $(seq 1 30); do
   SNAPSHOT="$(python3 scripts/ui-test-client.py --socket "$SOCKET" snapshot)"
   if python3 - <<'PY' "$SNAPSHOT" "$1"
 import json, sys
 data = json.loads(sys.argv[1])["snapshot"]
-line = "".join(cell["text"] for cell in data["terminal"]["rows_data"][0]["cells"])
-raise SystemExit(0 if sys.argv[2] in line else 1)
+rows = data["terminal"]["rows_data"]
+text = "\n".join("".join(cell["text"] for cell in row["cells"]) for row in rows)
+raise SystemExit(0 if sys.argv[2] in text else 1)
 PY
   then
     return 0
@@ -69,6 +80,26 @@ for _ in $(seq 1 30); do
 import json, sys
 data = json.loads(sys.argv[1])["snapshot"]
 raise SystemExit(0 if data.get("terminal") else 1)
+PY
+  then
+    return 0
+  fi
+  sleep 0.1
+done
+return 1
+}
+
+assert_active_tab_and_row0() {
+for _ in $(seq 1 40); do
+  SNAPSHOT="$(python3 scripts/ui-test-client.py --socket "$SOCKET" snapshot)"
+  if python3 - <<'PY' "$SNAPSHOT" "$1" "$2"
+import json, sys
+data = json.loads(sys.argv[1])["snapshot"]
+active = data["active_tab"]
+line = "".join(cell["text"] for cell in data["terminal"]["rows_data"][0]["cells"])
+needle = sys.argv[2]
+expected_tab = int(sys.argv[3])
+raise SystemExit(0 if active == expected_tab and needle in line else 1)
 PY
   then
     return 0
@@ -102,6 +133,36 @@ send_gui_text "abc"
 
 if ! assert_snapshot_contains "abc"; then
   echo "typed text never appeared in snapshot" >&2
+  exit 1
+fi
+
+send_gui_key "enter"
+
+send_gui_text "printf TAB1_MARKER_123"
+send_gui_key "enter"
+
+if ! assert_snapshot_contains "TAB1_MARKER_123"; then
+  echo "tab 1 marker never appeared in snapshot" >&2
+  exit 1
+fi
+
+send_gui_command "new-tab"
+
+if ! assert_active_tab_and_row0 "~/" 1; then
+  echo "new tab did not become active with a fresh prompt" >&2
+  exit 1
+fi
+
+SNAPSHOT="$(python3 scripts/ui-test-client.py --socket "$SOCKET" snapshot)"
+if python3 - <<'PY' "$SNAPSHOT"
+import json, sys
+line = "".join(cell["text"] for cell in json.loads(sys.argv[1])["snapshot"]["terminal"]["rows_data"][0]["cells"])
+raise SystemExit(1 if "TAB1_MARKER_123" in line else 0)
+PY
+then
+  :
+else
+  echo "tab 1 marker leaked into new tab snapshot" >&2
   exit 1
 fi
 

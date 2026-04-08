@@ -20,6 +20,7 @@ pub struct TerminalCanvas {
     pub cell_height: f32,
     pub font_size: f32,
     pub font_family: Option<&'static str>,
+    pub snapshot_generation: u64,
     pub appearance_revision: u64,
     pub background_opacity: f32,
     pub background_opacity_cells: bool,
@@ -43,6 +44,7 @@ impl TerminalCanvas {
         cell_height: f32,
         font_size: f32,
         font_family: Option<&'static str>,
+        snapshot_generation: u64,
         appearance_revision: u64,
         background_opacity: f32,
         background_opacity_cells: bool,
@@ -56,6 +58,7 @@ impl TerminalCanvas {
             cell_height,
             font_size,
             font_family,
+            snapshot_generation,
             appearance_revision,
             background_opacity,
             background_opacity_cells,
@@ -77,13 +80,6 @@ impl TerminalCanvas {
         let y = PADDING_Y + row_index as f32 * self.cell_height;
         let artifacts = state.row_artifacts.borrow();
         let artifacts = &artifacts[row_index];
-        if !artifacts.background_spans.is_empty() || !artifacts.text_runs.is_empty() {
-            frame.fill_rectangle(
-                Point::new(PADDING_X, y),
-                Size::new(self.snapshot.cols as f32 * self.cell_width, self.cell_height),
-                color_from_rgb(self.snapshot.colors.background, self.background_opacity),
-            );
-        }
         for span in &artifacts.background_spans {
             frame.fill_rectangle(
                 Point::new(PADDING_X + span.start_col as f32 * self.cell_width, y),
@@ -617,6 +613,7 @@ impl TerminalCanvas {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.snapshot.cols.hash(&mut hasher);
         self.snapshot.rows.hash(&mut hasher);
+        self.snapshot_generation.hash(&mut hasher);
         self.appearance_revision.hash(&mut hasher);
         self.snapshot.colors.background.r.hash(&mut hasher);
         self.snapshot.colors.background.g.hash(&mut hasher);
@@ -657,6 +654,7 @@ impl TerminalCanvas {
     fn row_style_fingerprint(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.snapshot.cols.hash(&mut hasher);
+        self.snapshot_generation.hash(&mut hasher);
         self.font_size.to_bits().hash(&mut hasher);
         self.background_opacity.to_bits().hash(&mut hasher);
         self.background_opacity_cells.hash(&mut hasher);
@@ -678,6 +676,7 @@ impl TerminalCanvas {
 
     fn overlay_fingerprint(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.snapshot_generation.hash(&mut hasher);
         self.snapshot.cursor.visible.hash(&mut hasher);
         self.snapshot.cursor.x.hash(&mut hasher);
         self.snapshot.cursor.y.hash(&mut hasher);
@@ -724,6 +723,7 @@ mod tests {
             16.0,
             14.0,
             Some("CodeNewRoman Nerd Font Mono"),
+            1,
             revision,
             0.8,
             true,
@@ -745,6 +745,14 @@ mod tests {
         let before = sample_canvas(1).fingerprint();
         let mut after = sample_canvas(1);
         after.preedit_text = Some("k".to_string());
+        assert_ne!(before, after.fingerprint());
+    }
+
+    #[test]
+    fn fingerprint_changes_when_snapshot_generation_changes() {
+        let before = sample_canvas(1).fingerprint();
+        let mut after = sample_canvas(1);
+        after.snapshot_generation = 2;
         assert_ne!(before, after.fingerprint());
     }
 
@@ -772,6 +780,7 @@ mod tests {
             before.cell_height,
             before.font_size,
             before.font_family,
+            before.snapshot_generation,
             before.appearance_revision,
             before.background_opacity,
             before.background_opacity_cells,

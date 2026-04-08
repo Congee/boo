@@ -321,6 +321,7 @@ impl BooApp {
                     self.terminal_font_size,
                     self.terminal_font_family,
                     self.appearance_revision,
+                    self.appearance_revision,
                     self.background_opacity,
                     self.background_opacity_cells,
                     selection_rects,

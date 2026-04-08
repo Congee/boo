@@ -43,6 +43,7 @@ pub enum Message {
 pub enum GuiTestCommand {
     Text(String),
     Key(String),
+    Command(String),
     Resize { cols: u16, rows: u16 },
     Refresh,
 }
@@ -52,6 +53,8 @@ struct GuiTestStatus {
     mode: &'static str,
     stream_ready: bool,
     has_terminal: bool,
+    active_tab: usize,
+    row0_text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,7 +104,9 @@ pub struct ClientApp {
     steady_state_snapshot_requests: u64,
     should_exit: bool,
     bindings: bindings::Bindings,
+    terminal_snapshot_generation: u64,
     next_full_snapshot_revision: u64,
+    next_snapshot_generation: u64,
 }
 
 impl ClientApp {
@@ -153,7 +158,9 @@ impl ClientApp {
                 steady_state_snapshot_requests: 0,
                 should_exit: false,
                 bindings: bindings::Bindings::from_config(&config::Config::load()),
+                terminal_snapshot_generation: 1,
                 next_full_snapshot_revision: 1,
+                next_snapshot_generation: 2,
             };
         app.update_gui_test_status();
         (app, Task::none())
@@ -210,6 +217,7 @@ impl ClientApp {
                 self.cell_height as f32,
                 self.font_size,
                 None,
+                self.terminal_snapshot_generation,
                 1,
                 self.background_opacity,
                 self.background_opacity_cells,
@@ -223,18 +231,6 @@ impl ClientApp {
                         .width(Length::Fill)
                         .height(Length::Fill),
                 )
-                .style({
-                    let background_opacity = self.background_opacity;
-                    move |_: &Theme| container::Style {
-                        background: Some(iced::Background::Color(Color::from_rgba(
-                            0.0,
-                            0.0,
-                            0.0,
-                            background_opacity.clamp(0.0, 1.0),
-                        ))),
-                        ..Default::default()
-                    }
-                })
                 .width(Length::Fill)
                 .height(Length::Fill),
             );
@@ -246,6 +242,7 @@ impl ClientApp {
                     self.cell_height as f32,
                     self.font_size,
                     None,
+                    self.terminal_snapshot_generation,
                     1,
                     self.background_opacity,
                     self.background_opacity_cells,
@@ -259,18 +256,6 @@ impl ClientApp {
                             .width(Length::Fill)
                             .height(Length::Fill),
                     )
-                    .style({
-                        let background_opacity = self.background_opacity;
-                        move |_: &Theme| container::Style {
-                            background: Some(iced::Background::Color(Color::from_rgba(
-                                0.0,
-                                0.0,
-                                0.0,
-                                background_opacity.clamp(0.0, 1.0),
-                            ))),
-                            ..Default::default()
-                        }
-                    })
                     .width(Length::Fill)
                     .height(Length::Fill),
                 );
@@ -377,6 +362,7 @@ impl ClientApp {
                 (self.cell_width, self.cell_height) = terminal_metrics(self.font_size);
                 self.ui_state = ClientUiState::from_snapshot(&snapshot);
                 self.bootstrap_snapshot = Some(snapshot);
+                self.terminal_snapshot_generation = self.allocate_snapshot_generation();
                 self.last_error = None;
             }
             Err(error) => {
@@ -624,6 +610,7 @@ impl ClientApp {
                 );
                 self.mode = ClientMode::Attached;
                 let revision_seed = self.allocate_full_snapshot_revision_seed(state.rows as usize);
+                self.terminal_snapshot_generation = self.allocate_snapshot_generation();
                 self.stream_snapshot = Some(Arc::new(remote_full_state_to_vt_snapshot(
                     &state,
                     revision_seed,
@@ -658,7 +645,16 @@ impl ClientApp {
 
     fn handle_stream_delivery(&mut self, event: LocalStreamEvent) -> Option<Task<Message>> {
         if is_passive_screen_event(&event) && matches!(self.mode, ClientMode::Attached) {
-            self.pending_passive_stream = Some(event);
+            match self.pending_passive_stream.take() {
+                Some(pending) if passive_screen_event_supersedes(&pending, &event) => {
+                    self.pending_passive_stream = Some(event);
+                }
+                Some(pending) => {
+                    self.handle_stream_event(pending);
+                    self.pending_passive_stream = Some(event);
+                }
+                None => self.pending_passive_stream = Some(event),
+            }
             if !self.passive_flush_scheduled {
                 self.passive_flush_scheduled = true;
                 return Some(Task::perform(
@@ -708,6 +704,12 @@ impl ClientApp {
                     self.refresh_snapshot();
                 }
             }
+            GuiTestCommand::Command(input) => self.send_stream_or_control(
+                StreamCommand::ExecuteCommand {
+                    input: input.clone(),
+                },
+                control::Request::ExecuteCommand { input },
+            ),
             GuiTestCommand::Resize { cols, rows } => self.send_resize_cells(cols, rows),
             GuiTestCommand::Refresh => self.refresh_snapshot(),
         }
@@ -746,6 +748,12 @@ impl ClientApp {
         seed
     }
 
+    fn allocate_snapshot_generation(&mut self) -> u64 {
+        let generation = self.next_snapshot_generation;
+        self.next_snapshot_generation = self.next_snapshot_generation.wrapping_add(1);
+        generation
+    }
+
     fn acknowledge_input_latency(&mut self, stage: &str, ack_input_seq: Option<u64>) {
         let Some(ack_input_seq) = ack_input_seq else {
             return;
@@ -777,6 +785,25 @@ impl ClientApp {
             },
             stream_ready: self.stream_ready_for_terminal_io(),
             has_terminal: self.has_paintable_terminal(),
+            active_tab: self.ui_state.active_tab,
+            row0_text: self
+                .stream_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.rows_data.first())
+                .map(|row| row.iter().map(|cell| cell.text.as_str()).collect::<String>())
+                .or_else(|| {
+                    self.bootstrap_snapshot
+                        .as_ref()
+                        .and_then(|snapshot| snapshot.terminal.as_ref())
+                        .and_then(|terminal| terminal.rows_data.first())
+                        .map(|row| {
+                            row.cells
+                                .iter()
+                                .map(|cell| cell.text.as_str())
+                                .collect::<String>()
+                        })
+                })
+                .unwrap_or_default(),
         };
         if let Some(status) = gui_test_status_handle()
             && let Ok(mut guard) = status.lock()
@@ -785,10 +812,12 @@ impl ClientApp {
         }
         if let Some(path) = gui_test_status_path() {
             let line = format!(
-                "mode={} stream_ready={} has_terminal={}\n",
+                "mode={} stream_ready={} has_terminal={} active_tab={} row0={:?}\n",
                 status_value.mode,
                 u8::from(status_value.stream_ready),
-                u8::from(status_value.has_terminal)
+                u8::from(status_value.has_terminal),
+                status_value.active_tab,
+                status_value.row0_text
             );
             if let Ok(mut last_written) = gui_test_status_last_written().lock()
                 && last_written.as_deref() != Some(line.as_str())
@@ -1122,7 +1151,16 @@ fn push_coalesced_stream_event(
     event: LocalStreamEvent,
 ) {
     if is_passive_screen_event(&event) {
-        *pending_passive_screen = Some(event);
+        match pending_passive_screen.take() {
+            Some(pending) if passive_screen_event_supersedes(&pending, &event) => {
+                *pending_passive_screen = Some(event);
+            }
+            Some(pending) => {
+                batch.push(pending);
+                *pending_passive_screen = Some(event);
+            }
+            None => *pending_passive_screen = Some(event),
+        }
         return;
     }
     if let Some(pending) = pending_passive_screen.take() {
@@ -1138,6 +1176,17 @@ fn flush_pending_passive_stream_event(
     if let Some(pending) = pending_passive_screen.take() {
         batch.push(pending);
     }
+}
+
+fn passive_screen_event_supersedes(previous: &LocalStreamEvent, next: &LocalStreamEvent) -> bool {
+    is_passive_screen_event(previous)
+        && matches!(
+            next,
+            LocalStreamEvent::FullState {
+                ack_input_seq: None,
+                ..
+            }
+        )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1336,10 +1385,12 @@ fn gui_test_subscription() -> Subscription<Message> {
                                 {
                                     let _ = writeln!(
                                         writer,
-                                        "mode={} stream_ready={} has_terminal={}",
+                                        "mode={} stream_ready={} has_terminal={} active_tab={} row0={:?}",
                                         guard.mode,
                                         u8::from(guard.stream_ready),
-                                        u8::from(guard.has_terminal)
+                                        u8::from(guard.has_terminal),
+                                        guard.active_tab,
+                                        guard.row0_text
                                     );
                                 }
                                 continue;
@@ -1372,6 +1423,9 @@ fn parse_gui_test_command(line: &str) -> Option<GuiTestCommand> {
     }
     if let Some(rest) = trimmed.strip_prefix("key ") {
         return Some(GuiTestCommand::Key(rest.to_string()));
+    }
+    if let Some(rest) = trimmed.strip_prefix("command ") {
+        return Some(GuiTestCommand::Command(rest.to_string()));
     }
     if let Some(rest) = trimmed.strip_prefix("resize ") {
         let mut parts = rest.split_whitespace();
@@ -1945,6 +1999,14 @@ mod tests {
     }
 
     #[test]
+    fn parse_gui_test_command_command() {
+        assert_eq!(
+            parse_gui_test_command("command new-tab"),
+            Some(GuiTestCommand::Command("new-tab".to_string()))
+        );
+    }
+
+    #[test]
     fn stream_batch_window_only_applies_to_unacked_screen_updates() {
         assert_eq!(
             stream_batch_window_for_event(&LocalStreamEvent::Delta {
@@ -2031,6 +2093,60 @@ mod tests {
         assert!(matches!(batch[0], LocalStreamEvent::FullState { ack_input_seq: None, .. }));
         assert!(matches!(batch[1], LocalStreamEvent::Delta { ack_input_seq: Some(1), .. }));
         assert!(matches!(batch[2], LocalStreamEvent::Attached(7)));
+    }
+
+    #[test]
+    fn preserves_consecutive_passive_deltas_in_order() {
+        let passive_a = LocalStreamEvent::Delta {
+            ack_input_seq: None,
+            delta: RemoteDelta {
+                cursor_x: 0,
+                cursor_y: 0,
+                cursor_visible: true,
+                scroll_rows: 0,
+                changed_rows: vec![RemoteRowDelta {
+                    row: 0,
+                    start_col: 0,
+                    cells: Vec::new(),
+                }],
+            },
+        };
+        let passive_b = LocalStreamEvent::Delta {
+            ack_input_seq: None,
+            delta: RemoteDelta {
+                cursor_x: 1,
+                cursor_y: 1,
+                cursor_visible: true,
+                scroll_rows: 0,
+                changed_rows: vec![RemoteRowDelta {
+                    row: 1,
+                    start_col: 0,
+                    cells: Vec::new(),
+                }],
+            },
+        };
+
+        let mut batch = Vec::new();
+        let mut pending = None;
+        push_coalesced_stream_event(&mut batch, &mut pending, passive_a.clone());
+        push_coalesced_stream_event(&mut batch, &mut pending, passive_b.clone());
+        flush_pending_passive_stream_event(&mut batch, &mut pending);
+
+        assert_eq!(batch.len(), 2);
+        match &batch[0] {
+            LocalStreamEvent::Delta { delta, .. } => {
+                assert_eq!(delta.cursor_x, 0);
+                assert_eq!(delta.cursor_y, 0);
+            }
+            other => panic!("expected first batch entry to be delta, got {other:?}"),
+        }
+        match &batch[1] {
+            LocalStreamEvent::Delta { delta, .. } => {
+                assert_eq!(delta.cursor_x, 1);
+                assert_eq!(delta.cursor_y, 1);
+            }
+            other => panic!("expected second batch entry to be delta, got {other:?}"),
+        }
     }
 
     #[test]
