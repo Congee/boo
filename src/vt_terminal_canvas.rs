@@ -116,6 +116,22 @@ impl TerminalCanvas {
         end_row: usize,
         state: &TerminalCanvasState,
     ) {
+        let default_bg = color_from_rgb(self.snapshot.colors.background, self.background_opacity);
+        let top = if start_row == 0 {
+            0.0
+        } else {
+            PADDING_Y + start_row as f32 * self.cell_height
+        };
+        let bottom = if end_row >= self.snapshot.rows_data.len() {
+            frame.height()
+        } else {
+            PADDING_Y + end_row as f32 * self.cell_height
+        };
+        frame.fill_rectangle(
+            Point::new(0.0, top),
+            Size::new(frame.width(), (bottom - top).max(0.0)),
+            default_bg,
+        );
         for row_index in start_row..end_row {
             self.draw_row(frame, row_index, state);
         }
