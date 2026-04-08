@@ -66,13 +66,24 @@ impl TerminalCanvas {
     }
 
     fn draw_base(&self, frame: &mut Frame<Renderer>) {
-        let _ = frame;
+        frame.fill_rectangle(
+            Point::new(0.0, 0.0),
+            frame.size(),
+            color_from_rgb(self.snapshot.colors.background, self.background_opacity),
+        );
     }
 
     fn draw_row(&self, frame: &mut Frame<Renderer>, row_index: usize, state: &TerminalCanvasState) {
         let y = PADDING_Y + row_index as f32 * self.cell_height;
         let artifacts = state.row_artifacts.borrow();
         let artifacts = &artifacts[row_index];
+        if !artifacts.background_spans.is_empty() || !artifacts.text_runs.is_empty() {
+            frame.fill_rectangle(
+                Point::new(PADDING_X, y),
+                Size::new(self.snapshot.cols as f32 * self.cell_width, self.cell_height),
+                color_from_rgb(self.snapshot.colors.background, self.background_opacity),
+            );
+        }
         for span in &artifacts.background_spans {
             frame.fill_rectangle(
                 Point::new(PADDING_X + span.start_col as f32 * self.cell_width, y),
