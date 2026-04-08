@@ -31,13 +31,18 @@ impl PtySize {
     }
 }
 
+#[derive(Debug)]
+pub enum PtyReadEvent {
+    Chunk(Vec<u8>),
+    Exited,
+}
+
 pub struct PtyProcess {
     master_fd: RawFd,
     reader_fd: RawFd,
     child_pid: libc::pid_t,
-    rx: channel::Receiver<Vec<u8>>,
-    reader_closed: Arc<AtomicBool>,
-    reaped: bool,
+    rx: channel::Receiver<PtyReadEvent>,
+    reaped: Arc<AtomicBool>,
 }
 
 impl PtyProcess {
@@ -68,10 +73,10 @@ impl PtyProcess {
         set_cloexec(reader_fd)?;
 
         let (tx, rx) = channel::unbounded();
-        let reader_closed = Arc::new(AtomicBool::new(false));
+        let reaped = Arc::new(AtomicBool::new(false));
         std::thread::spawn({
-            let reader_closed = Arc::clone(&reader_closed);
-            move || read_loop(reader_fd, tx, reader_closed)
+            let reaped = Arc::clone(&reaped);
+            move || read_loop(reader_fd, child_pid, tx, reaped)
         });
 
         Ok(Self {
@@ -79,8 +84,7 @@ impl PtyProcess {
             reader_fd,
             child_pid,
             rx,
-            reader_closed,
-            reaped: false,
+            reaped,
         })
     }
 
@@ -105,14 +109,21 @@ impl PtyProcess {
 
     pub fn try_read(&self) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
-        while let Ok(chunk) = self.rx.try_recv() {
-            out.push(chunk);
+        while let Ok(event) = self.rx.try_recv() {
+            if let PtyReadEvent::Chunk(chunk) = event {
+                out.push(chunk);
+            }
         }
         out
     }
 
     pub fn try_read_chunk(&self) -> Option<Vec<u8>> {
-        self.rx.try_recv().ok()
+        loop {
+            match self.rx.try_recv().ok()? {
+                PtyReadEvent::Chunk(chunk) => return Some(chunk),
+                PtyReadEvent::Exited => continue,
+            }
+        }
     }
 
     pub fn try_read_budgeted(&self, max_chunks: usize, max_bytes: usize) -> Vec<Vec<u8>> {
@@ -134,31 +145,31 @@ impl PtyProcess {
         self.child_pid
     }
 
+    pub fn event_rx(&self) -> channel::Receiver<PtyReadEvent> {
+        self.rx.clone()
+    }
+
     pub fn master_fd(&self) -> RawFd {
         self.master_fd
     }
 
     pub fn try_wait(&mut self) -> io::Result<bool> {
-        if self.reaped {
+        if self.reaped.load(Ordering::Relaxed) {
             return Ok(true);
         }
-        if !self.reader_closed.load(Ordering::Relaxed) {
-            return Ok(false);
-        }
-
         let mut status = 0;
         let rc = unsafe { libc::waitpid(self.child_pid, &mut status, libc::WNOHANG) };
         if rc == 0 {
             return Ok(false);
         }
         if rc == self.child_pid {
-            self.reaped = true;
+            self.reaped.store(true, Ordering::Relaxed);
             return Ok(true);
         }
         if rc < 0 {
             let err = io::Error::last_os_error();
             if matches!(err.raw_os_error(), Some(libc::ECHILD)) {
-                self.reaped = true;
+                self.reaped.store(true, Ordering::Relaxed);
                 return Ok(true);
             }
             return Err(err);
@@ -173,7 +184,7 @@ impl Drop for PtyProcess {
         unsafe {
             libc::close(self.reader_fd);
             libc::close(self.master_fd);
-            if !self.reaped {
+            if !self.reaped.load(Ordering::Relaxed) {
                 libc::kill(self.child_pid, libc::SIGHUP);
                 libc::waitpid(self.child_pid, std::ptr::null_mut(), libc::WNOHANG);
             }
@@ -343,7 +354,12 @@ fn set_env(key: &str, value: &str) {
     }
 }
 
-fn read_loop(fd: RawFd, tx: channel::Sender<Vec<u8>>, reader_closed: Arc<AtomicBool>) {
+fn read_loop(
+    fd: RawFd,
+    child_pid: libc::pid_t,
+    tx: channel::Sender<PtyReadEvent>,
+    reaped: Arc<AtomicBool>,
+) {
     let mut buf = vec![0u8; 8192];
     loop {
         let rc = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut _, buf.len()) };
@@ -358,14 +374,21 @@ fn read_loop(fd: RawFd, tx: channel::Sender<Vec<u8>>, reader_closed: Arc<AtomicB
             break;
         }
 
-        if tx.send(buf[..rc as usize].to_vec()).is_err() {
+        if tx.send(PtyReadEvent::Chunk(buf[..rc as usize].to_vec())).is_err() {
             break;
         }
     }
     unsafe {
         libc::close(fd);
     }
-    reader_closed.store(true, Ordering::Relaxed);
+    let mut status = 0;
+    let rc = unsafe { libc::waitpid(child_pid, &mut status, 0) };
+    if rc == child_pid
+        || (rc < 0 && matches!(io::Error::last_os_error().raw_os_error(), Some(libc::ECHILD)))
+    {
+        reaped.store(true, Ordering::Relaxed);
+    }
+    let _ = tx.send(PtyReadEvent::Exited);
 }
 
 #[cfg(test)]
@@ -375,16 +398,15 @@ mod tests {
     #[test]
     fn budgeted_read_limits_chunks_and_bytes() {
         let (tx, rx) = channel::unbounded();
-        tx.send(vec![0; 4]).unwrap();
-        tx.send(vec![0; 4]).unwrap();
-        tx.send(vec![0; 4]).unwrap();
+        tx.send(PtyReadEvent::Chunk(vec![0; 4])).unwrap();
+        tx.send(PtyReadEvent::Chunk(vec![0; 4])).unwrap();
+        tx.send(PtyReadEvent::Chunk(vec![0; 4])).unwrap();
         let pty = PtyProcess {
             master_fd: -1,
             reader_fd: -1,
             child_pid: 0,
             rx,
-            reader_closed: Arc::new(AtomicBool::new(true)),
-            reaped: true,
+            reaped: Arc::new(AtomicBool::new(true)),
         };
 
         let chunks = pty.try_read_budgeted(2, 5);

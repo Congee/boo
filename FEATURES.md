@@ -116,8 +116,8 @@ chrome, layout, and VT rendering path.
 - Uses the Boo GSP-compatible framing already consumed by the iOS client
 - Supports session listing, attach/detach, create, resize, destroy, text input, and full terminal-state publishing
 - Can require HMAC-SHA256 challenge/response auth when `remote-auth-key` is configured
-- Remaining architecture task: revisit whether PTY ingest should become fully event-driven instead of loop/poll driven once the current profiling work stabilizes
-- Remaining architecture task: move process exit/reap handling to an explicit PTY EOF/worker event path so the hot PTY ingest loop never probes for child exit status
+- PTY ingest is event-driven: the worker blocks on typed PTY read/exit events and command events instead of polling on a timeout
+- PTY exit/reap now follows an explicit EOF/worker event path instead of periodic child-exit probes in the hot ingest loop
 
 ### iOS Remote Viewer
 - A native SwiftUI iOS app lives under [`ios/`](/Users/example/dev/boo/ios)

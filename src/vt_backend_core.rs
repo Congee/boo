@@ -3,12 +3,13 @@
 
 use crate::unix_pty::{PtyProcess, PtySize};
 use crate::vt;
+use crossbeam_channel as channel;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{CStr, c_void};
 use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
@@ -74,10 +75,6 @@ pub struct VtPane {
 // interaction happens by message passing.
 unsafe impl Send for VtPane {}
 
-pub struct PollPtyResult {
-    pub changed: bool,
-}
-
 pub struct VtPaneUpdate {
     pub snapshot: Arc<TerminalSnapshot>,
     pub version: u64,
@@ -100,7 +97,7 @@ pub struct VtForwardKey {
 }
 
 pub struct VtPaneWorker {
-    tx: mpsc::Sender<WorkerCommand>,
+    tx: channel::Sender<WorkerCommand>,
     state: Arc<Mutex<WorkerState>>,
     pending_work: Arc<AtomicBool>,
     join: Option<thread::JoinHandle<()>>,
@@ -198,7 +195,6 @@ struct PendingPtyProfile {
 }
 
 impl VtPaneWorker {
-    const WORKER_IDLE_WAIT: Duration = Duration::from_millis(4);
     const SNAPSHOT_REFRESH_INTERVAL_UNDER_BACKLOG: Duration = Duration::from_millis(8);
 
     pub fn spawn(
@@ -229,7 +225,7 @@ impl VtPaneWorker {
             exited: false,
         }));
         let pending_work = Arc::new(AtomicBool::new(false));
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = channel::unbounded();
         let worker_state = Arc::clone(&state);
         let worker_pending = Arc::clone(&pending_work);
         let join = thread::Builder::new()
@@ -337,8 +333,6 @@ impl VtPane {
     const VT_WRITE_CHUNK_PLAIN: usize = 4096;
     const VT_WRITE_CHUNK_UNDER_BACKLOG: usize = 256;
     const VT_WRITE_CHUNK_PLAIN_UNDER_BACKLOG: usize = 2048;
-    const PTY_POLL_MAX_CHUNKS: usize = 8;
-    const PTY_POLL_MAX_BYTES: usize = 32 * 1024;
     const PTY_POLL_MAX_DURATION: Duration = Duration::from_millis(2);
     const PTY_BACKLOG_SOFT_LIMIT_BYTES: usize = 16 * 1024;
     const PTY_BACKLOG_HARD_LIMIT_BYTES: usize = 64 * 1024;
@@ -431,51 +425,30 @@ impl VtPane {
         std::mem::take(&mut self.completed_notifications)
     }
 
-    pub fn poll_pty(&mut self) -> io::Result<PollPtyResult> {
+    fn enqueue_pty_chunk(&mut self, chunk: Vec<u8>) {
+        let chunk_len = chunk.len();
+        let has_escape = chunk.contains(&0x1b);
+        {
+            let mut scope = crate::profiling::scope(
+                "server.backend.pty_event.osc",
+                crate::profiling::Kind::Cpu,
+            );
+            scope.add_bytes(chunk_len as u64);
+            self.observe_control_sequences(&chunk, has_escape);
+        }
+        self.pending_pty_chunks.push_back(PendingPtyChunk {
+            bytes: chunk,
+            offset: 0,
+            has_escape,
+        });
+        self.pending_pty_bytes = self.pending_pty_bytes.saturating_add(chunk_len);
+    }
+
+    pub fn process_pending_pty_work(&mut self) -> io::Result<bool> {
         let mut changed = false;
         let started_at = Instant::now();
-        let mut total_bytes = 0u64;
-        let mut read_chunks = 0u64;
         let mut written_chunks = 0u64;
         let mut write_chunk_units = 0u64;
-        let backlog_bytes = self.pending_backlog_bytes();
-        if backlog_bytes < Self::PTY_BACKLOG_HARD_LIMIT_BYTES {
-            let read_budget = Self::PTY_POLL_MAX_BYTES
-                .min(Self::PTY_BACKLOG_HARD_LIMIT_BYTES.saturating_sub(backlog_bytes));
-            let mut read_bytes = 0usize;
-            while read_chunks < Self::PTY_POLL_MAX_CHUNKS as u64 && read_bytes < read_budget {
-                let Some(chunk) = self.pty.try_read_chunk() else {
-                    break;
-                };
-                let chunk_len = chunk.len();
-                let has_escape = chunk.contains(&0x1b);
-                read_bytes = read_bytes.saturating_add(chunk_len);
-                total_bytes = total_bytes.saturating_add(chunk.len() as u64);
-                read_chunks = read_chunks.saturating_add(1);
-                {
-                    let mut scope = crate::profiling::scope(
-                        "server.backend.poll_pty.osc",
-                        crate::profiling::Kind::Cpu,
-                    );
-                    scope.add_bytes(chunk.len() as u64);
-                    self.observe_control_sequences(&chunk, has_escape);
-                }
-                self.pending_pty_chunks.push_back(PendingPtyChunk {
-                    bytes: chunk,
-                    offset: 0,
-                    has_escape,
-                });
-                self.pending_pty_bytes = self
-                    .pending_pty_bytes
-                    .saturating_add(chunk_len);
-            }
-        } else {
-            crate::profiling::record_units(
-                "server.backend.poll_pty.deferred_read_for_backlog",
-                crate::profiling::Kind::Cpu,
-                1,
-            );
-        }
         while started_at.elapsed() < Self::PTY_POLL_MAX_DURATION {
             let Some(has_escape) = self.pending_pty_chunks.front().map(|chunk| chunk.has_escape) else {
                 break;
@@ -520,14 +493,12 @@ impl VtPane {
             self.dirty = true;
         }
         crate::profiling::record_bytes(
-            "server.backend.poll_pty.total",
+            "server.backend.pty_event.total",
             crate::profiling::Kind::Cpu,
             started_at.elapsed(),
-            total_bytes,
+            0,
         );
         self.pending_pty_profile.polls = self.pending_pty_profile.polls.wrapping_add(1);
-        self.pending_pty_profile.read_chunks =
-            self.pending_pty_profile.read_chunks.saturating_add(read_chunks);
         self.pending_pty_profile.write_chunks =
             self.pending_pty_profile.write_chunks.saturating_add(written_chunks);
         self.pending_pty_profile.backlog_chunks = self
@@ -545,35 +516,35 @@ impl VtPane {
         if self.pending_pty_profile.polls >= 8 {
             crate::profiling::record_batch(&[
                 crate::profiling::Record {
-                    name: "server.backend.poll_pty.read_chunks",
+                    name: "server.backend.pty_event.read_chunks",
                     kind: crate::profiling::Kind::Cpu,
                     elapsed: Duration::ZERO,
                     bytes: 0,
                     units: self.pending_pty_profile.read_chunks,
                 },
                 crate::profiling::Record {
-                    name: "server.backend.poll_pty.write_chunks",
+                    name: "server.backend.pty_event.write_chunks",
                     kind: crate::profiling::Kind::Cpu,
                     elapsed: Duration::ZERO,
                     bytes: 0,
                     units: self.pending_pty_profile.write_chunks,
                 },
                 crate::profiling::Record {
-                    name: "server.backend.poll_pty.backlog_chunks",
+                    name: "server.backend.pty_event.backlog_chunks",
                     kind: crate::profiling::Kind::Cpu,
                     elapsed: Duration::ZERO,
                     bytes: 0,
                     units: self.pending_pty_profile.backlog_chunks,
                 },
                 crate::profiling::Record {
-                    name: "server.backend.poll_pty.backlog_bytes",
+                    name: "server.backend.pty_event.backlog_bytes",
                     kind: crate::profiling::Kind::Cpu,
                     elapsed: Duration::ZERO,
                     bytes: self.pending_pty_profile.backlog_bytes,
                     units: 0,
                 },
                 crate::profiling::Record {
-                    name: "server.backend.poll_pty.write_chunk_size",
+                    name: "server.backend.pty_event.write_chunk_size",
                     kind: crate::profiling::Kind::Cpu,
                     elapsed: Duration::ZERO,
                     bytes: 0,
@@ -582,7 +553,7 @@ impl VtPane {
             ]);
             self.pending_pty_profile = PendingPtyProfile::default();
         }
-        Ok(PollPtyResult { changed })
+        Ok(changed)
     }
 
     pub fn resize(
@@ -1016,35 +987,39 @@ impl VtPane {
         }
     }
 
-    fn try_reap_exited(&mut self) -> io::Result<bool> {
-        self.pty.try_wait()
-    }
 }
 
 fn worker_loop(
     mut pane: VtPane,
     mut snapshot: TerminalSnapshot,
-    rx: mpsc::Receiver<WorkerCommand>,
+    rx: channel::Receiver<WorkerCommand>,
     state: Arc<Mutex<WorkerState>>,
     pending_work: Arc<AtomicBool>,
 ) {
     let mut disconnected = false;
+    let mut exited = false;
     let mut last_snapshot_refresh = Instant::now();
-    let mut last_exit_check = Instant::now();
+    let pty_rx = pane.pty.event_rx();
     loop {
-        let timeout = if pane.has_pending_pty_work() {
-            Duration::ZERO
-        } else {
-            VtPaneWorker::WORKER_IDLE_WAIT
-        };
-        match rx.recv_timeout(timeout) {
-            Ok(command) => {
-                if !handle_worker_command(&mut pane, command) {
-                    break;
+        if !pane.has_pending_pty_work() && !exited && !disconnected {
+            channel::select! {
+                recv(rx) -> message => match message {
+                    Ok(command) => {
+                        if !handle_worker_command(&mut pane, command) {
+                            disconnected = true;
+                        }
+                    }
+                    Err(_) => disconnected = true,
+                },
+                recv(pty_rx) -> event => match event {
+                    Ok(crate::unix_pty::PtyReadEvent::Chunk(chunk)) => {
+                        pane.enqueue_pty_chunk(chunk);
+                        pane.pending_pty_profile.read_chunks =
+                            pane.pending_pty_profile.read_chunks.saturating_add(1);
+                    }
+                    Ok(crate::unix_pty::PtyReadEvent::Exited) | Err(_) => exited = true,
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => disconnected = true,
         }
 
         while let Ok(command) = rx.try_recv() {
@@ -1054,27 +1029,27 @@ fn worker_loop(
             }
         }
 
-        let exited = match pane.poll_pty() {
-            Ok(_poll) => false,
-            Err(error) => {
-                log::warn!("vt pane worker PTY poll failed: {error}");
-                true
-            }
-        };
-        let exited = if exited {
-            true
-        } else if !pane.has_pending_pty_work() && last_exit_check.elapsed() >= Duration::from_millis(64)
-        {
-            last_exit_check = Instant::now();
-            match pane.try_reap_exited() {
-                Ok(exited) => exited,
-                Err(error) => {
-                    log::warn!("vt pane worker PTY wait failed: {error}");
-                    true
+        while let Ok(event) = pty_rx.try_recv() {
+            match event {
+                crate::unix_pty::PtyReadEvent::Chunk(chunk) => {
+                    pane.enqueue_pty_chunk(chunk);
+                    pane.pending_pty_profile.read_chunks =
+                        pane.pending_pty_profile.read_chunks.saturating_add(1);
+                }
+                crate::unix_pty::PtyReadEvent::Exited => {
+                    exited = true;
+                    break;
                 }
             }
-        } else {
-            false
+        }
+
+        let _changed = match pane.process_pending_pty_work() {
+            Ok(changed) => changed,
+            Err(error) => {
+                log::warn!("vt pane worker PTY processing failed: {error}");
+                exited = true;
+                false
+            }
         };
 
         let should_refresh_snapshot = if pane.is_dirty() {
@@ -1135,6 +1110,38 @@ fn worker_loop(
 
         if exited || disconnected {
             break;
+        }
+
+        if pane.has_pending_pty_work() {
+            continue;
+        }
+
+        if pane.is_dirty()
+            && last_snapshot_refresh.elapsed() < VtPaneWorker::SNAPSHOT_REFRESH_INTERVAL_UNDER_BACKLOG
+        {
+            let wait = VtPaneWorker::SNAPSHOT_REFRESH_INTERVAL_UNDER_BACKLOG
+                .saturating_sub(last_snapshot_refresh.elapsed());
+            if !wait.is_zero() {
+                channel::select! {
+                    recv(rx) -> message => match message {
+                        Ok(command) => {
+                            if !handle_worker_command(&mut pane, command) {
+                                disconnected = true;
+                            }
+                        }
+                        Err(_) => disconnected = true,
+                    },
+                    recv(pty_rx) -> event => match event {
+                        Ok(crate::unix_pty::PtyReadEvent::Chunk(chunk)) => {
+                            pane.enqueue_pty_chunk(chunk);
+                            pane.pending_pty_profile.read_chunks =
+                                pane.pending_pty_profile.read_chunks.saturating_add(1);
+                        }
+                        Ok(crate::unix_pty::PtyReadEvent::Exited) | Err(_) => exited = true,
+                    },
+                    recv(channel::after(wait)) -> _ => {}
+                }
+            }
         }
     }
 
