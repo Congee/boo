@@ -355,17 +355,19 @@ impl BooApp {
                 if let Some(server) = self.remote_server_for_client(client_id) {
                     server.record_input_seq(client_id, event.input_seq);
                 }
-                self.handle_app_key_event(event);
-                let focused_session_id = self.server.tabs.active_session_id();
-                if let Some(server) = self
-                    .remote_server_for_client(client_id)
-                    .or(self.server.local_gui_server.as_ref())
-                    .or(self.server.remote_server.as_ref())
-                {
-                    server.send_session_list(client_id, &self.remote_sessions());
-                    if let Some(session_id) = focused_session_id {
-                        server.send_attached(client_id, session_id);
-                        self.publish_remote_session(session_id);
+                let consumed = self.handle_app_key_event(event);
+                if consumed {
+                    let focused_session_id = self.server.tabs.active_session_id();
+                    if let Some(server) = self
+                        .remote_server_for_client(client_id)
+                        .or(self.server.local_gui_server.as_ref())
+                        .or(self.server.remote_server.as_ref())
+                    {
+                        server.send_session_list(client_id, &self.remote_sessions());
+                        if let Some(session_id) = focused_session_id {
+                            server.send_attached(client_id, session_id);
+                            self.publish_remote_session(session_id);
+                        }
                     }
                 }
             }

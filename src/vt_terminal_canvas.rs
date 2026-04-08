@@ -27,10 +27,19 @@ pub struct TerminalCanvas {
     pub selection_rects: Vec<TerminalSelectionRect>,
     pub selection_color: Color,
     pub preedit_text: Option<String>,
+    pub viewport: Option<TerminalViewport>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct TerminalSelectionRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TerminalViewport {
     pub x: f32,
     pub y: f32,
     pub width: f32,
@@ -65,31 +74,42 @@ impl TerminalCanvas {
             selection_rects,
             selection_color,
             preedit_text,
+            viewport: None,
         }
     }
 
+    pub fn new_with_viewport(
+        mut self,
+        viewport: TerminalViewport,
+    ) -> Self {
+        self.viewport = Some(viewport);
+        self
+    }
+
     fn draw_base(&self, frame: &mut Frame<Renderer>) {
+        let (origin, size) = self.viewport_origin_and_size(frame.size());
         frame.fill_rectangle(
-            Point::new(0.0, 0.0),
-            frame.size(),
+            origin,
+            size,
             color_from_rgb(self.snapshot.colors.background, self.background_opacity),
         );
     }
 
     fn draw_row(&self, frame: &mut Frame<Renderer>, row_index: usize, state: &TerminalCanvasState) {
-        let y = PADDING_Y + row_index as f32 * self.cell_height;
+        let origin = self.viewport_origin();
+        let y = origin.y + PADDING_Y + row_index as f32 * self.cell_height;
         let artifacts = state.row_artifacts.borrow();
         let artifacts = &artifacts[row_index];
         for span in &artifacts.background_spans {
             frame.fill_rectangle(
-                Point::new(PADDING_X + span.start_col as f32 * self.cell_width, y),
+                Point::new(origin.x + PADDING_X + span.start_col as f32 * self.cell_width, y),
                 Size::new(span.width_cols as f32 * self.cell_width, self.cell_height),
                 span.color,
             );
         }
 
         for run in &artifacts.text_runs {
-            let x = PADDING_X + run.start_col as f32 * self.cell_width;
+            let x = origin.x + PADDING_X + run.start_col as f32 * self.cell_width;
             let draw_width = run.width_cols as f32 * self.cell_width;
             frame.fill_text(canvas::Text {
                 content: run.text.clone(),
@@ -129,6 +149,7 @@ impl TerminalCanvas {
     }
 
     fn draw_overlay(&self, frame: &mut Frame<Renderer>) {
+        let origin = self.viewport_origin();
         let default_fg = color_from_rgb(self.snapshot.colors.foreground, 1.0);
         let cursor_bg = if self.snapshot.colors.cursor_has_value {
             color_from_rgb(self.snapshot.colors.cursor, 0.95)
@@ -138,7 +159,7 @@ impl TerminalCanvas {
 
         for rect in &self.selection_rects {
             frame.fill_rectangle(
-                Point::new(rect.x + PADDING_X, rect.y + PADDING_Y),
+                Point::new(origin.x + rect.x + PADDING_X, origin.y + rect.y + PADDING_Y),
                 Size::new(rect.width, rect.height),
                 self.selection_color,
             );
@@ -148,8 +169,8 @@ impl TerminalCanvas {
             && self.snapshot.cursor.y < self.snapshot.rows
             && self.snapshot.cursor.x < self.snapshot.cols
         {
-            let x = PADDING_X + self.snapshot.cursor.x as f32 * self.cell_width;
-            let y = PADDING_Y + self.snapshot.cursor.y as f32 * self.cell_height;
+            let x = origin.x + PADDING_X + self.snapshot.cursor.x as f32 * self.cell_width;
+            let y = origin.y + PADDING_Y + self.snapshot.cursor.y as f32 * self.cell_height;
             match self.snapshot.cursor.style {
                 0 => frame.fill_rectangle(
                     Point::new(x, y),
@@ -201,8 +222,8 @@ impl TerminalCanvas {
             .filter(|text| !text.is_empty())
             .filter(|_| self.snapshot.cursor.y < self.snapshot.rows)
         {
-            let x = PADDING_X + self.snapshot.cursor.x as f32 * self.cell_width;
-            let y = PADDING_Y + self.snapshot.cursor.y as f32 * self.cell_height;
+            let x = origin.x + PADDING_X + self.snapshot.cursor.x as f32 * self.cell_width;
+            let y = origin.y + PADDING_Y + self.snapshot.cursor.y as f32 * self.cell_height;
             let width = (preedit.chars().count().max(1) as f32) * self.cell_width;
             let overlay = Color::from_rgba(0.92, 0.82, 0.32, 0.18);
             let underline = Color::from_rgba(0.98, 0.86, 0.35, 0.9);
@@ -619,6 +640,7 @@ impl TerminalCanvas {
         self.snapshot.colors.background.g.hash(&mut hasher);
         self.snapshot.colors.background.b.hash(&mut hasher);
         self.background_opacity.to_bits().hash(&mut hasher);
+        self.hash_viewport(&mut hasher);
         hasher.finish()
     }
 
@@ -663,6 +685,7 @@ impl TerminalCanvas {
         self.snapshot.colors.background.r.hash(&mut hasher);
         self.snapshot.colors.background.g.hash(&mut hasher);
         self.snapshot.colors.background.b.hash(&mut hasher);
+        self.hash_viewport(&mut hasher);
         hasher.finish()
     }
 
@@ -691,6 +714,7 @@ impl TerminalCanvas {
         self.selection_color.b.to_bits().hash(&mut hasher);
         self.selection_color.a.to_bits().hash(&mut hasher);
         self.preedit_text.hash(&mut hasher);
+        self.hash_viewport(&mut hasher);
         for rect in &self.selection_rects {
             rect.x.to_bits().hash(&mut hasher);
             rect.y.to_bits().hash(&mut hasher);
@@ -698,6 +722,32 @@ impl TerminalCanvas {
             rect.height.to_bits().hash(&mut hasher);
         }
         hasher.finish()
+    }
+
+    fn viewport_origin(&self) -> Point {
+        self.viewport
+            .map(|viewport| Point::new(viewport.x, viewport.y))
+            .unwrap_or(Point::new(0.0, 0.0))
+    }
+
+    fn viewport_origin_and_size(&self, fallback: Size) -> (Point, Size) {
+        self.viewport
+            .map(|viewport| {
+                (
+                    Point::new(viewport.x, viewport.y),
+                    Size::new(viewport.width, viewport.height),
+                )
+            })
+            .unwrap_or((Point::new(0.0, 0.0), fallback))
+    }
+
+    fn hash_viewport(&self, hasher: &mut std::collections::hash_map::DefaultHasher) {
+        if let Some(viewport) = self.viewport {
+            viewport.x.to_bits().hash(hasher);
+            viewport.y.to_bits().hash(hasher);
+            viewport.width.to_bits().hash(hasher);
+            viewport.height.to_bits().hash(hasher);
+        }
     }
 
     #[cfg(test)]

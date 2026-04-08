@@ -9,7 +9,7 @@ use crate::vt_backend_core;
 use crate::vt_terminal_canvas;
 use iced::futures::{SinkExt, StreamExt};
 use iced::stream;
-use iced::widget::{column, container, row, text};
+use iced::widget::{column, container, row, stack, text};
 use iced::window;
 use iced::{Color, Element, Event, Font, Length, Size, Subscription, Task, Theme, keyboard, time};
 use std::collections::HashMap;
@@ -90,7 +90,8 @@ pub struct ClientApp {
     ui_state: ClientUiState,
     mode: ClientMode,
     active_session_id: Option<u32>,
-    stream_snapshot: Option<Arc<vt_backend_core::TerminalSnapshot>>,
+    pane_snapshots: HashMap<u64, Arc<vt_backend_core::TerminalSnapshot>>,
+    focused_pane_id: u64,
     last_error: Option<String>,
     cell_width: f64,
     cell_height: f64,
@@ -111,12 +112,7 @@ pub struct ClientApp {
 
 impl ClientApp {
     fn has_paintable_terminal(&self) -> bool {
-        self.stream_snapshot.is_some()
-            || self
-                .bootstrap_snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot.terminal.as_ref())
-                .is_some()
+        !self.pane_snapshots.is_empty()
     }
 
     fn stream_ready_for_terminal_io(&self) -> bool {
@@ -135,6 +131,11 @@ impl ClientApp {
             .as_ref()
             .map(ClientUiState::from_snapshot)
             .unwrap_or_default();
+        let pane_snapshots = snapshot
+            .as_ref()
+            .map(pane_snapshot_map_from_ui_snapshot)
+            .unwrap_or_default();
+        let focused_pane_id = snapshot.as_ref().map(|snapshot| snapshot.focused_pane).unwrap_or(0);
         let app = Self {
                 socket_path,
                 client,
@@ -143,7 +144,8 @@ impl ClientApp {
                 ui_state,
                 mode: ClientMode::Bootstrapping,
                 active_session_id: None,
-                stream_snapshot: None,
+                pane_snapshots,
+                focused_pane_id,
                 last_error: None,
                 cell_width,
                 cell_height,
@@ -209,55 +211,9 @@ impl ClientApp {
     pub fn view(&self) -> Element<'_, Message> {
         let mut main_col = column![].width(Length::Fill).height(Length::Fill);
 
-        if let Some(stream_snapshot) = self.stream_snapshot.as_ref() {
-            let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
-                Arc::clone(stream_snapshot),
-                self.cell_width as f32,
-                self.cell_height as f32,
-                self.font_size,
-                None,
-                self.terminal_snapshot_generation,
-                1,
-                self.background_opacity,
-                self.background_opacity_cells,
-                Vec::new(),
-                Color::from_rgba(0.65, 0.72, 0.95, 0.35),
-                None,
-            );
-            main_col = main_col.push(
-                container(
-                    iced::widget::canvas(terminal_canvas)
-                        .width(Length::Fill)
-                        .height(Length::Fill),
-                )
-                .width(Length::Fill)
-                .height(Length::Fill),
-            );
-        } else if let Some(snapshot) = self.bootstrap_snapshot.as_ref() {
-            if let Some(terminal) = snapshot.terminal.as_ref() {
-                let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
-                    Arc::new(ui_terminal_to_vt_snapshot(terminal)),
-                    self.cell_width as f32,
-                    self.cell_height as f32,
-                    self.font_size,
-                    None,
-                    self.terminal_snapshot_generation,
-                    1,
-                    self.background_opacity,
-                    self.background_opacity_cells,
-                    Vec::new(),
-                    Color::from_rgba(0.65, 0.72, 0.95, 0.35),
-                    None,
-                );
-                main_col = main_col.push(
-                    container(
-                        iced::widget::canvas(terminal_canvas)
-                            .width(Length::Fill)
-                            .height(Length::Fill),
-                    )
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-                );
+        if let Some(snapshot) = self.bootstrap_snapshot.as_ref() {
+            if !snapshot.visible_panes.is_empty() && !self.pane_snapshots.is_empty() {
+                main_col = main_col.push(self.render_terminal_scene(snapshot));
             } else {
                 main_col = main_col.push(
                     iced::widget::Space::new()
@@ -314,6 +270,57 @@ impl ClientApp {
         Theme::Dark
     }
 
+    fn render_terminal_scene<'a>(
+        &'a self,
+        snapshot: &'a control::UiSnapshot,
+    ) -> Element<'a, Message> {
+        let mut layers: Vec<Element<'a, Message>> = Vec::new();
+        for pane in &snapshot.visible_panes {
+            let Some(terminal_snapshot) = self.pane_snapshots.get(&pane.pane_id) else {
+                continue;
+            };
+            let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
+                Arc::clone(terminal_snapshot),
+                self.cell_width as f32,
+                self.cell_height as f32,
+                self.font_size,
+                None,
+                self.terminal_snapshot_generation,
+                1,
+                self.background_opacity,
+                self.background_opacity_cells,
+                Vec::new(),
+                Color::from_rgba(0.65, 0.72, 0.95, 0.35),
+                None,
+            )
+            .new_with_viewport(vt_terminal_canvas::TerminalViewport {
+                x: pane.frame.x as f32,
+                y: pane.frame.y as f32,
+                width: pane.frame.width as f32,
+                height: pane.frame.height as f32,
+            });
+            layers.push(
+                container(
+                    iced::widget::canvas(terminal_canvas)
+                        .width(Length::Fill)
+                        .height(Length::Fill),
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            );
+        }
+        layers.push(
+            iced::widget::canvas(PaneBordersOverlay {
+                panes: snapshot.visible_panes.clone(),
+            })
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into(),
+        );
+        stack(layers).width(Length::Fill).height(Length::Fill).into()
+    }
+
     pub fn subscription(&self) -> Subscription<Message> {
         let mut subscriptions = vec![
             iced::event::listen().map(Message::IcedEvent),
@@ -360,6 +367,8 @@ impl ClientApp {
                 self.background_opacity_cells = snapshot.appearance.background_opacity_cells;
                 (self.cell_width, self.cell_height) = terminal_metrics(self.font_size);
                 self.ui_state = ClientUiState::from_snapshot(&snapshot);
+                self.focused_pane_id = snapshot.focused_pane;
+                self.pane_snapshots = pane_snapshot_map_from_ui_snapshot(&snapshot);
                 self.bootstrap_snapshot = Some(snapshot);
                 self.terminal_snapshot_generation = self.allocate_snapshot_generation();
                 self.last_error = None;
@@ -507,6 +516,7 @@ impl ClientApp {
             LocalStreamEvent::Attached(session_id) => {
                 self.active_session_id = Some(session_id);
                 self.ui_state.mark_active_session(Some(session_id));
+                self.refresh_snapshot();
             }
             LocalStreamEvent::Detached => {
                 self.mode = ClientMode::Recovering;
@@ -549,11 +559,12 @@ impl ClientApp {
                 self.mode = ClientMode::Attached;
                 let revision_seed = self.allocate_full_snapshot_revision_seed(state.rows as usize);
                 self.terminal_snapshot_generation = self.allocate_snapshot_generation();
-                self.stream_snapshot = Some(Arc::new(remote_full_state_to_vt_snapshot(
-                    &state,
-                    revision_seed,
-                )));
-                self.bootstrap_snapshot = None;
+                if self.focused_pane_id != 0 {
+                    self.pane_snapshots.insert(
+                        self.focused_pane_id,
+                        Arc::new(remote_full_state_to_vt_snapshot(&state, revision_seed)),
+                    );
+                }
                 self.acknowledge_input_latency("stream_full_state", ack_input_seq);
             }
             LocalStreamEvent::Delta {
@@ -564,7 +575,7 @@ impl ClientApp {
                     "client.stream.apply_delta",
                     crate::profiling::Kind::Cpu,
                 );
-                if let Some(snapshot) = self.stream_snapshot.as_mut() {
+                if let Some(snapshot) = self.pane_snapshots.get_mut(&self.focused_pane_id) {
                     apply_remote_delta_snapshot(Arc::make_mut(snapshot), &delta);
                 }
                 self.acknowledge_input_latency("stream_delta", ack_input_seq);
@@ -735,15 +746,20 @@ impl ClientApp {
             has_terminal: self.has_paintable_terminal(),
             active_tab: self.ui_state.active_tab,
             row0_text: self
-                .stream_snapshot
-                .as_ref()
+                .pane_snapshots
+                .get(&self.focused_pane_id)
                 .and_then(|snapshot| snapshot.rows_data.first())
                 .map(|row| row.iter().map(|cell| cell.text.as_str()).collect::<String>())
                 .or_else(|| {
                     self.bootstrap_snapshot
                         .as_ref()
-                        .and_then(|snapshot| snapshot.terminal.as_ref())
-                        .and_then(|terminal| terminal.rows_data.first())
+                        .and_then(|snapshot| {
+                            snapshot
+                                .pane_terminals
+                                .iter()
+                                .find(|pane| pane.pane_id == self.focused_pane_id)
+                        })
+                        .and_then(|pane| pane.terminal.rows_data.first())
                         .map(|row| {
                             row.cells
                                 .iter()
@@ -1036,6 +1052,60 @@ fn ui_terminal_to_vt_snapshot(
             cursor_has_value: true,
             ..Default::default()
         },
+    }
+}
+
+fn pane_snapshot_map_from_ui_snapshot(
+    snapshot: &control::UiSnapshot,
+) -> HashMap<u64, Arc<vt_backend_core::TerminalSnapshot>> {
+    snapshot
+        .pane_terminals
+        .iter()
+        .map(|pane| {
+            (
+                pane.pane_id,
+                Arc::new(ui_terminal_to_vt_snapshot(&pane.terminal)),
+            )
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone)]
+struct PaneBordersOverlay {
+    panes: Vec<control::UiPaneSnapshot>,
+}
+
+impl<Message> iced::widget::canvas::Program<Message> for PaneBordersOverlay {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced::Renderer,
+        _theme: &Theme,
+        bounds: iced::Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<iced::widget::canvas::Geometry<iced::Renderer>> {
+        let cache = iced::widget::canvas::Cache::new();
+        let geometry = cache.draw(renderer, bounds.size(), |frame| {
+            let stroke = iced::widget::canvas::Stroke::default()
+                .with_color(Color::from_rgba(0.72, 0.72, 0.72, 0.35))
+                .with_width(1.0);
+            for pane in &self.panes {
+                let rect = iced::Rectangle {
+                    x: pane.frame.x as f32,
+                    y: pane.frame.y as f32,
+                    width: pane.frame.width as f32,
+                    height: pane.frame.height as f32,
+                };
+                frame.stroke_rectangle(
+                    iced::Point::new(rect.x, rect.y),
+                    iced::Size::new(rect.width, rect.height),
+                    stroke,
+                );
+            }
+        });
+        vec![geometry]
     }
 }
 

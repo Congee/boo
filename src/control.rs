@@ -67,6 +67,7 @@ pub struct UiSnapshot {
     pub appearance: UiAppearanceSnapshot,
     pub tabs: Vec<UiTabSnapshot>,
     pub visible_panes: Vec<UiPaneSnapshot>,
+    pub pane_terminals: Vec<UiPaneTerminalSnapshot>,
     pub copy_mode: UiCopyModeSnapshot,
     pub search: UiSearchSnapshot,
     pub command_prompt: UiCommandPromptSnapshot,
@@ -100,6 +101,12 @@ pub struct UiPaneSnapshot {
     pub frame: UiRectSnapshot,
     pub split_direction: Option<String>,
     pub split_ratio: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UiPaneTerminalSnapshot {
+    pub pane_id: u64,
+    pub terminal: UiTerminalSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -728,6 +735,7 @@ mod tests {
                                 split_direction: None,
                                 split_ratio: None,
                             }],
+                            pane_terminals: Vec::new(),
                             copy_mode: UiCopyModeSnapshot {
                                 active: false,
                                 cursor_row: 0,
@@ -818,6 +826,7 @@ mod tests {
                     split_direction: Some("horizontal".to_string()),
                     split_ratio: Some(0.5),
                 }],
+                pane_terminals: Vec::new(),
                 copy_mode: UiCopyModeSnapshot {
                     active: true,
                     cursor_row: 12,

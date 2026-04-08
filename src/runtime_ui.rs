@@ -105,6 +105,26 @@ impl BooApp {
             .unwrap_or_default()
     }
 
+    pub(crate) fn visible_pane_terminal_snapshots(&self) -> Vec<control::UiPaneTerminalSnapshot> {
+        self.server
+            .tabs
+            .active_tree()
+            .map(|tree| {
+                tree.export_panes()
+                    .into_iter()
+                    .filter_map(|pane| {
+                        self.backend
+                            .ui_terminal_snapshot(pane.pane.id())
+                            .map(|terminal| control::UiPaneTerminalSnapshot {
+                                pane_id: pane.pane.id(),
+                                terminal,
+                            })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     #[allow(dead_code)]
     pub(crate) fn ui_font(&self) -> Font {
         configured_font(self.terminal_font_family)
@@ -127,6 +147,7 @@ impl BooApp {
         let focused_pane = self.server.tabs.focused_pane();
         let terminal_frame = self.terminal_frame();
         let visible_panes = self.visible_pane_snapshots();
+        let pane_terminals = self.visible_pane_terminal_snapshots();
 
         let copy_mode_frame = terminal_frame;
         let copy_mode = self.copy_mode.as_ref().map_or(
@@ -215,6 +236,7 @@ impl BooApp {
             },
             tabs,
             visible_panes,
+            pane_terminals,
             copy_mode,
             search: control::UiSearchSnapshot {
                 active: self.search_active,

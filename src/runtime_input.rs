@@ -79,12 +79,12 @@ impl BooApp {
         self.dispatch_binding_result(result)
     }
 
-    pub(crate) fn handle_app_key_event(&mut self, event: AppKeyEvent) {
+    pub(crate) fn handle_app_key_event(&mut self, event: AppKeyEvent) -> bool {
         let key_char = event.key_char();
         let keyboard_key = event.keyboard_key();
 
         if self.dispatch_app_key(&event, key_char, keyboard_key) {
-            return;
+            return true;
         }
 
         let surface = self.focused_surface();
@@ -97,11 +97,11 @@ impl BooApp {
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             {
                 let Some(vt_keycode) = keymap::native_to_vt_keycode(event.keycode) else {
-                    return;
+                    return false;
                 };
                 #[cfg(target_os = "macos")]
                 if should_route_macos_vt_key_via_appkit(vt_keycode, event.mods) {
-                    return;
+                    return false;
                 }
                 let _ = self.backend.forward_vt_key(
                     self.server.tabs.focused_pane(),
@@ -119,7 +119,7 @@ impl BooApp {
                     shifted_codepoint_vt(vt_keycode, 0),
                 );
             }
-            return;
+            return false;
         }
 
         let translation_mods = self.surface_key_translation_mods(surface, event.mods);
@@ -156,6 +156,7 @@ impl BooApp {
                 event.text.as_deref()
             );
         }
+        false
     }
 
     pub(crate) fn handle_committed_text(&mut self, committed: String) {
