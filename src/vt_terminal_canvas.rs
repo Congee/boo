@@ -36,6 +36,28 @@ pub struct TerminalCanvas {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct TerminalBackgroundCanvas {
+    pub color: Color,
+}
+
+impl<Message> canvas::Program<Message> for TerminalBackgroundCanvas {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry<Renderer>> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.color);
+        vec![frame.into_geometry()]
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct TerminalSelectionRect {
     pub x: f32,
     pub y: f32,
@@ -92,10 +114,7 @@ impl TerminalCanvas {
         }
     }
 
-    pub fn new_with_viewport(
-        mut self,
-        viewport: TerminalViewport,
-    ) -> Self {
+    pub fn new_with_viewport(mut self, viewport: TerminalViewport) -> Self {
         self.viewport = Some(viewport);
         self
     }
@@ -124,7 +143,10 @@ impl TerminalCanvas {
         let artifacts = &artifacts[row_index];
         for span in &artifacts.background_spans {
             frame.fill_rectangle(
-                Point::new(origin.x + PADDING_X + span.start_col as f32 * self.cell_width, y),
+                Point::new(
+                    origin.x + PADDING_X + span.start_col as f32 * self.cell_width,
+                    y,
+                ),
                 Size::new(span.width_cols as f32 * self.cell_width, self.cell_height),
                 span.color,
             );
@@ -196,23 +218,43 @@ impl TerminalCanvas {
             let x = origin.x + PADDING_X + self.snapshot.cursor.x as f32 * self.cell_width;
             let y = origin.y + PADDING_Y + self.snapshot.cursor.y as f32 * self.cell_height;
             match self.snapshot.cursor.style {
-                0 => frame.fill_rectangle(
+                crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR => frame.fill_rectangle(
                     Point::new(x, y),
                     Size::new(2.0, self.cell_height),
                     cursor_bg,
                 ),
-                3 => frame.fill_rectangle(
-                    Point::new(x, y + self.cell_height - 2.0),
-                    Size::new(self.cell_width, 2.0),
-                    cursor_bg,
-                ),
+                crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE => frame
+                    .fill_rectangle(
+                        Point::new(x, y + self.cell_height - 2.0),
+                        Size::new(self.cell_width, 2.0),
+                        cursor_bg,
+                    ),
+                crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW => {
+                    let path = canvas::Path::rectangle(
+                        Point::new(x + 0.5, y + 0.5),
+                        Size::new(
+                            (self.cell_width - 1.0).max(1.0),
+                            (self.cell_height - 1.0).max(1.0),
+                        ),
+                    );
+                    frame.stroke(
+                        &path,
+                        canvas::Stroke::default()
+                            .with_color(cursor_bg)
+                            .with_width(1.0),
+                    );
+                }
                 _ => {
                     frame.fill_rectangle(
                         Point::new(x, y),
                         Size::new(self.cell_width, self.cell_height),
                         cursor_bg,
                     );
-                    self.draw_cursor_text(frame, self.snapshot.cursor.y as usize, self.snapshot.cursor.x as usize);
+                    self.draw_cursor_text(
+                        frame,
+                        self.snapshot.cursor.y as usize,
+                        self.snapshot.cursor.x as usize,
+                    );
                 }
             }
         }
@@ -437,7 +479,6 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
                             background_spans: build_background_spans(
                                 row,
                                 self.snapshot.cols as usize,
-                                self.snapshot.colors.background,
                                 self.background_opacity,
                                 self.background_opacity_cells,
                             ),
@@ -590,38 +631,27 @@ struct RowArtifacts {
 fn build_background_spans(
     row: &[vt_backend_core::CellSnapshot],
     cols: usize,
-    default_background: crate::vt::GhosttyColorRgb,
     background_opacity: f32,
     background_opacity_cells: bool,
 ) -> Vec<BackgroundSpan> {
-    let default_bg = color_from_rgb(default_background, background_opacity);
     let mut spans = Vec::new();
     let mut current: Option<BackgroundSpan> = None;
 
     for col_index in 0..cols {
-        let bg = row
-            .get(col_index)
-            .map(|cell| {
-                let is_default_bg = cell.bg.r == default_background.r
-                    && cell.bg.g == default_background.g
-                    && cell.bg.b == default_background.b;
-                color_from_rgb(
-                    cell.bg,
-                    if background_opacity_cells || is_default_bg {
-                        background_opacity
-                    } else {
-                        1.0
-                    },
-                )
-            })
-            .unwrap_or(default_bg);
-
-        if bg == default_bg {
+        let Some(cell) = row.get(col_index).filter(|cell| !cell.bg_is_default) else {
             if let Some(span) = current.take() {
                 spans.push(span);
             }
             continue;
-        }
+        };
+        let bg = color_from_rgb(
+            cell.bg,
+            if background_opacity_cells {
+                background_opacity
+            } else {
+                1.0
+            },
+        );
 
         match current.as_mut() {
             Some(span) if span.color == bg && span.start_col + span.width_cols == col_index => {
@@ -801,6 +831,7 @@ impl TerminalCanvas {
                 cell.bg.r.hash(&mut hasher);
                 cell.bg.g.hash(&mut hasher);
                 cell.bg.b.hash(&mut hasher);
+                cell.bg_is_default.hash(&mut hasher);
                 cell.bold.hash(&mut hasher);
                 cell.italic.hash(&mut hasher);
                 cell.underline.hash(&mut hasher);
@@ -1121,21 +1152,17 @@ mod tests {
         let row = vec![
             vt_backend_core::CellSnapshot {
                 bg: highlight,
+                bg_is_default: false,
                 ..Default::default()
             },
             vt_backend_core::CellSnapshot {
                 bg: highlight,
+                bg_is_default: false,
                 ..Default::default()
             },
             vt_backend_core::CellSnapshot::default(),
         ];
-        let spans = build_background_spans(
-            &row,
-            row.len(),
-            crate::vt::GhosttyColorRgb::default(),
-            0.8,
-            false,
-        );
+        let spans = build_background_spans(&row, row.len(), 0.8, false);
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].start_col, 0);
         assert_eq!(spans[0].width_cols, 2);

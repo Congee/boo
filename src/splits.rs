@@ -233,7 +233,14 @@ impl SplitTree {
         cell_extent: f64,
     ) {
         if let Some(ref mut root) = self.root {
-            resize_toward_leaf_by_cells(root, frame, self.focused_id, axis, delta_cells, cell_extent);
+            resize_toward_leaf_by_cells(
+                root,
+                frame,
+                self.focused_id,
+                axis,
+                delta_cells,
+                cell_extent,
+            );
         }
     }
 
@@ -309,7 +316,10 @@ impl SplitTree {
             pane: panes[0],
         };
         for (idx, pane) in panes.iter().copied().enumerate().skip(1) {
-            let (direction, ratio) = splits.get(idx - 1).copied().unwrap_or((Direction::Vertical, 0.5));
+            let (direction, ratio) = splits
+                .get(idx - 1)
+                .copied()
+                .unwrap_or((Direction::Vertical, 0.5));
             let new_id = next_id;
             next_id += 1;
             root = split_node_with_ratio(root, new_id - 1, direction, new_id, pane, ratio);
@@ -521,8 +531,9 @@ fn find_leaf(node: &Node, id: LeafId) -> Option<PaneHandle> {
 fn find_leaf_id_by_pane(node: &Node, pane_id: crate::pane::PaneId) -> Option<LeafId> {
     match node {
         Node::Leaf { id, pane } if pane.id() == pane_id => Some(*id),
-        Node::Split { first, second, .. } => find_leaf_id_by_pane(first, pane_id)
-            .or_else(|| find_leaf_id_by_pane(second, pane_id)),
+        Node::Split { first, second, .. } => {
+            find_leaf_id_by_pane(first, pane_id).or_else(|| find_leaf_id_by_pane(second, pane_id))
+        }
         _ => None,
     }
 }
@@ -1110,9 +1121,11 @@ mod tests {
 
         assert!(tree.rebalance());
         let exported = tree.export_panes();
-        assert!(exported
-            .iter()
-            .all(|pane| pane.split.map(|(_, ratio)| (ratio - 0.5).abs() < 0.0001).unwrap_or(true)));
+        assert!(exported.iter().all(|pane| {
+            pane.split
+                .map(|(_, ratio)| (ratio - 0.5).abs() < 0.0001)
+                .unwrap_or(true)
+        }));
     }
 
     #[test]

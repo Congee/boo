@@ -63,6 +63,7 @@ pub fn run_gui_client() {
         .unwrap_or_else(control::default_socket_path);
 
     ensure_server_running(&socket_path, &boo_config);
+    crate::platform::install_command_drag_monitor();
 
     iced::application(
         move || client_gui::ClientApp::new(socket_path.clone()),
@@ -70,7 +71,7 @@ pub fn run_gui_client() {
         client_gui::ClientApp::view,
     )
     .title("boo")
-    .decorations(false)
+    .decorations(boo_config.window_decoration.shows_system_decorations())
     .transparent(true)
     .style(|state, _theme| state.window_style())
     .theme(client_gui::ClientApp::theme)

@@ -374,7 +374,10 @@ fn read_loop(
             break;
         }
 
-        if tx.send(PtyReadEvent::Chunk(buf[..rc as usize].to_vec())).is_err() {
+        if tx
+            .send(PtyReadEvent::Chunk(buf[..rc as usize].to_vec()))
+            .is_err()
+        {
             break;
         }
     }
@@ -384,7 +387,11 @@ fn read_loop(
     let mut status = 0;
     let rc = unsafe { libc::waitpid(child_pid, &mut status, 0) };
     if rc == child_pid
-        || (rc < 0 && matches!(io::Error::last_os_error().raw_os_error(), Some(libc::ECHILD)))
+        || (rc < 0
+            && matches!(
+                io::Error::last_os_error().raw_os_error(),
+                Some(libc::ECHILD)
+            ))
     {
         reaped.store(true, Ordering::Relaxed);
     }

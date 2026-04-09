@@ -239,29 +239,15 @@ nix develop
 - **iced owns the app shell** — terminal rendering, overlays, and pane chrome live in Boo
 - **Binary split tree** — each tab's pane layout is a binary tree, supporting arbitrary nesting
 
-## Planned Work
+## TODO
 
-### Shell Integration
-- Boo shell integration now ships for bash, zsh, and fish in [shell-integration/README.md](/Users/example/dev/boo/shell-integration/README.md)
-- These scripts emit `OSC 133` prompt markers and `cmdline_url` command metadata for the tab spinner/title path
-- `boo completions bash|zsh|fish` prints shell completions for the server/client lifecycle commands
-- Kitty config migration backlog:
-  - [x] support Kitty-style direct punctuation bindings needed by the config, such as `ctrl+super+,`
-  - [ ] migrate supported keybinds from `~/.config/kitty/kitty.conf` into `~/.config/boo/config.boo`
-  - [x] expose a bindable copy-to-clipboard action for the current Boo selection
-  - [ ] implement configurable macOS option-as-alt behavior
-  - [x] implement `set_tab_title`
-  - [ ] implement configurable tab bar style/separator/alignment/title template
-  - [ ] implement `window-decoration` config instead of ignoring it
-  - [ ] decide how to map Kitty’s `close_on_child_death` / `macos_quit_when_last_window_closed` semantics onto Boo’s client/server model
-  - [x] support Ghostty-style theme includes plus direct terminal/UI color keys (`foreground`, `background`, `color0..color15`, cursor, selection, active/inactive tab colors)
+### Kitty Config Migration
+- [ ] Migrate supported keybinds from `~/.config/kitty/kitty.conf` into `~/.config/boo/config.boo`
+- [ ] Implement configurable macOS option-as-alt behavior
+- [ ] Implement configurable tab bar style/separator/alignment/title template
+- [ ] Decide how to map Kitty’s `close_on_child_death` / `macos_quit_when_last_window_closed` semantics onto Boo’s client/server model
 
 ### tmux Parity Backlog
 - [ ] add remain-on-exit / respawn-pane style process lifecycle controls
 - [ ] add session/window rename and move/link semantics closer to tmux
 - [ ] add hooks, formats, `run-shell`, and `if-shell`
-
-### Command Finish Notifications
-- `notify-on-command-finish` config and duration thresholds are implemented
-- macOS notifications use `UNUserNotificationCenter`, with an AppleScript fallback if the native path is unavailable
-- Linux notifications are delivered through the desktop notification client path (`notify-send`) with the same Boo policy controls

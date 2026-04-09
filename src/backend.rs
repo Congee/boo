@@ -145,12 +145,7 @@ pub trait TerminalBackend {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn write_vt_bytes(&mut self, focused_pane: PaneHandle, bytes: &[u8]);
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn hyperlink_at(
-        &self,
-        focused_pane: PaneHandle,
-        row: u16,
-        col: u16,
-    ) -> Option<String>;
+    fn hyperlink_at(&self, focused_pane: PaneHandle, row: u16, col: u16) -> Option<String>;
 }
 
 #[cfg(target_os = "macos")]

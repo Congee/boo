@@ -86,6 +86,7 @@ pub fn ui_terminal_snapshot(snapshot: &TerminalSnapshot) -> control::UiTerminalS
                         display_width: cell.display_width,
                         fg: [cell.fg.r, cell.fg.g, cell.fg.b],
                         bg: [cell.bg.r, cell.bg.g, cell.bg.b],
+                        bg_is_default: cell.bg_is_default,
                         bold: cell.bold,
                         italic: cell.italic,
                         underline: cell.underline,

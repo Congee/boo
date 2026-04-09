@@ -129,6 +129,12 @@ impl BooApp {
                 self.server.tabs.prev_tab();
                 self.sync_after_tab_change();
             }
+            server::Command::ResizeViewportPoints { width, height } => {
+                self.resize_viewport_points(width, height);
+            }
+            server::Command::ResizeViewport { cols, rows } => {
+                self.resize_viewport_cells(cols, rows);
+            }
             server::Command::ResizeFocused { cols, rows } => {
                 let pane = self.server.tabs.focused_pane();
                 let (width, height) = self.session_size_pixels(cols, rows);
@@ -299,7 +305,7 @@ impl BooApp {
                     }
                     return;
                 };
-                let Some(pane) = self.pane_for_session(session_id) else {
+                let Some(_pane) = self.pane_for_session(session_id) else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -309,8 +315,8 @@ impl BooApp {
                     }
                     return;
                 };
-                let (width, height) = self.session_size_pixels(cols, rows);
-                self.resize_pane_backend(pane, self.scale_factor(), width, height);
+                self.resize_viewport_cells(cols, rows);
+                self.publish_remote_session(session_id);
             }
             server::Command::RemoteExecuteCommand { client_id, input } => {
                 self.execute_command(&input);

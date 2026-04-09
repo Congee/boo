@@ -52,6 +52,14 @@ pub enum Command {
     },
     NextTab,
     PrevTab,
+    ResizeViewportPoints {
+        width: f64,
+        height: f64,
+    },
+    ResizeViewport {
+        cols: u16,
+        rows: u16,
+    },
     ResizeFocused {
         cols: u16,
         rows: u16,
@@ -206,6 +214,12 @@ impl From<control::ControlCmd> for Command {
             control::ControlCmd::GotoTab { index } => Self::GotoTab { index },
             control::ControlCmd::NextTab => Self::NextTab,
             control::ControlCmd::PrevTab => Self::PrevTab,
+            control::ControlCmd::ResizeViewportPoints { width, height } => {
+                Self::ResizeViewportPoints { width, height }
+            }
+            control::ControlCmd::ResizeViewport { cols, rows } => {
+                Self::ResizeViewport { cols, rows }
+            }
             control::ControlCmd::ResizeFocused { cols, rows } => Self::ResizeFocused { cols, rows },
             control::ControlCmd::FocusSurface { index } => Self::FocusSurface { index },
             control::ControlCmd::Quit => Self::Quit,

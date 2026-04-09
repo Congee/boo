@@ -503,9 +503,11 @@ impl RemoteServer {
             };
             let latest_input_seq = client.latest_input_seq;
             let is_local = client.is_local;
-            let encoded = match client.last_state.as_ref().and_then(|previous| {
-                encode_delta(previous, state, latest_input_seq, is_local)
-            }) {
+            let encoded = match client
+                .last_state
+                .as_ref()
+                .and_then(|previous| encode_delta(previous, state, latest_input_seq, is_local))
+            {
                 Some(delta) => (MessageType::Delta, delta, is_local),
                 None => (
                     MessageType::FullState,
@@ -694,19 +696,18 @@ fn read_loop(
             MessageType::ExecuteCommand => String::from_utf8(payload)
                 .ok()
                 .map(|input| RemoteCmd::ExecuteCommand { client_id, input }),
-            MessageType::AppKeyEvent => {
-                serde_json::from_slice::<crate::AppKeyEvent>(&payload)
-                    .ok()
-                    .map(|event| RemoteCmd::AppKeyEvent { client_id, event })
-            }
+            MessageType::AppKeyEvent => serde_json::from_slice::<crate::AppKeyEvent>(&payload)
+                .ok()
+                .map(|event| RemoteCmd::AppKeyEvent { client_id, event }),
             MessageType::AppMouseEvent => serde_json::from_slice::<crate::AppMouseEvent>(&payload)
                 .ok()
                 .map(|event| RemoteCmd::AppMouseEvent { client_id, event }),
             MessageType::AppAction => serde_json::from_slice::<crate::bindings::Action>(&payload)
                 .ok()
                 .map(|action| RemoteCmd::AppAction { client_id, action }),
-            MessageType::FocusPane => parse_pane_id(&payload)
-                .map(|pane_id| RemoteCmd::FocusPane { client_id, pane_id }),
+            MessageType::FocusPane => {
+                parse_pane_id(&payload).map(|pane_id| RemoteCmd::FocusPane { client_id, pane_id })
+            }
             MessageType::Destroy => Some(RemoteCmd::Destroy {
                 client_id,
                 session_id: parse_session_id(&payload),
@@ -1184,7 +1185,7 @@ pub fn full_state_from_ui(snapshot: &crate::control::UiTerminalSnapshot) -> Remo
             if cell.fg != [0, 0, 0] {
                 style_flags |= STYLE_FLAG_EXPLICIT_FG;
             }
-            if cell.bg != [0, 0, 0] {
+            if !cell.bg_is_default {
                 style_flags |= STYLE_FLAG_EXPLICIT_BG;
             }
             RemoteCell {
@@ -1229,9 +1230,7 @@ pub fn full_state_from_terminal(
             let has_explicit_fg = cell.fg.r != snapshot.colors.foreground.r
                 || cell.fg.g != snapshot.colors.foreground.g
                 || cell.fg.b != snapshot.colors.foreground.b;
-            let has_explicit_bg = cell.bg.r != snapshot.colors.background.r
-                || cell.bg.g != snapshot.colors.background.g
-                || cell.bg.b != snapshot.colors.background.b;
+            let has_explicit_bg = !cell.bg_is_default;
             if has_explicit_fg {
                 style_flags |= STYLE_FLAG_EXPLICIT_FG;
             }
@@ -1312,18 +1311,29 @@ mod tests {
             None,
             false,
         );
-        assert_eq!(payload.len(), REMOTE_FULL_STATE_HEADER_LEN + 2 * REMOTE_CELL_ENCODED_LEN);
+        assert_eq!(
+            payload.len(),
+            REMOTE_FULL_STATE_HEADER_LEN + 2 * REMOTE_CELL_ENCODED_LEN
+        );
         assert_eq!(u16::from_le_bytes(payload[0..2].try_into().unwrap()), 1);
         assert_eq!(u16::from_le_bytes(payload[2..4].try_into().unwrap()), 2);
         assert_eq!(
-            u32::from_le_bytes(payload[REMOTE_FULL_STATE_HEADER_LEN..REMOTE_FULL_STATE_HEADER_LEN + 4].try_into().unwrap()),
+            u32::from_le_bytes(
+                payload[REMOTE_FULL_STATE_HEADER_LEN..REMOTE_FULL_STATE_HEADER_LEN + 4]
+                    .try_into()
+                    .unwrap()
+            ),
             u32::from('A')
         );
         let second_offset = REMOTE_FULL_STATE_HEADER_LEN + REMOTE_CELL_ENCODED_LEN;
         assert_eq!(payload[REMOTE_FULL_STATE_HEADER_LEN + 10], 0x21);
         assert_eq!(payload[REMOTE_FULL_STATE_HEADER_LEN + 11], 0);
         assert_eq!(
-            u32::from_le_bytes(payload[second_offset..second_offset + 4].try_into().unwrap()),
+            u32::from_le_bytes(
+                payload[second_offset..second_offset + 4]
+                    .try_into()
+                    .unwrap()
+            ),
             u32::from('好')
         );
         assert_eq!(payload[second_offset + 10], 0x42);
@@ -1378,6 +1388,7 @@ mod tests {
                         display_width: 1,
                         fg: [1, 1, 1],
                         bg: [0, 0, 0],
+                        bg_is_default: true,
                         bold: false,
                         italic: false,
                         underline: 0,
@@ -1388,6 +1399,7 @@ mod tests {
                         display_width: 2,
                         fg: [2, 2, 2],
                         bg: [3, 3, 3],
+                        bg_is_default: false,
                         bold: true,
                         italic: true,
                         underline: 0,
@@ -1423,6 +1435,7 @@ mod tests {
                     display_width: 1,
                     fg: crate::vt::GhosttyColorRgb { r: 1, g: 1, b: 1 },
                     bg: crate::vt::GhosttyColorRgb { r: 0, g: 0, b: 0 },
+                    bg_is_default: true,
                     bold: false,
                     italic: false,
                     underline: 0,
@@ -1433,6 +1446,7 @@ mod tests {
                     display_width: 2,
                     fg: crate::vt::GhosttyColorRgb { r: 2, g: 2, b: 2 },
                     bg: crate::vt::GhosttyColorRgb { r: 3, g: 3, b: 3 },
+                    bg_is_default: false,
                     bold: true,
                     italic: true,
                     underline: 0,
@@ -1590,7 +1604,10 @@ mod tests {
 
         let payload = encode_delta(&previous, &current, Some(5), true).expect("delta payload");
         let row_offset = LOCAL_DELTA_HEADER_LEN;
-        assert_eq!(u16::from_le_bytes(payload[row_offset..row_offset + 2].try_into().unwrap()), 0);
+        assert_eq!(
+            u16::from_le_bytes(payload[row_offset..row_offset + 2].try_into().unwrap()),
+            0
+        );
         assert_eq!(
             u16::from_le_bytes(payload[row_offset + 2..row_offset + 4].try_into().unwrap()),
             2

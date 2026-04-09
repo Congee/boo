@@ -33,7 +33,11 @@ impl AppMouseButton {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub enum AppMouseEvent {
-    CursorMoved { x: f64, y: f64, mods: i32 },
+    CursorMoved {
+        x: f64,
+        y: f64,
+        mods: i32,
+    },
     ButtonPressed {
         button: AppMouseButton,
         x: f64,
@@ -46,8 +50,16 @@ pub enum AppMouseEvent {
         y: f64,
         mods: i32,
     },
-    WheelScrolledLines { x: f64, y: f64, mods: i32 },
-    WheelScrolledPixels { x: f64, y: f64, mods: i32 },
+    WheelScrolledLines {
+        x: f64,
+        y: f64,
+        mods: i32,
+    },
+    WheelScrolledPixels {
+        x: f64,
+        y: f64,
+        mods: i32,
+    },
 }
 
 impl AppKeyEvent {

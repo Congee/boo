@@ -2,7 +2,10 @@ use super::*;
 
 impl BooApp {
     fn append_osc_color(seq: &mut Vec<u8>, code: &str, color: crate::config::RgbColor) {
-        let value = format!("\x1b]{code};#{:02X}{:02X}{:02X}\x07", color[0], color[1], color[2]);
+        let value = format!(
+            "\x1b]{code};#{:02X}{:02X}{:02X}\x07",
+            color[0], color[1], color[2]
+        );
         seq.extend_from_slice(value.as_bytes());
     }
 
@@ -32,14 +35,14 @@ impl BooApp {
             Some(style) => {
                 let blink = self.cursor_blink;
                 let param = match style {
-                    0 => {
+                    crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR => {
                         if blink {
                             5
                         } else {
                             6
                         }
                     }
-                    3 => {
+                    crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE => {
                         if blink {
                             3
                         } else {
@@ -112,6 +115,16 @@ impl BooApp {
 
     pub(crate) fn handle_resize(&mut self, size: Size) {
         self.last_size = size;
+        self.relayout();
+    }
+
+    pub(crate) fn resize_viewport_cells(&mut self, cols: u16, rows: u16) {
+        let (width, terminal_height) = self.session_size_pixels(cols, rows);
+        self.resize_viewport_points(width as f64, terminal_height as f64 + STATUS_BAR_HEIGHT);
+    }
+
+    pub(crate) fn resize_viewport_points(&mut self, width: f64, height: f64) {
+        self.last_size = Size::new(width.max(1.0) as f32, height.max(1.0) as f32);
         self.relayout();
     }
 

@@ -18,6 +18,7 @@ pub struct Config {
     pub keybinds: HashMap<String, String>,
     pub font_family: Option<String>,
     pub font_size: Option<f32>,
+    pub window_decoration: WindowDecoration,
     pub background_opacity: Option<f32>,
     pub background_opacity_cells: bool,
     pub foreground: Option<RgbColor>,
@@ -48,12 +49,24 @@ pub enum CursorStyle {
     Underline,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowDecoration {
+    None,
+    TitleBar,
+}
+
+impl WindowDecoration {
+    pub fn shows_system_decorations(self) -> bool {
+        matches!(self, WindowDecoration::TitleBar)
+    }
+}
+
 impl CursorStyle {
     pub fn vt_visual_style(self) -> i32 {
         match self {
-            CursorStyle::Bar => 0,
-            CursorStyle::Block => 1,
-            CursorStyle::Underline => 3,
+            CursorStyle::Bar => crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR,
+            CursorStyle::Block => crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK,
+            CursorStyle::Underline => crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE,
         }
     }
 }
@@ -121,6 +134,11 @@ impl Config {
                 "font-size" => {
                     if let Ok(size) = value.parse::<f32>() {
                         config.font_size = Some(size.max(1.0));
+                    }
+                }
+                "window-decoration" => {
+                    if let Some(decoration) = parse_window_decoration(value) {
+                        config.window_decoration = decoration;
                     }
                 }
                 "background-opacity" => {
@@ -220,6 +238,7 @@ impl Default for Config {
             keybinds: HashMap::new(),
             font_family: None,
             font_size: None,
+            window_decoration: WindowDecoration::None,
             background_opacity: None,
             background_opacity_cells: false,
             foreground: None,
@@ -248,7 +267,10 @@ impl Default for Config {
     }
 }
 
-fn load_with_includes(path: &Path, visited: &mut HashSet<PathBuf>) -> Result<String, std::io::Error> {
+fn load_with_includes(
+    path: &Path,
+    visited: &mut HashSet<PathBuf>,
+) -> Result<String, std::io::Error> {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if !visited.insert(canonical.clone()) {
         return Ok(String::new());
@@ -317,6 +339,14 @@ fn parse_cursor_style(value: &str) -> Option<CursorStyle> {
         "block" => Some(CursorStyle::Block),
         "bar" | "beam" => Some(CursorStyle::Bar),
         "underline" => Some(CursorStyle::Underline),
+        _ => None,
+    }
+}
+
+fn parse_window_decoration(value: &str) -> Option<WindowDecoration> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" => Some(WindowDecoration::None),
+        "titlebar" | "title-bar" | "native" | "system" => Some(WindowDecoration::TitleBar),
         _ => None,
     }
 }
@@ -450,6 +480,7 @@ keybind = super+1 = goto_tab:1
         assert!(config.prefix_key.is_none());
         assert!(config.keybinds.is_empty());
         assert_eq!(config.font_size, Some(14.0));
+        assert_eq!(config.window_decoration, WindowDecoration::None);
     }
 
     #[test]
@@ -481,8 +512,44 @@ keybind = super+1 = goto_tab:1
     fn test_parse_cursor_style() {
         assert_eq!(parse_cursor_style("block"), Some(CursorStyle::Block));
         assert_eq!(parse_cursor_style("beam"), Some(CursorStyle::Bar));
-        assert_eq!(parse_cursor_style("underline"), Some(CursorStyle::Underline));
+        assert_eq!(
+            parse_cursor_style("underline"),
+            Some(CursorStyle::Underline)
+        );
         assert_eq!(parse_cursor_style("weird"), None);
+    }
+
+    #[test]
+    fn test_cursor_style_maps_to_ghostty_visual_style() {
+        assert_eq!(
+            CursorStyle::Block.vt_visual_style(),
+            crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK
+        );
+        assert_eq!(
+            CursorStyle::Bar.vt_visual_style(),
+            crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR
+        );
+        assert_eq!(
+            CursorStyle::Underline.vt_visual_style(),
+            crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE
+        );
+    }
+
+    #[test]
+    fn test_parse_window_decoration() {
+        assert_eq!(
+            parse_window_decoration("none"),
+            Some(WindowDecoration::None)
+        );
+        assert_eq!(
+            parse_window_decoration("titlebar"),
+            Some(WindowDecoration::TitleBar)
+        );
+        assert_eq!(
+            parse_window_decoration("native"),
+            Some(WindowDecoration::TitleBar)
+        );
+        assert_eq!(parse_window_decoration("weird"), None);
     }
 
     #[test]

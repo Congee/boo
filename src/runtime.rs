@@ -79,7 +79,9 @@ impl BooApp {
             inactive_tab_background: config
                 .inactive_tab_background
                 .unwrap_or(DEFAULT_INACTIVE_TAB_BACKGROUND),
-            cursor_style: config.cursor_style.map(config::CursorStyle::vt_visual_style),
+            cursor_style: config
+                .cursor_style
+                .map(config::CursorStyle::vt_visual_style),
             cursor_blink: config.cursor_blink,
             cursor_blink_interval: std::time::Duration::from_nanos(config.cursor_blink_interval_ns),
             #[cfg(target_os = "linux")]

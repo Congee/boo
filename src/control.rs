@@ -38,6 +38,8 @@ pub enum Request {
     GotoTab { index: usize },
     NextTab,
     PrevTab,
+    ResizeViewportPoints { width: f64, height: f64 },
+    ResizeViewport { cols: u16, rows: u16 },
     ResizeFocused { cols: u16, rows: u16 },
     FocusSurface { index: usize },
     SendKey { key: String },
@@ -199,10 +201,16 @@ pub struct UiTerminalCellSnapshot {
     pub display_width: u8,
     pub fg: [u8; 3],
     pub bg: [u8; 3],
+    #[serde(default = "default_true")]
+    pub bg_is_default: bool,
     pub bold: bool,
     pub italic: bool,
     pub underline: i32,
     pub hyperlink: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Commands sent from the control thread to the main iced update loop.
@@ -227,6 +235,8 @@ pub enum ControlCmd {
     GotoTab { index: usize },
     NextTab,
     PrevTab,
+    ResizeViewportPoints { width: f64, height: f64 },
+    ResizeViewport { cols: u16, rows: u16 },
     ResizeFocused { cols: u16, rows: u16 },
     FocusSurface { index: usize },
     Quit,
@@ -463,6 +473,14 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
         }
         Request::PrevTab => {
             let _ = tx.send(ControlCmd::PrevTab);
+            Response::Ok { ok: true }
+        }
+        Request::ResizeViewportPoints { width, height } => {
+            let _ = tx.send(ControlCmd::ResizeViewportPoints { width, height });
+            Response::Ok { ok: true }
+        }
+        Request::ResizeViewport { cols, rows } => {
+            let _ = tx.send(ControlCmd::ResizeViewport { cols, rows });
             Response::Ok { ok: true }
         }
         Request::ResizeFocused { cols, rows } => {

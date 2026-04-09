@@ -31,6 +31,7 @@ pub fn install_event_monitors(
     _: std::sync::mpsc::Sender<TextInputEvent>,
 ) {
 }
+pub fn install_command_drag_monitor() {}
 pub fn create_scrollbar_layer() -> LayerHandle {
     std::ptr::null_mut()
 }

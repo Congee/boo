@@ -1,5 +1,5 @@
-mod app_input;
 mod app_helpers;
+mod app_input;
 mod backend;
 mod bindings;
 mod cli;
@@ -39,16 +39,16 @@ mod vt_snapshot;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vt_terminal_canvas;
 
+#[cfg(test)]
+use app_helpers::native_keycode_to_keyboard_key;
 use app_helpers::{
-    TextInputAction, apply_text_input_event, command_finish_notification, cursor_blink_visible,
-    control_key_to_keyboard_key, ghostty_mods_to_iced, iced_button_to_ghostty, iced_button_to_vt,
-    iced_mods_to_ghostty, native_keycode_to_named_key, parse_keyspec, parse_vt_keyspec,
-    shifted_char, shifted_codepoint, shifted_codepoint_vt,
+    TextInputAction, apply_text_input_event, command_finish_notification,
+    control_key_to_keyboard_key, cursor_blink_visible, ghostty_mods_to_iced,
+    iced_button_to_ghostty, iced_button_to_vt, iced_mods_to_ghostty, native_keycode_to_named_key,
+    parse_keyspec, parse_vt_keyspec, shifted_char, shifted_codepoint, shifted_codepoint_vt,
     should_route_macos_vt_key_via_appkit, split_direction_name, text_input_command_key,
     ui_rect_snapshot,
 };
-#[cfg(test)]
-use app_helpers::native_keycode_to_keyboard_key;
 pub(crate) use app_input::{AppKeyEvent, AppMouseButton, AppMouseEvent};
 use backend::TerminalBackend;
 use command_prompt::CommandPrompt;

@@ -94,7 +94,8 @@ impl BooApp {
             .unwrap_or_else(|| shifted_codepoint(event.keycode, 0));
 
         if surface.is_null() {
-            if event.mods & (ffi::GHOSTTY_MODS_CTRL | ffi::GHOSTTY_MODS_ALT | ffi::GHOSTTY_MODS_SUPER)
+            if event.mods
+                & (ffi::GHOSTTY_MODS_CTRL | ffi::GHOSTTY_MODS_ALT | ffi::GHOSTTY_MODS_SUPER)
                 == 0
             {
                 if let Some(committed) = event
@@ -348,7 +349,10 @@ impl BooApp {
                 self.handle_app_key_event(AppKeyEvent {
                     keycode,
                     mods,
-                    text: text.as_ref().map(ToString::to_string).filter(|t| !t.is_empty()),
+                    text: text
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .filter(|t| !t.is_empty()),
                     modified_text: match &modified_key {
                         keyboard::Key::Character(s) if !s.is_empty() => Some(s.to_string()),
                         _ => None,
@@ -517,7 +521,12 @@ impl BooApp {
                     splits::Direction::Vertical => self.cell_height,
                 };
                 if let Some(tree) = self.server.tabs.active_tree_mut() {
-                    tree.resize_focused_by_cells(frame, axis, sign * i32::from(amount), cell_extent);
+                    tree.resize_focused_by_cells(
+                        frame,
+                        axis,
+                        sign * i32::from(amount),
+                        cell_extent,
+                    );
                 }
                 self.relayout();
             }
@@ -585,8 +594,11 @@ impl BooApp {
                 self.find_window_selected = 0;
             }
             bindings::Action::DisplayPanes => {
-                self.display_panes_active =
-                    self.server.tabs.active_tree().is_some_and(|tree| tree.len() > 1);
+                self.display_panes_active = self
+                    .server
+                    .tabs
+                    .active_tree()
+                    .is_some_and(|tree| tree.len() > 1);
             }
             bindings::Action::Paste => {
                 self.ghostty_binding_action("paste_from_clipboard");
@@ -1508,7 +1520,9 @@ impl BooApp {
             self.choose_buffer_selected = 0;
             return;
         }
-        let index = self.choose_buffer_selected.min(self.paste_buffers.len() - 1);
+        let index = self
+            .choose_buffer_selected
+            .min(self.paste_buffers.len() - 1);
         self.paste_buffers.remove(index);
         if self.paste_buffers.is_empty() {
             self.choose_buffer_active = false;
@@ -1519,11 +1533,7 @@ impl BooApp {
     }
 
     fn paste_selected_buffer(&mut self) {
-        let Some(text) = self
-            .paste_buffers
-            .get(self.choose_buffer_selected)
-            .cloned()
-        else {
+        let Some(text) = self.paste_buffers.get(self.choose_buffer_selected).cloned() else {
             self.choose_buffer_active = false;
             self.choose_buffer_selected = 0;
             return;

@@ -15,16 +15,33 @@ use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CellSnapshot {
     pub text: String,
     pub display_width: u8,
     pub fg: vt::GhosttyColorRgb,
     pub bg: vt::GhosttyColorRgb,
+    pub bg_is_default: bool,
     pub bold: bool,
     pub italic: bool,
     pub underline: i32,
     pub hyperlink: bool,
+}
+
+impl Default for CellSnapshot {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            display_width: 0,
+            fg: vt::GhosttyColorRgb::default(),
+            bg: vt::GhosttyColorRgb::default(),
+            bg_is_default: true,
+            bold: false,
+            italic: false,
+            underline: 0,
+            hyperlink: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -471,7 +488,11 @@ impl VtPane {
         let mut written_chunks = 0u64;
         let mut write_chunk_units = 0u64;
         while started_at.elapsed() < Self::PTY_POLL_MAX_DURATION {
-            let Some(has_escape) = self.pending_pty_chunks.front().map(|chunk| chunk.has_escape) else {
+            let Some(has_escape) = self
+                .pending_pty_chunks
+                .front()
+                .map(|chunk| chunk.has_escape)
+            else {
                 break;
             };
             let write_chunk_size = self.write_chunk_size_for_chunk(has_escape);
@@ -520,8 +541,10 @@ impl VtPane {
             0,
         );
         self.pending_pty_profile.polls = self.pending_pty_profile.polls.wrapping_add(1);
-        self.pending_pty_profile.write_chunks =
-            self.pending_pty_profile.write_chunks.saturating_add(written_chunks);
+        self.pending_pty_profile.write_chunks = self
+            .pending_pty_profile
+            .write_chunks
+            .saturating_add(written_chunks);
         self.pending_pty_profile.backlog_chunks = self
             .pending_pty_profile
             .backlog_chunks
@@ -1021,7 +1044,6 @@ impl VtPane {
             }
         }
     }
-
 }
 
 fn worker_loop(
@@ -1152,7 +1174,8 @@ fn worker_loop(
         }
 
         if pane.is_dirty()
-            && last_snapshot_refresh.elapsed() < VtPaneWorker::SNAPSHOT_REFRESH_INTERVAL_UNDER_BACKLOG
+            && last_snapshot_refresh.elapsed()
+                < VtPaneWorker::SNAPSHOT_REFRESH_INTERVAL_UNDER_BACKLOG
         {
             let wait = VtPaneWorker::SNAPSHOT_REFRESH_INTERVAL_UNDER_BACKLOG
                 .saturating_sub(last_snapshot_refresh.elapsed());
@@ -1551,11 +1574,13 @@ fn snapshot_row(
         let style = cells.style().map_err(vt_to_io)?;
         let fg = cells.fg_color().unwrap_or(colors.foreground);
         let bg = cells.bg_color().unwrap_or(colors.background);
+        let bg_is_default = style.bg_color.tag == vt::GHOSTTY_STYLE_COLOR_NONE;
         row.push(CellSnapshot {
             display_width: text_width(&text),
             text,
             fg,
             bg,
+            bg_is_default,
             bold: style.bold,
             italic: style.italic,
             underline: style.underline,
@@ -1650,6 +1675,31 @@ mod tests {
 
         assert_eq!(seen[0], ("e\u{301}".to_string(), 1));
         assert_eq!(seen[1], ("🙂".to_string(), 2));
+    }
+
+    #[test]
+    fn descusr_cursor_shape_updates_render_state() {
+        let mut terminal = vt::Terminal::new(16, 4, 0).expect("terminal");
+        terminal.resize(16, 4, 8, 16).expect("resize");
+        let mut render_state = vt::RenderState::new().expect("render state");
+
+        terminal.write(b"\x1b[2 q");
+        render_state.update(&terminal).expect("update block");
+        assert_eq!(
+            render_state
+                .get_i32(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE)
+                .expect("block cursor style"),
+            vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK
+        );
+
+        terminal.write(b"\x1b[4 q");
+        render_state.update(&terminal).expect("update underline");
+        assert_eq!(
+            render_state
+                .get_i32(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE)
+                .expect("underline cursor style"),
+            vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE
+        );
     }
 
     #[test]

@@ -634,15 +634,9 @@ fn parse_action(s: &str) -> Option<Action> {
         "display_panes" => Some(Action::DisplayPanes),
         "mark_pane" => Some(Action::MarkPane),
         "clear_marked_pane" => Some(Action::ClearMarkedPane),
-        "join_marked_pane:right" | "move_marked_pane:right" => {
-            Some(Action::JoinMarkedPane(Right))
-        }
-        "join_marked_pane:down" | "move_marked_pane:down" => {
-            Some(Action::JoinMarkedPane(Down))
-        }
-        "join_marked_pane:left" | "move_marked_pane:left" => {
-            Some(Action::JoinMarkedPane(Left))
-        }
+        "join_marked_pane:right" | "move_marked_pane:right" => Some(Action::JoinMarkedPane(Right)),
+        "join_marked_pane:down" | "move_marked_pane:down" => Some(Action::JoinMarkedPane(Down)),
+        "join_marked_pane:left" | "move_marked_pane:left" => Some(Action::JoinMarkedPane(Left)),
         "join_marked_pane:up" | "move_marked_pane:up" => Some(Action::JoinMarkedPane(Up)),
         "rotate_panes_forward" => Some(Action::RotatePanesForward),
         "rotate_panes_backward" => Some(Action::RotatePanesBackward),
@@ -652,18 +646,18 @@ fn parse_action(s: &str) -> Option<Action> {
         "previous_layout" => Some(Action::PreviousLayout),
         "rebalance_layout" => Some(Action::RebalanceLayout),
         "select_layout:manual" => Some(Action::SelectLayout(crate::session::TabLayout::Manual)),
-        "select_layout:even-horizontal" => {
-            Some(Action::SelectLayout(crate::session::TabLayout::EvenHorizontal))
-        }
-        "select_layout:even-vertical" => {
-            Some(Action::SelectLayout(crate::session::TabLayout::EvenVertical))
-        }
-        "select_layout:main-horizontal" => {
-            Some(Action::SelectLayout(crate::session::TabLayout::MainHorizontal))
-        }
-        "select_layout:main-vertical" => {
-            Some(Action::SelectLayout(crate::session::TabLayout::MainVertical))
-        }
+        "select_layout:even-horizontal" => Some(Action::SelectLayout(
+            crate::session::TabLayout::EvenHorizontal,
+        )),
+        "select_layout:even-vertical" => Some(Action::SelectLayout(
+            crate::session::TabLayout::EvenVertical,
+        )),
+        "select_layout:main-horizontal" => Some(Action::SelectLayout(
+            crate::session::TabLayout::MainHorizontal,
+        )),
+        "select_layout:main-vertical" => Some(Action::SelectLayout(
+            crate::session::TabLayout::MainVertical,
+        )),
         "select_layout:tiled" => Some(Action::SelectLayout(crate::session::TabLayout::Tiled)),
         "toggle_zoom" => Some(Action::ToggleZoom),
         "command_prompt" => Some(Action::OpenCommandPrompt),
@@ -713,6 +707,7 @@ mod tests {
             remote_auth_key: None,
             font_family: None,
             font_size: None,
+            window_decoration: crate::config::WindowDecoration::None,
             background_opacity: None,
             background_opacity_cells: false,
             foreground: None,

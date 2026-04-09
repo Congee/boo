@@ -1,8 +1,8 @@
 use std::env;
 use std::fs;
-use std::path::PathBuf;
 #[cfg(target_os = "macos")]
 use std::os::unix::fs::symlink;
+use std::path::PathBuf;
 
 const MACOS_APP_BUNDLE_ID: &str = "me.congee.boo";
 const MACOS_APP_NAME: &str = "boo";

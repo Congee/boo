@@ -314,6 +314,15 @@ if [[ "$HAS_TERMINAL_SNAPSHOT" == "1" ]]; then
   wait_terminal_contains /tmp/boo-ui-after-backspace.json "BOOY"
 fi
 
+python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" request send-vt 'text=\x1b[4 q' >/dev/null
+if [[ "$HAS_TERMINAL_SNAPSHOT" == "1" ]]; then
+  wait_terminal_snapshot_matches /tmp/boo-ui-after-cursor-underline.json 'terminal["cursor"]["style"] == 2'
+fi
+python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" request send-vt 'text=\x1b[2 q' >/dev/null
+if [[ "$HAS_TERMINAL_SNAPSHOT" == "1" ]]; then
+  wait_terminal_snapshot_matches /tmp/boo-ui-after-cursor-block.json 'terminal["cursor"]["style"] == 1'
+fi
+
 python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" request send-key key=ctrl+shift+t >/tmp/boo-ui-new-tab-response.json
 wait_snapshot /tmp/boo-ui-after-new-tab.json 'len(tabs) == 2 and active_tab == 1 and len(visible_panes) == 1'
 python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" request send-text 'text=printf TAB2_OK\\r' >/dev/null
@@ -338,10 +347,12 @@ wait_snapshot /tmp/boo-ui-after-prefix-prev2.json 'len(tabs) == 3 and active_tab
 python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" request new-split direction=right >/tmp/boo-ui-split-response.json
 wait_snapshot /tmp/boo-ui-after-split.json 'len(visible_panes) == 2 and any(p["split_direction"] == "horizontal" for p in visible_panes)'
 assert_snapshot /tmp/boo-ui-after-split.json 'visible_panes[0]["frame"]["width"] > 0 and visible_panes[1]["frame"]["width"] > 0 and visible_panes[0]["frame"]["x"] < visible_panes[1]["frame"]["x"]'
+python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" request resize-viewport cols=140 rows=36 >/tmp/boo-ui-resize-viewport-response.json
+wait_snapshot /tmp/boo-ui-after-resize-viewport.json 'len(visible_panes) == 2 and abs((visible_panes[0]["frame"]["width"] + visible_panes[1]["frame"]["width"] + 1.0) - 1680.0) < 1.0 and abs(visible_panes[0]["frame"]["height"] - 900.0) < 1.0 and abs(visible_panes[1]["frame"]["height"] - 900.0) < 1.0'
 
 SECOND_LEAF_ID="$(python3 - <<'PY'
 import json
-with open("/tmp/boo-ui-after-split.json", "r", encoding="utf-8") as f:
+with open("/tmp/boo-ui-after-resize-viewport.json", "r", encoding="utf-8") as f:
     snapshot = json.load(f)["snapshot"]
 for pane in snapshot["visible_panes"]:
     if not pane["focused"]:

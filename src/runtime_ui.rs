@@ -41,19 +41,16 @@ impl BooApp {
                     .unwrap_or_default();
                 let preview = terminal
                     .and_then(|snapshot| {
-                        snapshot
-                            .rows_data
-                            .into_iter()
-                            .find_map(|row| {
-                                let line = row
-                                    .cells
-                                    .into_iter()
-                                    .map(|cell| cell.text)
-                                    .collect::<String>()
-                                    .trim()
-                                    .to_string();
-                                (!line.is_empty()).then_some(line)
-                            })
+                        snapshot.rows_data.into_iter().find_map(|row| {
+                            let line = row
+                                .cells
+                                .into_iter()
+                                .map(|cell| cell.text)
+                                .collect::<String>()
+                                .trim()
+                                .to_string();
+                            (!line.is_empty()).then_some(line)
+                        })
                     })
                     .unwrap_or_default();
                 entries.push(ChooseTreeEntry {
@@ -378,7 +375,8 @@ impl BooApp {
                     Some(Self::theme_color(self.cursor_text_color, 1.0)),
                     Some(Self::theme_color(self.url_color, 1.0)),
                     (!self.preedit_text.is_empty()).then(|| self.preedit_text.clone()),
-                );
+                )
+                .without_base_fill();
                 main_col = main_col.push(
                     container(
                         iced::widget::canvas(terminal_canvas)
@@ -524,7 +522,21 @@ impl BooApp {
                 .padding([2, 6]),
             );
         }
-        let base: Element<'_, Message> = main_col.into();
+        let background = iced::widget::canvas(vt_terminal_canvas::TerminalBackgroundCanvas {
+            color: Self::theme_color(self.terminal_background, self.background_opacity),
+        })
+        .width(Length::Fill)
+        .height(Length::Fill);
+        let base: Element<'_, Message> = stack([
+            background.into(),
+            container(main_col)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+        ])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into();
         if self.display_panes_active {
             let overlay = iced::widget::canvas(DisplayPanesOverlay {
                 panes: self.visible_pane_snapshots(),
@@ -538,9 +550,7 @@ impl BooApp {
                 .into()
         } else if self.find_window_active {
             let entries = self.find_window_entries();
-            let mut list = iced::widget::column![]
-                .spacing(6)
-                .width(Length::Fill);
+            let mut list = iced::widget::column![].spacing(6).width(Length::Fill);
             for (index, entry) in entries.iter().take(12).enumerate() {
                 let is_selected = index == self.find_window_selected;
                 let label = format!(
@@ -566,14 +576,11 @@ impl BooApp {
                 list = list.push(
                     container(
                         iced::widget::column![
-                            text(label)
-                                .font(ui_font)
-                                .size(14)
-                                .color(if is_selected {
-                                    Color::WHITE
-                                } else {
-                                    Color::from_rgb(0.86, 0.86, 0.86)
-                                }),
+                            text(label).font(ui_font).size(14).color(if is_selected {
+                                Color::WHITE
+                            } else {
+                                Color::from_rgb(0.86, 0.86, 0.86)
+                            }),
                             text(preview)
                                 .font(ui_font)
                                 .size(12)
@@ -635,9 +642,7 @@ impl BooApp {
             .into()
         } else if self.choose_tree_active {
             let entries = self.choose_tree_entries();
-            let mut list = iced::widget::column![]
-                .spacing(6)
-                .width(Length::Fill);
+            let mut list = iced::widget::column![].spacing(6).width(Length::Fill);
             for (index, entry) in entries.iter().take(12).enumerate() {
                 let is_selected = index == self.choose_tree_selected;
                 let label = format!(
@@ -664,14 +669,11 @@ impl BooApp {
                 list = list.push(
                     container(
                         iced::widget::column![
-                            text(label)
-                                .font(ui_font)
-                                .size(14)
-                                .color(if is_selected {
-                                    Color::WHITE
-                                } else {
-                                    Color::from_rgb(0.86, 0.86, 0.86)
-                                }),
+                            text(label).font(ui_font).size(14).color(if is_selected {
+                                Color::WHITE
+                            } else {
+                                Color::from_rgb(0.86, 0.86, 0.86)
+                            }),
                             text(preview)
                                 .font(ui_font)
                                 .size(12)
@@ -729,9 +731,7 @@ impl BooApp {
             .into()
         } else if self.choose_buffer_active {
             let preview_limit = 48usize;
-            let mut list = iced::widget::column![]
-                .spacing(6)
-                .width(Length::Fill);
+            let mut list = iced::widget::column![].spacing(6).width(Length::Fill);
             for (index, buffer) in self.paste_buffers.iter().take(8).enumerate() {
                 let is_selected = index == self.choose_buffer_selected;
                 let mut preview = buffer.replace('\n', "\\n");
@@ -740,16 +740,11 @@ impl BooApp {
                 }
                 let label = format!("{:>2}. {}", index + 1, preview);
                 list = list.push(
-                    container(
-                        text(label)
-                            .font(ui_font)
-                            .size(14)
-                            .color(if is_selected {
-                                Color::WHITE
-                            } else {
-                                Color::from_rgb(0.82, 0.82, 0.82)
-                            }),
-                    )
+                    container(text(label).font(ui_font).size(14).color(if is_selected {
+                        Color::WHITE
+                    } else {
+                        Color::from_rgb(0.82, 0.82, 0.82)
+                    }))
                     .padding([6, 10])
                     .width(Length::Fill)
                     .style(move |_: &Theme| container::Style {

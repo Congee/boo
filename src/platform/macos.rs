@@ -20,6 +20,7 @@ static TEXT_INPUT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<TextInputEvent
     std::sync::OnceLock::new();
 static KEY_EVENT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<KeyEvent>> =
     std::sync::OnceLock::new();
+static COMMAND_DRAG_MONITOR_INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 static MARKED_TEXT: std::sync::OnceLock<std::sync::Mutex<String>> = std::sync::OnceLock::new();
 static IME_RECT: std::sync::OnceLock<std::sync::Mutex<Rect>> = std::sync::OnceLock::new();
 
@@ -383,8 +384,14 @@ pub fn install_event_monitors(
 ) {
     let _ = KEY_EVENT_TX.set(key_event_tx);
     let _ = TEXT_INPUT_TX.set(text_input_tx);
-    install_cmd_drag_monitor();
+    install_command_drag_monitor();
     install_scroll_monitor(scroll_tx);
+}
+
+pub fn install_command_drag_monitor() {
+    COMMAND_DRAG_MONITOR_INSTALLED.get_or_init(|| {
+        install_cmd_drag_monitor();
+    });
 }
 
 #[allow(dead_code)]

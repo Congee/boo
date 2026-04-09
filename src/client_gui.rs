@@ -1,13 +1,13 @@
 use crate::bindings;
 use crate::control;
 use crate::cursor_blink_visible;
-use crate::{AppKeyEvent, AppMouseButton, AppMouseEvent};
 use crate::iced_mods_to_ghostty;
 use crate::keymap;
 use crate::remote;
 use crate::vt;
 use crate::vt_backend_core;
 use crate::vt_terminal_canvas;
+use crate::{AppKeyEvent, AppMouseButton, AppMouseEvent};
 use iced::futures::{SinkExt, StreamExt};
 use iced::stream;
 use iced::widget::{column, container, row, stack, text};
@@ -34,7 +34,8 @@ const SNAPSHOT_RETRY_TICKS: u8 = 3;
 const SNAPSHOT_KEEPALIVE_TICKS: u8 = 30;
 const LOCAL_STREAM_INPUT_SEQ_LEN: usize = 8;
 const REMOTE_FULL_STATE_HEADER_LEN: usize = 14;
-const LOCAL_FULL_STATE_HEADER_LEN: usize = LOCAL_STREAM_INPUT_SEQ_LEN + REMOTE_FULL_STATE_HEADER_LEN;
+const LOCAL_FULL_STATE_HEADER_LEN: usize =
+    LOCAL_STREAM_INPUT_SEQ_LEN + REMOTE_FULL_STATE_HEADER_LEN;
 const REMOTE_DELTA_HEADER_LEN: usize = 13;
 const LOCAL_DELTA_HEADER_LEN: usize = LOCAL_STREAM_INPUT_SEQ_LEN + REMOTE_DELTA_HEADER_LEN;
 const REMOTE_CELL_ENCODED_LEN: usize = 12;
@@ -124,6 +125,7 @@ pub struct ClientApp {
     cursor_blink_interval: Duration,
     app_focused: bool,
     cursor_blink_epoch: Instant,
+    focused_cursor_position: Option<(u64, u16, u16)>,
     tick_counter: u8,
     next_input_seq: u64,
     pending_input_latencies: HashMap<u64, Instant>,
@@ -227,49 +229,54 @@ impl ClientApp {
             .as_ref()
             .map(pane_snapshot_map_from_ui_snapshot)
             .unwrap_or_default();
-        let focused_pane_id = snapshot.as_ref().map(|snapshot| snapshot.focused_pane).unwrap_or(0);
+        let focused_pane_id = snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.focused_pane)
+            .unwrap_or(0);
+        let focused_cursor_position = focused_cursor_position(focused_pane_id, &pane_snapshots);
         let app = Self {
-                socket_path,
-                client,
-                stream_tx: None,
-                bootstrap_snapshot: snapshot,
-                ui_state,
-                mode: ClientMode::Bootstrapping,
-                active_session_id: None,
-                pane_snapshots,
-                focused_pane_id,
-                last_error: None,
-                cell_width,
-                cell_height,
-                font_size,
-                background_opacity,
-                background_opacity_cells,
-                terminal_foreground,
-                terminal_background,
-                cursor_color,
-                selection_background,
-                selection_foreground,
-                cursor_text_color,
-                url_color,
-                active_tab_foreground,
-                active_tab_background,
-                inactive_tab_foreground,
-                inactive_tab_background,
-                cursor_blink_interval,
-                app_focused: true,
-                cursor_blink_epoch: Instant::now(),
-                tick_counter: 0,
-                next_input_seq: 1,
-                pending_input_latencies: HashMap::new(),
-                pending_passive_stream: None,
-                passive_flush_scheduled: false,
-                steady_state_snapshot_requests: 0,
-                should_exit: false,
-                terminal_snapshot_generation: 1,
-                next_full_snapshot_revision: 1,
-                next_snapshot_generation: 2,
-                last_mouse_pos: Point::ORIGIN,
-            };
+            socket_path,
+            client,
+            stream_tx: None,
+            bootstrap_snapshot: snapshot,
+            ui_state,
+            mode: ClientMode::Bootstrapping,
+            active_session_id: None,
+            pane_snapshots,
+            focused_pane_id,
+            last_error: None,
+            cell_width,
+            cell_height,
+            font_size,
+            background_opacity,
+            background_opacity_cells,
+            terminal_foreground,
+            terminal_background,
+            cursor_color,
+            selection_background,
+            selection_foreground,
+            cursor_text_color,
+            url_color,
+            active_tab_foreground,
+            active_tab_background,
+            inactive_tab_foreground,
+            inactive_tab_background,
+            cursor_blink_interval,
+            app_focused: true,
+            cursor_blink_epoch: Instant::now(),
+            focused_cursor_position,
+            tick_counter: 0,
+            next_input_seq: 1,
+            pending_input_latencies: HashMap::new(),
+            pending_passive_stream: None,
+            passive_flush_scheduled: false,
+            steady_state_snapshot_requests: 0,
+            should_exit: false,
+            terminal_snapshot_generation: 1,
+            next_full_snapshot_revision: 1,
+            next_snapshot_generation: 2,
+            last_mouse_pos: Point::ORIGIN,
+        };
         app.update_gui_test_status();
         (app, Task::none())
     }
@@ -404,13 +411,6 @@ impl ClientApp {
         container(main_col)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style({
-                let background = Self::theme_color(self.terminal_background, self.background_opacity);
-                move |_: &Theme| container::Style {
-                    background: Some(iced::Background::Color(background)),
-                    ..Default::default()
-                }
-            })
             .into()
     }
 
@@ -422,7 +422,14 @@ impl ClientApp {
         &'a self,
         snapshot: &'a control::UiSnapshot,
     ) -> Element<'a, Message> {
-        let mut layers: Vec<Element<'a, Message>> = Vec::new();
+        let mut layers: Vec<Element<'a, Message>> = vec![
+            iced::widget::canvas(vt_terminal_canvas::TerminalBackgroundCanvas {
+                color: Self::theme_color(self.terminal_background, self.background_opacity),
+            })
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into(),
+        ];
         for pane in &snapshot.visible_panes {
             let Some(terminal_snapshot) = self.pane_snapshots.get(&pane.pane_id) else {
                 continue;
@@ -437,10 +444,13 @@ impl ClientApp {
                 1,
                 self.background_opacity,
                 self.background_opacity_cells,
-                !terminal_snapshot.cursor.blinking
-                    || self.cursor_blink_interval.is_zero()
-                    || !self.app_focused
-                    || cursor_blink_visible(self.cursor_blink_epoch, self.cursor_blink_interval),
+                pane_cursor_blink_visible(
+                    pane.focused,
+                    terminal_snapshot.cursor.blinking,
+                    self.app_focused,
+                    self.cursor_blink_epoch,
+                    self.cursor_blink_interval,
+                ),
                 Vec::new(),
                 Self::theme_color(self.selection_background, 0.35),
                 Some(Self::theme_color(self.selection_foreground, 1.0)),
@@ -474,7 +484,10 @@ impl ClientApp {
             .height(Length::Fill)
             .into(),
         );
-        stack(layers).width(Length::Fill).height(Length::Fill).into()
+        stack(layers)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -545,6 +558,7 @@ impl ClientApp {
                 self.ui_state = ClientUiState::from_snapshot(&snapshot);
                 self.focused_pane_id = snapshot.focused_pane;
                 self.pane_snapshots = pane_snapshot_map_from_ui_snapshot(&snapshot);
+                self.observe_focused_cursor_position();
                 self.bootstrap_snapshot = Some(snapshot);
                 self.terminal_snapshot_generation = self.allocate_snapshot_generation();
                 self.last_error = None;
@@ -580,18 +594,11 @@ impl ClientApp {
     }
 
     fn send_resize(&mut self, size: Size) {
-        let cols = ((size.width as f64 / self.cell_width).floor() as u16).max(2);
-        let rows = (((size.height as f64 - STATUS_BAR_HEIGHT).max(1.0) / self.cell_height).floor()
-            as u16)
-            .max(1);
-        if self.stream_ready_for_terminal_io() {
-            self.send_stream_command(StreamCommand::Resize { cols, rows });
-        } else {
-            let _ = self
-                .client
-                .send(&control::Request::ResizeFocused { cols, rows });
-            self.refresh_snapshot();
-        }
+        let _ = self.client.send(&control::Request::ResizeViewportPoints {
+            width: size.width as f64,
+            height: size.height as f64,
+        });
+        self.refresh_snapshot();
     }
 
     fn handle_keyboard(&mut self, event: keyboard::Event) {
@@ -632,7 +639,10 @@ impl ClientApp {
         let app_event = AppKeyEvent {
             keycode,
             mods: iced_mods_to_ghostty(&modifiers),
-            text: text.as_ref().map(ToString::to_string).filter(|text| !text.is_empty()),
+            text: text
+                .as_ref()
+                .map(ToString::to_string)
+                .filter(|text| !text.is_empty()),
             modified_text: match &modified_key {
                 keyboard::Key::Character(chars) if !chars.is_empty() => Some(chars.to_string()),
                 _ => None,
@@ -645,9 +655,7 @@ impl ClientApp {
             StreamCommand::AppKeyEvent {
                 event: app_event.clone(),
             },
-            control::Request::AppKeyEvent {
-                event: app_event,
-            },
+            control::Request::AppKeyEvent { event: app_event },
         );
     }
 
@@ -730,7 +738,9 @@ impl ClientApp {
                 } else if matches!(self.mode, ClientMode::Attached)
                     && self
                         .active_session_id
-                        .map(|session_id| live_sessions.iter().any(|session| session.id == session_id))
+                        .map(|session_id| {
+                            live_sessions.iter().any(|session| session.id == session_id)
+                        })
                         .unwrap_or(false)
                 {
                     self.should_exit = false;
@@ -801,6 +811,7 @@ impl ClientApp {
                         )),
                     );
                 }
+                self.observe_focused_cursor_position();
                 self.acknowledge_input_latency("stream_full_state", ack_input_seq);
             }
             LocalStreamEvent::Delta {
@@ -814,6 +825,7 @@ impl ClientApp {
                 if let Some(snapshot) = self.pane_snapshots.get_mut(&self.focused_pane_id) {
                     apply_remote_delta_snapshot(Arc::make_mut(snapshot), &delta);
                 }
+                self.observe_focused_cursor_position();
                 self.acknowledge_input_latency("stream_delta", ack_input_seq);
             }
             LocalStreamEvent::Error(error) => {
@@ -826,6 +838,14 @@ impl ClientApp {
         if let Some(event) = self.pending_passive_stream.take() {
             self.handle_stream_event(event);
         }
+    }
+
+    fn observe_focused_cursor_position(&mut self) {
+        let current = focused_cursor_position(self.focused_pane_id, &self.pane_snapshots);
+        if current.is_some() && self.focused_cursor_position != current {
+            self.cursor_blink_epoch = Instant::now();
+        }
+        self.focused_cursor_position = current;
     }
 
     fn handle_stream_delivery(&mut self, event: LocalStreamEvent) -> Option<Task<Message>> {
@@ -932,14 +952,14 @@ impl ClientApp {
     }
 
     fn send_resize_cells(&mut self, cols: u16, rows: u16) {
-        if self.stream_ready_for_terminal_io() {
-            self.send_stream_command(StreamCommand::Resize { cols, rows });
-        } else {
-            let _ = self
-                .client
-                .send(&control::Request::ResizeFocused { cols, rows });
-            self.refresh_snapshot();
-        }
+        self.send_resize_viewport_cells(cols, rows);
+    }
+
+    fn send_resize_viewport_cells(&mut self, cols: u16, rows: u16) {
+        let _ = self
+            .client
+            .send(&control::Request::ResizeViewport { cols, rows });
+        self.refresh_snapshot();
     }
 
     fn record_pending_input(&mut self) -> u64 {
@@ -1000,7 +1020,11 @@ impl ClientApp {
                 .pane_snapshots
                 .get(&self.focused_pane_id)
                 .and_then(|snapshot| snapshot.rows_data.first())
-                .map(|row| row.iter().map(|cell| cell.text.as_str()).collect::<String>())
+                .map(|row| {
+                    row.iter()
+                        .map(|cell| cell.text.as_str())
+                        .collect::<String>()
+                })
                 .or_else(|| {
                     self.bootstrap_snapshot
                         .as_ref()
@@ -1295,6 +1319,7 @@ fn ui_terminal_to_vt_snapshot(
                             g: cell.bg[1],
                             b: cell.bg[2],
                         },
+                        bg_is_default: cell.bg_is_default,
                         bold: cell.bold,
                         italic: cell.italic,
                         underline: cell.underline,
@@ -1368,22 +1393,116 @@ impl<Message> iced::widget::canvas::Program<Message> for PaneBordersOverlay {
             let stroke = iced::widget::canvas::Stroke::default()
                 .with_color(Color::from_rgba(0.72, 0.72, 0.72, 0.35))
                 .with_width(1.0);
-            for pane in &self.panes {
-                let rect = iced::Rectangle {
-                    x: pane.frame.x as f32,
-                    y: pane.frame.y as f32,
-                    width: pane.frame.width as f32,
-                    height: pane.frame.height as f32,
-                };
-                frame.stroke_rectangle(
-                    iced::Point::new(rect.x, rect.y),
-                    iced::Size::new(rect.width, rect.height),
-                    stroke,
-                );
+            for divider in pane_dividers(&self.panes) {
+                let path = iced::widget::canvas::Path::line(divider.start, divider.end);
+                frame.stroke(&path, stroke);
             }
         });
         vec![geometry]
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PaneDivider {
+    start: iced::Point,
+    end: iced::Point,
+}
+
+fn pane_dividers(panes: &[control::UiPaneSnapshot]) -> Vec<PaneDivider> {
+    let mut dividers = Vec::new();
+    for (index, first) in panes.iter().enumerate() {
+        let first_rect = pane_rect(first);
+        for second in panes.iter().skip(index + 1) {
+            let second_rect = pane_rect(second);
+            if let Some(divider) = vertical_divider(first_rect, second_rect)
+                .or_else(|| vertical_divider(second_rect, first_rect))
+                .or_else(|| horizontal_divider(first_rect, second_rect))
+                .or_else(|| horizontal_divider(second_rect, first_rect))
+            {
+                if !dividers
+                    .iter()
+                    .any(|existing| same_divider(*existing, divider))
+                {
+                    dividers.push(divider);
+                }
+            }
+        }
+    }
+    dividers
+}
+
+fn pane_rect(pane: &control::UiPaneSnapshot) -> iced::Rectangle {
+    iced::Rectangle {
+        x: pane.frame.x as f32,
+        y: pane.frame.y as f32,
+        width: pane.frame.width as f32,
+        height: pane.frame.height as f32,
+    }
+}
+
+fn vertical_divider(left: iced::Rectangle, right: iced::Rectangle) -> Option<PaneDivider> {
+    let left_edge = left.x + left.width;
+    let gap = right.x - left_edge;
+    if !(0.0..=2.0).contains(&gap) {
+        return None;
+    }
+    let top = left.y.max(right.y);
+    let bottom = (left.y + left.height).min(right.y + right.height);
+    if bottom - top <= 1.0 {
+        return None;
+    }
+    let x = left_edge + gap * 0.5;
+    Some(PaneDivider {
+        start: iced::Point::new(x, top),
+        end: iced::Point::new(x, bottom),
+    })
+}
+
+fn horizontal_divider(top: iced::Rectangle, bottom: iced::Rectangle) -> Option<PaneDivider> {
+    let top_edge = top.y + top.height;
+    let gap = bottom.y - top_edge;
+    if !(0.0..=2.0).contains(&gap) {
+        return None;
+    }
+    let left = top.x.max(bottom.x);
+    let right = (top.x + top.width).min(bottom.x + bottom.width);
+    if right - left <= 1.0 {
+        return None;
+    }
+    let y = top_edge + gap * 0.5;
+    Some(PaneDivider {
+        start: iced::Point::new(left, y),
+        end: iced::Point::new(right, y),
+    })
+}
+
+fn same_divider(a: PaneDivider, b: PaneDivider) -> bool {
+    (a.start.x - b.start.x).abs() < 0.5
+        && (a.start.y - b.start.y).abs() < 0.5
+        && (a.end.x - b.end.x).abs() < 0.5
+        && (a.end.y - b.end.y).abs() < 0.5
+}
+
+fn focused_cursor_position(
+    focused_pane_id: u64,
+    pane_snapshots: &HashMap<u64, Arc<vt_backend_core::TerminalSnapshot>>,
+) -> Option<(u64, u16, u16)> {
+    let cursor = &pane_snapshots.get(&focused_pane_id)?.cursor;
+    Some((focused_pane_id, cursor.x, cursor.y))
+}
+
+fn pane_cursor_blink_visible(
+    pane_focused: bool,
+    cursor_blinking: bool,
+    app_focused: bool,
+    epoch: Instant,
+    interval: Duration,
+) -> bool {
+    !pane_focused
+        || !cursor_blinking
+        || interval.is_zero()
+        || !app_focused
+        || cursor_blink_visible(epoch, interval)
 }
 
 #[derive(Clone, Debug)]
@@ -1502,7 +1621,6 @@ pub(crate) enum StreamCommand {
     ExecuteCommand { input: String },
     Input { input_seq: u64, bytes: Vec<u8> },
     Key { input_seq: u64, keyspec: String },
-    Resize { cols: u16, rows: u16 },
 }
 
 fn write_stream_message(
@@ -1598,16 +1716,6 @@ fn local_stream_subscription(
                                 payload.extend_from_slice(&input_seq.to_le_bytes());
                                 payload.extend_from_slice(keyspec.as_bytes());
                                 write_stream_message(&mut write, remote::MessageType::Key, &payload)
-                            }
-                            StreamCommand::Resize { cols, rows } => {
-                                let mut payload = Vec::with_capacity(4);
-                                payload.extend_from_slice(&cols.to_le_bytes());
-                                payload.extend_from_slice(&rows.to_le_bytes());
-                                write_stream_message(
-                                    &mut write,
-                                    remote::MessageType::Resize,
-                                    &payload,
-                                )
                             }
                         };
                         if result.is_err() {
@@ -1956,9 +2064,7 @@ fn decode_remote_full_state(payload: &[u8]) -> Option<(Option<u64>, remote::Remo
     let cursor_blinking = payload[17] != 0;
     let cursor_style = i32::from_le_bytes([payload[18], payload[19], payload[20], payload[21]]);
     let cell_count = rows as usize * cols as usize;
-    if payload.len()
-        < LOCAL_FULL_STATE_HEADER_LEN + cell_count * REMOTE_CELL_ENCODED_LEN
-    {
+    if payload.len() < LOCAL_FULL_STATE_HEADER_LEN + cell_count * REMOTE_CELL_ENCODED_LEN {
         return None;
     }
     let mut cells = Vec::with_capacity(cell_count);
@@ -2237,6 +2343,7 @@ fn remote_cell_to_snapshot(
         } else {
             default_bg
         },
+        bg_is_default: (cell.style_flags & REMOTE_STYLE_FLAG_EXPLICIT_BG) == 0,
         bold: (cell.style_flags & REMOTE_STYLE_FLAG_BOLD) != 0,
         italic: (cell.style_flags & REMOTE_STYLE_FLAG_ITALIC) != 0,
         underline: 0,
@@ -2335,6 +2442,122 @@ mod tests {
     }
 
     #[test]
+    fn pane_dividers_draw_only_internal_vertical_split() {
+        let panes = vec![
+            test_pane(0.0, 0.0, 49.5, 80.0),
+            test_pane(50.5, 0.0, 49.5, 80.0),
+        ];
+        let dividers = pane_dividers(&panes);
+        assert_eq!(dividers.len(), 1);
+        assert!((dividers[0].start.x - 50.0).abs() < 0.01);
+        assert_eq!(dividers[0].start.y, 0.0);
+        assert_eq!(dividers[0].end.y, 80.0);
+    }
+
+    #[test]
+    fn pane_dividers_do_not_draw_outer_pane_rectangles() {
+        let panes = vec![
+            test_pane(0.0, 0.0, 49.5, 40.0),
+            test_pane(50.5, 0.0, 49.5, 40.0),
+            test_pane(0.0, 41.0, 100.0, 39.0),
+        ];
+        let dividers = pane_dividers(&panes);
+        assert_eq!(dividers.len(), 3);
+        assert!(
+            !dividers
+                .iter()
+                .any(|divider| divider.start.x == 0.0 && divider.end.x == 0.0)
+        );
+        assert!(
+            !dividers
+                .iter()
+                .any(|divider| divider.start.y == 0.0 && divider.end.y == 0.0)
+        );
+    }
+
+    #[test]
+    fn focused_pane_cursor_uses_blink_phase() {
+        let interval = Duration::from_millis(500);
+        let hidden_epoch = Instant::now() - Duration::from_millis(750);
+        assert!(!pane_cursor_blink_visible(
+            true,
+            true,
+            true,
+            hidden_epoch,
+            interval
+        ));
+    }
+
+    #[test]
+    fn unfocused_pane_cursor_stays_visible_when_blink_phase_is_hidden() {
+        let interval = Duration::from_millis(500);
+        let hidden_epoch = Instant::now() - Duration::from_millis(750);
+        assert!(pane_cursor_blink_visible(
+            false,
+            true,
+            true,
+            hidden_epoch,
+            interval
+        ));
+    }
+
+    #[test]
+    fn focused_pane_cursor_stays_visible_when_app_is_unfocused() {
+        let interval = Duration::from_millis(500);
+        let hidden_epoch = Instant::now() - Duration::from_millis(750);
+        assert!(pane_cursor_blink_visible(
+            true,
+            true,
+            false,
+            hidden_epoch,
+            interval
+        ));
+    }
+
+    #[test]
+    fn focused_cursor_movement_resets_blink_epoch() {
+        let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
+        app.focused_pane_id = 42;
+        app.pane_snapshots
+            .insert(42, Arc::new(test_terminal_snapshot_with_cursor(0, 0, true)));
+        app.observe_focused_cursor_position();
+
+        let hidden_epoch = Instant::now() - Duration::from_millis(750);
+        app.cursor_blink_epoch = hidden_epoch;
+        app.pane_snapshots
+            .insert(42, Arc::new(test_terminal_snapshot_with_cursor(1, 0, true)));
+
+        app.observe_focused_cursor_position();
+
+        assert!(app.cursor_blink_epoch > hidden_epoch);
+        assert_eq!(app.focused_cursor_position, Some((42, 1, 0)));
+        assert!(pane_cursor_blink_visible(
+            true,
+            true,
+            true,
+            app.cursor_blink_epoch,
+            Duration::from_millis(500)
+        ));
+    }
+
+    #[test]
+    fn unchanged_focused_cursor_does_not_reset_blink_epoch() {
+        let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
+        app.focused_pane_id = 42;
+        app.pane_snapshots
+            .insert(42, Arc::new(test_terminal_snapshot_with_cursor(0, 0, true)));
+        app.observe_focused_cursor_position();
+
+        let hidden_epoch = Instant::now() - Duration::from_millis(750);
+        app.cursor_blink_epoch = hidden_epoch;
+
+        app.observe_focused_cursor_position();
+
+        assert_eq!(app.cursor_blink_epoch, hidden_epoch);
+        assert_eq!(app.focused_cursor_position, Some((42, 0, 0)));
+    }
+
+    #[test]
     fn parse_gui_test_command_command() {
         assert_eq!(
             parse_gui_test_command("command new-tab"),
@@ -2346,10 +2569,7 @@ mod tests {
     fn parse_gui_test_click_command() {
         assert_eq!(
             parse_gui_test_command("click 120.5 33.25"),
-            Some(GuiTestCommand::Click {
-                x: 120.5,
-                y: 33.25,
-            })
+            Some(GuiTestCommand::Click { x: 120.5, y: 33.25 })
         );
     }
 
@@ -2386,6 +2606,44 @@ mod tests {
                 assert_eq!(event.named_key, None);
             }
             other => panic!("unexpected stream command: {other:?}"),
+        }
+    }
+
+    fn test_terminal_snapshot_with_cursor(
+        x: u16,
+        y: u16,
+        blinking: bool,
+    ) -> vt_backend_core::TerminalSnapshot {
+        vt_backend_core::TerminalSnapshot {
+            cols: 2,
+            rows: 1,
+            cursor: vt_backend_core::CursorSnapshot {
+                visible: true,
+                blinking,
+                x,
+                y,
+                style: vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK,
+            },
+            rows_data: vec![vec![vt_backend_core::CellSnapshot::default(); 2]],
+            row_revisions: vec![0],
+            ..Default::default()
+        }
+    }
+
+    fn test_pane(x: f64, y: f64, width: f64, height: f64) -> control::UiPaneSnapshot {
+        control::UiPaneSnapshot {
+            leaf_index: 0,
+            leaf_id: 0,
+            pane_id: 0,
+            focused: false,
+            frame: control::UiRectSnapshot {
+                x,
+                y,
+                width,
+                height,
+            },
+            split_direction: None,
+            split_ratio: None,
         }
     }
 
@@ -2483,8 +2741,20 @@ mod tests {
         flush_pending_passive_stream_event(&mut batch, &mut pending);
 
         assert_eq!(batch.len(), 3);
-        assert!(matches!(batch[0], LocalStreamEvent::FullState { ack_input_seq: None, .. }));
-        assert!(matches!(batch[1], LocalStreamEvent::Delta { ack_input_seq: Some(1), .. }));
+        assert!(matches!(
+            batch[0],
+            LocalStreamEvent::FullState {
+                ack_input_seq: None,
+                ..
+            }
+        ));
+        assert!(matches!(
+            batch[1],
+            LocalStreamEvent::Delta {
+                ack_input_seq: Some(1),
+                ..
+            }
+        ));
         assert!(matches!(batch[2], LocalStreamEvent::Attached(7)));
     }
 

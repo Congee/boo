@@ -222,7 +222,10 @@ impl TabManager {
             TabLayout::MainVertical,
             TabLayout::Tiled,
         ];
-        let pos = layouts.iter().position(|layout| *layout == current).unwrap_or(0);
+        let pos = layouts
+            .iter()
+            .position(|layout| *layout == current)
+            .unwrap_or(0);
         let next = if forward {
             layouts[(pos + 1) % layouts.len()].clone()
         } else {
