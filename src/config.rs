@@ -4,8 +4,10 @@
 //! On Linux, Boo now consumes the visual settings it needs directly because the
 //! terminal runtime is `libghostty-vt`, not the full Ghostty surface runtime.
 
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+pub type RgbColor = [u8; 3];
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -18,6 +20,18 @@ pub struct Config {
     pub font_size: Option<f32>,
     pub background_opacity: Option<f32>,
     pub background_opacity_cells: bool,
+    pub foreground: Option<RgbColor>,
+    pub background: Option<RgbColor>,
+    pub palette: [Option<RgbColor>; 16],
+    pub cursor_color: Option<RgbColor>,
+    pub selection_background: Option<RgbColor>,
+    pub selection_foreground: Option<RgbColor>,
+    pub cursor_text_color: Option<RgbColor>,
+    pub url_color: Option<RgbColor>,
+    pub active_tab_foreground: Option<RgbColor>,
+    pub active_tab_background: Option<RgbColor>,
+    pub inactive_tab_foreground: Option<RgbColor>,
+    pub inactive_tab_background: Option<RgbColor>,
     pub cursor_style: Option<CursorStyle>,
     pub cursor_blink: bool,
     pub cursor_blink_interval_ns: u64,
@@ -64,7 +78,7 @@ impl Config {
             log::warn!("boo config not found at {}", path.display());
             return Config::default();
         }
-        let content = match std::fs::read_to_string(&path) {
+        let content = match load_with_includes(&path, &mut HashSet::new()) {
             Ok(c) => c,
             Err(e) => {
                 log::error!("failed to read {}: {e}", path.display());
@@ -117,6 +131,33 @@ impl Config {
                 "background-opacity-cells" => {
                     config.background_opacity_cells = parse_bool(value).unwrap_or(false);
                 }
+                "foreground" => config.foreground = parse_rgb_color(value),
+                "background" => config.background = parse_rgb_color(value),
+                "cursor" | "cursor-color" => config.cursor_color = parse_rgb_color(value),
+                "cursor_text_color" | "cursor-text-color" => {
+                    config.cursor_text_color = parse_rgb_color(value);
+                }
+                "selection_background" | "selection-background" => {
+                    config.selection_background = parse_rgb_color(value);
+                }
+                "selection_foreground" | "selection-foreground" => {
+                    config.selection_foreground = parse_rgb_color(value);
+                }
+                "url_color" | "url-color" => {
+                    config.url_color = parse_rgb_color(value);
+                }
+                "active_tab_foreground" | "active-tab-foreground" => {
+                    config.active_tab_foreground = parse_rgb_color(value);
+                }
+                "active_tab_background" | "active-tab-background" => {
+                    config.active_tab_background = parse_rgb_color(value);
+                }
+                "inactive_tab_foreground" | "inactive-tab-foreground" => {
+                    config.inactive_tab_foreground = parse_rgb_color(value);
+                }
+                "inactive_tab_background" | "inactive-tab-background" => {
+                    config.inactive_tab_background = parse_rgb_color(value);
+                }
                 "cursor-style" => {
                     config.cursor_style = parse_cursor_style(value);
                 }
@@ -157,7 +198,11 @@ impl Config {
                         );
                     }
                 }
-                _ => {}
+                _ => {
+                    if let Some(index) = parse_palette_key(key) {
+                        config.palette[index] = parse_rgb_color(value);
+                    }
+                }
             }
         }
         log::info!("loaded boo config from {} lines", content.lines().count());
@@ -177,6 +222,18 @@ impl Default for Config {
             font_size: None,
             background_opacity: None,
             background_opacity_cells: false,
+            foreground: None,
+            background: None,
+            palette: [None; 16],
+            cursor_color: None,
+            selection_background: None,
+            selection_foreground: None,
+            cursor_text_color: None,
+            url_color: None,
+            active_tab_foreground: None,
+            active_tab_background: None,
+            inactive_tab_foreground: None,
+            inactive_tab_background: None,
             cursor_style: None,
             cursor_blink: true,
             cursor_blink_interval_ns: 600_000_000,
@@ -189,6 +246,36 @@ impl Default for Config {
             notify_on_command_finish_after_ns: 5 * 1_000_000_000,
         }
     }
+}
+
+fn load_with_includes(path: &Path, visited: &mut HashSet<PathBuf>) -> Result<String, std::io::Error> {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if !visited.insert(canonical.clone()) {
+        return Ok(String::new());
+    }
+    let content = std::fs::read_to_string(&canonical)?;
+    let mut expanded = String::new();
+    let base_dir = canonical.parent().unwrap_or_else(|| Path::new("."));
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("include ") {
+            let include_path = strip_quotes(rest.trim());
+            let candidate = Path::new(include_path);
+            let include_path = if candidate.is_absolute() {
+                candidate.to_path_buf()
+            } else {
+                base_dir.join(candidate)
+            };
+            expanded.push_str(&load_with_includes(&include_path, visited)?);
+            if !expanded.ends_with('\n') {
+                expanded.push('\n');
+            }
+            continue;
+        }
+        expanded.push_str(line);
+        expanded.push('\n');
+    }
+    Ok(expanded)
 }
 
 fn strip_quotes(value: &str) -> &str {
@@ -205,6 +292,24 @@ fn parse_bool(value: &str) -> Option<bool> {
         "false" | "no" | "off" | "0" => Some(false),
         _ => None,
     }
+}
+
+fn parse_rgb_color(value: &str) -> Option<RgbColor> {
+    let hex = value.trim().strip_prefix('#')?;
+    if hex.len() != 6 {
+        return None;
+    }
+    Some([
+        u8::from_str_radix(&hex[0..2], 16).ok()?,
+        u8::from_str_radix(&hex[2..4], 16).ok()?,
+        u8::from_str_radix(&hex[4..6], 16).ok()?,
+    ])
+}
+
+fn parse_palette_key(key: &str) -> Option<usize> {
+    let suffix = key.strip_prefix("color")?;
+    let index = suffix.parse::<usize>().ok()?;
+    (index < 16).then_some(index)
 }
 
 fn parse_cursor_style(value: &str) -> Option<CursorStyle> {

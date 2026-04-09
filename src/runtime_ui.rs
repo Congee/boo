@@ -135,6 +135,10 @@ impl BooApp {
         (base * self.background_opacity.max(0.3)).clamp(0.2, 0.98)
     }
 
+    fn theme_color(color: crate::config::RgbColor, alpha: f32) -> Color {
+        Color::from_rgba8(color[0], color[1], color[2], alpha.clamp(0.0, 1.0))
+    }
+
     #[allow(dead_code)]
     pub(crate) fn window_style(&self) -> iced::theme::Style {
         iced::theme::Style {
@@ -233,6 +237,17 @@ impl BooApp {
                 font_size: self.terminal_font_size,
                 background_opacity: self.background_opacity,
                 background_opacity_cells: self.background_opacity_cells,
+                terminal_foreground: self.terminal_foreground,
+                terminal_background: self.terminal_background,
+                cursor_color: self.cursor_color,
+                selection_background: self.selection_background,
+                selection_foreground: self.selection_foreground,
+                cursor_text_color: self.cursor_text_color,
+                url_color: self.url_color,
+                active_tab_foreground: self.active_tab_foreground,
+                active_tab_background: self.active_tab_background,
+                inactive_tab_foreground: self.inactive_tab_foreground,
+                inactive_tab_background: self.inactive_tab_background,
                 cursor_style: self.cursor_style,
                 cursor_blink: self.cursor_blink,
                 cursor_blink_interval_ns: self.cursor_blink_interval.as_nanos() as u64,
@@ -358,7 +373,9 @@ impl BooApp {
                     self.background_opacity_cells,
                     cursor_blink_visible,
                     selection_rects,
-                    Color::from_rgba(0.65, 0.72, 0.95, 0.35),
+                    Self::theme_color(self.selection_background, 0.35),
+                    Some(Self::theme_color(self.selection_foreground, 1.0)),
+                    Some(Self::theme_color(self.cursor_text_color, 1.0)),
                     (!self.preedit_text.is_empty()).then(|| self.preedit_text.clone()),
                 );
                 main_col = main_col.push(
@@ -446,14 +463,44 @@ impl BooApp {
                 .padding([2, 6]),
             );
         } else {
-            let (status_left, status_right) = self.build_status_zones();
+            let spinner_frame = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| (duration.as_millis() / 125) as usize)
+                .unwrap_or(0);
+            let tabs = self.server.tabs.tab_info_with_spinner(spinner_frame);
+            let status_right = self.build_status_right();
+            let mut tabs_row = row![].spacing(4);
+            for tab in &tabs {
+                let display_idx = tab.index + 1;
+                let marker = if tab.active { "*" } else { "" };
+                let label = if tab.title.is_empty() {
+                    format!("[{display_idx}{marker}]")
+                } else {
+                    format!("[{display_idx}:{}{marker}]", tab.title)
+                };
+                let fg = if tab.active {
+                    Self::theme_color(self.active_tab_foreground, 1.0)
+                } else {
+                    Self::theme_color(self.inactive_tab_foreground, 1.0)
+                };
+                let bg = if tab.active {
+                    Self::theme_color(self.active_tab_background, 0.94)
+                } else {
+                    Self::theme_color(self.inactive_tab_background, 0.88)
+                };
+                tabs_row = tabs_row.push(
+                    container(text(label).font(ui_font).size(13).color(fg))
+                        .padding([2, 6])
+                        .style(move |_: &Theme| container::Style {
+                            background: Some(iced::Background::Color(bg)),
+                            ..Default::default()
+                        }),
+                );
+            }
             main_col = main_col.push(
                 container(
                     row![
-                        text(status_left)
-                            .font(ui_font)
-                            .size(13)
-                            .color(Color::from_rgb(0.8, 0.8, 0.8)),
+                        tabs_row,
                         iced::widget::Space::new().width(Length::Fill),
                         text(status_right)
                             .font(ui_font)
@@ -756,24 +803,7 @@ impl BooApp {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn build_status_zones(&self) -> (String, String) {
-        let spinner_frame = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| (duration.as_millis() / 125) as usize)
-            .unwrap_or(0);
-        let tabs = self.server.tabs.tab_info_with_spinner(spinner_frame);
-        let mut parts = Vec::new();
-        for tab in &tabs {
-            let display_idx = tab.index + 1;
-            let marker = if tab.active { "*" } else { "" };
-            if tab.title.is_empty() {
-                parts.push(format!("[{display_idx}{marker}]"));
-            } else {
-                parts.push(format!("[{display_idx}:{}{marker}]", tab.title));
-            }
-        }
-        let left = parts.join(" ");
-
+    pub(crate) fn build_status_right(&self) -> String {
         let mut right_parts = Vec::new();
         let active_surfaces = self.server.tabs.active_tree().map(|t| t.len()).unwrap_or(0);
         if active_surfaces > 1 {
@@ -811,9 +841,7 @@ impl BooApp {
             };
             right_parts.push(display);
         }
-        let right = right_parts.join("  ");
-
-        (left, right)
+        right_parts.join("  ")
     }
 
     #[allow(dead_code)]

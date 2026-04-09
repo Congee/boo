@@ -110,6 +110,17 @@ pub struct ClientApp {
     font_size: f32,
     background_opacity: f32,
     background_opacity_cells: bool,
+    terminal_foreground: crate::config::RgbColor,
+    terminal_background: crate::config::RgbColor,
+    cursor_color: crate::config::RgbColor,
+    selection_background: crate::config::RgbColor,
+    selection_foreground: crate::config::RgbColor,
+    cursor_text_color: crate::config::RgbColor,
+    url_color: crate::config::RgbColor,
+    active_tab_foreground: crate::config::RgbColor,
+    active_tab_background: crate::config::RgbColor,
+    inactive_tab_foreground: crate::config::RgbColor,
+    inactive_tab_background: crate::config::RgbColor,
     cursor_blink_interval: Duration,
     app_focused: bool,
     cursor_blink_epoch: Instant,
@@ -141,6 +152,10 @@ impl ClientApp {
         self.stream_tx.is_some() && matches!(self.mode, ClientMode::Attached)
     }
 
+    fn theme_color(color: crate::config::RgbColor, alpha: f32) -> Color {
+        Color::from_rgba8(color[0], color[1], color[2], alpha.clamp(0.0, 1.0))
+    }
+
     pub fn new(socket_path: String) -> (Self, Task<Message>) {
         let client = control::Client::connect(socket_path.clone());
         let snapshot = client.get_ui_snapshot().ok();
@@ -159,6 +174,50 @@ impl ClientApp {
             .as_ref()
             .map(|snapshot| Duration::from_nanos(snapshot.appearance.cursor_blink_interval_ns))
             .unwrap_or(DEFAULT_CURSOR_BLINK_INTERVAL);
+        let terminal_foreground = snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.appearance.terminal_foreground)
+            .unwrap_or(crate::DEFAULT_TERMINAL_FOREGROUND);
+        let terminal_background = snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.appearance.terminal_background)
+            .unwrap_or(crate::DEFAULT_TERMINAL_BACKGROUND);
+        let cursor_color = snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.appearance.cursor_color)
+            .unwrap_or(crate::DEFAULT_CURSOR_COLOR);
+        let selection_background = snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.appearance.selection_background)
+            .unwrap_or(crate::DEFAULT_SELECTION_BACKGROUND);
+        let selection_foreground = snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.appearance.selection_foreground)
+            .unwrap_or(crate::DEFAULT_SELECTION_FOREGROUND);
+        let cursor_text_color = snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.appearance.cursor_text_color)
+            .unwrap_or(crate::DEFAULT_CURSOR_TEXT_COLOR);
+        let url_color = snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.appearance.url_color)
+            .unwrap_or(crate::DEFAULT_URL_COLOR);
+        let active_tab_foreground = snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.appearance.active_tab_foreground)
+            .unwrap_or(crate::DEFAULT_ACTIVE_TAB_FOREGROUND);
+        let active_tab_background = snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.appearance.active_tab_background)
+            .unwrap_or(crate::DEFAULT_ACTIVE_TAB_BACKGROUND);
+        let inactive_tab_foreground = snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.appearance.inactive_tab_foreground)
+            .unwrap_or(crate::DEFAULT_INACTIVE_TAB_FOREGROUND);
+        let inactive_tab_background = snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.appearance.inactive_tab_background)
+            .unwrap_or(crate::DEFAULT_INACTIVE_TAB_BACKGROUND);
         let (cell_width, cell_height) = terminal_metrics(font_size);
         let ui_state = snapshot
             .as_ref()
@@ -185,6 +244,17 @@ impl ClientApp {
                 font_size,
                 background_opacity,
                 background_opacity_cells,
+                terminal_foreground,
+                terminal_background,
+                cursor_color,
+                selection_background,
+                selection_foreground,
+                cursor_text_color,
+                url_color,
+                active_tab_foreground,
+                active_tab_background,
+                inactive_tab_foreground,
+                inactive_tab_background,
                 cursor_blink_interval,
                 app_focused: true,
                 cursor_blink_epoch: Instant::now(),
@@ -279,14 +349,39 @@ impl ClientApp {
             );
         }
 
-        let (left, right) = build_status(&self.ui_state);
+        let right = build_status_right(&self.ui_state);
+        let mut tabs_row = row![].spacing(4);
+        for tab in &self.ui_state.tabs {
+            let display_idx = tab.index + 1;
+            let marker = if tab.active { "*" } else { "" };
+            let label = if tab.title.is_empty() {
+                format!("[{display_idx}{marker}]")
+            } else {
+                format!("[{display_idx}:{}{marker}]", tab.title)
+            };
+            let fg = if tab.active {
+                Self::theme_color(self.active_tab_foreground, 1.0)
+            } else {
+                Self::theme_color(self.inactive_tab_foreground, 1.0)
+            };
+            let bg = if tab.active {
+                Self::theme_color(self.active_tab_background, 0.94)
+            } else {
+                Self::theme_color(self.inactive_tab_background, 0.88)
+            };
+            tabs_row = tabs_row.push(
+                container(text(label).font(Font::MONOSPACE).size(13).color(fg))
+                    .padding([2, 6])
+                    .style(move |_: &Theme| container::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        ..Default::default()
+                    }),
+            );
+        }
         main_col = main_col.push(
             container(
                 row![
-                    text(left)
-                        .font(Font::MONOSPACE)
-                        .size(13)
-                        .color(Color::from_rgb(0.8, 0.8, 0.8)),
+                    tabs_row,
                     iced::widget::Space::new().width(Length::Fill),
                     text(right)
                         .font(Font::MONOSPACE)
@@ -340,7 +435,9 @@ impl ClientApp {
                     || !self.app_focused
                     || cursor_blink_visible(self.cursor_blink_epoch, self.cursor_blink_interval),
                 Vec::new(),
-                Color::from_rgba(0.65, 0.72, 0.95, 0.35),
+                Self::theme_color(self.selection_background, 0.35),
+                Some(Self::theme_color(self.selection_foreground, 1.0)),
+                Some(Self::theme_color(self.cursor_text_color, 1.0)),
                 None,
             )
             .new_with_viewport(vt_terminal_canvas::TerminalViewport {
@@ -421,6 +518,17 @@ impl ClientApp {
                 self.font_size = snapshot.appearance.font_size.max(8.0);
                 self.background_opacity = snapshot.appearance.background_opacity;
                 self.background_opacity_cells = snapshot.appearance.background_opacity_cells;
+                self.terminal_foreground = snapshot.appearance.terminal_foreground;
+                self.terminal_background = snapshot.appearance.terminal_background;
+                self.cursor_color = snapshot.appearance.cursor_color;
+                self.selection_background = snapshot.appearance.selection_background;
+                self.selection_foreground = snapshot.appearance.selection_foreground;
+                self.cursor_text_color = snapshot.appearance.cursor_text_color;
+                self.url_color = snapshot.appearance.url_color;
+                self.active_tab_foreground = snapshot.appearance.active_tab_foreground;
+                self.active_tab_background = snapshot.appearance.active_tab_background;
+                self.inactive_tab_foreground = snapshot.appearance.inactive_tab_foreground;
+                self.inactive_tab_background = snapshot.appearance.inactive_tab_background;
                 self.cursor_blink_interval =
                     Duration::from_nanos(snapshot.appearance.cursor_blink_interval_ns);
                 self.cursor_blink_epoch = Instant::now();
@@ -675,7 +783,13 @@ impl ClientApp {
                 if self.focused_pane_id != 0 {
                     self.pane_snapshots.insert(
                         self.focused_pane_id,
-                        Arc::new(remote_full_state_to_vt_snapshot(&state, revision_seed)),
+                        Arc::new(remote_full_state_to_vt_snapshot(
+                            &state,
+                            revision_seed,
+                            self.terminal_foreground,
+                            self.terminal_background,
+                            self.cursor_color,
+                        )),
                     );
                 }
                 self.acknowledge_input_latency("stream_full_state", ack_input_seq);
@@ -1081,12 +1195,19 @@ fn log_client_latency(stage: &str, input_seq: u64, started_at: Instant) {
 fn remote_full_state_to_vt_snapshot(
     state: &remote::RemoteFullState,
     revision_seed: u64,
+    terminal_foreground: crate::config::RgbColor,
+    terminal_background: crate::config::RgbColor,
+    cursor_color: crate::config::RgbColor,
 ) -> vt_backend_core::TerminalSnapshot {
     let cols = state.cols as usize;
     let rows_data = state
         .cells
         .chunks(cols.max(1))
-        .map(|row| row.iter().map(remote_cell_to_snapshot).collect())
+        .map(|row| {
+            row.iter()
+                .map(|cell| remote_cell_to_snapshot(cell, terminal_foreground, terminal_background))
+                .collect()
+        })
         .collect();
     let row_revisions = (0..state.rows as usize)
         .map(|index| revision_seed.wrapping_add(index as u64))
@@ -1108,15 +1229,19 @@ fn remote_full_state_to_vt_snapshot(
         scrollbar: Default::default(),
         colors: vt::GhosttyRenderStateColors {
             foreground: vt::GhosttyColorRgb {
-                r: 0xf0,
-                g: 0xf0,
-                b: 0xf0,
+                r: terminal_foreground[0],
+                g: terminal_foreground[1],
+                b: terminal_foreground[2],
             },
-            background: vt::GhosttyColorRgb { r: 0, g: 0, b: 0 },
+            background: vt::GhosttyColorRgb {
+                r: terminal_background[0],
+                g: terminal_background[1],
+                b: terminal_background[2],
+            },
             cursor: vt::GhosttyColorRgb {
-                r: 0xff,
-                g: 0xff,
-                b: 0xff,
+                r: cursor_color[0],
+                g: cursor_color[1],
+                b: cursor_color[2],
             },
             cursor_has_value: true,
             ..Default::default()
@@ -1126,6 +1251,9 @@ fn remote_full_state_to_vt_snapshot(
 
 fn ui_terminal_to_vt_snapshot(
     snapshot: &control::UiTerminalSnapshot,
+    terminal_foreground: crate::config::RgbColor,
+    terminal_background: crate::config::RgbColor,
+    cursor_color: crate::config::RgbColor,
 ) -> vt_backend_core::TerminalSnapshot {
     vt_backend_core::TerminalSnapshot {
         cols: snapshot.cols,
@@ -1169,15 +1297,19 @@ fn ui_terminal_to_vt_snapshot(
         scrollbar: Default::default(),
         colors: vt::GhosttyRenderStateColors {
             foreground: vt::GhosttyColorRgb {
-                r: 0xf0,
-                g: 0xf0,
-                b: 0xf0,
+                r: terminal_foreground[0],
+                g: terminal_foreground[1],
+                b: terminal_foreground[2],
             },
-            background: vt::GhosttyColorRgb { r: 0, g: 0, b: 0 },
+            background: vt::GhosttyColorRgb {
+                r: terminal_background[0],
+                g: terminal_background[1],
+                b: terminal_background[2],
+            },
             cursor: vt::GhosttyColorRgb {
-                r: 0xff,
-                g: 0xff,
-                b: 0xff,
+                r: cursor_color[0],
+                g: cursor_color[1],
+                b: cursor_color[2],
             },
             cursor_has_value: true,
             ..Default::default()
@@ -1194,7 +1326,12 @@ fn pane_snapshot_map_from_ui_snapshot(
         .map(|pane| {
             (
                 pane.pane_id,
-                Arc::new(ui_terminal_to_vt_snapshot(&pane.terminal)),
+                Arc::new(ui_terminal_to_vt_snapshot(
+                    &pane.terminal,
+                    snapshot.appearance.terminal_foreground,
+                    snapshot.appearance.terminal_background,
+                    snapshot.appearance.cursor_color,
+                )),
             )
         })
         .collect()
@@ -1994,7 +2131,7 @@ fn apply_remote_delta_snapshot(
             .enumerate()
             .take(cols.saturating_sub(start_col))
         {
-            target_row[start_col + offset] = remote_cell_to_snapshot(cell);
+            target_row[start_col + offset] = remote_cell_to_snapshot_default(cell);
             applied_cells += 1;
         }
         applied_rows += 1;
@@ -2043,13 +2180,21 @@ fn apply_snapshot_scroll(snapshot: &mut vt_backend_core::TerminalSnapshot, scrol
     }
 }
 
-fn remote_cell_to_snapshot(cell: &remote::RemoteCell) -> vt_backend_core::CellSnapshot {
+fn remote_cell_to_snapshot(
+    cell: &remote::RemoteCell,
+    default_foreground: crate::config::RgbColor,
+    default_background: crate::config::RgbColor,
+) -> vt_backend_core::CellSnapshot {
     let default_fg = vt::GhosttyColorRgb {
-        r: 0xf0,
-        g: 0xf0,
-        b: 0xf0,
+        r: default_foreground[0],
+        g: default_foreground[1],
+        b: default_foreground[2],
     };
-    let default_bg = vt::GhosttyColorRgb { r: 0, g: 0, b: 0 };
+    let default_bg = vt::GhosttyColorRgb {
+        r: default_background[0],
+        g: default_background[1],
+        b: default_background[2],
+    };
     vt_backend_core::CellSnapshot {
         text: if cell.codepoint == 0 {
             String::new()
@@ -2083,22 +2228,15 @@ fn remote_cell_to_snapshot(cell: &remote::RemoteCell) -> vt_backend_core::CellSn
     }
 }
 
-fn build_status(ui_state: &ClientUiState) -> (String, String) {
-    let left = ui_state
-        .tabs
-        .iter()
-        .map(|tab| {
-            let display_idx = tab.index + 1;
-            let marker = if tab.active { "*" } else { "" };
-            if tab.title.is_empty() {
-                format!("[{display_idx}{marker}]")
-            } else {
-                format!("[{display_idx}:{}{marker}]", tab.title)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
+fn remote_cell_to_snapshot_default(cell: &remote::RemoteCell) -> vt_backend_core::CellSnapshot {
+    remote_cell_to_snapshot(
+        cell,
+        crate::DEFAULT_TERMINAL_FOREGROUND,
+        crate::DEFAULT_TERMINAL_BACKGROUND,
+    )
+}
 
+fn build_status_right(ui_state: &ClientUiState) -> String {
     let mut right_parts = Vec::new();
     if ui_state.pane_count > 1 {
         right_parts.push(format!("{} panes", ui_state.pane_count));
@@ -2106,7 +2244,7 @@ fn build_status(ui_state: &ClientUiState) -> (String, String) {
     if !ui_state.pwd.is_empty() {
         right_parts.push(ui_state.pwd.clone());
     }
-    (left, right_parts.join("  "))
+    right_parts.join("  ")
 }
 
 #[cfg(test)]
@@ -2122,7 +2260,7 @@ mod tests {
             style_flags: 0,
             wide: false,
         };
-        let snapshot = remote_cell_to_snapshot(&cell);
+        let snapshot = remote_cell_to_snapshot_default(&cell);
         assert_eq!(snapshot.fg.r, 0xf0);
         assert_eq!(snapshot.fg.g, 0xf0);
         assert_eq!(snapshot.fg.b, 0xf0);
@@ -2140,7 +2278,7 @@ mod tests {
             style_flags: 0x60,
             wide: false,
         };
-        let snapshot = remote_cell_to_snapshot(&cell);
+        let snapshot = remote_cell_to_snapshot_default(&cell);
         assert_eq!((snapshot.fg.r, snapshot.fg.g, snapshot.fg.b), (1, 2, 3));
         assert_eq!((snapshot.bg.r, snapshot.bg.g, snapshot.bg.b), (4, 5, 6));
     }
@@ -2461,7 +2599,7 @@ mod tests {
 
     #[test]
     fn remote_blank_cell_stays_empty() {
-        let snapshot = remote_cell_to_snapshot(&remote::RemoteCell {
+        let snapshot = remote_cell_to_snapshot_default(&remote::RemoteCell {
             codepoint: 0,
             fg: [0, 0, 0],
             bg: [0, 0, 0],

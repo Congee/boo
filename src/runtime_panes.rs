@@ -1,6 +1,32 @@
 use super::*;
 
 impl BooApp {
+    fn append_osc_color(seq: &mut Vec<u8>, code: &str, color: crate::config::RgbColor) {
+        let value = format!("\x1b]{code};#{:02X}{:02X}{:02X}\x07", color[0], color[1], color[2]);
+        seq.extend_from_slice(value.as_bytes());
+    }
+
+    fn append_palette_osc(seq: &mut Vec<u8>, index: usize, color: crate::config::RgbColor) {
+        let value = format!(
+            "\x1b]4;{index};#{:02X}{:02X}{:02X}\x07",
+            color[0], color[1], color[2]
+        );
+        seq.extend_from_slice(value.as_bytes());
+    }
+
+    fn default_theme_vt_sequence(&self) -> Vec<u8> {
+        let mut seq = Vec::new();
+        for (index, color) in self.terminal_palette.iter().enumerate() {
+            if let Some(color) = color {
+                Self::append_palette_osc(&mut seq, index, *color);
+            }
+        }
+        Self::append_osc_color(&mut seq, "10", self.terminal_foreground);
+        Self::append_osc_color(&mut seq, "11", self.terminal_background);
+        Self::append_osc_color(&mut seq, "12", self.cursor_color);
+        seq
+    }
+
     fn default_cursor_vt_sequence(&self) -> Option<Vec<u8>> {
         match self.cursor_style {
             Some(style) => {
@@ -36,9 +62,13 @@ impl BooApp {
     }
 
     fn apply_cursor_defaults_to_pane(&mut self, pane: PaneHandle) {
-        let Some(bytes) = self.default_cursor_vt_sequence() else {
+        let mut bytes = self.default_theme_vt_sequence();
+        if let Some(cursor_bytes) = self.default_cursor_vt_sequence() {
+            bytes.extend_from_slice(&cursor_bytes);
+        }
+        if bytes.is_empty() {
             return;
-        };
+        }
         self.backend.write_vt_bytes(pane, &bytes);
     }
 

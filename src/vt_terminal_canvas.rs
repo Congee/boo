@@ -27,6 +27,8 @@ pub struct TerminalCanvas {
     pub cursor_blink_visible: bool,
     pub selection_rects: Vec<TerminalSelectionRect>,
     pub selection_color: Color,
+    pub selection_foreground: Option<Color>,
+    pub cursor_text_color: Option<Color>,
     pub preedit_text: Option<String>,
     pub viewport: Option<TerminalViewport>,
 }
@@ -61,6 +63,8 @@ impl TerminalCanvas {
         cursor_blink_visible: bool,
         selection_rects: Vec<TerminalSelectionRect>,
         selection_color: Color,
+        selection_foreground: Option<Color>,
+        cursor_text_color: Option<Color>,
         preedit_text: Option<String>,
     ) -> Self {
         Self {
@@ -76,6 +80,8 @@ impl TerminalCanvas {
             cursor_blink_visible,
             selection_rects,
             selection_color,
+            selection_foreground,
+            cursor_text_color,
             preedit_text,
             viewport: None,
         }
@@ -167,6 +173,7 @@ impl TerminalCanvas {
                 self.selection_color,
             );
         }
+        self.draw_selection_foreground(frame);
 
         if self.snapshot.cursor.visible
             && self.cursor_blink_visible
@@ -190,32 +197,9 @@ impl TerminalCanvas {
                     frame.fill_rectangle(
                         Point::new(x, y),
                         Size::new(self.cell_width, self.cell_height),
-                        Color {
-                            a: 0.18,
-                            ..cursor_bg
-                        },
-                    );
-                    let thickness = 1.5;
-                    frame.fill_rectangle(
-                        Point::new(x, y),
-                        Size::new(self.cell_width, thickness),
                         cursor_bg,
                     );
-                    frame.fill_rectangle(
-                        Point::new(x, y + self.cell_height - thickness),
-                        Size::new(self.cell_width, thickness),
-                        cursor_bg,
-                    );
-                    frame.fill_rectangle(
-                        Point::new(x, y),
-                        Size::new(thickness, self.cell_height),
-                        cursor_bg,
-                    );
-                    frame.fill_rectangle(
-                        Point::new(x + self.cell_width - thickness, y),
-                        Size::new(thickness, self.cell_height),
-                        cursor_bg,
-                    );
+                    self.draw_cursor_text(frame, self.snapshot.cursor.y as usize, self.snapshot.cursor.x as usize);
                 }
             }
         }
@@ -254,6 +238,78 @@ impl TerminalCanvas {
                 underline,
             );
         }
+    }
+
+    fn draw_selection_foreground(&self, frame: &mut Frame<Renderer>) {
+        let Some(selection_foreground) = self.selection_foreground else {
+            return;
+        };
+
+        for (row_index, row) in self.snapshot.rows_data.iter().enumerate() {
+            for (col_index, cell) in row.iter().enumerate() {
+                if self.cell_is_selected(row_index, col_index, cell.display_width) {
+                    self.draw_cell_text(frame, row_index, col_index, cell, selection_foreground);
+                }
+            }
+        }
+    }
+
+    fn draw_cursor_text(&self, frame: &mut Frame<Renderer>, row_index: usize, col_index: usize) {
+        let Some(color) = self.cursor_text_color else {
+            return;
+        };
+        let Some(row) = self.snapshot.rows_data.get(row_index) else {
+            return;
+        };
+        let Some(cell) = row.get(col_index) else {
+            return;
+        };
+        self.draw_cell_text(frame, row_index, col_index, cell, color);
+    }
+
+    fn draw_cell_text(
+        &self,
+        frame: &mut Frame<Renderer>,
+        row_index: usize,
+        col_index: usize,
+        cell: &vt_backend_core::CellSnapshot,
+        fg_override: Color,
+    ) {
+        if cell.text.is_empty() || cell.text == "\0" {
+            return;
+        }
+
+        let origin = self.viewport_origin();
+        let x = origin.x + PADDING_X + col_index as f32 * self.cell_width;
+        let y = origin.y + PADDING_Y + row_index as f32 * self.cell_height;
+        let draw_width = usize::from(cell.display_width.max(1)) as f32 * self.cell_width;
+        frame.fill_text(canvas::Text {
+            content: cell.text.clone(),
+            position: Point::new(x, y),
+            color: fg_override,
+            size: Pixels(self.font_size),
+            line_height: iced::widget::text::LineHeight::Absolute(Pixels(self.cell_height)),
+            font: font_for_cell(cell, self.font_family),
+            align_x: iced::widget::text::Alignment::Left,
+            align_y: alignment::Vertical::Top,
+            shaping: shaping_for_terminal_text(&cell.text),
+            max_width: draw_width,
+        });
+    }
+
+    fn cell_is_selected(&self, row_index: usize, col_index: usize, display_width: u8) -> bool {
+        let cell_x = col_index as f32 * self.cell_width;
+        let cell_y = row_index as f32 * self.cell_height;
+        let cell_width = usize::from(display_width.max(1)) as f32 * self.cell_width;
+        let cell_rect = Rectangle {
+            x: cell_x,
+            y: cell_y,
+            width: cell_width,
+            height: self.cell_height,
+        };
+        self.selection_rects
+            .iter()
+            .any(|selection| rects_intersect(cell_rect, selection))
     }
 }
 
@@ -612,6 +668,32 @@ fn color_from_rgb(color: crate::vt::GhosttyColorRgb, alpha: f32) -> Color {
     Color::from_rgba8(color.r, color.g, color.b, alpha.clamp(0.0, 1.0))
 }
 
+fn rects_intersect(cell: Rectangle, selection: &TerminalSelectionRect) -> bool {
+    let selection_rect = Rectangle {
+        x: selection.x,
+        y: selection.y,
+        width: selection.width,
+        height: selection.height,
+    };
+    cell.x < selection_rect.x + selection_rect.width
+        && selection_rect.x < cell.x + cell.width
+        && cell.y < selection_rect.y + selection_rect.height
+        && selection_rect.y < cell.y + cell.height
+}
+
+fn hash_optional_color(
+    color: Option<Color>,
+    hasher: &mut std::collections::hash_map::DefaultHasher,
+) {
+    color.is_some().hash(hasher);
+    if let Some(color) = color {
+        color.r.to_bits().hash(hasher);
+        color.g.to_bits().hash(hasher);
+        color.b.to_bits().hash(hasher);
+        color.a.to_bits().hash(hasher);
+    }
+}
+
 fn render_debug_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("BOO_RENDER_DEBUG").is_some())
@@ -718,6 +800,8 @@ impl TerminalCanvas {
         self.selection_color.g.to_bits().hash(&mut hasher);
         self.selection_color.b.to_bits().hash(&mut hasher);
         self.selection_color.a.to_bits().hash(&mut hasher);
+        hash_optional_color(self.selection_foreground, &mut hasher);
+        hash_optional_color(self.cursor_text_color, &mut hasher);
         self.preedit_text.hash(&mut hasher);
         self.hash_viewport(&mut hasher);
         for rect in &self.selection_rects {
@@ -785,6 +869,8 @@ mod tests {
             true,
             Vec::new(),
             Color::from_rgba(0.65, 0.72, 0.95, 0.35),
+            Some(Color::WHITE),
+            Some(Color::BLACK),
             None,
         )
     }
@@ -831,6 +917,22 @@ mod tests {
     }
 
     #[test]
+    fn overlay_fingerprint_changes_when_selection_foreground_changes() {
+        let before = sample_canvas(1).overlay_fingerprint();
+        let mut after = sample_canvas(1);
+        after.selection_foreground = Some(Color::BLACK);
+        assert_ne!(before, after.overlay_fingerprint());
+    }
+
+    #[test]
+    fn overlay_fingerprint_changes_when_cursor_text_color_changes() {
+        let before = sample_canvas(1).overlay_fingerprint();
+        let mut after = sample_canvas(1);
+        after.cursor_text_color = Some(Color::WHITE);
+        assert_ne!(before, after.overlay_fingerprint());
+    }
+
+    #[test]
     fn row_fingerprint_ignores_global_content_revision() {
         let mut before = sample_canvas(1);
         before.snapshot = Arc::new(vt_backend_core::TerminalSnapshot {
@@ -861,6 +963,8 @@ mod tests {
             before.cursor_blink_visible,
             before.selection_rects.clone(),
             before.selection_color,
+            before.selection_foreground,
+            before.cursor_text_color,
             before.preedit_text.clone(),
         );
         assert_eq!(before.row_fingerprint(0), after.row_fingerprint(0));

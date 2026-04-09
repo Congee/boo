@@ -67,7 +67,9 @@ chrome, layout, and VT rendering path.
 - Single config file: `~/.config/boo/config.boo` (respects `XDG_CONFIG_HOME`)
 - Key=value format with `#` comments
 - Boo-specific keys: `prefix-key`, `control-socket`, `remote-port`, `remote-auth-key`, `keybind`
-- Shared terminal/UI keys: `font-family`, `font-size`, `background-opacity`, `background-opacity-cells`
+- Shared terminal/UI keys: `font-family`, `font-size`, `background-opacity`, `background-opacity-cells`, `foreground`, `background`, `color0..color15`, `cursor`, `selection_background`, `selection_foreground`, `cursor_text_color`, `url_color`, `active_tab_foreground`, `active_tab_background`, `inactive_tab_foreground`, `inactive_tab_background`
+- `selection_foreground` and `cursor_text_color` are rendered directly; `url_color` is accepted in config and propagated through appearance state, with hyperlink-specific rendering to follow when per-cell URL metadata is exposed
+- Config files can `include` additional theme/config snippets, with later entries overriding earlier ones
 - Runtime config reload via `reload_config` action
 
 ### Scrollback & Scrolling
@@ -252,7 +254,7 @@ nix develop
   - [ ] implement configurable tab bar style/separator/alignment/title template
   - [ ] implement `window-decoration` config instead of ignoring it
   - [ ] decide how to map Kitty’s `close_on_child_death` / `macos_quit_when_last_window_closed` semantics onto Boo’s client/server model
-  - [ ] audit Kitty theme/include settings and decide which visual settings Boo should support directly
+  - [x] support Ghostty-style theme includes plus direct terminal/UI color keys (`foreground`, `background`, `color0..color15`, cursor, selection, active/inactive tab colors)
 
 ### tmux Parity Backlog
 - [ ] add remain-on-exit / respawn-pane style process lifecycle controls

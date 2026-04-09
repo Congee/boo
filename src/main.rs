@@ -88,12 +88,35 @@ const DEFAULT_TERMINAL_FONT_SIZE: f32 = 14.0;
 const DEFAULT_BACKGROUND_OPACITY: f32 = 1.0;
 const HEADLESS_WIDTH: f32 = 1024.0;
 const HEADLESS_HEIGHT: f32 = 768.0;
+const DEFAULT_TERMINAL_FOREGROUND: config::RgbColor = [0xF0, 0xF0, 0xF0];
+const DEFAULT_TERMINAL_BACKGROUND: config::RgbColor = [0x00, 0x00, 0x00];
+const DEFAULT_CURSOR_COLOR: config::RgbColor = [0xFF, 0xFF, 0xFF];
+const DEFAULT_SELECTION_BACKGROUND: config::RgbColor = [0xA6, 0xB8, 0xF2];
+const DEFAULT_SELECTION_FOREGROUND: config::RgbColor = DEFAULT_TERMINAL_BACKGROUND;
+const DEFAULT_CURSOR_TEXT_COLOR: config::RgbColor = DEFAULT_TERMINAL_BACKGROUND;
+const DEFAULT_URL_COLOR: config::RgbColor = DEFAULT_TERMINAL_FOREGROUND;
+const DEFAULT_ACTIVE_TAB_FOREGROUND: config::RgbColor = [0xEB, 0xEB, 0xEB];
+const DEFAULT_ACTIVE_TAB_BACKGROUND: config::RgbColor = [0x3D, 0x52, 0x9E];
+const DEFAULT_INACTIVE_TAB_FOREGROUND: config::RgbColor = [0xB8, 0xB8, 0xB8];
+const DEFAULT_INACTIVE_TAB_BACKGROUND: config::RgbColor = [0x1A, 0x1A, 0x1A];
 #[derive(Debug)]
 struct ResolvedAppearance {
     font_family: Option<&'static str>,
     font_size: f32,
     background_opacity: f32,
     background_opacity_cells: bool,
+    terminal_foreground: config::RgbColor,
+    terminal_background: config::RgbColor,
+    terminal_palette: [Option<config::RgbColor>; 16],
+    cursor_color: config::RgbColor,
+    selection_background: config::RgbColor,
+    selection_foreground: config::RgbColor,
+    cursor_text_color: config::RgbColor,
+    url_color: config::RgbColor,
+    active_tab_foreground: config::RgbColor,
+    active_tab_background: config::RgbColor,
+    inactive_tab_foreground: config::RgbColor,
+    inactive_tab_background: config::RgbColor,
     cursor_style: Option<i32>,
     cursor_blink: bool,
     cursor_blink_interval: std::time::Duration,
@@ -235,6 +258,18 @@ struct BooApp {
     terminal_font_size: f32,
     background_opacity: f32,
     background_opacity_cells: bool,
+    terminal_foreground: config::RgbColor,
+    terminal_background: config::RgbColor,
+    terminal_palette: [Option<config::RgbColor>; 16],
+    cursor_color: config::RgbColor,
+    selection_background: config::RgbColor,
+    selection_foreground: config::RgbColor,
+    cursor_text_color: config::RgbColor,
+    url_color: config::RgbColor,
+    active_tab_foreground: config::RgbColor,
+    active_tab_background: config::RgbColor,
+    inactive_tab_foreground: config::RgbColor,
+    inactive_tab_background: config::RgbColor,
     cursor_style: Option<i32>,
     cursor_blink: bool,
     cursor_blink_interval: std::time::Duration,

@@ -53,6 +53,32 @@ impl BooApp {
                 .unwrap_or(DEFAULT_BACKGROUND_OPACITY)
                 .clamp(0.0, 1.0),
             background_opacity_cells: config.background_opacity_cells,
+            terminal_foreground: config.foreground.unwrap_or(DEFAULT_TERMINAL_FOREGROUND),
+            terminal_background: config.background.unwrap_or(DEFAULT_TERMINAL_BACKGROUND),
+            terminal_palette: config.palette,
+            cursor_color: config.cursor_color.unwrap_or(DEFAULT_CURSOR_COLOR),
+            selection_background: config
+                .selection_background
+                .unwrap_or(DEFAULT_SELECTION_BACKGROUND),
+            selection_foreground: config
+                .selection_foreground
+                .unwrap_or(DEFAULT_SELECTION_FOREGROUND),
+            cursor_text_color: config
+                .cursor_text_color
+                .unwrap_or(DEFAULT_CURSOR_TEXT_COLOR),
+            url_color: config.url_color.unwrap_or(DEFAULT_URL_COLOR),
+            active_tab_foreground: config
+                .active_tab_foreground
+                .unwrap_or(DEFAULT_ACTIVE_TAB_FOREGROUND),
+            active_tab_background: config
+                .active_tab_background
+                .unwrap_or(DEFAULT_ACTIVE_TAB_BACKGROUND),
+            inactive_tab_foreground: config
+                .inactive_tab_foreground
+                .unwrap_or(DEFAULT_INACTIVE_TAB_FOREGROUND),
+            inactive_tab_background: config
+                .inactive_tab_background
+                .unwrap_or(DEFAULT_INACTIVE_TAB_BACKGROUND),
             cursor_style: config.cursor_style.map(config::CursorStyle::vt_visual_style),
             cursor_blink: config.cursor_blink,
             cursor_blink_interval: std::time::Duration::from_nanos(config.cursor_blink_interval_ns),
@@ -141,6 +167,18 @@ impl BooApp {
                     terminal_font_size: appearance.font_size,
                     background_opacity: appearance.background_opacity,
                     background_opacity_cells: appearance.background_opacity_cells,
+                    terminal_foreground: appearance.terminal_foreground,
+                    terminal_background: appearance.terminal_background,
+                    terminal_palette: appearance.terminal_palette,
+                    cursor_color: appearance.cursor_color,
+                    selection_background: appearance.selection_background,
+                    selection_foreground: appearance.selection_foreground,
+                    cursor_text_color: appearance.cursor_text_color,
+                    url_color: appearance.url_color,
+                    active_tab_foreground: appearance.active_tab_foreground,
+                    active_tab_background: appearance.active_tab_background,
+                    inactive_tab_foreground: appearance.inactive_tab_foreground,
+                    inactive_tab_background: appearance.inactive_tab_background,
                     cursor_style: appearance.cursor_style,
                     cursor_blink: appearance.cursor_blink,
                     cursor_blink_interval: appearance.cursor_blink_interval,
@@ -212,6 +250,18 @@ impl BooApp {
                     terminal_font_size: appearance.font_size,
                     background_opacity: appearance.background_opacity,
                     background_opacity_cells: appearance.background_opacity_cells,
+                    terminal_foreground: appearance.terminal_foreground,
+                    terminal_background: appearance.terminal_background,
+                    terminal_palette: appearance.terminal_palette,
+                    cursor_color: appearance.cursor_color,
+                    selection_background: appearance.selection_background,
+                    selection_foreground: appearance.selection_foreground,
+                    cursor_text_color: appearance.cursor_text_color,
+                    url_color: appearance.url_color,
+                    active_tab_foreground: appearance.active_tab_foreground,
+                    active_tab_background: appearance.active_tab_background,
+                    inactive_tab_foreground: appearance.inactive_tab_foreground,
+                    inactive_tab_background: appearance.inactive_tab_background,
                     cursor_style: appearance.cursor_style,
                     cursor_blink: appearance.cursor_blink,
                     cursor_blink_interval: appearance.cursor_blink_interval,
@@ -432,6 +482,18 @@ impl BooApp {
         self.terminal_font_size = appearance.font_size;
         self.background_opacity = appearance.background_opacity;
         self.background_opacity_cells = appearance.background_opacity_cells;
+        self.terminal_foreground = appearance.terminal_foreground;
+        self.terminal_background = appearance.terminal_background;
+        self.terminal_palette = appearance.terminal_palette;
+        self.cursor_color = appearance.cursor_color;
+        self.selection_background = appearance.selection_background;
+        self.selection_foreground = appearance.selection_foreground;
+        self.cursor_text_color = appearance.cursor_text_color;
+        self.url_color = appearance.url_color;
+        self.active_tab_foreground = appearance.active_tab_foreground;
+        self.active_tab_background = appearance.active_tab_background;
+        self.inactive_tab_foreground = appearance.inactive_tab_foreground;
+        self.inactive_tab_background = appearance.inactive_tab_background;
         self.cursor_style = appearance.cursor_style;
         self.cursor_blink = appearance.cursor_blink;
         self.cursor_blink_interval = appearance.cursor_blink_interval;
