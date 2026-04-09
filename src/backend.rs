@@ -144,6 +144,13 @@ pub trait TerminalBackend {
     fn write_input(&self, focused_pane: PaneHandle, bytes: &[u8]) -> std::io::Result<()>;
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn write_vt_bytes(&mut self, focused_pane: PaneHandle, bytes: &[u8]);
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn hyperlink_at(
+        &self,
+        focused_pane: PaneHandle,
+        row: u16,
+        col: u16,
+    ) -> Option<String>;
 }
 
 #[cfg(target_os = "macos")]
@@ -536,5 +543,10 @@ impl TerminalBackend for LinuxBackend {
         if let Some(pane) = self.pane(focused_pane) {
             pane.write_vt_bytes(bytes);
         }
+    }
+
+    fn hyperlink_at(&self, focused_pane: PaneHandle, row: u16, col: u16) -> Option<String> {
+        let pane = self.pane(focused_pane)?;
+        pane.hyperlink_at(row, col).ok().flatten()
     }
 }

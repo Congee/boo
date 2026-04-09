@@ -21,6 +21,8 @@ pub type GhosttyTerminal = ffi::GhosttyTerminal_ptr;
 pub type GhosttyRenderState = ffi::GhosttyRenderState_ptr;
 pub type GhosttyRenderStateRowIterator = ffi::GhosttyRenderStateRowIterator_ptr;
 pub type GhosttyRenderStateRowCells = ffi::GhosttyRenderStateRowCells_ptr;
+pub type GhosttyCell = ffi::GhosttyCell;
+pub type GhosttyFormatter = ffi::GhosttyFormatter_ptr;
 pub type GhosttyKeyEncoder = ffi::GhosttyKeyEncoder_ptr;
 pub type GhosttyKeyEvent = ffi::GhosttyKeyEvent_ptr;
 pub type GhosttyMouseEncoder = ffi::GhosttyMouseEncoder_ptr;
@@ -84,6 +86,8 @@ pub const GHOSTTY_RENDER_STATE_ROW_OPTION_DIRTY: i32 =
 
 pub const GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE: i32 =
     ffi::GhosttyRenderStateRowCellsData_GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE as i32;
+pub const GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW: i32 =
+    ffi::GhosttyRenderStateRowCellsData_GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW as i32;
 pub const GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN: i32 =
     ffi::GhosttyRenderStateRowCellsData_GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN as i32;
 pub const GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF: i32 =
@@ -92,6 +96,8 @@ pub const GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR: i32 =
     ffi::GhosttyRenderStateRowCellsData_GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR as i32;
 pub const GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR: i32 =
     ffi::GhosttyRenderStateRowCellsData_GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR as i32;
+pub const GHOSTTY_CELL_DATA_HAS_HYPERLINK: i32 =
+    ffi::GhosttyCellData_GHOSTTY_CELL_DATA_HAS_HYPERLINK as i32;
 
 pub const GHOSTTY_TERMINAL_OPT_USERDATA: i32 =
     ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_USERDATA as i32;
@@ -283,6 +289,67 @@ impl Terminal {
 impl Drop for Terminal {
     fn drop(&mut self) {
         unsafe { ffi::ghostty_terminal_free(self.raw) };
+    }
+}
+
+pub struct Formatter {
+    raw: GhosttyFormatter,
+}
+
+impl Formatter {
+    pub fn for_terminal_hyperlinks(terminal: &Terminal) -> Result<Self, Error> {
+        let mut raw = MaybeUninit::uninit();
+        let options = ffi::GhosttyFormatterTerminalOptions {
+            size: std::mem::size_of::<ffi::GhosttyFormatterTerminalOptions>(),
+            emit: ffi::GhosttyFormatterFormat_GHOSTTY_FORMATTER_FORMAT_VT,
+            unwrap: false,
+            trim: false,
+            extra: ffi::GhosttyFormatterTerminalExtra {
+                size: std::mem::size_of::<ffi::GhosttyFormatterTerminalExtra>(),
+                screen: ffi::GhosttyFormatterScreenExtra {
+                    size: std::mem::size_of::<ffi::GhosttyFormatterScreenExtra>(),
+                    hyperlink: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        };
+        unsafe {
+            result(ffi::ghostty_formatter_terminal_new(
+                std::ptr::null(),
+                raw.as_mut_ptr(),
+                terminal.raw(),
+                options,
+            ))?;
+            Ok(Self {
+                raw: raw.assume_init(),
+            })
+        }
+    }
+
+    pub fn format_alloc(&self) -> Result<Vec<u8>, Error> {
+        let mut ptr = std::ptr::null_mut();
+        let mut len = 0usize;
+        unsafe {
+            result(ffi::ghostty_formatter_format_alloc(
+                self.raw,
+                std::ptr::null(),
+                &mut ptr,
+                &mut len,
+            ))?;
+            if ptr.is_null() || len == 0 {
+                return Ok(Vec::new());
+            }
+            let bytes = std::slice::from_raw_parts(ptr, len).to_vec();
+            ffi::ghostty_free(std::ptr::null(), ptr, len);
+            Ok(bytes)
+        }
+    }
+}
+
+impl Drop for Formatter {
+    fn drop(&mut self) {
+        unsafe { ffi::ghostty_formatter_free(self.raw) };
     }
 }
 
@@ -495,6 +562,26 @@ impl RowCells {
             result(ffi::ghostty_render_state_row_cells_get(
                 self.raw,
                 ffi::GhosttyRenderStateRowCellsData_GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR,
+                &mut out as *mut _ as *mut c_void,
+            ))?;
+        }
+        Ok(out)
+    }
+
+    pub fn has_hyperlink(&self) -> Result<bool, Error> {
+        let mut cell = 0 as GhosttyCell;
+        unsafe {
+            result(ffi::ghostty_render_state_row_cells_get(
+                self.raw,
+                ffi::GhosttyRenderStateRowCellsData_GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW,
+                &mut cell as *mut _ as *mut c_void,
+            ))?;
+        }
+        let mut out = false;
+        unsafe {
+            result(ffi::ghostty_cell_get(
+                cell,
+                ffi::GhosttyCellData_GHOSTTY_CELL_DATA_HAS_HYPERLINK,
                 &mut out as *mut _ as *mut c_void,
             ))?;
         }

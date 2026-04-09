@@ -79,19 +79,29 @@ snapshot_json() {
   python3 scripts/ui-test-client.py --socket "$SOCKET" snapshot
 }
 
+snapshot_to_file() {
+  local file
+  file="$(mktemp)"
+  snapshot_json >"$file"
+  printf '%s\n' "$file"
+}
+
 assert_snapshot_contains() {
 for _ in $(seq 1 30); do
-  SNAPSHOT="$(python3 scripts/ui-test-client.py --socket "$SOCKET" snapshot)"
-  if python3 - <<'PY' "$SNAPSHOT" "$1"
+  SNAPSHOT_FILE="$(snapshot_to_file)"
+  if python3 - <<'PY' "$SNAPSHOT_FILE" "$1"
 import json, sys
-data = json.loads(sys.argv[1])["snapshot"]
+with open(sys.argv[1]) as fh:
+    data = json.load(fh)["snapshot"]
 rows = data["terminal"]["rows_data"]
 text = "\n".join("".join(cell["text"] for cell in row["cells"]) for row in rows)
 raise SystemExit(0 if sys.argv[2] in text else 1)
 PY
   then
+    rm -f "$SNAPSHOT_FILE"
     return 0
   fi
+  rm -f "$SNAPSHOT_FILE"
   sleep 0.1
 done
 return 1
@@ -99,15 +109,18 @@ return 1
 
 wait_for_terminal_snapshot() {
 for _ in $(seq 1 30); do
-  SNAPSHOT="$(python3 scripts/ui-test-client.py --socket "$SOCKET" snapshot)"
-  if python3 - <<'PY' "$SNAPSHOT"
+  SNAPSHOT_FILE="$(snapshot_to_file)"
+  if python3 - <<'PY' "$SNAPSHOT_FILE"
 import json, sys
-data = json.loads(sys.argv[1])["snapshot"]
+with open(sys.argv[1]) as fh:
+    data = json.load(fh)["snapshot"]
 raise SystemExit(0 if data.get("terminal") else 1)
 PY
   then
+    rm -f "$SNAPSHOT_FILE"
     return 0
   fi
+  rm -f "$SNAPSHOT_FILE"
   sleep 0.1
 done
 return 1
@@ -115,10 +128,11 @@ return 1
 
 assert_active_tab_and_row0() {
 for _ in $(seq 1 40); do
-  SNAPSHOT="$(python3 scripts/ui-test-client.py --socket "$SOCKET" snapshot)"
-  if python3 - <<'PY' "$SNAPSHOT" "$1" "$2"
+  SNAPSHOT_FILE="$(snapshot_to_file)"
+  if python3 - <<'PY' "$SNAPSHOT_FILE" "$1" "$2"
 import json, sys
-data = json.loads(sys.argv[1])["snapshot"]
+with open(sys.argv[1]) as fh:
+    data = json.load(fh)["snapshot"]
 active = data["active_tab"]
 line = "".join(cell["text"] for cell in data["terminal"]["rows_data"][0]["cells"])
 needle = sys.argv[2]
@@ -126,8 +140,10 @@ expected_tab = int(sys.argv[3])
 raise SystemExit(0 if active == expected_tab and needle in line else 1)
 PY
   then
+    rm -f "$SNAPSHOT_FILE"
     return 0
   fi
+  rm -f "$SNAPSHOT_FILE"
   sleep 0.1
 done
 return 1
@@ -135,15 +151,18 @@ return 1
 
 assert_visible_pane_count() {
 for _ in $(seq 1 40); do
-  SNAPSHOT="$(python3 scripts/ui-test-client.py --socket "$SOCKET" snapshot)"
-  if python3 - <<'PY' "$SNAPSHOT" "$1"
+  SNAPSHOT_FILE="$(snapshot_to_file)"
+  if python3 - <<'PY' "$SNAPSHOT_FILE" "$1"
 import json, sys
-data = json.loads(sys.argv[1])["snapshot"]
+with open(sys.argv[1]) as fh:
+    data = json.load(fh)["snapshot"]
 raise SystemExit(0 if len(data["visible_panes"]) == int(sys.argv[2]) else 1)
 PY
   then
+    rm -f "$SNAPSHOT_FILE"
     return 0
   fi
+  rm -f "$SNAPSHOT_FILE"
   sleep 0.1
 done
 return 1
@@ -151,15 +170,18 @@ return 1
 
 assert_focused_pane() {
 for _ in $(seq 1 40); do
-  SNAPSHOT="$(snapshot_json)"
-  if python3 - <<'PY' "$SNAPSHOT" "$1"
+  SNAPSHOT_FILE="$(snapshot_to_file)"
+  if python3 - <<'PY' "$SNAPSHOT_FILE" "$1"
 import json, sys
-data = json.loads(sys.argv[1])["snapshot"]
+with open(sys.argv[1]) as fh:
+    data = json.load(fh)["snapshot"]
 raise SystemExit(0 if data["focused_pane"] == int(sys.argv[2]) else 1)
 PY
   then
+    rm -f "$SNAPSHOT_FILE"
     return 0
   fi
+  rm -f "$SNAPSHOT_FILE"
   sleep 0.1
 done
 return 1
@@ -168,7 +190,8 @@ return 1
 pane_info() {
 python3 - <<'PY' "$1" "$2"
 import json, sys
-data = json.loads(sys.argv[1])["snapshot"]
+with open(sys.argv[1]) as fh:
+    data = json.load(fh)["snapshot"]
 side = sys.argv[2]
 panes = sorted(data["visible_panes"], key=lambda pane: pane["frame"]["x"])
 pane = panes[0 if side == "left" else -1]
@@ -184,10 +207,11 @@ PY
 
 assert_pane_contains() {
 for _ in $(seq 1 40); do
-  SNAPSHOT="$(snapshot_json)"
-  if python3 - <<'PY' "$SNAPSHOT" "$1" "$2"
+  SNAPSHOT_FILE="$(snapshot_to_file)"
+  if python3 - <<'PY' "$SNAPSHOT_FILE" "$1" "$2"
 import json, sys
-data = json.loads(sys.argv[1])["snapshot"]
+with open(sys.argv[1]) as fh:
+    data = json.load(fh)["snapshot"]
 pane_id = int(sys.argv[2])
 needle = sys.argv[3]
 pane = next((pane for pane in data["pane_terminals"] if pane["pane_id"] == pane_id), None)
@@ -198,8 +222,10 @@ text = "\n".join("".join(cell["text"] for cell in row["cells"]) for row in rows)
 raise SystemExit(0 if needle in text else 1)
 PY
   then
+    rm -f "$SNAPSHOT_FILE"
     return 0
   fi
+  rm -f "$SNAPSHOT_FILE"
   sleep 0.1
 done
 return 1
@@ -207,10 +233,11 @@ return 1
 
 assert_pane_width_increased() {
 for _ in $(seq 1 40); do
-  SNAPSHOT="$(snapshot_json)"
-  if python3 - <<'PY' "$SNAPSHOT" "$1" "$2" "$3"
+  SNAPSHOT_FILE="$(snapshot_to_file)"
+  if python3 - <<'PY' "$SNAPSHOT_FILE" "$1" "$2" "$3"
 import json, sys
-data = json.loads(sys.argv[1])["snapshot"]
+with open(sys.argv[1]) as fh:
+    data = json.load(fh)["snapshot"]
 pane_id = int(sys.argv[2])
 before = float(sys.argv[3])
 minimum_delta = float(sys.argv[4])
@@ -221,8 +248,10 @@ after = float(pane["frame"]["width"])
 raise SystemExit(0 if after > before + minimum_delta else 1)
 PY
   then
+    rm -f "$SNAPSHOT_FILE"
     return 0
   fi
+  rm -f "$SNAPSHOT_FILE"
   sleep 0.1
 done
 return 1
@@ -289,9 +318,10 @@ if ! assert_visible_pane_count 2; then
   exit 1
 fi
 
-SNAPSHOT="$(snapshot_json)"
-read -r LEFT_PANE LEFT_X LEFT_Y LEFT_W <<<"$(pane_info "$SNAPSHOT" left)"
-read -r RIGHT_PANE RIGHT_X RIGHT_Y RIGHT_W <<<"$(pane_info "$SNAPSHOT" right)"
+SNAPSHOT_FILE="$(snapshot_to_file)"
+read -r LEFT_PANE LEFT_X LEFT_Y LEFT_W <<<"$(pane_info "$SNAPSHOT_FILE" left)"
+read -r RIGHT_PANE RIGHT_X RIGHT_Y RIGHT_W <<<"$(pane_info "$SNAPSHOT_FILE" right)"
+rm -f "$SNAPSHOT_FILE"
 
 if ! assert_focused_pane "$RIGHT_PANE"; then
   echo "new split did not focus the new pane" >&2
@@ -351,18 +381,21 @@ if ! assert_pane_contains "$RIGHT_PANE" "RIGHTPANE"; then
   exit 1
 fi
 
-SNAPSHOT="$(python3 scripts/ui-test-client.py --socket "$SOCKET" snapshot)"
-if python3 - <<'PY' "$SNAPSHOT"
+SNAPSHOT_FILE="$(snapshot_to_file)"
+if python3 - <<'PY' "$SNAPSHOT_FILE"
 import json, sys
-line = "".join(cell["text"] for cell in json.loads(sys.argv[1])["snapshot"]["terminal"]["rows_data"][0]["cells"])
+with open(sys.argv[1]) as fh:
+    line = "".join(cell["text"] for cell in json.load(fh)["snapshot"]["terminal"]["rows_data"][0]["cells"])
 raise SystemExit(1 if "TAB1_MARKER_123" in line else 0)
 PY
 then
   :
 else
+  rm -f "$SNAPSHOT_FILE"
   echo "tab 1 marker leaked into new tab snapshot" >&2
   exit 1
 fi
+rm -f "$SNAPSHOT_FILE"
 
 kill "$GUI_PID" >/dev/null 2>&1 || true
 wait "$GUI_PID" >/dev/null 2>&1 || true

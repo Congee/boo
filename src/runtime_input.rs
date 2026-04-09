@@ -1163,6 +1163,13 @@ impl BooApp {
                             self.set_pane_focus(new, true);
                         }
                     }
+
+                    if let Some(url) = self.hyperlink_at_point(point) {
+                        std::thread::spawn(move || {
+                            let _ = open::that(url);
+                        });
+                        return;
+                    }
                 }
                 #[cfg(any(target_os = "linux", target_os = "macos"))]
                 if self.focused_surface().is_null() {
@@ -1244,6 +1251,29 @@ impl BooApp {
             }
             _ => {}
         }
+    }
+
+    fn hyperlink_at_point(&self, point: (f64, f64)) -> Option<String> {
+        let frame = self.terminal_frame();
+        let tree = self.server.tabs.active_tree()?;
+        let pane = tree
+            .export_panes_with_frames(frame)
+            .into_iter()
+            .find(|pane| pane.pane.id() == self.server.tabs.focused_pane().id())?;
+        let pane_frame = pane.frame?;
+        if point.0 < pane_frame.origin.x
+            || point.1 < pane_frame.origin.y
+            || point.0 >= pane_frame.origin.x + pane_frame.size.width
+            || point.1 >= pane_frame.origin.y + pane_frame.size.height
+        {
+            return None;
+        }
+        let local_x = point.0 - pane_frame.origin.x;
+        let local_y = point.1 - pane_frame.origin.y;
+        let col = (local_x / self.cell_width).floor().max(0.0) as u16;
+        let row = (local_y / self.cell_height).floor().max(0.0) as u16;
+        self.backend
+            .hyperlink_at(self.server.tabs.focused_pane(), row, col)
     }
 }
 

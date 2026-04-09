@@ -376,6 +376,7 @@ impl BooApp {
                     Self::theme_color(self.selection_background, 0.35),
                     Some(Self::theme_color(self.selection_foreground, 1.0)),
                     Some(Self::theme_color(self.cursor_text_color, 1.0)),
+                    Some(Self::theme_color(self.url_color, 1.0)),
                     (!self.preedit_text.is_empty()).then(|| self.preedit_text.clone()),
                 );
                 main_col = main_col.push(

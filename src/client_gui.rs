@@ -404,6 +404,13 @@ impl ClientApp {
         container(main_col)
             .width(Length::Fill)
             .height(Length::Fill)
+            .style({
+                let background = Self::theme_color(self.terminal_background, self.background_opacity);
+                move |_: &Theme| container::Style {
+                    background: Some(iced::Background::Color(background)),
+                    ..Default::default()
+                }
+            })
             .into()
     }
 
@@ -438,8 +445,10 @@ impl ClientApp {
                 Self::theme_color(self.selection_background, 0.35),
                 Some(Self::theme_color(self.selection_foreground, 1.0)),
                 Some(Self::theme_color(self.cursor_text_color, 1.0)),
+                Some(Self::theme_color(self.url_color, 1.0)),
                 None,
             )
+            .without_base_fill()
             .new_with_viewport(vt_terminal_canvas::TerminalViewport {
                 x: pane.frame.x as f32,
                 y: pane.frame.y as f32,
@@ -1289,6 +1298,7 @@ fn ui_terminal_to_vt_snapshot(
                         bold: cell.bold,
                         italic: cell.italic,
                         underline: cell.underline,
+                        hyperlink: cell.hyperlink,
                     })
                     .collect()
             })
@@ -2185,6 +2195,11 @@ fn remote_cell_to_snapshot(
     default_foreground: crate::config::RgbColor,
     default_background: crate::config::RgbColor,
 ) -> vt_backend_core::CellSnapshot {
+    const REMOTE_STYLE_FLAG_BOLD: u8 = 0x01;
+    const REMOTE_STYLE_FLAG_ITALIC: u8 = 0x02;
+    const REMOTE_STYLE_FLAG_HYPERLINK: u8 = 0x04;
+    const REMOTE_STYLE_FLAG_EXPLICIT_FG: u8 = 0x20;
+    const REMOTE_STYLE_FLAG_EXPLICIT_BG: u8 = 0x40;
     let default_fg = vt::GhosttyColorRgb {
         r: default_foreground[0],
         g: default_foreground[1],
@@ -2204,7 +2219,7 @@ fn remote_cell_to_snapshot(
                 .unwrap_or_default()
         },
         display_width: if cell.wide { 2 } else { 1 },
-        fg: if (cell.style_flags & 0x20) != 0 {
+        fg: if (cell.style_flags & REMOTE_STYLE_FLAG_EXPLICIT_FG) != 0 {
             vt::GhosttyColorRgb {
                 r: cell.fg[0],
                 g: cell.fg[1],
@@ -2213,7 +2228,7 @@ fn remote_cell_to_snapshot(
         } else {
             default_fg
         },
-        bg: if (cell.style_flags & 0x40) != 0 {
+        bg: if (cell.style_flags & REMOTE_STYLE_FLAG_EXPLICIT_BG) != 0 {
             vt::GhosttyColorRgb {
                 r: cell.bg[0],
                 g: cell.bg[1],
@@ -2222,9 +2237,10 @@ fn remote_cell_to_snapshot(
         } else {
             default_bg
         },
-        bold: (cell.style_flags & 0x01) != 0,
-        italic: (cell.style_flags & 0x02) != 0,
+        bold: (cell.style_flags & REMOTE_STYLE_FLAG_BOLD) != 0,
+        italic: (cell.style_flags & REMOTE_STYLE_FLAG_ITALIC) != 0,
         underline: 0,
+        hyperlink: (cell.style_flags & REMOTE_STYLE_FLAG_HYPERLINK) != 0,
     }
 }
 

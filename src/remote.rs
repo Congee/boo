@@ -22,6 +22,11 @@ const REMOTE_DELTA_HEADER_LEN: usize = 13;
 #[cfg(test)]
 const LOCAL_DELTA_HEADER_LEN: usize = LOCAL_INPUT_SEQ_LEN + REMOTE_DELTA_HEADER_LEN;
 const REMOTE_CELL_ENCODED_LEN: usize = 12;
+const STYLE_FLAG_BOLD: u8 = 0x01;
+const STYLE_FLAG_ITALIC: u8 = 0x02;
+const STYLE_FLAG_HYPERLINK: u8 = 0x04;
+const STYLE_FLAG_EXPLICIT_FG: u8 = 0x20;
+const STYLE_FLAG_EXPLICIT_BG: u8 = 0x40;
 
 enum OutboundMessage {
     Frame(Vec<u8>),
@@ -1168,16 +1173,19 @@ pub fn full_state_from_ui(snapshot: &crate::control::UiTerminalSnapshot) -> Remo
         .map(|cell| {
             let mut style_flags = 0u8;
             if cell.bold {
-                style_flags |= 0x01;
+                style_flags |= STYLE_FLAG_BOLD;
             }
             if cell.italic {
-                style_flags |= 0x02;
+                style_flags |= STYLE_FLAG_ITALIC;
+            }
+            if cell.hyperlink {
+                style_flags |= STYLE_FLAG_HYPERLINK;
             }
             if cell.fg != [0, 0, 0] {
-                style_flags |= 0x20;
+                style_flags |= STYLE_FLAG_EXPLICIT_FG;
             }
             if cell.bg != [0, 0, 0] {
-                style_flags |= 0x40;
+                style_flags |= STYLE_FLAG_EXPLICIT_BG;
             }
             RemoteCell {
                 codepoint: cell.text.chars().next().map(u32::from).unwrap_or(0),
@@ -1210,10 +1218,13 @@ pub fn full_state_from_terminal(
         .map(|cell| {
             let mut style_flags = 0u8;
             if cell.bold {
-                style_flags |= 0x01;
+                style_flags |= STYLE_FLAG_BOLD;
             }
             if cell.italic {
-                style_flags |= 0x02;
+                style_flags |= STYLE_FLAG_ITALIC;
+            }
+            if cell.hyperlink {
+                style_flags |= STYLE_FLAG_HYPERLINK;
             }
             let has_explicit_fg = cell.fg.r != snapshot.colors.foreground.r
                 || cell.fg.g != snapshot.colors.foreground.g
@@ -1222,10 +1233,10 @@ pub fn full_state_from_terminal(
                 || cell.bg.g != snapshot.colors.background.g
                 || cell.bg.b != snapshot.colors.background.b;
             if has_explicit_fg {
-                style_flags |= 0x20;
+                style_flags |= STYLE_FLAG_EXPLICIT_FG;
             }
             if has_explicit_bg {
-                style_flags |= 0x40;
+                style_flags |= STYLE_FLAG_EXPLICIT_BG;
             }
             RemoteCell {
                 codepoint: cell.text.chars().next().map(u32::from).unwrap_or(0),
@@ -1370,6 +1381,7 @@ mod tests {
                         bold: false,
                         italic: false,
                         underline: 0,
+                        hyperlink: false,
                     },
                     control::UiTerminalCellSnapshot {
                         text: "界".to_string(),
@@ -1379,6 +1391,7 @@ mod tests {
                         bold: true,
                         italic: true,
                         underline: 0,
+                        hyperlink: false,
                     },
                 ],
             }],
@@ -1413,6 +1426,7 @@ mod tests {
                     bold: false,
                     italic: false,
                     underline: 0,
+                    hyperlink: false,
                 },
                 crate::vt_backend_core::CellSnapshot {
                     text: "界".to_string(),
@@ -1422,6 +1436,7 @@ mod tests {
                     bold: true,
                     italic: true,
                     underline: 0,
+                    hyperlink: false,
                 },
             ]],
             colors: crate::vt::GhosttyRenderStateColors {

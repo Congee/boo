@@ -29,8 +29,10 @@ pub struct TerminalCanvas {
     pub selection_color: Color,
     pub selection_foreground: Option<Color>,
     pub cursor_text_color: Option<Color>,
+    pub url_color: Option<Color>,
     pub preedit_text: Option<String>,
     pub viewport: Option<TerminalViewport>,
+    pub paint_base: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -65,6 +67,7 @@ impl TerminalCanvas {
         selection_color: Color,
         selection_foreground: Option<Color>,
         cursor_text_color: Option<Color>,
+        url_color: Option<Color>,
         preedit_text: Option<String>,
     ) -> Self {
         Self {
@@ -82,8 +85,10 @@ impl TerminalCanvas {
             selection_color,
             selection_foreground,
             cursor_text_color,
+            url_color,
             preedit_text,
             viewport: None,
+            paint_base: true,
         }
     }
 
@@ -95,7 +100,15 @@ impl TerminalCanvas {
         self
     }
 
+    pub fn without_base_fill(mut self) -> Self {
+        self.paint_base = false;
+        self
+    }
+
     fn draw_base(&self, frame: &mut Frame<Renderer>) {
+        if !self.paint_base {
+            return;
+        }
         let (origin, size) = self.viewport_origin_and_size(frame.size());
         frame.fill_rectangle(
             origin,
@@ -311,6 +324,20 @@ impl TerminalCanvas {
             .iter()
             .any(|selection| rects_intersect(cell_rect, selection))
     }
+
+    fn hyperlink_at_position(&self, position: Point) -> Option<(usize, usize)> {
+        let origin = self.viewport_origin();
+        let local_x = position.x - origin.x - PADDING_X;
+        let local_y = position.y - origin.y - PADDING_Y;
+        if local_x < 0.0 || local_y < 0.0 {
+            return None;
+        }
+        let col = (local_x / self.cell_width).floor() as usize;
+        let row = (local_y / self.cell_height).floor() as usize;
+        let row_cells = self.snapshot.rows_data.get(row)?;
+        let cell = row_cells.get(col)?;
+        cell.hyperlink.then_some((row, col))
+    }
 }
 
 pub struct TerminalCanvasState {
@@ -418,6 +445,7 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
                                 row,
                                 self.snapshot.cols as usize,
                                 self.font_family,
+                                self.url_color,
                             ),
                         };
                         row_artifact_fingerprints[row_index] = row_fingerprint;
@@ -517,6 +545,22 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
 
         geometries
     }
+
+    fn mouse_interaction(
+        &self,
+        _state: &Self::State,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        let Some(position) = cursor.position_in(bounds) else {
+            return mouse::Interaction::default();
+        };
+        if self.hyperlink_at_position(position).is_some() {
+            mouse::Interaction::Pointer
+        } else {
+            mouse::Interaction::default()
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -607,6 +651,7 @@ fn build_text_runs(
     row: &[vt_backend_core::CellSnapshot],
     cols: usize,
     font_family: Option<&'static str>,
+    url_color: Option<Color>,
 ) -> Vec<TextRun> {
     let mut runs = Vec::new();
 
@@ -625,7 +670,11 @@ fn build_text_runs(
             continue;
         }
 
-        let fg = color_from_rgb(cell.fg, 1.0);
+        let fg = if cell.hyperlink {
+            url_color.unwrap_or_else(|| color_from_rgb(cell.fg, 1.0))
+        } else {
+            color_from_rgb(cell.fg, 1.0)
+        };
         let font = font_for_cell(cell, font_family);
         let width_cols = usize::from(cell.display_width.max(1));
         runs.push(TextRun {
@@ -726,6 +775,7 @@ impl TerminalCanvas {
         self.snapshot.colors.background.g.hash(&mut hasher);
         self.snapshot.colors.background.b.hash(&mut hasher);
         self.background_opacity.to_bits().hash(&mut hasher);
+        self.paint_base.hash(&mut hasher);
         self.hash_viewport(&mut hasher);
         hasher.finish()
     }
@@ -754,6 +804,7 @@ impl TerminalCanvas {
                 cell.bold.hash(&mut hasher);
                 cell.italic.hash(&mut hasher);
                 cell.underline.hash(&mut hasher);
+                cell.hyperlink.hash(&mut hasher);
             }
         }
         hasher.finish()
@@ -768,6 +819,7 @@ impl TerminalCanvas {
         self.background_opacity_cells.hash(&mut hasher);
         self.font_family.hash(&mut hasher);
         self.appearance_revision.hash(&mut hasher);
+        hash_optional_color(self.url_color, &mut hasher);
         self.snapshot.colors.background.r.hash(&mut hasher);
         self.snapshot.colors.background.g.hash(&mut hasher);
         self.snapshot.colors.background.b.hash(&mut hasher);
@@ -871,6 +923,7 @@ mod tests {
             Color::from_rgba(0.65, 0.72, 0.95, 0.35),
             Some(Color::WHITE),
             Some(Color::BLACK),
+            Some(Color::from_rgb(0.2, 0.6, 1.0)),
             None,
         )
     }
@@ -965,6 +1018,7 @@ mod tests {
             before.selection_color,
             before.selection_foreground,
             before.cursor_text_color,
+            before.url_color,
             before.preedit_text.clone(),
         );
         assert_eq!(before.row_fingerprint(0), after.row_fingerprint(0));
@@ -1001,7 +1055,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let runs = build_text_runs(&row, row.len(), None);
+        let runs = build_text_runs(&row, row.len(), None, None);
         assert_eq!(runs.len(), 3);
         assert_eq!(runs[0].text, "a");
         assert_eq!(runs[0].start_col, 0);
@@ -1029,7 +1083,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let runs = build_text_runs(&row, row.len(), None);
+        let runs = build_text_runs(&row, row.len(), None, None);
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].text, "a");
         assert_eq!(runs[0].start_col, 0);
@@ -1051,7 +1105,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let runs = build_text_runs(&row, row.len(), None);
+        let runs = build_text_runs(&row, row.len(), None, None);
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].shaping, iced::widget::text::Shaping::Basic);
         assert_eq!(runs[1].shaping, iced::widget::text::Shaping::Advanced);

@@ -417,6 +417,11 @@ impl crate::backend::TerminalBackend for MacVtBackend {
             pane.write_vt_bytes(bytes);
         }
     }
+
+    fn hyperlink_at(&self, focused_pane: PaneHandle, row: u16, col: u16) -> Option<String> {
+        let pane = self.pane(focused_pane)?;
+        pane.hyperlink_at(row, col).ok().flatten()
+    }
 }
 
 fn snapshot_selection_text(
@@ -507,6 +512,7 @@ fn ui_terminal_snapshot(snapshot: &TerminalSnapshot) -> control::UiTerminalSnaps
                         bold: cell.bold,
                         italic: cell.italic,
                         underline: cell.underline,
+                        hyperlink: cell.hyperlink,
                     })
                     .collect(),
             })

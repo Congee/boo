@@ -202,6 +202,7 @@ pub struct UiTerminalCellSnapshot {
     pub bold: bool,
     pub italic: bool,
     pub underline: i32,
+    pub hyperlink: bool,
 }
 
 /// Commands sent from the control thread to the main iced update loop.

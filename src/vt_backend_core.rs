@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, Clone, Default)]
@@ -23,6 +24,7 @@ pub struct CellSnapshot {
     pub bold: bool,
     pub italic: bool,
     pub underline: i32,
+    pub hyperlink: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -133,6 +135,11 @@ enum WorkerCommand {
     ScrollViewportDelta(isize),
     ScrollViewportTop,
     ScrollViewportBottom,
+    HyperlinkAt {
+        row: u16,
+        col: u16,
+        reply: channel::Sender<Option<String>>,
+    },
     Shutdown,
 }
 
@@ -316,6 +323,19 @@ impl VtPaneWorker {
     pub fn scroll_viewport_bottom(&self) -> io::Result<()> {
         self.tx
             .send(WorkerCommand::ScrollViewportBottom)
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "vt pane worker closed"))
+    }
+
+    pub fn hyperlink_at(&self, row: u16, col: u16) -> io::Result<Option<String>> {
+        let (tx, rx) = channel::bounded(1);
+        self.tx
+            .send(WorkerCommand::HyperlinkAt {
+                row,
+                col,
+                reply: tx,
+            })
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "vt pane worker closed"))?;
+        rx.recv()
             .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "vt pane worker closed"))
     }
 }
@@ -831,6 +851,12 @@ impl VtPane {
         &self.terminal
     }
 
+    pub fn hyperlink_at(&self, row: u16, col: u16) -> Option<String> {
+        let formatter = vt::Formatter::for_terminal_hyperlinks(&self.terminal).ok()?;
+        let bytes = formatter.format_alloc().ok()?;
+        hyperlink_at_position(&bytes, row as usize, col as usize)
+    }
+
     pub fn has_pending_pty_work(&self) -> bool {
         !self.pending_pty_chunks.is_empty()
     }
@@ -1192,6 +1218,9 @@ fn handle_worker_command(pane: &mut VtPane, command: WorkerCommand) -> bool {
         WorkerCommand::ScrollViewportBottom => {
             let _ = pane.scroll_viewport_bottom();
         }
+        WorkerCommand::HyperlinkAt { row, col, reply } => {
+            let _ = reply.send(pane.hyperlink_at(row, col));
+        }
         WorkerCommand::Shutdown => return false,
     }
     true
@@ -1239,6 +1268,10 @@ const FULL_REFRESH_CONTROL_SEQUENCES: &[&[u8]] = &[
     b"\x1b[?47l",
     b"\x1b[2J",
     b"\x1b[3J",
+    b"\x1b]4;",
+    b"\x1b]10;",
+    b"\x1b]11;",
+    b"\x1b]12;",
 ];
 
 fn should_force_full_snapshot_refresh(tail: &[u8], bytes: &[u8]) -> bool {
@@ -1265,6 +1298,103 @@ fn update_control_sequence_tail(tail: &mut Vec<u8>, bytes: &[u8]) {
         let trim = tail.len() - MAX_TAIL;
         tail.drain(0..trim);
     }
+}
+
+fn hyperlink_at_position(bytes: &[u8], target_row: usize, target_col: usize) -> Option<String> {
+    let mut index = 0usize;
+    let mut row = 0usize;
+    let mut col = 0usize;
+    let mut current_link: Option<String> = None;
+
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\x1b' => {
+                if index + 1 >= bytes.len() {
+                    break;
+                }
+                match bytes[index + 1] {
+                    b']' => {
+                        if let Some((next, link)) = parse_osc8(bytes, index) {
+                            current_link = link;
+                            index = next;
+                            continue;
+                        }
+                    }
+                    b'[' => {
+                        index += 2;
+                        while index < bytes.len() {
+                            let byte = bytes[index];
+                            index += 1;
+                            if (0x40..=0x7e).contains(&byte) {
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
+                index += 1;
+            }
+            b'\r' => {
+                col = 0;
+                index += 1;
+            }
+            b'\n' => {
+                row += 1;
+                col = 0;
+                index += 1;
+            }
+            _ => {
+                let Some(ch) = next_utf8_char(bytes, &mut index) else {
+                    break;
+                };
+                let width = UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
+                if row == target_row
+                    && target_col >= col
+                    && target_col < col + width
+                    && current_link.is_some()
+                {
+                    return current_link;
+                }
+                col += width;
+            }
+        }
+    }
+
+    None
+}
+
+fn parse_osc8(bytes: &[u8], start: usize) -> Option<(usize, Option<String>)> {
+    let mut idx = start + 2;
+    while idx < bytes.len() {
+        if bytes[idx] == 0x07 {
+            let payload = std::str::from_utf8(&bytes[start + 2..idx]).ok()?;
+            return Some((idx + 1, osc8_payload_to_link(payload)));
+        }
+        if bytes[idx] == b'\x1b' && idx + 1 < bytes.len() && bytes[idx + 1] == b'\\' {
+            let payload = std::str::from_utf8(&bytes[start + 2..idx]).ok()?;
+            return Some((idx + 2, osc8_payload_to_link(payload)));
+        }
+        idx += 1;
+    }
+    None
+}
+
+fn osc8_payload_to_link(payload: &str) -> Option<String> {
+    let rest = payload.strip_prefix('8')?.strip_prefix(";;")?;
+    if rest.is_empty() {
+        None
+    } else {
+        Some(rest.to_string())
+    }
+}
+
+fn next_utf8_char(bytes: &[u8], index: &mut usize) -> Option<char> {
+    let remaining = bytes.get(*index..)?;
+    let text = std::str::from_utf8(remaining).ok()?;
+    let ch = text.chars().next()?;
+    *index += ch.len_utf8();
+    Some(ch)
 }
 
 struct Osc99Metadata {
@@ -1429,6 +1559,7 @@ fn snapshot_row(
             bold: style.bold,
             italic: style.italic,
             underline: style.underline,
+            hyperlink: cells.has_hyperlink().unwrap_or(false),
         });
     }
     Ok(row)

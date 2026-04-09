@@ -68,7 +68,7 @@ chrome, layout, and VT rendering path.
 - Key=value format with `#` comments
 - Boo-specific keys: `prefix-key`, `control-socket`, `remote-port`, `remote-auth-key`, `keybind`
 - Shared terminal/UI keys: `font-family`, `font-size`, `background-opacity`, `background-opacity-cells`, `foreground`, `background`, `color0..color15`, `cursor`, `selection_background`, `selection_foreground`, `cursor_text_color`, `url_color`, `active_tab_foreground`, `active_tab_background`, `inactive_tab_foreground`, `inactive_tab_background`
-- `selection_foreground` and `cursor_text_color` are rendered directly; `url_color` is accepted in config and propagated through appearance state, with hyperlink-specific rendering to follow when per-cell URL metadata is exposed
+- `selection_foreground` and `cursor_text_color` are rendered directly; `url_color` now recolors visible hyperlink cells and hyperlinks request a pointer cursor on hover. Full hyperlink identity/URL extraction is still future work for click/open/copy-url behaviors
 - Config files can `include` additional theme/config snippets, with later entries overriding earlier ones
 - Runtime config reload via `reload_config` action
 

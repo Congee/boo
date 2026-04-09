@@ -89,6 +89,7 @@ pub fn ui_terminal_snapshot(snapshot: &TerminalSnapshot) -> control::UiTerminalS
                         bold: cell.bold,
                         italic: cell.italic,
                         underline: cell.underline,
+                        hyperlink: cell.hyperlink,
                     })
                     .collect(),
             })
