@@ -22,6 +22,7 @@ use std::time::Duration;
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "kebab-case")]
 pub enum Request {
+    Ping,
     ListSurfaces,
     ListTabs,
     GetClipboard,
@@ -219,6 +220,7 @@ fn default_true() -> bool {
 pub enum ControlCmd {
     DumpKeysOn,
     DumpKeysOff,
+    Ping,
     ListSurfaces { reply: mpsc::Sender<Response> },
     ListTabs { reply: mpsc::Sender<Response> },
     GetClipboard { reply: mpsc::Sender<Response> },
@@ -284,6 +286,14 @@ impl Client {
     pub fn get_ui_snapshot(&self) -> Result<UiSnapshot, String> {
         match self.request(&Request::GetUiSnapshot)? {
             Response::UiSnapshot { snapshot } => Ok(snapshot),
+            Response::Error { error } => Err(error),
+            other => Err(format!("unexpected response: {other:?}")),
+        }
+    }
+
+    pub fn ping(&self) -> Result<(), String> {
+        match self.request(&Request::Ping)? {
+            Response::Ok { ok: true } => Ok(()),
             Response::Error { error } => Err(error),
             other => Err(format!("unexpected response: {other:?}")),
         }
@@ -368,6 +378,11 @@ fn run_socket(path: &str, tx: &mpsc::Sender<ControlCmd>) {
 fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
     let notify = || crate::notify_headless_wakeup();
     match req {
+        Request::Ping => {
+            let _ = tx.send(ControlCmd::Ping);
+            notify();
+            Response::Ok { ok: true }
+        }
         Request::Quit => {
             let _ = tx.send(ControlCmd::Quit);
             notify();
@@ -807,6 +822,20 @@ mod tests {
         worker.join().unwrap();
 
         assert!(matches!(response, Response::Error { error } if error == "timeout"));
+    }
+
+    #[test]
+    fn ping_maps_to_control_command() {
+        let (tx, rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || match rx.recv().unwrap() {
+            ControlCmd::Ping => {}
+            other => panic!("unexpected command: {other:?}"),
+        });
+
+        let response = dispatch_request(Request::Ping, &tx);
+        worker.join().unwrap();
+
+        assert!(matches!(response, Response::Ok { ok: true }));
     }
 
     #[test]

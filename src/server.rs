@@ -6,6 +6,7 @@ use std::sync::mpsc;
 #[derive(Debug)]
 pub enum Command {
     DumpKeys(bool),
+    Ping,
     Quit,
     ListSurfaces {
         reply: mpsc::Sender<control::Response>,
@@ -197,6 +198,7 @@ impl From<control::ControlCmd> for Command {
         match value {
             control::ControlCmd::DumpKeysOn => Self::DumpKeys(true),
             control::ControlCmd::DumpKeysOff => Self::DumpKeys(false),
+            control::ControlCmd::Ping => Self::Ping,
             control::ControlCmd::ListSurfaces { reply } => Self::ListSurfaces { reply },
             control::ControlCmd::ListTabs { reply } => Self::ListTabs { reply },
             control::ControlCmd::GetClipboard { reply } => Self::GetClipboard { reply },

@@ -1756,6 +1756,7 @@ impl TerminalCanvas {
             .unwrap_or_else(|| self.row_fingerprint(row_index))
     }
 
+    #[cfg(test)]
     fn overlay_fingerprint(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.selection_overlay_fingerprint().hash(&mut hasher);

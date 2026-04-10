@@ -161,8 +161,6 @@ pub struct ClientApp {
 enum SnapshotRefreshReason {
     TextFallback,
     StreamFallback,
-    ResizeViewport,
-    ResizeCells,
     GuiTestText,
     GuiTestKey,
     GuiTestManual,
@@ -173,8 +171,6 @@ impl SnapshotRefreshReason {
         match self {
             Self::TextFallback => "client.control.get_ui_snapshot.text_fallback",
             Self::StreamFallback => "client.control.get_ui_snapshot.stream_fallback",
-            Self::ResizeViewport => "client.control.get_ui_snapshot.resize_viewport",
-            Self::ResizeCells => "client.control.get_ui_snapshot.resize_cells",
             Self::GuiTestText => "client.control.get_ui_snapshot.gui_test_text",
             Self::GuiTestKey => "client.control.get_ui_snapshot.gui_test_key",
             Self::GuiTestManual => "client.control.get_ui_snapshot.gui_test_manual",
@@ -676,9 +672,6 @@ impl ClientApp {
             width: size.width as f64,
             height: size.height as f64,
         });
-        if self.stream_tx.is_none() && !matches!(self.mode, ClientMode::Bootstrapping) {
-            self.refresh_snapshot(SnapshotRefreshReason::ResizeViewport);
-        }
     }
 
     fn handle_keyboard(&mut self, event: keyboard::Event) {
@@ -1069,9 +1062,6 @@ impl ClientApp {
         let _ = self
             .client
             .send(&control::Request::ResizeViewport { cols, rows });
-        if self.stream_tx.is_none() && !matches!(self.mode, ClientMode::Bootstrapping) {
-            self.refresh_snapshot(SnapshotRefreshReason::ResizeCells);
-        }
     }
 
     fn record_pending_input(&mut self) -> u64 {

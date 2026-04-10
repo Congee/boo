@@ -45,6 +45,7 @@ impl BooApp {
     pub(crate) fn handle_server_cmd(&mut self, cmd: server::Command) {
         match cmd {
             server::Command::DumpKeys(enabled) => self.dump_keys = enabled,
+            server::Command::Ping => {}
             server::Command::Quit => self.terminate(0),
             server::Command::ListSurfaces { reply } => {
                 let info = if let Some(tree) = self.server.tabs.active_tree() {

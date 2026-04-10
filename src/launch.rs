@@ -130,7 +130,7 @@ fn system_text_fallback_fonts() -> Vec<Cow<'static, [u8]>> {
 
 pub fn ensure_server_running(socket_path: &str, boo_config: &config::Config) {
     let client = control::Client::connect(socket_path.to_string());
-    if client.get_ui_snapshot().is_ok() {
+    if client.ping().is_ok() {
         return;
     }
 
@@ -159,7 +159,7 @@ pub fn ensure_server_running(socket_path: &str, boo_config: &config::Config) {
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     while std::time::Instant::now() < deadline {
-        if client.get_ui_snapshot().is_ok() {
+        if client.ping().is_ok() {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
