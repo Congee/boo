@@ -24,7 +24,7 @@ pub struct TerminalCanvas {
     pub cell_height: f32,
     pub font_size: f32,
     pub font_family: Option<&'static str>,
-    pub font_fallbacks: Vec<&'static str>,
+    pub font_fallbacks: Arc<[&'static str]>,
     pub snapshot_generation: u64,
     pub appearance_revision: u64,
     pub background_opacity: f32,
@@ -71,6 +71,12 @@ pub struct TerminalSelectionRect {
     pub height: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SelectionColSpan {
+    start_col: usize,
+    end_col: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TerminalViewport {
     pub x: f32,
@@ -86,7 +92,7 @@ impl TerminalCanvas {
         cell_height: f32,
         font_size: f32,
         font_family: Option<&'static str>,
-        font_fallbacks: Vec<&'static str>,
+        font_fallbacks: Arc<[&'static str]>,
         snapshot_generation: u64,
         appearance_revision: u64,
         background_opacity: f32,
@@ -221,15 +227,8 @@ impl TerminalCanvas {
         }
     }
 
-    fn draw_overlay(&self, frame: &mut Frame<Renderer>) {
+    fn draw_selection_overlay(&self, frame: &mut Frame<Renderer>, state: &TerminalCanvasState) {
         let origin = self.viewport_origin();
-        let default_fg = color_from_rgb(self.snapshot.colors.foreground, 1.0);
-        let cursor_bg = if self.snapshot.colors.cursor_has_value {
-            color_from_rgb(self.snapshot.colors.cursor, 0.95)
-        } else {
-            default_fg
-        };
-
         for rect in &self.selection_rects {
             frame.fill_rectangle(
                 Point::new(origin.x + rect.x + PADDING_X, origin.y + rect.y + PADDING_Y),
@@ -237,7 +236,17 @@ impl TerminalCanvas {
                 self.selection_color,
             );
         }
-        self.draw_selection_foreground(frame);
+        self.draw_selection_foreground(frame, state);
+    }
+
+    fn draw_cursor_overlay(&self, frame: &mut Frame<Renderer>) {
+        let origin = self.viewport_origin();
+        let default_fg = color_from_rgb(self.snapshot.colors.foreground, 1.0);
+        let cursor_bg = if self.snapshot.colors.cursor_has_value {
+            color_from_rgb(self.snapshot.colors.cursor, 0.95)
+        } else {
+            default_fg
+        };
 
         if self.snapshot.cursor.visible
             && self.cursor_blink_visible
@@ -326,16 +335,26 @@ impl TerminalCanvas {
         }
     }
 
-    fn draw_selection_foreground(&self, frame: &mut Frame<Renderer>) {
+    fn draw_selection_foreground(&self, frame: &mut Frame<Renderer>, state: &TerminalCanvasState) {
         let Some(selection_foreground) = self.selection_foreground else {
             return;
         };
 
+        let selection_row_spans = state.selection_row_spans.borrow();
         for (row_index, row) in self.snapshot.rows_data.iter().enumerate() {
-            for (col_index, cell) in row.iter().enumerate() {
-                if self.cell_is_selected(row_index, col_index, cell.display_width) {
-                    self.draw_cell_text(frame, row_index, col_index, cell, selection_foreground);
-                }
+            let spans = selection_row_spans.get(row_index).map(Vec::as_slice).unwrap_or(&[]);
+            if spans.is_empty() {
+                continue;
+            }
+            for run in build_selection_text_runs(
+                row,
+                self.snapshot.cols as usize,
+                self.font_family,
+                &self.font_fallbacks,
+                selection_foreground,
+                |col_index, display_width| cell_is_selected_in_spans(&spans, col_index, display_width),
+            ) {
+                self.draw_text_run(frame, row_index, &run);
             }
         }
     }
@@ -350,55 +369,38 @@ impl TerminalCanvas {
         let Some(cell) = row.get(col_index) else {
             return;
         };
-        self.draw_cell_text(frame, row_index, col_index, cell, color);
+        let run = TextRun {
+            start_col: col_index,
+            width_cols: usize::from(cell.display_width.max(1)),
+            text: cell.text.clone(),
+            fg: color,
+            font: font_for_cell(cell, self.font_family, &self.font_fallbacks),
+            underline: cell.underline != 0,
+            shaping: terminal_text_shaping(),
+        };
+        self.draw_text_run(frame, row_index, &run);
     }
 
-    fn draw_cell_text(
-        &self,
-        frame: &mut Frame<Renderer>,
-        row_index: usize,
-        col_index: usize,
-        cell: &vt_backend_core::CellSnapshot,
-        fg_override: Color,
-    ) {
+    fn draw_text_run(&self, frame: &mut Frame<Renderer>, row_index: usize, run: &TextRun) {
         if !self.paint_text {
             return;
         }
-        if cell.text.is_empty() || cell.text == "\0" {
-            return;
-        }
-
         let origin = self.viewport_origin();
-        let x = origin.x + PADDING_X + col_index as f32 * self.cell_width;
+        let x = origin.x + PADDING_X + run.start_col as f32 * self.cell_width;
         let y = origin.y + PADDING_Y + row_index as f32 * self.cell_height;
-        let draw_width = usize::from(cell.display_width.max(1)) as f32 * self.cell_width;
+        let draw_width = run.width_cols as f32 * self.cell_width;
         frame.fill_text(canvas::Text {
-            content: cell.text.clone(),
+            content: run.text.clone(),
             position: Point::new(x, y),
-            color: fg_override,
+            color: run.fg,
             size: Pixels(self.font_size),
             line_height: iced::widget::text::LineHeight::Absolute(Pixels(self.cell_height)),
-            font: font_for_cell(cell, self.font_family, &self.font_fallbacks),
+            font: run.font,
             align_x: iced::widget::text::Alignment::Left,
             align_y: alignment::Vertical::Top,
-            shaping: terminal_text_shaping(),
-            max_width: non_ascii_text_max_width(&cell.text, draw_width),
+            shaping: run.shaping,
+            max_width: non_ascii_text_max_width(&run.text, draw_width),
         });
-    }
-
-    fn cell_is_selected(&self, row_index: usize, col_index: usize, display_width: u8) -> bool {
-        let cell_x = col_index as f32 * self.cell_width;
-        let cell_y = row_index as f32 * self.cell_height;
-        let cell_width = usize::from(display_width.max(1)) as f32 * self.cell_width;
-        let cell_rect = Rectangle {
-            x: cell_x,
-            y: cell_y,
-            width: cell_width,
-            height: self.cell_height,
-        };
-        self.selection_rects
-            .iter()
-            .any(|selection| rects_intersect(cell_rect, selection))
     }
 
     fn hyperlink_at_position(&self, position: Point) -> Option<(usize, usize)> {
@@ -423,7 +425,7 @@ pub struct TerminalTextLayer {
     pub cell_height: f32,
     pub font_size: f32,
     pub font_family: Option<&'static str>,
-    pub font_fallbacks: Vec<&'static str>,
+    pub font_fallbacks: Arc<[&'static str]>,
     pub cursor_blink_visible: bool,
     pub selection_rects: Vec<TerminalSelectionRect>,
     pub selection_foreground: Option<Color>,
@@ -434,13 +436,27 @@ pub struct TerminalTextLayer {
 }
 
 struct TerminalTextLayerState {
-    entries: Vec<TextLayerEntry>,
+    base_row_entries: Vec<Vec<TextLayerEntry>>,
+    base_row_fingerprints: Vec<u64>,
+    overlay_row_entries: Vec<Vec<TextLayerEntry>>,
+    overlay_row_fingerprints: Vec<u64>,
+    selection_row_spans: Vec<Vec<SelectionColSpan>>,
+    selection_spans_fingerprint: Option<u64>,
+    selection_row_range: Option<(usize, usize)>,
+    style_fingerprint: Option<u64>,
 }
 
 impl Default for TerminalTextLayerState {
     fn default() -> Self {
         Self {
-            entries: Vec::new(),
+            base_row_entries: Vec::new(),
+            base_row_fingerprints: Vec::new(),
+            overlay_row_entries: Vec::new(),
+            overlay_row_fingerprints: Vec::new(),
+            selection_row_spans: Vec::new(),
+            selection_spans_fingerprint: None,
+            selection_row_range: None,
+            style_fingerprint: None,
         }
     }
 }
@@ -458,7 +474,7 @@ impl TerminalTextLayer {
         cell_height: f32,
         font_size: f32,
         font_family: Option<&'static str>,
-        font_fallbacks: Vec<&'static str>,
+        font_fallbacks: Arc<[&'static str]>,
         cursor_blink_visible: bool,
         selection_rects: Vec<TerminalSelectionRect>,
         selection_foreground: Option<Color>,
@@ -504,30 +520,117 @@ impl TerminalTextLayer {
         Point::new(viewport.x, viewport.y)
     }
 
-    fn build_text_pass(
+    fn build_base_row_entries(&self, viewport: Rectangle, row_index: usize) -> Vec<TextLayerEntry> {
+        let Some(row) = self.snapshot.rows_data.get(row_index) else {
+            return Vec::new();
+        };
+        let mut entries = Vec::new();
+        for run in build_text_runs(
+            row,
+            self.snapshot.cols as usize,
+            self.font_family,
+            &self.font_fallbacks,
+            self.url_color,
+        ) {
+            self.push_text_entry(
+                &mut entries,
+                viewport,
+                row_index,
+                run.start_col,
+                run.text.as_str(),
+                run.width_cols,
+                run.font,
+                run.shaping,
+                run.fg,
+            );
+        }
+        entries
+    }
+
+    fn build_overlay_row_entries(
         &self,
-        entries: &mut Vec<TextLayerEntry>,
         viewport: Rectangle,
-        color_override: impl Fn(usize, usize, &vt_backend_core::CellSnapshot) -> Option<Color>,
-    ) {
-        for (row_index, row) in self.snapshot.rows_data.iter().enumerate() {
-            for (col_index, cell) in row.iter().enumerate() {
-                let Some(color) = color_override(row_index, col_index, cell) else {
-                    continue;
-                };
+        row_index: usize,
+        selection_spans: &[SelectionColSpan],
+    ) -> Vec<TextLayerEntry> {
+        let mut entries = Vec::new();
+        let Some(row) = self.snapshot.rows_data.get(row_index) else {
+            return entries;
+        };
+
+        if let Some(selection_foreground) = self.selection_foreground.filter(|_| !selection_spans.is_empty()) {
+            for run in build_selection_text_runs(
+                row,
+                self.snapshot.cols as usize,
+                self.font_family,
+                &self.font_fallbacks,
+                selection_foreground,
+                |col_index, display_width| {
+                    cell_is_selected_in_spans(selection_spans, col_index, display_width)
+                },
+            ) {
                 self.push_text_entry(
-                    entries,
+                    &mut entries,
                     viewport,
                     row_index,
-                    col_index,
-                    cell.text.as_str(),
-                    usize::from(cell.display_width.max(1)),
-                    font_for_cell(cell, self.font_family, &self.font_fallbacks),
-                    terminal_text_shaping(),
-                    color,
+                    run.start_col,
+                    run.text.as_str(),
+                    run.width_cols,
+                    run.font,
+                    run.shaping,
+                    run.fg,
                 );
             }
         }
+
+        if let Some(cursor_text_color) = self
+            .cursor_text_color
+            .filter(|_| self.snapshot.cursor.y as usize == row_index)
+        {
+            for (col_index, cell) in row.iter().enumerate() {
+                if !cell.text.is_empty() && self.should_draw_cursor_text(row_index, col_index) {
+                    self.push_text_entry(
+                        &mut entries,
+                        viewport,
+                        row_index,
+                        col_index,
+                        cell.text.as_str(),
+                        usize::from(cell.display_width.max(1)),
+                        font_for_cell(cell, self.font_family, &self.font_fallbacks),
+                        terminal_text_shaping(),
+                        cursor_text_color,
+                    );
+                }
+            }
+        }
+
+        if let Some(preedit) = self
+            .preedit_text
+            .as_deref()
+            .filter(|text| !text.is_empty())
+            .filter(|_| self.snapshot.cursor.y < self.snapshot.rows)
+            .filter(|_| self.snapshot.cursor.y as usize == row_index)
+        {
+            self.push_text_entry(
+                &mut entries,
+                viewport,
+                self.snapshot.cursor.y as usize,
+                self.snapshot.cursor.x as usize,
+                preedit,
+                preedit.chars().count().max(1),
+                font_for_terminal_text(
+                    preedit,
+                    false,
+                    false,
+                    self.font_family,
+                    &self.font_fallbacks,
+                ),
+                terminal_text_shaping(),
+                color_from_rgb(self.snapshot.colors.foreground, 1.0),
+            );
+        }
+
+        entries
     }
 
     fn push_text_entry(
@@ -575,21 +678,6 @@ impl TerminalTextLayer {
         });
     }
 
-    fn cell_is_selected(&self, row_index: usize, col_index: usize, display_width: u8) -> bool {
-        let cell_x = col_index as f32 * self.cell_width;
-        let cell_y = row_index as f32 * self.cell_height;
-        let cell_width = usize::from(display_width.max(1)) as f32 * self.cell_width;
-        let cell_rect = Rectangle {
-            x: cell_x,
-            y: cell_y,
-            width: cell_width,
-            height: self.cell_height,
-        };
-        self.selection_rects
-            .iter()
-            .any(|selection| rects_intersect(cell_rect, selection))
-    }
-
     fn should_draw_cursor_text(&self, row_index: usize, col_index: usize) -> bool {
         self.snapshot.cursor.visible
             && self.cursor_blink_visible
@@ -602,60 +690,97 @@ impl TerminalTextLayer {
                 != crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW
     }
 
-    fn rebuild_entries(&self, bounds: Rectangle) -> Vec<TextLayerEntry> {
-        let viewport = self.viewport_rect(bounds);
-        let mut entries = Vec::new();
+    fn style_fingerprint(&self, viewport: Rectangle) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.font_size.to_bits().hash(&mut hasher);
+        self.cell_width.to_bits().hash(&mut hasher);
+        self.cell_height.to_bits().hash(&mut hasher);
+        self.font_family.hash(&mut hasher);
+        self.url_color.map(|c| c.r.to_bits()).hash(&mut hasher);
+        self.url_color.map(|c| c.g.to_bits()).hash(&mut hasher);
+        self.url_color.map(|c| c.b.to_bits()).hash(&mut hasher);
+        self.url_color.map(|c| c.a.to_bits()).hash(&mut hasher);
+        viewport.x.to_bits().hash(&mut hasher);
+        viewport.y.to_bits().hash(&mut hasher);
+        viewport.width.to_bits().hash(&mut hasher);
+        viewport.height.to_bits().hash(&mut hasher);
+        for family in self.font_fallbacks.iter() {
+            family.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
 
-        self.build_text_pass(&mut entries, viewport, |_, _, cell| {
-            if cell.text.is_empty() || cell.text == "\0" {
-                None
-            } else if cell.hyperlink {
-                Some(self.url_color.unwrap_or_else(|| color_from_rgb(cell.fg, 1.0)))
-            } else {
-                Some(color_from_rgb(cell.fg, 1.0))
+    fn selection_spans_fingerprint(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.snapshot.rows.hash(&mut hasher);
+        self.snapshot.cols.hash(&mut hasher);
+        self.cell_width.to_bits().hash(&mut hasher);
+        self.cell_height.to_bits().hash(&mut hasher);
+        self.selection_rects.len().hash(&mut hasher);
+        for rect in &self.selection_rects {
+            rect.x.to_bits().hash(&mut hasher);
+            rect.y.to_bits().hash(&mut hasher);
+            rect.width.to_bits().hash(&mut hasher);
+            rect.height.to_bits().hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    fn base_row_fingerprint(&self, row_index: usize, style_fingerprint: u64) -> u64 {
+        style_fingerprint
+            ^ self
+                .snapshot
+                .row_revisions
+                .get(row_index)
+                .copied()
+                .unwrap_or_default()
+                .rotate_left(17)
+            ^ (row_index as u64).rotate_left(33)
+    }
+
+    fn overlay_row_fingerprint(
+        &self,
+        row_index: usize,
+        viewport: Rectangle,
+        style_fingerprint: u64,
+        selection_spans: &[SelectionColSpan],
+    ) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        style_fingerprint.hash(&mut hasher);
+        row_index.hash(&mut hasher);
+        self.snapshot
+            .row_revisions
+            .get(row_index)
+            .copied()
+            .unwrap_or_default()
+            .hash(&mut hasher);
+
+        if !selection_spans.is_empty() {
+            self.selection_foreground
+                .map(|c| (c.r.to_bits(), c.g.to_bits(), c.b.to_bits(), c.a.to_bits()))
+                .hash(&mut hasher);
+            for span in selection_spans {
+                span.start_col.hash(&mut hasher);
+                span.end_col.hash(&mut hasher);
             }
-        });
-
-        if let Some(selection_foreground) = self.selection_foreground {
-            self.build_text_pass(&mut entries, viewport, |row_index, col_index, cell| {
-                self.cell_is_selected(row_index, col_index, cell.display_width)
-                    .then_some(selection_foreground)
-            });
         }
 
-        if let Some(cursor_text_color) = self.cursor_text_color {
-            self.build_text_pass(&mut entries, viewport, |row_index, col_index, cell| {
-                (!cell.text.is_empty() && self.should_draw_cursor_text(row_index, col_index))
-                    .then_some(cursor_text_color)
-            });
+        if self.snapshot.cursor.y as usize == row_index {
+            self.cursor_blink_visible.hash(&mut hasher);
+            self.snapshot.cursor.visible.hash(&mut hasher);
+            self.snapshot.cursor.x.hash(&mut hasher);
+            self.snapshot.cursor.y.hash(&mut hasher);
+            self.snapshot.cursor.style.hash(&mut hasher);
+            self.cursor_text_color
+                .map(|c| (c.r.to_bits(), c.g.to_bits(), c.b.to_bits(), c.a.to_bits()))
+                .hash(&mut hasher);
+            self.preedit_text.hash(&mut hasher);
         }
-
-        if let Some(preedit) = self
-            .preedit_text
-            .as_deref()
-            .filter(|text| !text.is_empty())
-            .filter(|_| self.snapshot.cursor.y < self.snapshot.rows)
-        {
-            self.push_text_entry(
-                &mut entries,
-                viewport,
-                self.snapshot.cursor.y as usize,
-                self.snapshot.cursor.x as usize,
-                preedit,
-                preedit.chars().count().max(1),
-                font_for_terminal_text(
-                    preedit,
-                    false,
-                    false,
-                    self.font_family,
-                    &self.font_fallbacks,
-                ),
-                terminal_text_shaping(),
-                color_from_rgb(self.snapshot.colors.foreground, 1.0),
-            );
-        }
-
-        entries
+        viewport.x.to_bits().hash(&mut hasher);
+        viewport.y.to_bits().hash(&mut hasher);
+        viewport.width.to_bits().hash(&mut hasher);
+        viewport.height.to_bits().hash(&mut hasher);
+        hasher.finish()
     }
 }
 
@@ -693,8 +818,15 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TerminalTextLayer {
     ) {
         let viewport = self.viewport_rect(layout.bounds());
         let state = tree.state.downcast_ref::<TerminalTextLayerState>();
-        for entry in &state.entries {
-            renderer.fill_paragraph(&entry.paragraph, entry.position, entry.color, viewport);
+        for row_entries in &state.base_row_entries {
+            for entry in row_entries {
+                renderer.fill_paragraph(&entry.paragraph, entry.position, entry.color, viewport);
+            }
+        }
+        for row_entries in &state.overlay_row_entries {
+            for entry in row_entries {
+                renderer.fill_paragraph(&entry.paragraph, entry.position, entry.color, viewport);
+            }
         }
     }
 
@@ -714,7 +846,77 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TerminalTextLayer {
                 width: 1.0,
                 height: 1.0,
             });
-        state.entries = self.rebuild_entries(bounds);
+        let viewport = self.viewport_rect(bounds);
+        let style_fingerprint = self.style_fingerprint(viewport);
+        let style_changed = state.style_fingerprint != Some(style_fingerprint);
+        let row_count = self.snapshot.rows_data.len();
+        state.base_row_entries.resize_with(row_count, Vec::new);
+        state.base_row_entries.truncate(row_count);
+        state.base_row_fingerprints.resize(row_count, 0);
+        state.base_row_fingerprints.truncate(row_count);
+        state.overlay_row_entries.resize_with(row_count, Vec::new);
+        state.overlay_row_entries.truncate(row_count);
+        state.overlay_row_fingerprints.resize(row_count, 0);
+        state.overlay_row_fingerprints.truncate(row_count);
+        state.selection_row_spans.resize_with(row_count, Vec::new);
+        state.selection_row_spans.truncate(row_count);
+        let selection_spans_fingerprint = self.selection_spans_fingerprint();
+        let new_selection_row_range =
+            selection_row_range(&self.selection_rects, self.cell_height, row_count);
+        if style_changed || state.selection_spans_fingerprint != Some(selection_spans_fingerprint) {
+            let previous_range = state.selection_row_range;
+            let affected_range = match (previous_range, new_selection_row_range) {
+                (Some((old_start, old_end)), Some((new_start, new_end))) => {
+                    Some((old_start.min(new_start), old_end.max(new_end)))
+                }
+                (Some(range), None) | (None, Some(range)) => Some(range),
+                (None, None) => None,
+            };
+            if let Some((affected_start, affected_end)) = affected_range {
+                for row_index in affected_start..affected_end.min(row_count) {
+                    state.selection_row_spans[row_index] = if new_selection_row_range
+                        .is_some_and(|(new_start, new_end)| {
+                            row_index >= new_start && row_index < new_end
+                        }) {
+                        selection_col_spans_for_row(
+                            &self.selection_rects,
+                            row_index,
+                            self.cell_width,
+                            self.cell_height,
+                            self.snapshot.cols as usize,
+                        )
+                    } else {
+                        Vec::new()
+                    };
+                }
+            }
+            state.selection_spans_fingerprint = Some(selection_spans_fingerprint);
+            state.selection_row_range = new_selection_row_range;
+        }
+        for row_index in 0..row_count {
+            let fingerprint = self.base_row_fingerprint(row_index, style_fingerprint);
+            if style_changed || state.base_row_fingerprints[row_index] != fingerprint {
+                state.base_row_entries[row_index] = self.build_base_row_entries(viewport, row_index);
+                state.base_row_fingerprints[row_index] = fingerprint;
+            }
+            let overlay_fingerprint =
+                self.overlay_row_fingerprint(
+                    row_index,
+                    viewport,
+                    style_fingerprint,
+                    &state.selection_row_spans[row_index],
+                );
+            if style_changed || state.overlay_row_fingerprints[row_index] != overlay_fingerprint {
+                state.overlay_row_entries[row_index] =
+                    self.build_overlay_row_entries(
+                        viewport,
+                        row_index,
+                        &state.selection_row_spans[row_index],
+                    );
+                state.overlay_row_fingerprints[row_index] = overlay_fingerprint;
+            }
+        }
+        state.style_fingerprint = Some(style_fingerprint);
         tree.children.clear();
     }
 }
@@ -727,8 +929,13 @@ pub struct TerminalCanvasState {
     row_seen_revisions: RefCell<Vec<u64>>,
     row_artifact_fingerprints: RefCell<Vec<u64>>,
     row_artifacts: RefCell<Vec<RowArtifacts>>,
-    overlay_cache: Cache,
-    overlay_fingerprint: RefCell<Option<u64>>,
+    selection_overlay_cache: Cache,
+    selection_overlay_fingerprint: RefCell<Option<u64>>,
+    cursor_overlay_cache: Cache,
+    cursor_overlay_fingerprint: RefCell<Option<u64>>,
+    selection_row_spans: RefCell<Vec<Vec<SelectionColSpan>>>,
+    selection_spans_fingerprint: RefCell<Option<u64>>,
+    selection_row_range: RefCell<Option<(usize, usize)>>,
 }
 
 impl Default for TerminalCanvasState {
@@ -741,8 +948,13 @@ impl Default for TerminalCanvasState {
             row_seen_revisions: RefCell::new(Vec::new()),
             row_artifact_fingerprints: RefCell::new(Vec::new()),
             row_artifacts: RefCell::new(Vec::new()),
-            overlay_cache: Cache::new(),
-            overlay_fingerprint: RefCell::new(None),
+            selection_overlay_cache: Cache::new(),
+            selection_overlay_fingerprint: RefCell::new(None),
+            cursor_overlay_cache: Cache::new(),
+            cursor_overlay_fingerprint: RefCell::new(None),
+            selection_row_spans: RefCell::new(Vec::new()),
+            selection_spans_fingerprint: RefCell::new(None),
+            selection_row_range: RefCell::new(None),
         }
     }
 }
@@ -898,16 +1110,67 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
             );
         }
 
-        let overlay_fingerprint = self.overlay_fingerprint();
+        let selection_spans_fingerprint = self.selection_spans_fingerprint();
         {
-            let mut cached = state.overlay_fingerprint.borrow_mut();
-            if cached.as_ref() != Some(&overlay_fingerprint) {
-                state.overlay_cache.clear();
-                *cached = Some(overlay_fingerprint);
+            let mut cached = state.selection_spans_fingerprint.borrow_mut();
+            if cached.as_ref() != Some(&selection_spans_fingerprint) {
+                let row_count = self.snapshot.rows_data.len();
+                let new_selection_row_range =
+                    selection_row_range(&self.selection_rects, self.cell_height, row_count);
+                let previous_range = *state.selection_row_range.borrow();
+                let mut selection_row_spans = state.selection_row_spans.borrow_mut();
+                selection_row_spans.resize_with(row_count, Vec::new);
+                selection_row_spans.truncate(row_count);
+                let affected_range = match (previous_range, new_selection_row_range) {
+                    (Some((old_start, old_end)), Some((new_start, new_end))) => {
+                        Some((old_start.min(new_start), old_end.max(new_end)))
+                    }
+                    (Some(range), None) | (None, Some(range)) => Some(range),
+                    (None, None) => None,
+                };
+                if let Some((affected_start, affected_end)) = affected_range {
+                    for row_index in affected_start..affected_end.min(row_count) {
+                        selection_row_spans[row_index] = if new_selection_row_range
+                            .is_some_and(|(new_start, new_end)| {
+                                row_index >= new_start && row_index < new_end
+                            }) {
+                            selection_col_spans_for_row(
+                                &self.selection_rects,
+                                row_index,
+                                self.cell_width,
+                                self.cell_height,
+                                self.snapshot.cols as usize,
+                            )
+                        } else {
+                            Vec::new()
+                        };
+                    }
+                }
+                *state.selection_row_range.borrow_mut() = new_selection_row_range;
+                *cached = Some(selection_spans_fingerprint);
             }
         }
-        geometries.push(state.overlay_cache.draw(renderer, bounds.size(), |frame| {
-            self.draw_overlay(frame);
+        {
+            let selection_overlay_fingerprint = self.selection_overlay_fingerprint();
+            let mut cached = state.selection_overlay_fingerprint.borrow_mut();
+            if cached.as_ref() != Some(&selection_overlay_fingerprint) {
+                state.selection_overlay_cache.clear();
+                *cached = Some(selection_overlay_fingerprint);
+            }
+        }
+        {
+            let cursor_overlay_fingerprint = self.cursor_overlay_fingerprint();
+            let mut cached = state.cursor_overlay_fingerprint.borrow_mut();
+            if cached.as_ref() != Some(&cursor_overlay_fingerprint) {
+                state.cursor_overlay_cache.clear();
+                *cached = Some(cursor_overlay_fingerprint);
+            }
+        }
+        geometries.push(state.selection_overlay_cache.draw(renderer, bounds.size(), |frame| {
+            self.draw_selection_overlay(frame, state);
+        }));
+        geometries.push(state.cursor_overlay_cache.draw(renderer, bounds.size(), |frame| {
+            self.draw_cursor_overlay(frame);
         }));
 
         if let Some(started_at) = started_at {
@@ -1022,7 +1285,7 @@ fn build_text_runs(
     font_fallbacks: &[&'static str],
     url_color: Option<Color>,
 ) -> Vec<TextRun> {
-    let mut runs = Vec::new();
+    let mut runs: Vec<TextRun> = Vec::new();
 
     for col_index in 0..cols {
         let Some(cell) = row.get(col_index) else {
@@ -1046,6 +1309,20 @@ fn build_text_runs(
         };
         let font = font_for_cell(cell, font_family, font_fallbacks);
         let width_cols = usize::from(cell.display_width.max(1));
+        let shaping = terminal_text_shaping();
+
+        if let Some(previous) = runs.last_mut().filter(|previous| {
+            previous.start_col + previous.width_cols == col_index
+                && previous.fg == fg
+                && previous.font == font
+                && previous.underline == underline
+                && previous.shaping == shaping
+        }) {
+            previous.width_cols += width_cols;
+            previous.text.push_str(content);
+            continue;
+        }
+
         runs.push(TextRun {
             start_col: col_index,
             width_cols,
@@ -1053,7 +1330,69 @@ fn build_text_runs(
             fg,
             font,
             underline,
-            shaping: terminal_text_shaping(),
+            shaping,
+        });
+    }
+
+    runs
+}
+
+fn build_selection_text_runs<F>(
+    row: &[vt_backend_core::CellSnapshot],
+    cols: usize,
+    font_family: Option<&'static str>,
+    font_fallbacks: &[&'static str],
+    selection_foreground: Color,
+    is_selected: F,
+) -> Vec<TextRun>
+where
+    F: Fn(usize, u8) -> bool,
+{
+    let mut runs: Vec<TextRun> = Vec::new();
+
+    for col_index in 0..cols {
+        let Some(cell) = row.get(col_index) else {
+            continue;
+        };
+
+        let content = cell.text.as_str();
+        if content.is_empty() || content == "\0" {
+            continue;
+        }
+
+        let underline = cell.underline != 0;
+        if content == " " && !underline {
+            continue;
+        }
+
+        if !is_selected(col_index, cell.display_width) {
+            continue;
+        }
+
+        let font = font_for_cell(cell, font_family, font_fallbacks);
+        let width_cols = usize::from(cell.display_width.max(1));
+        let shaping = terminal_text_shaping();
+
+        if let Some(previous) = runs.last_mut().filter(|previous| {
+            previous.start_col + previous.width_cols == col_index
+                && previous.fg == selection_foreground
+                && previous.font == font
+                && previous.underline == underline
+                && previous.shaping == shaping
+        }) {
+            previous.width_cols += width_cols;
+            previous.text.push_str(content);
+            continue;
+        }
+
+        runs.push(TextRun {
+            start_col: col_index,
+            width_cols,
+            text: content.to_string(),
+            fg: selection_foreground,
+            font,
+            underline,
+            shaping,
         });
     }
 
@@ -1157,6 +1496,81 @@ fn rects_intersect(cell: Rectangle, selection: &TerminalSelectionRect) -> bool {
         && selection_rect.x < cell.x + cell.width
         && cell.y < selection_rect.y + selection_rect.height
         && selection_rect.y < cell.y + cell.height
+}
+
+fn selection_col_spans_for_row(
+    selection_rects: &[TerminalSelectionRect],
+    row_index: usize,
+    cell_width: f32,
+    cell_height: f32,
+    cols: usize,
+) -> Vec<SelectionColSpan> {
+    let row_y = row_index as f32 * cell_height;
+    let row_rect = Rectangle {
+        x: 0.0,
+        y: row_y,
+        width: cols as f32 * cell_width,
+        height: cell_height,
+    };
+    let mut spans = Vec::new();
+    for rect in selection_rects {
+        if !rects_intersect(row_rect, rect) {
+            continue;
+        }
+        let start_col = (rect.x / cell_width).floor().max(0.0) as usize;
+        let end_col = ((rect.x + rect.width) / cell_width).ceil().max(0.0) as usize;
+        let start_col = start_col.min(cols);
+        let end_col = end_col.min(cols);
+        if start_col >= end_col {
+            continue;
+        }
+        spans.push(SelectionColSpan { start_col, end_col });
+    }
+    spans.sort_unstable_by_key(|span| span.start_col);
+    let mut merged: Vec<SelectionColSpan> = Vec::new();
+    for span in spans {
+        if let Some(previous) = merged
+            .last_mut()
+            .filter(|previous| span.start_col <= previous.end_col)
+        {
+            previous.end_col = previous.end_col.max(span.end_col);
+        } else {
+            merged.push(span);
+        }
+    }
+    merged
+}
+
+fn selection_row_range(
+    selection_rects: &[TerminalSelectionRect],
+    cell_height: f32,
+    rows: usize,
+) -> Option<(usize, usize)> {
+    let mut start = rows;
+    let mut end = 0usize;
+    for rect in selection_rects {
+        let rect_start = (rect.y / cell_height).floor().max(0.0) as usize;
+        let rect_end = ((rect.y + rect.height) / cell_height).ceil().max(0.0) as usize;
+        let rect_start = rect_start.min(rows);
+        let rect_end = rect_end.min(rows);
+        if rect_start >= rect_end {
+            continue;
+        }
+        start = start.min(rect_start);
+        end = end.max(rect_end);
+    }
+    (start < end).then_some((start, end))
+}
+
+fn cell_is_selected_in_spans(
+    spans: &[SelectionColSpan],
+    col_index: usize,
+    display_width: u8,
+) -> bool {
+    let cell_end = col_index + usize::from(display_width.max(1));
+    spans
+        .iter()
+        .any(|span| col_index < span.end_col && span.start_col < cell_end)
 }
 
 fn hash_optional_color(
@@ -1344,6 +1758,27 @@ impl TerminalCanvas {
 
     fn overlay_fingerprint(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.selection_overlay_fingerprint().hash(&mut hasher);
+        self.cursor_overlay_fingerprint().hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn selection_overlay_fingerprint(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.snapshot_generation.hash(&mut hasher);
+        self.selection_rects.len().hash(&mut hasher);
+        self.selection_color.r.to_bits().hash(&mut hasher);
+        self.selection_color.g.to_bits().hash(&mut hasher);
+        self.selection_color.b.to_bits().hash(&mut hasher);
+        self.selection_color.a.to_bits().hash(&mut hasher);
+        hash_optional_color(self.selection_foreground, &mut hasher);
+        self.selection_spans_fingerprint().hash(&mut hasher);
+        self.hash_viewport(&mut hasher);
+        hasher.finish()
+    }
+
+    fn cursor_overlay_fingerprint(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.snapshot_generation.hash(&mut hasher);
         self.snapshot.cursor.visible.hash(&mut hasher);
         self.snapshot.cursor.x.hash(&mut hasher);
@@ -1354,15 +1789,19 @@ impl TerminalCanvas {
         self.snapshot.colors.cursor.r.hash(&mut hasher);
         self.snapshot.colors.cursor.g.hash(&mut hasher);
         self.snapshot.colors.cursor.b.hash(&mut hasher);
-        self.selection_rects.len().hash(&mut hasher);
-        self.selection_color.r.to_bits().hash(&mut hasher);
-        self.selection_color.g.to_bits().hash(&mut hasher);
-        self.selection_color.b.to_bits().hash(&mut hasher);
-        self.selection_color.a.to_bits().hash(&mut hasher);
-        hash_optional_color(self.selection_foreground, &mut hasher);
         hash_optional_color(self.cursor_text_color, &mut hasher);
         self.preedit_text.hash(&mut hasher);
         self.hash_viewport(&mut hasher);
+        hasher.finish()
+    }
+
+    fn selection_spans_fingerprint(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.snapshot.rows.hash(&mut hasher);
+        self.snapshot.cols.hash(&mut hasher);
+        self.cell_width.to_bits().hash(&mut hasher);
+        self.cell_height.to_bits().hash(&mut hasher);
+        self.selection_rects.len().hash(&mut hasher);
         for rect in &self.selection_rects {
             rect.x.to_bits().hash(&mut hasher);
             rect.y.to_bits().hash(&mut hasher);
@@ -1421,7 +1860,7 @@ mod tests {
             16.0,
             14.0,
             Some("CodeNewRoman Nerd Font Mono"),
-            vec!["Fallback One", "Fallback Two"],
+            Arc::from(["Fallback One", "Fallback Two"]),
             1,
             revision,
             0.8,
@@ -1565,14 +2004,12 @@ mod tests {
             },
         ];
         let runs = build_text_runs(&row, row.len(), None, &[], None);
-        assert_eq!(runs.len(), 3);
-        assert_eq!(runs[0].text, "a");
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].text, "ab");
         assert_eq!(runs[0].start_col, 0);
-        assert_eq!(runs[0].width_cols, 1);
-        assert_eq!(runs[1].text, "b");
-        assert_eq!(runs[1].start_col, 1);
-        assert_eq!(runs[2].text, "c");
-        assert_eq!(runs[2].start_col, 2);
+        assert_eq!(runs[0].width_cols, 2);
+        assert_eq!(runs[1].text, "c");
+        assert_eq!(runs[1].start_col, 2);
     }
 
     #[test]
@@ -1602,6 +2039,37 @@ mod tests {
     }
 
     #[test]
+    fn selection_text_runs_coalesce_adjacent_selected_cells() {
+        let row = vec![
+            vt_backend_core::CellSnapshot {
+                text: "a".to_string(),
+                ..Default::default()
+            },
+            vt_backend_core::CellSnapshot {
+                text: "b".to_string(),
+                ..Default::default()
+            },
+            vt_backend_core::CellSnapshot {
+                text: "c".to_string(),
+                bold: true,
+                ..Default::default()
+            },
+        ];
+        let runs = build_selection_text_runs(
+            &row,
+            row.len(),
+            None,
+            &[],
+            Color::WHITE,
+            |col_index, _display_width| col_index < 2,
+        );
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].text, "ab");
+        assert_eq!(runs[0].start_col, 0);
+        assert_eq!(runs[0].width_cols, 2);
+    }
+
+    #[test]
     fn text_runs_use_advanced_shaping_for_all_terminal_text() {
         let row = vec![
             vt_backend_core::CellSnapshot {
@@ -1615,10 +2083,68 @@ mod tests {
             },
         ];
         let runs = build_text_runs(&row, row.len(), None, &[], None);
-        assert_eq!(runs.len(), 2);
+        assert!(!runs.is_empty());
         assert!(runs
             .iter()
             .all(|run| run.shaping == iced::widget::text::Shaping::Advanced));
+    }
+
+    #[test]
+    fn selection_col_spans_merge_overlapping_rects() {
+        let spans = selection_col_spans_for_row(
+            &[
+                TerminalSelectionRect {
+                    x: 8.0,
+                    y: 0.0,
+                    width: 16.0,
+                    height: 16.0,
+                },
+                TerminalSelectionRect {
+                    x: 24.0,
+                    y: 0.0,
+                    width: 16.0,
+                    height: 16.0,
+                },
+            ],
+            0,
+            8.0,
+            16.0,
+            10,
+        );
+        assert_eq!(
+            spans,
+            vec![SelectionColSpan {
+                start_col: 1,
+                end_col: 5
+            }]
+        );
+    }
+
+    #[test]
+    fn cell_selection_uses_row_spans() {
+        let spans = vec![SelectionColSpan {
+            start_col: 2,
+            end_col: 4,
+        }];
+        assert!(cell_is_selected_in_spans(&spans, 2, 1));
+        assert!(cell_is_selected_in_spans(&spans, 3, 1));
+        assert!(!cell_is_selected_in_spans(&spans, 4, 1));
+        assert!(cell_is_selected_in_spans(&spans, 1, 2));
+    }
+
+    #[test]
+    fn selection_row_range_tracks_covered_rows() {
+        let range = selection_row_range(
+            &[TerminalSelectionRect {
+                x: 0.0,
+                y: 8.0,
+                width: 16.0,
+                height: 24.0,
+            }],
+            16.0,
+            10,
+        );
+        assert_eq!(range, Some((0, 2)));
     }
 
     #[test]

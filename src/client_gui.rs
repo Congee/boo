@@ -126,7 +126,7 @@ pub struct ClientApp {
     pane_snapshots: HashMap<u64, Arc<vt_backend_core::TerminalSnapshot>>,
     focused_pane_id: u64,
     last_error: Option<String>,
-    font_fallbacks: Vec<&'static str>,
+    font_fallbacks: Arc<[&'static str]>,
     cell_width: f64,
     cell_height: f64,
     font_size: f32,
@@ -166,10 +166,10 @@ impl ClientApp {
         !self.pane_snapshots.is_empty()
     }
 
-    fn has_blinking_cursor(&self) -> bool {
+    fn focused_pane_has_blinking_cursor(&self) -> bool {
         self.pane_snapshots
-            .values()
-            .any(|snapshot| snapshot.cursor.visible && snapshot.cursor.blinking)
+            .get(&self.focused_pane_id)
+            .is_some_and(|snapshot| snapshot.cursor.visible && snapshot.cursor.blinking)
     }
 
     fn stream_ready_for_terminal_io(&self) -> bool {
@@ -195,9 +195,10 @@ impl ClientApp {
                     .font_fallbacks
                     .iter()
                     .map(|family| crate::leak_font_family(family))
-                    .collect()
+                    .collect::<Vec<_>>()
+                    .into()
             })
-            .unwrap_or_default();
+            .unwrap_or_else(|| Arc::from([]));
         let background_opacity = snapshot
             .as_ref()
             .map(|snapshot| snapshot.appearance.background_opacity)
@@ -458,6 +459,10 @@ impl ClientApp {
         &'a self,
         snapshot: &'a control::UiSnapshot,
     ) -> Element<'a, Message> {
+        let selection_background = Self::theme_color(self.selection_background, 0.35);
+        let selection_foreground = Self::theme_color(self.selection_foreground, 1.0);
+        let cursor_text_color = Self::theme_color(self.cursor_text_color, 1.0);
+        let url_color = Self::theme_color(self.url_color, 1.0);
         let mut layers: Vec<Element<'a, Message>> = vec![
             iced::widget::canvas(vt_terminal_canvas::TerminalBackgroundCanvas {
                 color: Self::theme_color(self.terminal_background, self.background_opacity),
@@ -470,6 +475,21 @@ impl ClientApp {
             let Some(terminal_snapshot) = self.pane_snapshots.get(&pane.pane_id) else {
                 continue;
             };
+            let cursor_blink_visible = pane_cursor_blink_visible(
+                pane.focused,
+                terminal_snapshot.cursor.blinking,
+                self.app_focused,
+                self.cursor_blink_epoch,
+                self.cursor_blink_interval,
+            );
+            let viewport = vt_terminal_canvas::TerminalViewport {
+                x: pane.frame.x as f32,
+                y: pane.frame.y as f32,
+                width: pane.frame.width as f32,
+                height: pane.frame.height as f32,
+            };
+            let preedit_text =
+                (pane.focused && !self.preedit_text.is_empty()).then(|| self.preedit_text.clone());
             let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
                 Arc::clone(terminal_snapshot),
                 self.cell_width as f32,
@@ -481,28 +501,17 @@ impl ClientApp {
                 1,
                 self.background_opacity,
                 self.background_opacity_cells,
-                pane_cursor_blink_visible(
-                    pane.focused,
-                    terminal_snapshot.cursor.blinking,
-                    self.app_focused,
-                    self.cursor_blink_epoch,
-                    self.cursor_blink_interval,
-                ),
+                cursor_blink_visible,
                 Vec::new(),
-                Self::theme_color(self.selection_background, 0.35),
-                Some(Self::theme_color(self.selection_foreground, 1.0)),
-                Some(Self::theme_color(self.cursor_text_color, 1.0)),
-                Some(Self::theme_color(self.url_color, 1.0)),
-                (pane.focused && !self.preedit_text.is_empty()).then(|| self.preedit_text.clone()),
+                selection_background,
+                Some(selection_foreground),
+                Some(cursor_text_color),
+                Some(url_color),
+                preedit_text.clone(),
             )
             .without_base_fill()
             .without_text_fill()
-            .new_with_viewport(vt_terminal_canvas::TerminalViewport {
-                x: pane.frame.x as f32,
-                y: pane.frame.y as f32,
-                width: pane.frame.width as f32,
-                height: pane.frame.height as f32,
-            });
+            .new_with_viewport(viewport);
             layers.push(
                 container(
                     iced::widget::canvas(terminal_canvas)
@@ -522,26 +531,14 @@ impl ClientApp {
                         self.font_size,
                         None,
                         self.font_fallbacks.clone(),
-                        pane_cursor_blink_visible(
-                            pane.focused,
-                            terminal_snapshot.cursor.blinking,
-                            self.app_focused,
-                            self.cursor_blink_epoch,
-                            self.cursor_blink_interval,
-                        ),
+                        cursor_blink_visible,
                         Vec::new(),
-                        Some(Self::theme_color(self.selection_foreground, 1.0)),
-                        Some(Self::theme_color(self.cursor_text_color, 1.0)),
-                        Some(Self::theme_color(self.url_color, 1.0)),
-                        (pane.focused && !self.preedit_text.is_empty())
-                            .then(|| self.preedit_text.clone()),
+                        Some(selection_foreground),
+                        Some(cursor_text_color),
+                        Some(url_color),
+                        preedit_text,
                     )
-                    .new_with_viewport(vt_terminal_canvas::TerminalViewport {
-                        x: pane.frame.x as f32,
-                        y: pane.frame.y as f32,
-                        width: pane.frame.width as f32,
-                        height: pane.frame.height as f32,
-                    }),
+                    .new_with_viewport(viewport),
                 ),
             );
         }
@@ -578,7 +575,7 @@ impl ClientApp {
             subscriptions.push(time::every(IDLE_TICK_INTERVAL).map(|_| Message::Frame));
         }
         if !self.cursor_blink_interval.is_zero()
-            && self.has_blinking_cursor()
+            && self.focused_pane_has_blinking_cursor()
             && self.has_paintable_terminal()
         {
             subscriptions.push(time::every(self.cursor_blink_interval).map(|_| Message::Frame));
@@ -618,7 +615,8 @@ impl ClientApp {
                     .font_fallbacks
                     .iter()
                     .map(|family| crate::leak_font_family(family))
-                    .collect();
+                    .collect::<Vec<_>>()
+                    .into();
                 self.background_opacity = snapshot.appearance.background_opacity;
                 self.background_opacity_cells = snapshot.appearance.background_opacity_cells;
                 self.terminal_foreground = snapshot.appearance.terminal_foreground;
@@ -2453,9 +2451,6 @@ fn apply_remote_delta_snapshot(
     }
     if delta.scroll_rows != 0 {
         apply_snapshot_scroll(snapshot, delta.scroll_rows);
-        for revision in &mut snapshot.row_revisions {
-            *revision = revision.wrapping_add(1);
-        }
     }
     let mut applied_rows = 0u64;
     let mut applied_cells = 0u64;
@@ -2510,20 +2505,20 @@ fn apply_snapshot_scroll(snapshot: &mut vt_backend_core::TerminalSnapshot, scrol
     let blank_row = || vec![vt_backend_core::CellSnapshot::default(); cols];
     if scroll_rows > 0 {
         let shift = (scroll_rows as usize).min(rows);
-        snapshot.rows_data.drain(0..shift);
-        snapshot.row_revisions.drain(0..shift);
-        for _ in 0..shift {
-            snapshot.rows_data.push(blank_row());
-            snapshot.row_revisions.push(1);
+        snapshot.rows_data.rotate_left(shift);
+        snapshot.row_revisions.rotate_left(shift);
+        for row_index in rows - shift..rows {
+            snapshot.rows_data[row_index] = blank_row();
+            snapshot.row_revisions[row_index] = snapshot.row_revisions[row_index].wrapping_add(1);
         }
     } else {
         let shift = ((-scroll_rows) as usize).min(rows);
-        for _ in 0..shift {
-            snapshot.rows_data.insert(0, blank_row());
-            snapshot.row_revisions.insert(0, 1);
+        snapshot.rows_data.rotate_right(shift);
+        snapshot.row_revisions.rotate_right(shift);
+        for row_index in 0..shift {
+            snapshot.rows_data[row_index] = blank_row();
+            snapshot.row_revisions[row_index] = snapshot.row_revisions[row_index].wrapping_add(1);
         }
-        snapshot.rows_data.truncate(rows);
-        snapshot.row_revisions.truncate(rows);
     }
 }
 
@@ -2746,6 +2741,30 @@ mod tests {
     }
 
     #[test]
+    fn focused_pane_blink_scheduler_ignores_unfocused_blinking_cursors() {
+        let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
+        app.focused_pane_id = 1;
+        app.pane_snapshots
+            .insert(1, Arc::new(test_terminal_snapshot_with_cursor(0, 0, false)));
+        app.pane_snapshots
+            .insert(2, Arc::new(test_terminal_snapshot_with_cursor(1, 0, true)));
+
+        assert!(!app.focused_pane_has_blinking_cursor());
+    }
+
+    #[test]
+    fn focused_pane_blink_scheduler_tracks_focused_blinking_cursor() {
+        let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
+        app.focused_pane_id = 2;
+        app.pane_snapshots
+            .insert(1, Arc::new(test_terminal_snapshot_with_cursor(0, 0, false)));
+        app.pane_snapshots
+            .insert(2, Arc::new(test_terminal_snapshot_with_cursor(1, 0, true)));
+
+        assert!(app.focused_pane_has_blinking_cursor());
+    }
+
+    #[test]
     fn focused_cursor_movement_resets_blink_epoch() {
         let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
         app.focused_pane_id = 42;
@@ -2770,6 +2789,7 @@ mod tests {
             Duration::from_millis(500)
         ));
     }
+
 
     #[test]
     fn unchanged_focused_cursor_does_not_reset_blink_epoch() {
@@ -3131,6 +3151,40 @@ mod tests {
             texts,
             vec!["b".to_string(), "c".to_string(), "d".to_string()]
         );
+    }
+
+    #[test]
+    fn apply_snapshot_scroll_rotates_row_revisions_with_content() {
+        let mut snapshot = vt_backend_core::TerminalSnapshot {
+            cols: 1,
+            rows: 3,
+            rows_data: vec![
+                vec![vt_backend_core::CellSnapshot {
+                    text: "a".to_string(),
+                    ..Default::default()
+                }],
+                vec![vt_backend_core::CellSnapshot {
+                    text: "b".to_string(),
+                    ..Default::default()
+                }],
+                vec![vt_backend_core::CellSnapshot {
+                    text: "c".to_string(),
+                    ..Default::default()
+                }],
+            ],
+            row_revisions: vec![10, 20, 30],
+            ..Default::default()
+        };
+
+        apply_snapshot_scroll(&mut snapshot, 1);
+
+        let texts = snapshot
+            .rows_data
+            .iter()
+            .map(|row| row.first().map(|cell| cell.text.clone()).unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(texts, vec!["b".to_string(), "c".to_string(), String::new()]);
+        assert_eq!(snapshot.row_revisions, vec![20, 30, 11]);
     }
 
     #[test]

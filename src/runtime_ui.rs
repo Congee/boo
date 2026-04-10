@@ -369,7 +369,7 @@ impl BooApp {
                     self.cell_height as f32,
                     self.terminal_font_size,
                     self.terminal_font_family,
-                    self.terminal_font_fallbacks.clone(),
+                    self.terminal_font_fallbacks.clone().into(),
                     self.appearance_revision,
                     self.appearance_revision,
                     self.background_opacity,
