@@ -1147,22 +1147,37 @@ fn worker_loop(
         };
 
         pending_work.store(pane.has_pending_pty_work(), Ordering::Relaxed);
+        let mut should_wake_headless = snapshot_changed;
         {
             let mut shared = state.lock().unwrap();
+            let running_command = pane
+                .running_command()
+                .map(|running| running.command.clone());
+            let finished_commands = pane.take_finished_commands();
+            let desktop_notifications = pane.take_desktop_notifications();
             if snapshot_changed {
                 shared.snapshot = Arc::new(snapshot.clone());
                 shared.version = shared.version.wrapping_add(1);
             }
-            shared.running_command = pane
-                .running_command()
-                .map(|running| running.command.clone());
-            shared
-                .finished_commands
-                .extend(pane.take_finished_commands());
-            shared
-                .desktop_notifications
-                .extend(pane.take_desktop_notifications());
-            shared.exited = shared.exited || exited;
+            if shared.running_command != running_command {
+                shared.running_command = running_command;
+                should_wake_headless = true;
+            }
+            if !finished_commands.is_empty() {
+                shared.finished_commands.extend(finished_commands);
+                should_wake_headless = true;
+            }
+            if !desktop_notifications.is_empty() {
+                shared.desktop_notifications.extend(desktop_notifications);
+                should_wake_headless = true;
+            }
+            if !shared.exited && exited {
+                shared.exited = true;
+                should_wake_headless = true;
+            }
+        }
+        if should_wake_headless {
+            crate::notify_headless_wakeup();
         }
 
         if exited || disconnected {
