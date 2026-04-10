@@ -155,6 +155,16 @@ impl BooApp {
                 self.inject_key(&keyspec);
             }
             server::Command::RemoteListSessions { client_id } => {
+                if let Some(server) = self.server.local_gui_server.as_ref()
+                    && server.client_is_local(client_id)
+                    && server.client_session(client_id).is_none()
+                    && let Some(session_id) = self.server.tabs.active_session_id()
+                    && self.pane_for_session(session_id).is_some()
+                {
+                    server.send_attached(client_id, session_id);
+                    server.send_ui_snapshot(client_id, &self.ui_snapshot());
+                    self.publish_remote_session(session_id);
+                }
                 if let Some(server) = self
                     .remote_server_for_client(client_id)
                     .or(self.server.local_gui_server.as_ref())

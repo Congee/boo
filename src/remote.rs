@@ -403,6 +403,14 @@ impl RemoteServer {
             .and_then(|client| client.attached_session)
     }
 
+    pub fn client_is_local(&self, client_id: u64) -> bool {
+        let state = self.state.lock().expect("remote server state poisoned");
+        state
+            .clients
+            .get(&client_id)
+            .is_some_and(|client| client.is_local)
+    }
+
     pub fn send_session_list(&self, client_id: u64, sessions: &[RemoteSessionInfo]) {
         self.send_to_client(
             client_id,
