@@ -99,6 +99,7 @@ const DEFAULT_ACTIVE_TAB_FOREGROUND: config::RgbColor = [0xEB, 0xEB, 0xEB];
 const DEFAULT_ACTIVE_TAB_BACKGROUND: config::RgbColor = [0x3D, 0x52, 0x9E];
 const DEFAULT_INACTIVE_TAB_FOREGROUND: config::RgbColor = [0xB8, 0xB8, 0xB8];
 const DEFAULT_INACTIVE_TAB_BACKGROUND: config::RgbColor = [0x1A, 0x1A, 0x1A];
+const INTERACTIVE_ACTIVITY_WINDOW: std::time::Duration = std::time::Duration::from_millis(250);
 #[derive(Debug)]
 struct ResolvedAppearance {
     font_family: Option<&'static str>,
@@ -337,6 +338,7 @@ struct BooApp {
     surface_initialized_once: bool,
     app_focused: bool,
     remote_dirty: bool,
+    interactive_activity_epoch: std::time::Instant,
     desktop_notifications_enabled: bool,
     notify_on_command_finish: config::NotifyOnCommandFinish,
     notify_on_command_finish_action: config::NotifyOnCommandFinishAction,

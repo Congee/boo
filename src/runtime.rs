@@ -20,7 +20,10 @@ pub fn run_headless() {
                 crate::profiling::scope("server.headless.update", crate::profiling::Kind::Cpu);
             let _ = app.update(Message::Frame);
         }
-        let sleep_duration = if app.backend.has_pending_terminal_work() {
+        let sleep_duration = if app.backend.has_pending_terminal_work()
+            || app.remote_dirty
+            || app.interactive_activity_epoch.elapsed() < INTERACTIVE_ACTIVITY_WINDOW
+        {
             std::time::Duration::from_millis(1)
         } else {
             std::time::Duration::from_millis(16)
@@ -208,6 +211,7 @@ impl BooApp {
                     surface_initialized_once: false,
                     app_focused: true,
                     remote_dirty: true,
+                    interactive_activity_epoch: std::time::Instant::now(),
                     desktop_notifications_enabled: boo_config.desktop_notifications,
                     notify_on_command_finish: boo_config.notify_on_command_finish,
                     notify_on_command_finish_action: boo_config.notify_on_command_finish_action,
@@ -292,6 +296,7 @@ impl BooApp {
                     surface_initialized_once: false,
                     app_focused: true,
                     remote_dirty: true,
+                    interactive_activity_epoch: std::time::Instant::now(),
                     desktop_notifications_enabled: boo_config.desktop_notifications,
                     notify_on_command_finish: boo_config.notify_on_command_finish,
                     notify_on_command_finish_action: boo_config.notify_on_command_finish_action,
@@ -582,14 +587,21 @@ impl BooApp {
             self.update_text_input_cursor_rect();
         }
 
+        let mut saw_interactive_activity = false;
         if let Ok(cmd) = self.server.ctl_rx.try_recv() {
             self.handle_server_cmd(cmd.into());
+            saw_interactive_activity = true;
         }
         while let Ok(cmd) = self.server.remote_rx.try_recv() {
             self.handle_server_cmd(cmd.into());
+            saw_interactive_activity = true;
         }
         while let Ok(cmd) = self.server.local_gui_rx.try_recv() {
             self.handle_server_cmd(cmd.into());
+            saw_interactive_activity = true;
+        }
+        if saw_interactive_activity {
+            self.interactive_activity_epoch = std::time::Instant::now();
         }
         if self.remote_dirty {
             let _scope =
