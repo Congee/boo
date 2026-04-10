@@ -14,6 +14,8 @@ fn take_global_receiver<T>(
 
 pub fn run_headless() {
     let mut app = BooApp::new_headless();
+    let (wake_tx, wake_rx) = std::sync::mpsc::sync_channel(1);
+    crate::install_headless_waker(wake_tx);
     loop {
         {
             let _scope =
@@ -31,7 +33,7 @@ pub fn run_headless() {
         {
             let _scope =
                 crate::profiling::scope("server.headless.sleep", crate::profiling::Kind::Wait);
-            std::thread::sleep(sleep_duration);
+            let _ = wake_rx.recv_timeout(sleep_duration);
         }
     }
 }

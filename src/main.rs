@@ -77,6 +77,8 @@ static KEY_EVENT_RX: std::sync::OnceLock<
 static TEXT_INPUT_RX: std::sync::OnceLock<
     std::sync::Mutex<std::sync::mpsc::Receiver<platform::TextInputEvent>>,
 > = std::sync::OnceLock::new();
+static HEADLESS_WAKE_TX: std::sync::OnceLock<std::sync::mpsc::SyncSender<()>> =
+    std::sync::OnceLock::new();
 
 #[derive(Clone, Copy)]
 struct CommandFinishedEvent {
@@ -100,6 +102,17 @@ const DEFAULT_ACTIVE_TAB_BACKGROUND: config::RgbColor = [0x3D, 0x52, 0x9E];
 const DEFAULT_INACTIVE_TAB_FOREGROUND: config::RgbColor = [0xB8, 0xB8, 0xB8];
 const DEFAULT_INACTIVE_TAB_BACKGROUND: config::RgbColor = [0x1A, 0x1A, 0x1A];
 const INTERACTIVE_ACTIVITY_WINDOW: std::time::Duration = std::time::Duration::from_millis(250);
+
+fn install_headless_waker(tx: std::sync::mpsc::SyncSender<()>) {
+    let _ = HEADLESS_WAKE_TX.set(tx);
+}
+
+pub(crate) fn notify_headless_wakeup() {
+    if let Some(tx) = HEADLESS_WAKE_TX.get() {
+        let _ = tx.try_send(());
+    }
+}
+
 #[derive(Debug)]
 struct ResolvedAppearance {
     font_family: Option<&'static str>,

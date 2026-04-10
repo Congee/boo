@@ -719,6 +719,7 @@ fn read_loop(
             if cmd_tx.send(command).is_err() {
                 break;
             }
+            crate::notify_headless_wakeup();
         } else {
             send_direct_error(&state, client_id, "invalid payload");
         }

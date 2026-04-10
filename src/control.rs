@@ -366,9 +366,11 @@ fn run_socket(path: &str, tx: &mpsc::Sender<ControlCmd>) {
 }
 
 fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
+    let notify = || crate::notify_headless_wakeup();
     match req {
         Request::Quit => {
             let _ = tx.send(ControlCmd::Quit);
+            notify();
             Response::Ok { ok: true }
         }
         Request::DumpKeys { enabled } => {
@@ -377,43 +379,53 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
             } else {
                 ControlCmd::DumpKeysOff
             });
+            notify();
             Response::Ok { ok: true }
         }
         Request::SendKey { key } => {
             let _ = tx.send(ControlCmd::SendKey { keyspec: key });
+            notify();
             Response::Ok { ok: true }
         }
         Request::ExecuteCommand { input } => {
             let _ = tx.send(ControlCmd::ExecuteCommand { input });
+            notify();
             Response::Ok { ok: true }
         }
         Request::AppKeyEvent { event } => {
             let _ = tx.send(ControlCmd::AppKeyEvent { event });
+            notify();
             Response::Ok { ok: true }
         }
         Request::AppMouseEvent { event } => {
             let _ = tx.send(ControlCmd::AppMouseEvent { event });
+            notify();
             Response::Ok { ok: true }
         }
         Request::AppAction { action } => {
             let _ = tx.send(ControlCmd::AppAction { action });
+            notify();
             Response::Ok { ok: true }
         }
         Request::FocusPane { pane_id } => {
             let _ = tx.send(ControlCmd::FocusPane { pane_id });
+            notify();
             Response::Ok { ok: true }
         }
         Request::SendText { text } => {
             let _ = tx.send(ControlCmd::SendText { text });
+            notify();
             Response::Ok { ok: true }
         }
         Request::SendVt { text } => {
             let _ = tx.send(ControlCmd::SendVt { text });
+            notify();
             Response::Ok { ok: true }
         }
         Request::GetClipboard => {
             let (reply_tx, reply_rx) = mpsc::channel();
             let _ = tx.send(ControlCmd::GetClipboard { reply: reply_tx });
+            notify();
             reply_rx
                 .recv_timeout(std::time::Duration::from_millis(500))
                 .unwrap_or(Response::Error {
@@ -424,15 +436,18 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
             let _ = tx.send(ControlCmd::NewSplit {
                 direction: direction.unwrap_or_else(|| "right".into()),
             });
+            notify();
             Response::Ok { ok: true }
         }
         Request::FocusSurface { index } => {
             let _ = tx.send(ControlCmd::FocusSurface { index });
+            notify();
             Response::Ok { ok: true }
         }
         Request::ListSurfaces => {
             let (reply_tx, reply_rx) = mpsc::channel();
             let _ = tx.send(ControlCmd::ListSurfaces { reply: reply_tx });
+            notify();
             match reply_rx.recv_timeout(std::time::Duration::from_secs(2)) {
                 Ok(resp) => resp,
                 Err(_) => Response::Error {
@@ -443,6 +458,7 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
         Request::ListTabs => {
             let (reply_tx, reply_rx) = mpsc::channel();
             let _ = tx.send(ControlCmd::ListTabs { reply: reply_tx });
+            notify();
             match reply_rx.recv_timeout(std::time::Duration::from_secs(2)) {
                 Ok(resp) => resp,
                 Err(_) => Response::Error {
@@ -453,6 +469,7 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
         Request::GetUiSnapshot => {
             let (reply_tx, reply_rx) = mpsc::channel();
             let _ = tx.send(ControlCmd::GetUiSnapshot { reply: reply_tx });
+            notify();
             match reply_rx.recv_timeout(std::time::Duration::from_secs(2)) {
                 Ok(resp) => resp,
                 Err(_) => Response::Error {
@@ -462,30 +479,37 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
         }
         Request::NewTab => {
             let _ = tx.send(ControlCmd::NewTab);
+            notify();
             Response::Ok { ok: true }
         }
         Request::GotoTab { index } => {
             let _ = tx.send(ControlCmd::GotoTab { index });
+            notify();
             Response::Ok { ok: true }
         }
         Request::NextTab => {
             let _ = tx.send(ControlCmd::NextTab);
+            notify();
             Response::Ok { ok: true }
         }
         Request::PrevTab => {
             let _ = tx.send(ControlCmd::PrevTab);
+            notify();
             Response::Ok { ok: true }
         }
         Request::ResizeViewportPoints { width, height } => {
             let _ = tx.send(ControlCmd::ResizeViewportPoints { width, height });
+            notify();
             Response::Ok { ok: true }
         }
         Request::ResizeViewport { cols, rows } => {
             let _ = tx.send(ControlCmd::ResizeViewport { cols, rows });
+            notify();
             Response::Ok { ok: true }
         }
         Request::ResizeFocused { cols, rows } => {
             let _ = tx.send(ControlCmd::ResizeFocused { cols, rows });
+            notify();
             Response::Ok { ok: true }
         }
     }
@@ -532,6 +556,7 @@ fn run_pipe(tx: &mpsc::Sender<ControlCmd>) {
                 if tx.send(cmd).is_err() {
                     return;
                 }
+                crate::notify_headless_wakeup();
             }
         }
     }
