@@ -66,6 +66,7 @@ pub enum MessageType {
     ScrollData = 0x8a,
     Clipboard = 0x8b,
     Image = 0x8c,
+    UiSnapshot = 0x8d,
 }
 
 impl TryFrom<u8> for MessageType {
@@ -102,6 +103,7 @@ impl TryFrom<u8> for MessageType {
             0x8a => Self::ScrollData,
             0x8b => Self::Clipboard,
             0x8c => Self::Image,
+            0x8d => Self::UiSnapshot,
             _ => return Err(()),
         };
         Ok(message)
@@ -434,6 +436,37 @@ impl RemoteServer {
             MessageType::ErrorMsg,
             message.as_bytes().to_vec(),
         );
+    }
+
+    pub fn send_ui_snapshot(&self, client_id: u64, snapshot: &crate::control::UiSnapshot) {
+        let is_local = {
+            let state = self.state.lock().expect("remote server state poisoned");
+            state
+                .clients
+                .get(&client_id)
+                .is_some_and(|client| client.is_local)
+        };
+        if !is_local {
+            return;
+        }
+        let Ok(payload) = serde_json::to_vec(snapshot) else {
+            return;
+        };
+        self.send_to_client(client_id, MessageType::UiSnapshot, payload);
+    }
+
+    pub fn send_ui_snapshot_to_local_clients(&self, snapshot: &crate::control::UiSnapshot) {
+        let client_ids = {
+            let state = self.state.lock().expect("remote server state poisoned");
+            state
+                .clients
+                .iter()
+                .filter_map(|(client_id, client)| client.is_local.then_some(*client_id))
+                .collect::<Vec<_>>()
+        };
+        for client_id in client_ids {
+            self.send_ui_snapshot(client_id, snapshot);
+        }
     }
 
     pub fn send_full_state_to_attached(&self, session_id: u32, state: &RemoteFullState) {

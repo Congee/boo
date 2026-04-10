@@ -131,9 +131,15 @@ impl BooApp {
             }
             server::Command::ResizeViewportPoints { width, height } => {
                 self.resize_viewport_points(width, height);
+                if let Some(server) = self.server.local_gui_server.as_ref() {
+                    server.send_ui_snapshot_to_local_clients(&self.ui_snapshot());
+                }
             }
             server::Command::ResizeViewport { cols, rows } => {
                 self.resize_viewport_cells(cols, rows);
+                if let Some(server) = self.server.local_gui_server.as_ref() {
+                    server.send_ui_snapshot_to_local_clients(&self.ui_snapshot());
+                }
             }
             server::Command::ResizeFocused { cols, rows } => {
                 let pane = self.server.tabs.focused_pane();
@@ -163,6 +169,7 @@ impl BooApp {
                         .or(self.server.remote_server.as_ref())
                     {
                         server.send_attached(client_id, session_id);
+                        server.send_ui_snapshot(client_id, &self.ui_snapshot());
                     }
                     self.publish_remote_session(session_id);
                 } else if let Some(server) = self

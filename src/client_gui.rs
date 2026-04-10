@@ -30,12 +30,9 @@ use std::time::{Duration, Instant};
 
 const STATUS_BAR_HEIGHT: f64 = 20.0;
 const DEFAULT_FONT_SIZE: f32 = 14.0;
-const IDLE_TICK_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(600);
 const STREAM_RECONNECT_DELAY: Duration = Duration::from_millis(250);
 const PASSIVE_STREAM_BATCH_WINDOW: Duration = Duration::from_millis(24);
-const SNAPSHOT_RETRY_TICKS: u8 = 3;
-const SNAPSHOT_KEEPALIVE_TICKS: u8 = 30;
 const LOCAL_STREAM_INPUT_SEQ_LEN: usize = 8;
 const REMOTE_FULL_STATE_HEADER_LEN: usize = 14;
 const LOCAL_FULL_STATE_HEADER_LEN: usize =
@@ -148,7 +145,6 @@ pub struct ClientApp {
     cursor_blink_epoch: Instant,
     focused_cursor_position: Option<(u64, u16, u16)>,
     preedit_text: String,
-    tick_counter: u8,
     next_input_seq: u64,
     pending_input_latencies: HashMap<u64, Instant>,
     pending_passive_stream: Option<LocalStreamEvent>,
@@ -161,7 +157,67 @@ pub struct ClientApp {
     last_mouse_pos: Point,
 }
 
+#[derive(Clone, Copy)]
+enum SnapshotRefreshReason {
+    TextFallback,
+    StreamFallback,
+    ResizeViewport,
+    ResizeCells,
+    GuiTestText,
+    GuiTestKey,
+    GuiTestManual,
+}
+
+impl SnapshotRefreshReason {
+    fn profile_path(self) -> &'static str {
+        match self {
+            Self::TextFallback => "client.control.get_ui_snapshot.text_fallback",
+            Self::StreamFallback => "client.control.get_ui_snapshot.stream_fallback",
+            Self::ResizeViewport => "client.control.get_ui_snapshot.resize_viewport",
+            Self::ResizeCells => "client.control.get_ui_snapshot.resize_cells",
+            Self::GuiTestText => "client.control.get_ui_snapshot.gui_test_text",
+            Self::GuiTestKey => "client.control.get_ui_snapshot.gui_test_key",
+            Self::GuiTestManual => "client.control.get_ui_snapshot.gui_test_manual",
+        }
+    }
+}
+
 impl ClientApp {
+    fn apply_ui_snapshot(&mut self, snapshot: control::UiSnapshot) {
+        self.font_size = snapshot.appearance.font_size.max(8.0);
+        self.font_fallbacks = snapshot
+            .appearance
+            .font_fallbacks
+            .iter()
+            .map(|family| crate::leak_font_family(family))
+            .collect::<Vec<_>>()
+            .into();
+        self.background_opacity = snapshot.appearance.background_opacity;
+        self.background_opacity_cells = snapshot.appearance.background_opacity_cells;
+        self.terminal_foreground = snapshot.appearance.terminal_foreground;
+        self.terminal_background = snapshot.appearance.terminal_background;
+        self.cursor_color = snapshot.appearance.cursor_color;
+        self.selection_background = snapshot.appearance.selection_background;
+        self.selection_foreground = snapshot.appearance.selection_foreground;
+        self.cursor_text_color = snapshot.appearance.cursor_text_color;
+        self.url_color = snapshot.appearance.url_color;
+        self.active_tab_foreground = snapshot.appearance.active_tab_foreground;
+        self.active_tab_background = snapshot.appearance.active_tab_background;
+        self.inactive_tab_foreground = snapshot.appearance.inactive_tab_foreground;
+        self.inactive_tab_background = snapshot.appearance.inactive_tab_background;
+        self.cursor_blink_interval =
+            Duration::from_nanos(snapshot.appearance.cursor_blink_interval_ns);
+        self.cursor_blink_epoch = Instant::now();
+        (self.cell_width, self.cell_height) = terminal_metrics(self.font_size);
+        self.ui_state = ClientUiState::from_snapshot(&snapshot);
+        self.focused_pane_id = snapshot.focused_pane;
+        self.pane_snapshots = pane_snapshot_map_from_ui_snapshot(&snapshot);
+        self.observe_focused_cursor_position();
+        self.bootstrap_snapshot = Some(snapshot);
+        self.terminal_snapshot_generation = self.allocate_snapshot_generation();
+        self.last_error = None;
+    }
+
     fn has_paintable_terminal(&self) -> bool {
         !self.pane_snapshots.is_empty()
     }
@@ -182,97 +238,32 @@ impl ClientApp {
 
     pub fn new(socket_path: String) -> (Self, Task<Message>) {
         let client = control::Client::connect(socket_path.clone());
-        let snapshot = client.get_ui_snapshot().ok();
-        let font_size = snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.appearance.font_size)
-            .unwrap_or(DEFAULT_FONT_SIZE);
-        let font_fallbacks = snapshot
-            .as_ref()
-            .map(|snapshot| {
-                snapshot
-                    .appearance
-                    .font_fallbacks
-                    .iter()
-                    .map(|family| crate::leak_font_family(family))
-                    .collect::<Vec<_>>()
-                    .into()
-            })
-            .unwrap_or_else(|| Arc::from([]));
-        let background_opacity = snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.appearance.background_opacity)
-            .unwrap_or(1.0);
-        let background_opacity_cells = snapshot
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.appearance.background_opacity_cells);
-        let cursor_blink_interval = snapshot
-            .as_ref()
-            .map(|snapshot| Duration::from_nanos(snapshot.appearance.cursor_blink_interval_ns))
-            .unwrap_or(DEFAULT_CURSOR_BLINK_INTERVAL);
-        let terminal_foreground = snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.appearance.terminal_foreground)
-            .unwrap_or(crate::DEFAULT_TERMINAL_FOREGROUND);
-        let terminal_background = snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.appearance.terminal_background)
-            .unwrap_or(crate::DEFAULT_TERMINAL_BACKGROUND);
-        let cursor_color = snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.appearance.cursor_color)
-            .unwrap_or(crate::DEFAULT_CURSOR_COLOR);
-        let selection_background = snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.appearance.selection_background)
-            .unwrap_or(crate::DEFAULT_SELECTION_BACKGROUND);
-        let selection_foreground = snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.appearance.selection_foreground)
-            .unwrap_or(crate::DEFAULT_SELECTION_FOREGROUND);
-        let cursor_text_color = snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.appearance.cursor_text_color)
-            .unwrap_or(crate::DEFAULT_CURSOR_TEXT_COLOR);
-        let url_color = snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.appearance.url_color)
-            .unwrap_or(crate::DEFAULT_URL_COLOR);
-        let active_tab_foreground = snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.appearance.active_tab_foreground)
-            .unwrap_or(crate::DEFAULT_ACTIVE_TAB_FOREGROUND);
-        let active_tab_background = snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.appearance.active_tab_background)
-            .unwrap_or(crate::DEFAULT_ACTIVE_TAB_BACKGROUND);
-        let inactive_tab_foreground = snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.appearance.inactive_tab_foreground)
-            .unwrap_or(crate::DEFAULT_INACTIVE_TAB_FOREGROUND);
-        let inactive_tab_background = snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.appearance.inactive_tab_background)
-            .unwrap_or(crate::DEFAULT_INACTIVE_TAB_BACKGROUND);
+        let font_size = DEFAULT_FONT_SIZE;
+        let font_fallbacks = Arc::from([]);
+        let background_opacity = 1.0;
+        let background_opacity_cells = false;
+        let cursor_blink_interval = DEFAULT_CURSOR_BLINK_INTERVAL;
+        let terminal_foreground = crate::DEFAULT_TERMINAL_FOREGROUND;
+        let terminal_background = crate::DEFAULT_TERMINAL_BACKGROUND;
+        let cursor_color = crate::DEFAULT_CURSOR_COLOR;
+        let selection_background = crate::DEFAULT_SELECTION_BACKGROUND;
+        let selection_foreground = crate::DEFAULT_SELECTION_FOREGROUND;
+        let cursor_text_color = crate::DEFAULT_CURSOR_TEXT_COLOR;
+        let url_color = crate::DEFAULT_URL_COLOR;
+        let active_tab_foreground = crate::DEFAULT_ACTIVE_TAB_FOREGROUND;
+        let active_tab_background = crate::DEFAULT_ACTIVE_TAB_BACKGROUND;
+        let inactive_tab_foreground = crate::DEFAULT_INACTIVE_TAB_FOREGROUND;
+        let inactive_tab_background = crate::DEFAULT_INACTIVE_TAB_BACKGROUND;
         let (cell_width, cell_height) = terminal_metrics(font_size);
-        let ui_state = snapshot
-            .as_ref()
-            .map(ClientUiState::from_snapshot)
-            .unwrap_or_default();
-        let pane_snapshots = snapshot
-            .as_ref()
-            .map(pane_snapshot_map_from_ui_snapshot)
-            .unwrap_or_default();
-        let focused_pane_id = snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.focused_pane)
-            .unwrap_or(0);
+        let ui_state = ClientUiState::default();
+        let pane_snapshots = HashMap::new();
+        let focused_pane_id = 0;
         let focused_cursor_position = focused_cursor_position(focused_pane_id, &pane_snapshots);
         let app = Self {
             socket_path,
             client,
             stream_tx: None,
-            bootstrap_snapshot: snapshot,
+            bootstrap_snapshot: None,
             ui_state,
             mode: ClientMode::Bootstrapping,
             active_session_id: None,
@@ -301,7 +292,6 @@ impl ClientApp {
             cursor_blink_epoch: Instant::now(),
             focused_cursor_position,
             preedit_text: String::new(),
-            tick_counter: 0,
             next_input_seq: 1,
             pending_input_latencies: HashMap::new(),
             pending_passive_stream: None,
@@ -580,12 +570,6 @@ impl ClientApp {
             iced::Subscription::run_with(self.socket_path.clone(), local_stream_subscription),
             gui_test_subscription(),
         ];
-        if !matches!(self.mode, ClientMode::Attached)
-            && self.stream_tx.is_none()
-            && !self.has_paintable_terminal()
-        {
-            subscriptions.push(time::every(IDLE_TICK_INTERVAL).map(|_| Message::Frame));
-        }
         if !self.cursor_blink_interval.is_zero()
             && self.focused_pane_has_blinking_cursor()
             && self.has_paintable_terminal()
@@ -602,9 +586,10 @@ impl ClientApp {
         }
     }
 
-    fn refresh_snapshot(&mut self) {
+    fn refresh_snapshot(&mut self, reason: SnapshotRefreshReason) {
         let _scope =
             crate::profiling::scope("client.control.get_ui_snapshot", crate::profiling::Kind::Io);
+        crate::profiling::record_units(reason.profile_path(), crate::profiling::Kind::Io, 1);
         match self.client.get_ui_snapshot() {
             Ok(snapshot) => {
                 if matches!(self.mode, ClientMode::Attached) {
@@ -621,38 +606,7 @@ impl ClientApp {
                     crate::profiling::Kind::Io,
                     1,
                 );
-                self.font_size = snapshot.appearance.font_size.max(8.0);
-                self.font_fallbacks = snapshot
-                    .appearance
-                    .font_fallbacks
-                    .iter()
-                    .map(|family| crate::leak_font_family(family))
-                    .collect::<Vec<_>>()
-                    .into();
-                self.background_opacity = snapshot.appearance.background_opacity;
-                self.background_opacity_cells = snapshot.appearance.background_opacity_cells;
-                self.terminal_foreground = snapshot.appearance.terminal_foreground;
-                self.terminal_background = snapshot.appearance.terminal_background;
-                self.cursor_color = snapshot.appearance.cursor_color;
-                self.selection_background = snapshot.appearance.selection_background;
-                self.selection_foreground = snapshot.appearance.selection_foreground;
-                self.cursor_text_color = snapshot.appearance.cursor_text_color;
-                self.url_color = snapshot.appearance.url_color;
-                self.active_tab_foreground = snapshot.appearance.active_tab_foreground;
-                self.active_tab_background = snapshot.appearance.active_tab_background;
-                self.inactive_tab_foreground = snapshot.appearance.inactive_tab_foreground;
-                self.inactive_tab_background = snapshot.appearance.inactive_tab_background;
-                self.cursor_blink_interval =
-                    Duration::from_nanos(snapshot.appearance.cursor_blink_interval_ns);
-                self.cursor_blink_epoch = Instant::now();
-                (self.cell_width, self.cell_height) = terminal_metrics(self.font_size);
-                self.ui_state = ClientUiState::from_snapshot(&snapshot);
-                self.focused_pane_id = snapshot.focused_pane;
-                self.pane_snapshots = pane_snapshot_map_from_ui_snapshot(&snapshot);
-                self.observe_focused_cursor_position();
-                self.bootstrap_snapshot = Some(snapshot);
-                self.terminal_snapshot_generation = self.allocate_snapshot_generation();
-                self.last_error = None;
+                self.apply_ui_snapshot(snapshot);
             }
             Err(error) => {
                 crate::profiling::record_units(
@@ -672,16 +626,6 @@ impl ClientApp {
         {
             return;
         }
-        self.tick_counter = self.tick_counter.wrapping_add(1);
-        let refresh_ticks = if !self.has_paintable_terminal() || self.stream_tx.is_none() {
-            SNAPSHOT_RETRY_TICKS
-        } else {
-            SNAPSHOT_KEEPALIVE_TICKS
-        };
-        if self.tick_counter >= refresh_ticks {
-            self.tick_counter = 0;
-            self.refresh_snapshot();
-        }
     }
 
     fn send_text_input(&mut self, text: String) {
@@ -692,10 +636,12 @@ impl ClientApp {
                 input_seq,
                 bytes: text.into_bytes(),
             });
+        } else if matches!(self.mode, ClientMode::Bootstrapping) {
+            ime_debug!("client drop committed text while bootstrapping");
         } else {
             ime_debug!("client send committed text via control");
             let _ = self.client.send(&control::Request::SendText { text });
-            self.refresh_snapshot();
+            self.refresh_snapshot(SnapshotRefreshReason::TextFallback);
         }
     }
 
@@ -730,7 +676,9 @@ impl ClientApp {
             width: size.width as f64,
             height: size.height as f64,
         });
-        self.refresh_snapshot();
+        if self.stream_tx.is_none() && !matches!(self.mode, ClientMode::Bootstrapping) {
+            self.refresh_snapshot(SnapshotRefreshReason::ResizeViewport);
+        }
     }
 
     fn handle_keyboard(&mut self, event: keyboard::Event) {
@@ -851,9 +799,12 @@ impl ClientApp {
     fn send_stream_or_control(&mut self, stream: StreamCommand, control: control::Request) {
         if self.stream_ready_for_terminal_io() {
             self.send_stream_command(stream);
+        } else if matches!(self.mode, ClientMode::Bootstrapping) {
+            let _ = stream;
+            let _ = control;
         } else {
             let _ = self.client.send(&control);
-            self.refresh_snapshot();
+            self.refresh_snapshot(SnapshotRefreshReason::StreamFallback);
         }
     }
 
@@ -891,6 +842,9 @@ impl ClientApp {
             LocalStreamEvent::Attached(session_id) => {
                 self.active_session_id = Some(session_id);
                 self.ui_state.mark_active_session(Some(session_id));
+            }
+            LocalStreamEvent::UiSnapshot(snapshot) => {
+                self.apply_ui_snapshot(snapshot);
             }
             LocalStreamEvent::Detached => {
                 self.mode = ClientMode::Recovering;
@@ -1049,7 +1003,7 @@ impl ClientApp {
                     });
                 } else {
                     let _ = self.client.send(&control::Request::SendText { text });
-                    self.refresh_snapshot();
+                    self.refresh_snapshot(SnapshotRefreshReason::GuiTestText);
                 }
             }
             GuiTestCommand::Key(keyspec) => {
@@ -1060,7 +1014,7 @@ impl ClientApp {
                     let _ = self
                         .client
                         .send(&control::Request::SendKey { key: keyspec });
-                    self.refresh_snapshot();
+                    self.refresh_snapshot(SnapshotRefreshReason::GuiTestKey);
                 }
             }
             GuiTestCommand::AppKey(keyspec) => {
@@ -1095,7 +1049,9 @@ impl ClientApp {
                 });
             }
             GuiTestCommand::Resize { cols, rows } => self.send_resize_cells(cols, rows),
-            GuiTestCommand::Refresh => self.refresh_snapshot(),
+            GuiTestCommand::Refresh => {
+                self.refresh_snapshot(SnapshotRefreshReason::GuiTestManual)
+            }
         }
     }
 
@@ -1113,7 +1069,9 @@ impl ClientApp {
         let _ = self
             .client
             .send(&control::Request::ResizeViewport { cols, rows });
-        self.refresh_snapshot();
+        if self.stream_tx.is_none() && !matches!(self.mode, ClientMode::Bootstrapping) {
+            self.refresh_snapshot(SnapshotRefreshReason::ResizeCells);
+        }
     }
 
     fn record_pending_input(&mut self) -> u64 {
@@ -1749,6 +1707,7 @@ impl Widget<Message, Theme, iced::Renderer> for TerminalInputMethodLayer {
 pub(crate) enum LocalStreamEvent {
     SessionList(Vec<remote::RemoteSessionInfo>),
     Attached(u32),
+    UiSnapshot(control::UiSnapshot),
     Detached,
     SessionExited(u32),
     Disconnected,
@@ -2185,6 +2144,9 @@ fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStream
                 decode_remote_session_list(&payload).map(LocalStreamEvent::SessionList)
             }
             remote::MessageType::Attached => decode_u32(&payload).map(LocalStreamEvent::Attached),
+            remote::MessageType::UiSnapshot => serde_json::from_slice(&payload)
+                .ok()
+                .map(LocalStreamEvent::UiSnapshot),
             remote::MessageType::Detached => Some(LocalStreamEvent::Detached),
             remote::MessageType::SessionExited => {
                 decode_u32(&payload).map(LocalStreamEvent::SessionExited)
