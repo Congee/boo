@@ -29,6 +29,7 @@
           clang-tools
           lldb
           gdb
+          fontconfig
         ] ++ lib.optional stdenv.isLinux valgrind;
 
         buildInputs = with pkgs; [

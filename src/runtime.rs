@@ -35,6 +35,23 @@ pub fn run_headless() {
 
 impl BooApp {
     pub(crate) fn resolve_appearance_config(config: &config::Config) -> ResolvedAppearance {
+        let mut font_fallbacks = Vec::new();
+        let mut seen_families = std::collections::HashSet::new();
+        if let Some(primary) = config.font_family.as_deref() {
+            seen_families.insert(primary.to_ascii_lowercase());
+        }
+        for family in &config.font_fallbacks {
+            let key = family.to_ascii_lowercase();
+            if seen_families.insert(key) {
+                font_fallbacks.push(leak_font_family(family));
+            }
+        }
+        for family in platform_default_font_fallbacks(config.font_family.as_deref()) {
+            if seen_families.insert(family.to_ascii_lowercase()) {
+                font_fallbacks.push(family);
+            }
+        }
+
         #[cfg(target_os = "linux")]
         let (font_family, font_bytes) = config
             .font_family
@@ -47,6 +64,7 @@ impl BooApp {
 
         ResolvedAppearance {
             font_family,
+            font_fallbacks,
             font_size: config.font_size.unwrap_or(DEFAULT_TERMINAL_FONT_SIZE),
             background_opacity: config
                 .background_opacity
@@ -166,6 +184,7 @@ impl BooApp {
                     copy_mode: None,
                     command_prompt: CommandPrompt::new(),
                     terminal_font_family: appearance.font_family,
+                    terminal_font_fallbacks: appearance.font_fallbacks.clone(),
                     terminal_font_size: appearance.font_size,
                     background_opacity: appearance.background_opacity,
                     background_opacity_cells: appearance.background_opacity_cells,
@@ -249,6 +268,7 @@ impl BooApp {
                     copy_mode: None,
                     command_prompt: CommandPrompt::new(),
                     terminal_font_family: appearance.font_family,
+                    terminal_font_fallbacks: appearance.font_fallbacks.clone(),
                     terminal_font_size: appearance.font_size,
                     background_opacity: appearance.background_opacity,
                     background_opacity_cells: appearance.background_opacity_cells,
@@ -481,6 +501,7 @@ impl BooApp {
 
     pub(crate) fn apply_appearance(&mut self, appearance: ResolvedAppearance) {
         self.terminal_font_family = appearance.font_family;
+        self.terminal_font_fallbacks = appearance.font_fallbacks;
         self.terminal_font_size = appearance.font_size;
         self.background_opacity = appearance.background_opacity;
         self.background_opacity_cells = appearance.background_opacity_cells;

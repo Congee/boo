@@ -1,18 +1,22 @@
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use crate::vt_backend_core;
+use iced::advanced::renderer;
+use iced::advanced::text::{self, Paragraph as _, Renderer as _};
+use iced::advanced::widget::Tree;
+use iced::advanced::{Layout, Widget, layout};
 use iced::alignment;
 use iced::font;
 use iced::mouse;
 use iced::widget::canvas::{self, Cache, Frame};
-use iced::{Color, Font, Pixels, Point, Rectangle, Renderer, Size, Theme};
+use iced::{Color, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme};
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const PADDING_X: f32 = 4.0;
-const PADDING_Y: f32 = 2.0;
+pub(crate) const PADDING_X: f32 = 4.0;
+pub(crate) const PADDING_Y: f32 = 2.0;
 #[derive(Debug)]
 pub struct TerminalCanvas {
     pub snapshot: Arc<vt_backend_core::TerminalSnapshot>,
@@ -20,6 +24,7 @@ pub struct TerminalCanvas {
     pub cell_height: f32,
     pub font_size: f32,
     pub font_family: Option<&'static str>,
+    pub font_fallbacks: Vec<&'static str>,
     pub snapshot_generation: u64,
     pub appearance_revision: u64,
     pub background_opacity: f32,
@@ -33,6 +38,7 @@ pub struct TerminalCanvas {
     pub preedit_text: Option<String>,
     pub viewport: Option<TerminalViewport>,
     pub paint_base: bool,
+    pub paint_text: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -80,6 +86,7 @@ impl TerminalCanvas {
         cell_height: f32,
         font_size: f32,
         font_family: Option<&'static str>,
+        font_fallbacks: Vec<&'static str>,
         snapshot_generation: u64,
         appearance_revision: u64,
         background_opacity: f32,
@@ -98,6 +105,7 @@ impl TerminalCanvas {
             cell_height,
             font_size,
             font_family,
+            font_fallbacks,
             snapshot_generation,
             appearance_revision,
             background_opacity,
@@ -111,6 +119,7 @@ impl TerminalCanvas {
             preedit_text,
             viewport: None,
             paint_base: true,
+            paint_text: true,
         }
     }
 
@@ -121,6 +130,11 @@ impl TerminalCanvas {
 
     pub fn without_base_fill(mut self) -> Self {
         self.paint_base = false;
+        self
+    }
+
+    pub fn without_text_fill(mut self) -> Self {
+        self.paint_text = false;
         self
     }
 
@@ -153,8 +167,23 @@ impl TerminalCanvas {
         }
 
         for run in &artifacts.text_runs {
+            if !self.paint_text {
+                if run.underline {
+                    let x = origin.x + PADDING_X + run.start_col as f32 * self.cell_width;
+                    let draw_width = run.width_cols as f32 * self.cell_width;
+                    let underline_y = y + self.cell_height - 2.0;
+                    frame.fill_rectangle(
+                        Point::new(x, underline_y),
+                        Size::new(draw_width, 1.5),
+                        run.fg,
+                    );
+                }
+                continue;
+            }
             let x = origin.x + PADDING_X + run.start_col as f32 * self.cell_width;
             let draw_width = run.width_cols as f32 * self.cell_width;
+            let max_width = text_run_max_width(run, draw_width);
+            debug_non_ascii_draw_run(run, row_index, x, y, draw_width, max_width);
             frame.fill_text(canvas::Text {
                 content: run.text.clone(),
                 position: Point::new(x, y),
@@ -165,7 +194,7 @@ impl TerminalCanvas {
                 align_x: iced::widget::text::Alignment::Left,
                 align_y: alignment::Vertical::Top,
                 shaping: run.shaping,
-                max_width: draw_width,
+                max_width,
             });
 
             if run.underline {
@@ -275,18 +304,20 @@ impl TerminalCanvas {
                 Size::new(width, self.cell_height),
                 overlay,
             );
-            frame.fill_text(canvas::Text {
-                content: preedit.to_string(),
-                position: Point::new(x, y),
-                color: default_fg,
-                size: Pixels(self.font_size),
-                line_height: iced::widget::text::LineHeight::Absolute(Pixels(self.cell_height)),
-                font: configured_font(self.font_family),
-                align_x: iced::widget::text::Alignment::Left,
-                align_y: alignment::Vertical::Top,
-                shaping: iced::widget::text::Shaping::Advanced,
-                max_width: width,
-            });
+            if self.paint_text {
+                frame.fill_text(canvas::Text {
+                    content: preedit.to_string(),
+                    position: Point::new(x, y),
+                    color: default_fg,
+                    size: Pixels(self.font_size),
+                    line_height: iced::widget::text::LineHeight::Absolute(Pixels(self.cell_height)),
+                font: font_for_terminal_text(preedit, false, false, self.font_family, &self.font_fallbacks),
+                    align_x: iced::widget::text::Alignment::Left,
+                    align_y: alignment::Vertical::Top,
+                    shaping: iced::widget::text::Shaping::Advanced,
+                    max_width: non_ascii_text_max_width(preedit, width),
+                });
+            }
             frame.fill_rectangle(
                 Point::new(x, y + self.cell_height - 2.0),
                 Size::new(width, 1.5),
@@ -330,6 +361,9 @@ impl TerminalCanvas {
         cell: &vt_backend_core::CellSnapshot,
         fg_override: Color,
     ) {
+        if !self.paint_text {
+            return;
+        }
         if cell.text.is_empty() || cell.text == "\0" {
             return;
         }
@@ -344,11 +378,11 @@ impl TerminalCanvas {
             color: fg_override,
             size: Pixels(self.font_size),
             line_height: iced::widget::text::LineHeight::Absolute(Pixels(self.cell_height)),
-            font: font_for_cell(cell, self.font_family),
+            font: font_for_cell(cell, self.font_family, &self.font_fallbacks),
             align_x: iced::widget::text::Alignment::Left,
             align_y: alignment::Vertical::Top,
-            shaping: shaping_for_terminal_text(&cell.text),
-            max_width: draw_width,
+            shaping: terminal_text_shaping(),
+            max_width: non_ascii_text_max_width(&cell.text, draw_width),
         });
     }
 
@@ -379,6 +413,309 @@ impl TerminalCanvas {
         let row_cells = self.snapshot.rows_data.get(row)?;
         let cell = row_cells.get(col)?;
         cell.hyperlink.then_some((row, col))
+    }
+}
+
+#[derive(Debug)]
+pub struct TerminalTextLayer {
+    pub snapshot: Arc<vt_backend_core::TerminalSnapshot>,
+    pub cell_width: f32,
+    pub cell_height: f32,
+    pub font_size: f32,
+    pub font_family: Option<&'static str>,
+    pub font_fallbacks: Vec<&'static str>,
+    pub cursor_blink_visible: bool,
+    pub selection_rects: Vec<TerminalSelectionRect>,
+    pub selection_foreground: Option<Color>,
+    pub cursor_text_color: Option<Color>,
+    pub url_color: Option<Color>,
+    pub preedit_text: Option<String>,
+    pub viewport: Option<TerminalViewport>,
+}
+
+struct TerminalTextLayerState {
+    entries: Vec<TextLayerEntry>,
+}
+
+impl Default for TerminalTextLayerState {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+}
+
+struct TextLayerEntry {
+    paragraph: <iced::Renderer as text::Renderer>::Paragraph,
+    position: Point,
+    color: Color,
+}
+
+impl TerminalTextLayer {
+    pub fn new(
+        snapshot: Arc<vt_backend_core::TerminalSnapshot>,
+        cell_width: f32,
+        cell_height: f32,
+        font_size: f32,
+        font_family: Option<&'static str>,
+        font_fallbacks: Vec<&'static str>,
+        cursor_blink_visible: bool,
+        selection_rects: Vec<TerminalSelectionRect>,
+        selection_foreground: Option<Color>,
+        cursor_text_color: Option<Color>,
+        url_color: Option<Color>,
+        preedit_text: Option<String>,
+    ) -> Self {
+        Self {
+            snapshot,
+            cell_width,
+            cell_height,
+            font_size,
+            font_family,
+            font_fallbacks,
+            cursor_blink_visible,
+            selection_rects,
+            selection_foreground,
+            cursor_text_color,
+            url_color,
+            preedit_text,
+            viewport: None,
+        }
+    }
+
+    pub fn new_with_viewport(mut self, viewport: TerminalViewport) -> Self {
+        self.viewport = Some(viewport);
+        self
+    }
+
+    fn viewport_rect(&self, bounds: Rectangle) -> Rectangle {
+        self.viewport
+            .map(|viewport| Rectangle {
+                x: viewport.x,
+                y: viewport.y,
+                width: viewport.width,
+                height: viewport.height,
+            })
+            .unwrap_or(bounds)
+    }
+
+    fn viewport_origin(&self, bounds: Rectangle) -> Point {
+        let viewport = self.viewport_rect(bounds);
+        Point::new(viewport.x, viewport.y)
+    }
+
+    fn build_text_pass(
+        &self,
+        entries: &mut Vec<TextLayerEntry>,
+        viewport: Rectangle,
+        color_override: impl Fn(usize, usize, &vt_backend_core::CellSnapshot) -> Option<Color>,
+    ) {
+        for (row_index, row) in self.snapshot.rows_data.iter().enumerate() {
+            for (col_index, cell) in row.iter().enumerate() {
+                let Some(color) = color_override(row_index, col_index, cell) else {
+                    continue;
+                };
+                self.push_text_entry(
+                    entries,
+                    viewport,
+                    row_index,
+                    col_index,
+                    cell.text.as_str(),
+                    usize::from(cell.display_width.max(1)),
+                    font_for_cell(cell, self.font_family, &self.font_fallbacks),
+                    terminal_text_shaping(),
+                    color,
+                );
+            }
+        }
+    }
+
+    fn push_text_entry(
+        &self,
+        entries: &mut Vec<TextLayerEntry>,
+        viewport: Rectangle,
+        row_index: usize,
+        col_index: usize,
+        content: &str,
+        width_cols: usize,
+        font: Font,
+        shaping: iced::widget::text::Shaping,
+        color: Color,
+    ) {
+        if content.is_empty() || content == "\0" {
+            return;
+        }
+
+        let origin = self.viewport_origin(viewport);
+        let x = origin.x + PADDING_X + col_index as f32 * self.cell_width;
+        let y = origin.y + PADDING_Y + row_index as f32 * self.cell_height;
+        let draw_width = width_cols as f32 * self.cell_width;
+        let bounds = Size::new(
+            available_text_width(viewport, x),
+            self.cell_height.max(draw_width.min(self.cell_height)),
+        );
+        debug_text_layer_draw_run(
+            content, row_index, col_index, width_cols, x, y, bounds.width, font, shaping, color,
+        );
+        let paragraph = <iced::Renderer as text::Renderer>::Paragraph::with_text(iced::advanced::text::Text {
+            content,
+            bounds,
+            size: Pixels(self.font_size),
+            line_height: iced::advanced::text::LineHeight::Absolute(Pixels(self.cell_height)),
+            font,
+            align_x: iced::advanced::text::Alignment::Left,
+            align_y: alignment::Vertical::Top,
+            shaping,
+            wrapping: iced::advanced::text::Wrapping::None,
+        });
+        entries.push(TextLayerEntry {
+            paragraph,
+            position: Point::new(x, y),
+            color,
+        });
+    }
+
+    fn cell_is_selected(&self, row_index: usize, col_index: usize, display_width: u8) -> bool {
+        let cell_x = col_index as f32 * self.cell_width;
+        let cell_y = row_index as f32 * self.cell_height;
+        let cell_width = usize::from(display_width.max(1)) as f32 * self.cell_width;
+        let cell_rect = Rectangle {
+            x: cell_x,
+            y: cell_y,
+            width: cell_width,
+            height: self.cell_height,
+        };
+        self.selection_rects
+            .iter()
+            .any(|selection| rects_intersect(cell_rect, selection))
+    }
+
+    fn should_draw_cursor_text(&self, row_index: usize, col_index: usize) -> bool {
+        self.snapshot.cursor.visible
+            && self.cursor_blink_visible
+            && self.snapshot.cursor.y as usize == row_index
+            && self.snapshot.cursor.x as usize == col_index
+            && self.snapshot.cursor.style != crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR
+            && self.snapshot.cursor.style
+                != crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE
+            && self.snapshot.cursor.style
+                != crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW
+    }
+
+    fn rebuild_entries(&self, bounds: Rectangle) -> Vec<TextLayerEntry> {
+        let viewport = self.viewport_rect(bounds);
+        let mut entries = Vec::new();
+
+        self.build_text_pass(&mut entries, viewport, |_, _, cell| {
+            if cell.text.is_empty() || cell.text == "\0" {
+                None
+            } else if cell.hyperlink {
+                Some(self.url_color.unwrap_or_else(|| color_from_rgb(cell.fg, 1.0)))
+            } else {
+                Some(color_from_rgb(cell.fg, 1.0))
+            }
+        });
+
+        if let Some(selection_foreground) = self.selection_foreground {
+            self.build_text_pass(&mut entries, viewport, |row_index, col_index, cell| {
+                self.cell_is_selected(row_index, col_index, cell.display_width)
+                    .then_some(selection_foreground)
+            });
+        }
+
+        if let Some(cursor_text_color) = self.cursor_text_color {
+            self.build_text_pass(&mut entries, viewport, |row_index, col_index, cell| {
+                (!cell.text.is_empty() && self.should_draw_cursor_text(row_index, col_index))
+                    .then_some(cursor_text_color)
+            });
+        }
+
+        if let Some(preedit) = self
+            .preedit_text
+            .as_deref()
+            .filter(|text| !text.is_empty())
+            .filter(|_| self.snapshot.cursor.y < self.snapshot.rows)
+        {
+            self.push_text_entry(
+                &mut entries,
+                viewport,
+                self.snapshot.cursor.y as usize,
+                self.snapshot.cursor.x as usize,
+                preedit,
+                preedit.chars().count().max(1),
+                font_for_terminal_text(
+                    preedit,
+                    false,
+                    false,
+                    self.font_family,
+                    &self.font_fallbacks,
+                ),
+                terminal_text_shaping(),
+                color_from_rgb(self.snapshot.colors.foreground, 1.0),
+            );
+        }
+
+        entries
+    }
+}
+
+impl<Message> Widget<Message, Theme, iced::Renderer> for TerminalTextLayer {
+    fn tag(&self) -> iced::advanced::widget::tree::Tag {
+        iced::advanced::widget::tree::Tag::of::<TerminalTextLayerState>()
+    }
+
+    fn state(&self) -> iced::advanced::widget::tree::State {
+        iced::advanced::widget::tree::State::new(TerminalTextLayerState::default())
+    }
+
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fill, Length::Fill)
+    }
+
+    fn layout(
+        &mut self,
+        _tree: &mut Tree,
+        _renderer: &iced::Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        layout::atomic(limits, Length::Fill, Length::Fill)
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut iced::Renderer,
+        _theme: &Theme,
+        _style: &renderer::Style,
+        layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+        _viewport: &Rectangle,
+    ) {
+        let viewport = self.viewport_rect(layout.bounds());
+        let state = tree.state.downcast_ref::<TerminalTextLayerState>();
+        for entry in &state.entries {
+            renderer.fill_paragraph(&entry.paragraph, entry.position, entry.color, viewport);
+        }
+    }
+
+    fn diff(&self, tree: &mut Tree) {
+        let state = tree.state.downcast_mut::<TerminalTextLayerState>();
+        let bounds = self
+            .viewport
+            .map(|viewport| Rectangle {
+                x: viewport.x,
+                y: viewport.y,
+                width: viewport.width,
+                height: viewport.height,
+            })
+            .unwrap_or(Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            });
+        state.entries = self.rebuild_entries(bounds);
+        tree.children.clear();
     }
 }
 
@@ -486,6 +823,7 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
                                 row,
                                 self.snapshot.cols as usize,
                                 self.font_family,
+                                &self.font_fallbacks,
                                 self.url_color,
                             ),
                         };
@@ -681,6 +1019,7 @@ fn build_text_runs(
     row: &[vt_backend_core::CellSnapshot],
     cols: usize,
     font_family: Option<&'static str>,
+    font_fallbacks: &[&'static str],
     url_color: Option<Color>,
 ) -> Vec<TextRun> {
     let mut runs = Vec::new();
@@ -705,7 +1044,7 @@ fn build_text_runs(
         } else {
             color_from_rgb(cell.fg, 1.0)
         };
-        let font = font_for_cell(cell, font_family);
+        let font = font_for_cell(cell, font_family, font_fallbacks);
         let width_cols = usize::from(cell.display_width.max(1));
         runs.push(TextRun {
             start_col: col_index,
@@ -714,23 +1053,41 @@ fn build_text_runs(
             fg,
             font,
             underline,
-            shaping: shaping_for_terminal_text(content),
+            shaping: terminal_text_shaping(),
         });
     }
 
     runs
 }
 
-fn font_for_cell(cell: &vt_backend_core::CellSnapshot, family: Option<&'static str>) -> Font {
-    let base = configured_font(family);
+fn font_for_cell(
+    cell: &vt_backend_core::CellSnapshot,
+    family: Option<&'static str>,
+    font_fallbacks: &[&'static str],
+) -> Font {
+    font_for_terminal_text(&cell.text, cell.bold, cell.italic, family, font_fallbacks)
+}
+
+fn font_for_terminal_text(
+    text: &str,
+    bold: bool,
+    italic: bool,
+    family: Option<&'static str>,
+    font_fallbacks: &[&'static str],
+) -> Font {
+    let base = if text_prefers_primary_font(text) || !text_requires_explicit_fallback(text) {
+        configured_font(family)
+    } else {
+        configured_fallback_font(font_fallbacks).unwrap_or(Font::MONOSPACE)
+    };
     Font {
         family: base.family,
-        weight: if cell.bold {
+        weight: if bold {
             font::Weight::Bold
         } else {
             font::Weight::Normal
         },
-        style: if cell.italic {
+        style: if italic {
             font::Style::Italic
         } else {
             font::Style::Normal
@@ -741,6 +1098,48 @@ fn font_for_cell(cell: &vt_backend_core::CellSnapshot, family: Option<&'static s
 
 fn configured_font(family: Option<&'static str>) -> Font {
     family.map(Font::with_name).unwrap_or(Font::MONOSPACE)
+}
+
+fn configured_fallback_font(font_fallbacks: &[&'static str]) -> Option<Font> {
+    font_fallbacks.first().copied().map(Font::with_name)
+}
+
+fn text_prefers_primary_font(text: &str) -> bool {
+    text.is_ascii() || text.chars().all(is_private_use_scalar)
+}
+
+fn text_requires_explicit_fallback(text: &str) -> bool {
+    text.chars().any(is_cjk_scalar)
+}
+
+fn is_private_use_scalar(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0xE000..=0xF8FF | 0xF0000..=0xFFFFD | 0x100000..=0x10FFFD
+    )
+}
+
+fn is_cjk_scalar(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x2E80..=0x2FDF
+            | 0x3000..=0x303F
+            | 0x3040..=0x30FF
+            | 0x3100..=0x312F
+            | 0x3130..=0x318F
+            | 0x3190..=0x319F
+            | 0x31A0..=0x31BF
+            | 0x31C0..=0x31EF
+            | 0x31F0..=0x31FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xA960..=0xA97F
+            | 0xAC00..=0xD7AF
+            | 0xF900..=0xFAFF
+            | 0xFE30..=0xFE4F
+            | 0xFF00..=0xFFEF
+            | 0x20000..=0x2EBEF
+    )
 }
 
 fn color_from_rgb(color: crate::vt::GhosttyColorRgb, alpha: f32) -> Color {
@@ -778,12 +1177,89 @@ fn render_debug_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("BOO_RENDER_DEBUG").is_some())
 }
 
-fn shaping_for_terminal_text(text: &str) -> iced::widget::text::Shaping {
-    if text.len() <= 8 && text.is_ascii() {
-        iced::widget::text::Shaping::Basic
+fn text_run_max_width(run: &TextRun, draw_width: f32) -> f32 {
+    non_ascii_text_max_width(&run.text, draw_width)
+}
+
+fn non_ascii_text_max_width(text: &str, draw_width: f32) -> f32 {
+    if text.is_ascii() {
+        draw_width
     } else {
-        iced::widget::text::Shaping::Advanced
+        f32::INFINITY
     }
+}
+
+fn available_text_width(viewport: Rectangle, x: f32) -> f32 {
+    (viewport.x + viewport.width - x).max(1.0)
+}
+
+fn debug_non_ascii_draw_run(
+    run: &TextRun,
+    row_index: usize,
+    x: f32,
+    y: f32,
+    draw_width: f32,
+    max_width: f32,
+) {
+    if !render_debug_enabled() || run.text.is_ascii() {
+        return;
+    }
+    eprintln!(
+        "boo_render non_ascii_run row={} col={} text={:?} chars={} width_cols={} draw_width={} max_width={} font={:?} shaping={:?} fg=rgba({:.3},{:.3},{:.3},{:.3}) pos=({}, {})",
+        row_index,
+        run.start_col,
+        run.text,
+        run.text.chars().count(),
+        run.width_cols,
+        draw_width,
+        max_width,
+        run.font,
+        run.shaping,
+        run.fg.r,
+        run.fg.g,
+        run.fg.b,
+        run.fg.a,
+        x,
+        y
+    );
+}
+
+fn debug_text_layer_draw_run(
+    text: &str,
+    row_index: usize,
+    col_index: usize,
+    width_cols: usize,
+    x: f32,
+    y: f32,
+    bounds_width: f32,
+    font: Font,
+    shaping: iced::widget::text::Shaping,
+    color: Color,
+) {
+    if !render_debug_enabled() || text.is_ascii() {
+        return;
+    }
+    eprintln!(
+        "boo_render text_layer_run row={} col={} text={:?} chars={} width_cols={} bounds_width={} font={:?} shaping={:?} fg=rgba({:.3},{:.3},{:.3},{:.3}) pos=({}, {})",
+        row_index,
+        col_index,
+        text,
+        text.chars().count(),
+        width_cols,
+        bounds_width,
+        font,
+        shaping,
+        color.r,
+        color.g,
+        color.b,
+        color.a,
+        x,
+        y
+    );
+}
+
+fn terminal_text_shaping() -> iced::widget::text::Shaping {
+    iced::widget::text::Shaping::Advanced
 }
 
 impl TerminalCanvas {
@@ -945,6 +1421,7 @@ mod tests {
             16.0,
             14.0,
             Some("CodeNewRoman Nerd Font Mono"),
+            vec!["Fallback One", "Fallback Two"],
             1,
             revision,
             0.8,
@@ -1040,6 +1517,7 @@ mod tests {
             before.cell_height,
             before.font_size,
             before.font_family,
+            before.font_fallbacks.clone(),
             before.snapshot_generation,
             before.appearance_revision,
             before.background_opacity,
@@ -1086,7 +1564,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let runs = build_text_runs(&row, row.len(), None, None);
+        let runs = build_text_runs(&row, row.len(), None, &[], None);
         assert_eq!(runs.len(), 3);
         assert_eq!(runs[0].text, "a");
         assert_eq!(runs[0].start_col, 0);
@@ -1114,7 +1592,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let runs = build_text_runs(&row, row.len(), None, None);
+        let runs = build_text_runs(&row, row.len(), None, &[], None);
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].text, "a");
         assert_eq!(runs[0].start_col, 0);
@@ -1124,7 +1602,7 @@ mod tests {
     }
 
     #[test]
-    fn text_runs_use_advanced_shaping_for_non_ascii_text() {
+    fn text_runs_use_advanced_shaping_for_all_terminal_text() {
         let row = vec![
             vt_backend_core::CellSnapshot {
                 text: "a".to_string(),
@@ -1136,10 +1614,80 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let runs = build_text_runs(&row, row.len(), None, None);
+        let runs = build_text_runs(&row, row.len(), None, &[], None);
         assert_eq!(runs.len(), 2);
-        assert_eq!(runs[0].shaping, iced::widget::text::Shaping::Basic);
-        assert_eq!(runs[1].shaping, iced::widget::text::Shaping::Advanced);
+        assert!(runs
+            .iter()
+            .all(|run| run.shaping == iced::widget::text::Shaping::Advanced));
+    }
+
+    #[test]
+    fn cjk_text_uses_first_configured_fallback_family() {
+        let row = vec![
+            vt_backend_core::CellSnapshot {
+                text: "a".to_string(),
+                ..Default::default()
+            },
+            vt_backend_core::CellSnapshot {
+                text: "仮".to_string(),
+                display_width: 2,
+                bold: true,
+                ..Default::default()
+            },
+        ];
+        let runs = build_text_runs(
+            &row,
+            row.len(),
+            Some("CodeNewRoman Nerd Font Mono"),
+            &["Fallback CJK", "Fallback Emoji"],
+            None,
+        );
+
+        assert_eq!(runs[0].font.family, font::Family::Name("CodeNewRoman Nerd Font Mono"));
+        assert_eq!(runs[1].font.family, font::Family::Name("Fallback CJK"));
+        assert_eq!(runs[1].font.weight, font::Weight::Bold);
+    }
+
+    #[test]
+    fn cjk_font_selection_uses_first_configured_fallback_family() {
+        let font = font_for_terminal_text(
+            "仮",
+            false,
+            false,
+            Some("CodeNewRoman Nerd Font Mono"),
+            &["Fallback One", "Fallback Two"],
+        );
+        assert_eq!(font.family, font::Family::Name("Fallback One"));
+    }
+
+    #[test]
+    fn private_use_text_stays_on_primary_font() {
+        let font = font_for_terminal_text(
+            "\u{f313}",
+            false,
+            false,
+            Some("CodeNewRoman Nerd Font Mono"),
+            &["Fallback CJK", "Fallback Emoji"],
+        );
+        assert_eq!(font.family, font::Family::Name("CodeNewRoman Nerd Font Mono"));
+    }
+
+    #[test]
+    fn non_cjk_non_ascii_text_stays_on_primary_font() {
+        let font = font_for_terminal_text(
+            "é",
+            false,
+            false,
+            Some("CodeNewRoman Nerd Font Mono"),
+            &["Fallback One", "Fallback Two"],
+        );
+        assert_eq!(font.family, font::Family::Name("CodeNewRoman Nerd Font Mono"));
+    }
+
+    #[test]
+    fn non_ascii_text_is_not_clipped_to_cell_width() {
+        assert_eq!(non_ascii_text_max_width("a", 10.0), 10.0);
+        assert!(non_ascii_text_max_width("仮", 10.0).is_infinite());
     }
 
     #[test]

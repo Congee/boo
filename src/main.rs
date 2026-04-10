@@ -102,6 +102,7 @@ const DEFAULT_INACTIVE_TAB_BACKGROUND: config::RgbColor = [0x1A, 0x1A, 0x1A];
 #[derive(Debug)]
 struct ResolvedAppearance {
     font_family: Option<&'static str>,
+    font_fallbacks: Vec<&'static str>,
     font_size: f32,
     background_opacity: f32,
     background_opacity_cells: bool,
@@ -126,6 +127,27 @@ struct ResolvedAppearance {
 
 fn leak_font_family(name: &str) -> &'static str {
     Box::leak(name.to_owned().into_boxed_str())
+}
+
+fn platform_default_font_fallbacks(primary_family: Option<&str>) -> Vec<&'static str> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::platform::default_font_fallbacks(primary_family)
+            .into_iter()
+            .map(|family| leak_font_family(&family))
+            .collect()
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        resolve_linux_font_fallbacks(primary_family.unwrap_or("monospace"))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = primary_family;
+        Vec::new()
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -184,6 +206,42 @@ fn resolve_linux_font(name: &str) -> (Option<&'static str>, Option<Vec<u8>>) {
     };
 
     (Some(family), font_bytes)
+}
+
+#[cfg(target_os = "linux")]
+fn resolve_linux_font_fallbacks(name: &str) -> Vec<&'static str> {
+    let output = Command::new("fc-match")
+        .args(["--sort", "-f", "%{family[0]}\n", name])
+        .output();
+
+    let Ok(output) = output else {
+        log::warn!(
+            "failed to run fc-match --sort for font fallbacks {:?}",
+            name
+        );
+        return Vec::new();
+    };
+
+    if !output.status.success() {
+        log::warn!("fc-match --sort failed for font fallbacks {:?}", name);
+        return Vec::new();
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut seen = std::collections::HashSet::new();
+    let mut families = Vec::new();
+    seen.insert(name.to_ascii_lowercase());
+    for line in stdout.lines() {
+        let family = line.trim();
+        if family.is_empty() {
+            continue;
+        }
+        let key = family.to_ascii_lowercase();
+        if seen.insert(key) {
+            families.push(leak_font_family(family));
+        }
+    }
+    families
 }
 
 fn terminal_metrics(font_size: f32) -> (f64, f64) {
@@ -255,6 +313,7 @@ struct BooApp {
     copy_mode: Option<CopyModeState>,
     command_prompt: CommandPrompt,
     terminal_font_family: Option<&'static str>,
+    terminal_font_fallbacks: Vec<&'static str>,
     terminal_font_size: f32,
     background_opacity: f32,
     background_opacity_cells: bool,

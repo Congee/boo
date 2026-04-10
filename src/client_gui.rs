@@ -8,13 +8,17 @@ use crate::vt;
 use crate::vt_backend_core;
 use crate::vt_terminal_canvas;
 use crate::{AppKeyEvent, AppMouseButton, AppMouseEvent};
+use iced::advanced::widget::Tree;
+use iced::advanced::{
+    Clipboard, InputMethod, Layout, Shell, Widget, input_method, layout, renderer,
+};
 use iced::futures::{SinkExt, StreamExt};
 use iced::stream;
 use iced::widget::{column, container, row, stack, text};
 use iced::window;
 use iced::{
-    Color, Element, Event, Font, Length, Point, Size, Subscription, Task, Theme, keyboard, mouse,
-    time,
+    Color, Element, Event, Font, Length, Point, Rectangle, Size, Subscription, Task, Theme,
+    keyboard, mouse, time,
 };
 use std::collections::HashMap;
 use std::io::Write;
@@ -39,6 +43,22 @@ const LOCAL_FULL_STATE_HEADER_LEN: usize =
 const REMOTE_DELTA_HEADER_LEN: usize = 13;
 const LOCAL_DELTA_HEADER_LEN: usize = LOCAL_STREAM_INPUT_SEQ_LEN + REMOTE_DELTA_HEADER_LEN;
 const REMOTE_CELL_ENCODED_LEN: usize = 12;
+
+fn ime_debug_enabled() -> bool {
+    std::env::var_os("BOO_IME_DEBUG").is_some()
+}
+
+fn ime_debug(args: std::fmt::Arguments<'_>) {
+    if ime_debug_enabled() {
+        eprintln!("[boo-ime] {args}");
+    }
+}
+
+macro_rules! ime_debug {
+    ($($arg:tt)*) => {
+        crate::client_gui::ime_debug(format_args!($($arg)*))
+    };
+}
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -106,6 +126,7 @@ pub struct ClientApp {
     pane_snapshots: HashMap<u64, Arc<vt_backend_core::TerminalSnapshot>>,
     focused_pane_id: u64,
     last_error: Option<String>,
+    font_fallbacks: Vec<&'static str>,
     cell_width: f64,
     cell_height: f64,
     font_size: f32,
@@ -126,6 +147,7 @@ pub struct ClientApp {
     app_focused: bool,
     cursor_blink_epoch: Instant,
     focused_cursor_position: Option<(u64, u16, u16)>,
+    preedit_text: String,
     tick_counter: u8,
     next_input_seq: u64,
     pending_input_latencies: HashMap<u64, Instant>,
@@ -165,6 +187,17 @@ impl ClientApp {
             .as_ref()
             .map(|snapshot| snapshot.appearance.font_size)
             .unwrap_or(DEFAULT_FONT_SIZE);
+        let font_fallbacks = snapshot
+            .as_ref()
+            .map(|snapshot| {
+                snapshot
+                    .appearance
+                    .font_fallbacks
+                    .iter()
+                    .map(|family| crate::leak_font_family(family))
+                    .collect()
+            })
+            .unwrap_or_default();
         let background_opacity = snapshot
             .as_ref()
             .map(|snapshot| snapshot.appearance.background_opacity)
@@ -245,6 +278,7 @@ impl ClientApp {
             pane_snapshots,
             focused_pane_id,
             last_error: None,
+            font_fallbacks,
             cell_width,
             cell_height,
             font_size,
@@ -265,6 +299,7 @@ impl ClientApp {
             app_focused: true,
             cursor_blink_epoch: Instant::now(),
             focused_cursor_position,
+            preedit_text: String::new(),
             tick_counter: 0,
             next_input_seq: 1,
             pending_input_latencies: HashMap::new(),
@@ -319,6 +354,7 @@ impl ClientApp {
                     self.cursor_blink_epoch = Instant::now();
                 }
                 Event::Keyboard(event) => self.handle_keyboard(event),
+                Event::InputMethod(event) => self.handle_input_method(event),
                 Event::Mouse(event) => self.handle_mouse(event),
                 _ => {}
             },
@@ -440,6 +476,7 @@ impl ClientApp {
                 self.cell_height as f32,
                 self.font_size,
                 None,
+                self.font_fallbacks.clone(),
                 self.terminal_snapshot_generation,
                 1,
                 self.background_opacity,
@@ -456,9 +493,10 @@ impl ClientApp {
                 Some(Self::theme_color(self.selection_foreground, 1.0)),
                 Some(Self::theme_color(self.cursor_text_color, 1.0)),
                 Some(Self::theme_color(self.url_color, 1.0)),
-                None,
+                (pane.focused && !self.preedit_text.is_empty()).then(|| self.preedit_text.clone()),
             )
             .without_base_fill()
+            .without_text_fill()
             .new_with_viewport(vt_terminal_canvas::TerminalViewport {
                 x: pane.frame.x as f32,
                 y: pane.frame.y as f32,
@@ -475,6 +513,37 @@ impl ClientApp {
                 .height(Length::Fill)
                 .into(),
             );
+            layers.push(
+                Element::new(
+                    vt_terminal_canvas::TerminalTextLayer::new(
+                        Arc::clone(terminal_snapshot),
+                        self.cell_width as f32,
+                        self.cell_height as f32,
+                        self.font_size,
+                        None,
+                        self.font_fallbacks.clone(),
+                        pane_cursor_blink_visible(
+                            pane.focused,
+                            terminal_snapshot.cursor.blinking,
+                            self.app_focused,
+                            self.cursor_blink_epoch,
+                            self.cursor_blink_interval,
+                        ),
+                        Vec::new(),
+                        Some(Self::theme_color(self.selection_foreground, 1.0)),
+                        Some(Self::theme_color(self.cursor_text_color, 1.0)),
+                        Some(Self::theme_color(self.url_color, 1.0)),
+                        (pane.focused && !self.preedit_text.is_empty())
+                            .then(|| self.preedit_text.clone()),
+                    )
+                    .new_with_viewport(vt_terminal_canvas::TerminalViewport {
+                        x: pane.frame.x as f32,
+                        y: pane.frame.y as f32,
+                        width: pane.frame.width as f32,
+                        height: pane.frame.height as f32,
+                    }),
+                ),
+            );
         }
         layers.push(
             iced::widget::canvas(PaneBordersOverlay {
@@ -484,6 +553,12 @@ impl ClientApp {
             .height(Length::Fill)
             .into(),
         );
+        layers.push(TerminalInputMethodLayer::new(
+            self.focused_cursor_rect(),
+            self.font_size,
+            self.preedit_text.clone(),
+            self.app_focused,
+        ));
         stack(layers)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -538,6 +613,12 @@ impl ClientApp {
                     1,
                 );
                 self.font_size = snapshot.appearance.font_size.max(8.0);
+                self.font_fallbacks = snapshot
+                    .appearance
+                    .font_fallbacks
+                    .iter()
+                    .map(|family| crate::leak_font_family(family))
+                    .collect();
                 self.background_opacity = snapshot.appearance.background_opacity;
                 self.background_opacity_cells = snapshot.appearance.background_opacity_cells;
                 self.terminal_foreground = snapshot.appearance.terminal_foreground;
@@ -593,6 +674,47 @@ impl ClientApp {
         }
     }
 
+    fn send_text_input(&mut self, text: String) {
+        if self.stream_ready_for_terminal_io() {
+            ime_debug!("client send committed text via stream");
+            let input_seq = self.record_pending_input();
+            self.send_stream_command(StreamCommand::Input {
+                input_seq,
+                bytes: text.into_bytes(),
+            });
+        } else {
+            ime_debug!("client send committed text via control");
+            let _ = self.client.send(&control::Request::SendText { text });
+            self.refresh_snapshot();
+        }
+    }
+
+    fn handle_input_method(&mut self, event: input_method::Event) {
+        ime_debug!(
+            "client iced input method event: {}",
+            iced_input_method_event_name(&event)
+        );
+        match event {
+            input_method::Event::Opened => {
+                self.preedit_text.clear();
+            }
+            input_method::Event::Preedit(text, _selection) => {
+                if text.is_empty() {
+                    self.preedit_text.clear();
+                } else {
+                    self.preedit_text = text;
+                }
+            }
+            input_method::Event::Commit(text) => {
+                self.preedit_text.clear();
+                self.send_text_input(text);
+            }
+            input_method::Event::Closed => {
+                self.preedit_text.clear();
+            }
+        }
+    }
+
     fn send_resize(&mut self, size: Size) {
         let _ = self.client.send(&control::Request::ResizeViewportPoints {
             width: size.width as f64,
@@ -602,6 +724,7 @@ impl ClientApp {
     }
 
     fn handle_keyboard(&mut self, event: keyboard::Event) {
+        ime_debug!("client iced keyboard event");
         let keyboard::Event::KeyPressed {
             key,
             modified_key,
@@ -633,8 +756,10 @@ impl ClientApp {
         }
 
         let Some(keycode) = keymap::physical_to_native_keycode(&physical_key) else {
+            ime_debug!("client iced keyboard missing native keycode");
             return;
         };
+        ime_debug!("client iced keyboard sends app key keycode={keycode}");
         let input_seq = self.record_pending_input();
         let app_event = AppKeyEvent {
             keycode,
@@ -846,6 +971,26 @@ impl ClientApp {
             self.cursor_blink_epoch = Instant::now();
         }
         self.focused_cursor_position = current;
+    }
+
+    fn focused_cursor_rect(&self) -> Option<Rectangle> {
+        let snapshot = self.pane_snapshots.get(&self.focused_pane_id)?;
+        let pane = self.bootstrap_snapshot.as_ref().and_then(|snapshot| {
+            snapshot
+                .visible_panes
+                .iter()
+                .find(|pane| pane.pane_id == self.focused_pane_id)
+        })?;
+        let x = pane.frame.x
+            + vt_terminal_canvas::PADDING_X as f64
+            + snapshot.cursor.x as f64 * self.cell_width;
+        let y = pane.frame.y
+            + vt_terminal_canvas::PADDING_Y as f64
+            + snapshot.cursor.y as f64 * self.cell_height;
+        Some(Rectangle::new(
+            Point::new(x as f32, y as f32),
+            Size::new(self.cell_width as f32, self.cell_height as f32),
+        ))
     }
 
     fn handle_stream_delivery(&mut self, event: LocalStreamEvent) -> Option<Task<Message>> {
@@ -1503,6 +1648,92 @@ fn pane_cursor_blink_visible(
         || interval.is_zero()
         || !app_focused
         || cursor_blink_visible(epoch, interval)
+}
+
+fn iced_input_method_event_name(event: &input_method::Event) -> &'static str {
+    match event {
+        input_method::Event::Opened => "opened",
+        input_method::Event::Preedit(_, _) => "preedit",
+        input_method::Event::Commit(_) => "commit",
+        input_method::Event::Closed => "closed",
+    }
+}
+
+struct TerminalInputMethodLayer {
+    cursor: Option<Rectangle>,
+    text_size: f32,
+    preedit: String,
+    enabled: bool,
+}
+
+impl TerminalInputMethodLayer {
+    fn new<'a>(
+        cursor: Option<Rectangle>,
+        text_size: f32,
+        preedit: String,
+        enabled: bool,
+    ) -> Element<'a, Message> {
+        Element::new(Self {
+            cursor,
+            text_size,
+            preedit,
+            enabled,
+        })
+    }
+}
+
+impl Widget<Message, Theme, iced::Renderer> for TerminalInputMethodLayer {
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fill, Length::Fill)
+    }
+
+    fn layout(
+        &mut self,
+        _tree: &mut Tree,
+        _renderer: &iced::Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        layout::atomic(limits, Length::Fill, Length::Fill)
+    }
+
+    fn draw(
+        &self,
+        _tree: &Tree,
+        _renderer: &mut iced::Renderer,
+        _theme: &Theme,
+        _style: &renderer::Style,
+        _layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+        _viewport: &Rectangle,
+    ) {
+    }
+
+    fn update(
+        &mut self,
+        _tree: &mut Tree,
+        event: &Event,
+        _layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+        _renderer: &iced::Renderer,
+        _clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        _viewport: &Rectangle,
+    ) {
+        if let Event::Window(window::Event::RedrawRequested(_)) = event {
+            if let Some(cursor) = self.cursor.filter(|_| self.enabled) {
+                let preedit = (!self.preedit.is_empty()).then(|| input_method::Preedit {
+                    content: self.preedit.as_str(),
+                    selection: None,
+                    text_size: Some(iced::Pixels(self.text_size)),
+                });
+                shell.request_input_method(&InputMethod::Enabled {
+                    cursor,
+                    purpose: input_method::Purpose::Terminal,
+                    preedit,
+                });
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -2555,6 +2786,25 @@ mod tests {
 
         assert_eq!(app.cursor_blink_epoch, hidden_epoch);
         assert_eq!(app.focused_cursor_position, Some((42, 0, 0)));
+    }
+
+    #[test]
+    fn iced_input_method_commit_sends_text_and_clears_preedit() {
+        let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.stream_tx = Some(tx);
+        app.mode = ClientMode::Attached;
+
+        app.handle_input_method(input_method::Event::Preedit("かな".to_string(), Some(0..6)));
+        assert_eq!(app.preedit_text, "かな");
+
+        app.handle_input_method(input_method::Event::Commit("仮名".to_string()));
+
+        assert!(app.preedit_text.is_empty());
+        match rx.recv().unwrap() {
+            StreamCommand::Input { bytes, .. } => assert_eq!(bytes, "仮名".as_bytes()),
+            other => panic!("unexpected stream command: {other:?}"),
+        }
     }
 
     #[test]

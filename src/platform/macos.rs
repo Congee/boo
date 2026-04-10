@@ -14,6 +14,8 @@ use objc2_foundation::{
     MainThreadMarker, NSArray, NSAttributedString, NSNotFound, NSObject, NSObjectProtocol, NSRange,
     NSRect, NSSize, NSString,
 };
+use std::collections::HashSet;
+use std::ffi::c_char;
 use std::ffi::c_void;
 
 static TEXT_INPUT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<TextInputEvent>> =
@@ -21,15 +23,165 @@ static TEXT_INPUT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<TextInputEvent
 static KEY_EVENT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<KeyEvent>> =
     std::sync::OnceLock::new();
 static COMMAND_DRAG_MONITOR_INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+static TEXT_INPUT_BRIDGE_INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+static TEXT_INPUT_BRIDGE_VIEW: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 static MARKED_TEXT: std::sync::OnceLock<std::sync::Mutex<String>> = std::sync::OnceLock::new();
 static IME_RECT: std::sync::OnceLock<std::sync::Mutex<Rect>> = std::sync::OnceLock::new();
 
 #[link(name = "UserNotifications", kind = "framework")]
 unsafe extern "C" {}
+#[link(name = "CoreText", kind = "framework")]
+unsafe extern "C" {}
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {}
+
+unsafe extern "C" {
+    static kCTFontFamilyNameAttribute: *const c_void;
+
+    fn CTFontCreateWithName(
+        name: *const c_void,
+        size: f64,
+        matrix: *const c_void,
+    ) -> *const c_void;
+    fn CTFontCopyDefaultCascadeListForLanguages(
+        font: *const c_void,
+        language_pref_list: *const c_void,
+    ) -> *const c_void;
+    fn CTFontDescriptorCopyAttribute(
+        descriptor: *const c_void,
+        attribute: *const c_void,
+    ) -> *const c_void;
+    fn CFArrayGetCount(array: *const c_void) -> isize;
+    fn CFArrayGetValueAtIndex(array: *const c_void, index: isize) -> *const c_void;
+    fn CFStringGetCString(
+        string: *const c_void,
+        buffer: *mut c_char,
+        buffer_size: isize,
+        encoding: u32,
+    ) -> bool;
+    fn CFRelease(object: *const c_void);
+}
+
+const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+
+fn ime_debug_enabled() -> bool {
+    std::env::var_os("BOO_IME_DEBUG").is_some()
+}
+
+fn ime_debug(args: std::fmt::Arguments<'_>) {
+    if ime_debug_enabled() {
+        eprintln!("[boo-ime] {args}");
+    }
+}
+
+macro_rules! ime_debug {
+    ($($arg:tt)*) => {
+        crate::platform::macos::ime_debug(format_args!($($arg)*))
+    };
+}
+
+pub fn default_font_fallbacks(primary_family: Option<&str>) -> Vec<String> {
+    let primary_family = primary_family.unwrap_or("Menlo");
+    let name = NSString::from_str(primary_family);
+    let font = unsafe {
+        CTFontCreateWithName(
+            Retained::as_ptr(&name) as *const _ as *const c_void,
+            12.0,
+            std::ptr::null(),
+        )
+    };
+    if font.is_null() {
+        return Vec::new();
+    }
+
+    let cascade = unsafe { CTFontCopyDefaultCascadeListForLanguages(font, std::ptr::null()) };
+    unsafe { CFRelease(font) };
+    if cascade.is_null() {
+        return Vec::new();
+    }
+
+    let mut seen = HashSet::new();
+    let mut families = Vec::new();
+    seen.insert(primary_family.to_ascii_lowercase());
+
+    let count = unsafe { CFArrayGetCount(cascade) };
+    for index in 0..count {
+        let descriptor = unsafe { CFArrayGetValueAtIndex(cascade, index) };
+        if descriptor.is_null() {
+            continue;
+        }
+        let family = unsafe {
+            CTFontDescriptorCopyAttribute(descriptor, kCTFontFamilyNameAttribute)
+        };
+        if family.is_null() {
+            continue;
+        }
+        let family_name = cf_string_to_string(family);
+        unsafe { CFRelease(family) };
+        let Some(family_name) = family_name else {
+            continue;
+        };
+        let key = family_name.to_ascii_lowercase();
+        if seen.insert(key) {
+            families.push(family_name);
+        }
+    }
+
+    unsafe { CFRelease(cascade) };
+    families
+}
+
+fn cf_string_to_string(string: *const c_void) -> Option<String> {
+    let mut buffer = vec![0u8; 1024];
+    let ok = unsafe {
+        CFStringGetCString(
+            string,
+            buffer.as_mut_ptr().cast(),
+            buffer.len() as isize,
+            K_CF_STRING_ENCODING_UTF8,
+        )
+    };
+    if !ok {
+        return None;
+    }
+    let nul = buffer.iter().position(|&byte| byte == 0)?;
+    Some(String::from_utf8_lossy(&buffer[..nul]).into_owned())
+}
 
 fn send_text_input_event(event: TextInputEvent) {
+    ime_debug!("send text input event: {}", text_input_event_name(&event));
     if let Some(tx) = TEXT_INPUT_TX.get() {
         let _ = tx.send(event);
+    } else {
+        ime_debug!("drop text input event: TEXT_INPUT_TX is not installed");
+    }
+}
+
+fn text_input_event_name(event: &TextInputEvent) -> &'static str {
+    match event {
+        TextInputEvent::Commit(_) => "commit",
+        TextInputEvent::Preedit(_) => "preedit",
+        TextInputEvent::PreeditClear => "preedit-clear",
+        TextInputEvent::Command(_) => "command",
+    }
+}
+
+fn ns_text_len(text: &str) -> usize {
+    text.encode_utf16().count()
+}
+
+fn ns_object_text(string: &AnyObject) -> Option<String> {
+    let object: &NSObject = unsafe { &*(string as *const AnyObject as *const NSObject) };
+    if object.isKindOfClass(NSAttributedString::class()) {
+        let string: *const AnyObject = string;
+        let string: *const NSAttributedString = string.cast();
+        Some(unsafe { &*string }.string().to_string())
+    } else if object.isKindOfClass(NSString::class()) {
+        let string: *const AnyObject = string;
+        let string: *const NSString = string.cast();
+        Some(unsafe { &*string }.to_string())
+    } else {
+        None
     }
 }
 
@@ -82,7 +234,14 @@ define_class!(
 
         #[unsafe(method(keyDown:))]
         fn _key_down(&self, event: &NSEvent) {
+            ime_debug!(
+                "keyDown keycode={} mods={:#x} repeat={}",
+                event.keyCode(),
+                event_mods(event),
+                event.isARepeat()
+            );
             if should_send_raw_key_event(event) {
+                ime_debug!("keyDown routed as raw key");
                 if let Some(tx) = KEY_EVENT_TX.get() {
                     let _ = tx.send(KeyEvent {
                         keycode: event.keyCode() as u32,
@@ -92,6 +251,7 @@ define_class!(
                 }
                 return;
             }
+            ime_debug!("keyDown routed to interpretKeyEvents");
             let responder: &NSResponder = unsafe { &*(self as *const Self as *const NSResponder) };
             let events = NSArray::from_slice(&[event]);
             responder.interpretKeyEvents(&events);
@@ -99,21 +259,16 @@ define_class!(
 
         #[unsafe(method(insertText:))]
         fn _insert_text(&self, string: &AnyObject) {
-            let object: &NSObject = unsafe { &*(string as *const AnyObject as *const NSObject) };
-            let is_attributed = object.isKindOfClass(NSAttributedString::class());
-            let is_string = object.isKindOfClass(NSString::class());
-            let text = if is_attributed {
-                let string: *const AnyObject = string;
-                let string: *const NSAttributedString = string.cast();
-                unsafe { &*string }.string().to_string()
-            } else if is_string {
-                let string: *const AnyObject = string;
-                let string: *const NSString = string.cast();
-                unsafe { &*string }.to_string()
-            } else {
-                return;
-            };
-            send_text_input_event(TextInputEvent::Commit(text));
+            let Some(text) = ns_object_text(string) else { return };
+            ime_debug!("insertText chars={}", text.chars().count());
+            commit_text_input(text);
+        }
+
+        #[unsafe(method(insertText:replacementRange:))]
+        fn _insert_text_replacement(&self, string: &AnyObject, _replacement_range: NSRange) {
+            let Some(text) = ns_object_text(string) else { return };
+            ime_debug!("insertText:replacementRange chars={}", text.chars().count());
+            commit_text_input(text);
         }
 
         #[unsafe(method(hasMarkedText))]
@@ -130,7 +285,7 @@ define_class!(
             let len = MARKED_TEXT
                 .get_or_init(|| std::sync::Mutex::new(String::new()))
                 .lock()
-                .map(|text| text.len())
+                .map(|text| ns_text_len(&text))
                 .unwrap_or(0);
             if len == 0 {
                 NSRange::new(NSNotFound as usize, 0)
@@ -151,18 +306,8 @@ define_class!(
             _selected_range: NSRange,
             _replacement_range: NSRange,
         ) {
-            let object: &NSObject = unsafe { &*(string as *const AnyObject as *const NSObject) };
-            let text = if object.isKindOfClass(NSAttributedString::class()) {
-                let string: *const AnyObject = string;
-                let string: *const NSAttributedString = string.cast();
-                unsafe { &*string }.string().to_string()
-            } else if object.isKindOfClass(NSString::class()) {
-                let string: *const AnyObject = string;
-                let string: *const NSString = string.cast();
-                unsafe { &*string }.to_string()
-            } else {
-                return;
-            };
+            let Some(text) = ns_object_text(string) else { return };
+            ime_debug!("setMarkedText chars={}", text.chars().count());
             if let Ok(mut marked) = MARKED_TEXT
                 .get_or_init(|| std::sync::Mutex::new(String::new()))
                 .lock()
@@ -174,6 +319,7 @@ define_class!(
 
         #[unsafe(method(unmarkText))]
         fn _unmark_text(&self) {
+            ime_debug!("unmarkText");
             if let Ok(mut marked) = MARKED_TEXT
                 .get_or_init(|| std::sync::Mutex::new(String::new()))
                 .lock()
@@ -197,6 +343,13 @@ define_class!(
                 .lock()
                 .map(|rect| *rect)
                 .unwrap_or_default();
+            ime_debug!(
+                "firstRectForCharacterRange x={} y={} w={} h={}",
+                rect.origin.x,
+                rect.origin.y,
+                rect.size.width,
+                rect.size.height
+            );
             let rect = to_nsrect(rect);
             if let Some(window) = self.window() {
                 window.convertRectToScreen(self.convertRect_toView(rect, None))
@@ -207,6 +360,7 @@ define_class!(
 
         #[unsafe(method(doCommandBySelector:))]
         fn _do_command_by_selector(&self, selector: objc2::runtime::Sel) {
+            ime_debug!("doCommandBySelector {:?}", selector);
             if let Some(command) = command_from_selector(selector) {
                 send_text_input_event(TextInputEvent::Command(command));
             }
@@ -233,6 +387,17 @@ define_class!(
         }
     }
 );
+
+fn commit_text_input(text: String) {
+    ime_debug!("commit text chars={}", text.chars().count());
+    if let Ok(mut marked) = MARKED_TEXT
+        .get_or_init(|| std::sync::Mutex::new(String::new()))
+        .lock()
+    {
+        marked.clear();
+    }
+    send_text_input_event(TextInputEvent::Commit(text));
+}
 
 fn mtm() -> MainThreadMarker {
     unsafe { MainThreadMarker::new_unchecked() }
@@ -384,8 +549,35 @@ pub fn install_event_monitors(
 ) {
     let _ = KEY_EVENT_TX.set(key_event_tx);
     let _ = TEXT_INPUT_TX.set(text_input_tx);
+    let _ = install_text_input_bridge_tx();
     install_command_drag_monitor();
     install_scroll_monitor(scroll_tx);
+}
+
+fn install_text_input_bridge_tx() -> bool {
+    if TEXT_INPUT_BRIDGE_INSTALLED.get().is_some() {
+        focus_text_input_bridge();
+        return true;
+    }
+    let parent = content_view_handle();
+    if parent.is_null() {
+        return false;
+    }
+    let view =
+        create_focusable_child_view(parent, Rect::new(Point::new(0.0, 0.0), Size::new(1.0, 1.0)));
+    if view.is_null() {
+        return false;
+    }
+    let _ = TEXT_INPUT_BRIDGE_VIEW.set(view as usize);
+    focus_view(view);
+    let _ = TEXT_INPUT_BRIDGE_INSTALLED.set(());
+    true
+}
+
+pub fn focus_text_input_bridge() {
+    if let Some(view) = TEXT_INPUT_BRIDGE_VIEW.get().copied() {
+        focus_view(view as ViewHandle);
+    }
 }
 
 pub fn install_command_drag_monitor() {
@@ -642,10 +834,17 @@ fn apple_script_literal(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::apple_script_literal;
+    use super::{apple_script_literal, ns_text_len};
 
     #[test]
     fn apple_script_literal_escapes_quotes_and_newlines() {
         assert_eq!(apple_script_literal("a\"b\nc\\d"), "\"a\\\"b\\nc\\\\d\"");
+    }
+
+    #[test]
+    fn marked_text_range_uses_utf16_units() {
+        assert_eq!(ns_text_len("kana"), 4);
+        assert_eq!(ns_text_len("かな"), 2);
+        assert_eq!(ns_text_len("𐐷"), 2);
     }
 }

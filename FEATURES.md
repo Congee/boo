@@ -245,9 +245,20 @@ nix develop
 - [ ] Migrate supported keybinds from `~/.config/kitty/kitty.conf` into `~/.config/boo/config.boo`
 - [ ] Implement configurable macOS option-as-alt behavior
 - [ ] Implement configurable tab bar style/separator/alignment/title template
+- [ ] Implement Kitty-style mouse text selection: double-click selects a word, double-click-drag extends by words, triple-click selects a line, and selection word boundaries use Unicode alphanumerics plus configurable `select_by_word_characters` / `select_by_word_characters_forward` with Kitty-compatible defaults (`@-./_~?&=%+#`)
 - [ ] Decide how to map Kitty’s `close_on_child_death` / `macos_quit_when_last_window_closed` semantics onto Boo’s client/server model
 
 ### tmux Parity Backlog
 - [ ] add remain-on-exit / respawn-pane style process lifecycle controls
 - [ ] add session/window rename and move/link semantics closer to tmux
 - [ ] add hooks, formats, `run-shell`, and `if-shell`
+
+### Status Components
+- [ ] Restore the Ghostty-fork Vim status bar feature on the libghostty-vt path: implement a Boo control-socket status component protocol inspired by `/Users/example/dev/ghostty/research/status-bar-component-protocol.md`, supporting left/right zones, styled text segments, source-scoped updates/clears, optional OSC 1337 SetUserVar ingestion for one-way updates, and clickable segment callbacks where practical
+
+### UI Backlog
+- [ ] Restore macOS cmd-drag window movement with left mouse button
+- [ ] Blink the cursor only in the focused pane
+
+### macOS IME
+- [x] Manually validate macOS IME/dead-key behavior on the active GUI client path, including candidate window positioning, preedit rendering, committed text insertion, and pane focus changes

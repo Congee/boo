@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-iced = { version = "0.14", features = ["wgpu", "tokio", "image", "canvas"] }
+iced = { version = "0.14", features = ["wgpu", "tokio", "image", "canvas", "advanced"] }
 image = "0.25"
 raw-window-handle = "0.6"
 anyhow = "1"

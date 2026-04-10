@@ -1,6 +1,7 @@
 use crate::client_gui;
 use crate::config;
 use crate::control;
+use std::borrow::Cow;
 
 static STARTUP_SESSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static STARTUP_CONTROL_SOCKET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -70,6 +71,10 @@ pub fn run_gui_client() {
         client_gui::ClientApp::update,
         client_gui::ClientApp::view,
     )
+    .settings(iced::Settings {
+        fonts: system_text_fallback_fonts(),
+        ..iced::Settings::default()
+    })
     .title("boo")
     .decorations(boo_config.window_decoration.shows_system_decorations())
     .transparent(true)
@@ -78,6 +83,49 @@ pub fn run_gui_client() {
     .subscription(client_gui::ClientApp::subscription)
     .run()
     .unwrap();
+}
+
+fn system_text_fallback_fonts() -> Vec<Cow<'static, [u8]>> {
+    #[cfg(target_os = "macos")]
+    {
+        const CANDIDATES: &[&str] = &[
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            "/System/Library/Fonts/STHeiti Medium.ttc",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+            "/System/Library/Fonts/Supplemental/Songti.ttc",
+            "/System/Library/Fonts/Apple Color Emoji.ttc",
+        ];
+
+        CANDIDATES
+            .iter()
+            .filter_map(|path| match std::fs::read(path) {
+                Ok(bytes) => {
+                    if std::env::var_os("BOO_RENDER_DEBUG").is_some() {
+                        eprintln!(
+                            "boo_render loaded_text_fallback_font path={} bytes={}",
+                            path,
+                            bytes.len()
+                        );
+                    }
+                    Some(Cow::Owned(bytes))
+                }
+                Err(error) => {
+                    if std::env::var_os("BOO_RENDER_DEBUG").is_some() {
+                        eprintln!(
+                            "boo_render skipped_text_fallback_font path={} error={}",
+                            path, error
+                        );
+                    }
+                    None
+                }
+            })
+            .collect()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Vec::new()
+    }
 }
 
 pub fn ensure_server_running(socket_path: &str, boo_config: &config::Config) {

@@ -17,6 +17,7 @@ pub struct Config {
     pub remote_auth_key: Option<String>,
     pub keybinds: HashMap<String, String>,
     pub font_family: Option<String>,
+    pub font_fallbacks: Vec<String>,
     pub font_size: Option<f32>,
     pub window_decoration: WindowDecoration,
     pub background_opacity: Option<f32>,
@@ -127,8 +128,13 @@ impl Config {
                     }
                 }
                 "font-family" => {
-                    if !value.is_empty() {
+                    if value.is_empty() {
+                        config.font_family = None;
+                        config.font_fallbacks.clear();
+                    } else if config.font_family.is_none() {
                         config.font_family = Some(value.to_string());
+                    } else {
+                        config.font_fallbacks.push(value.to_string());
                     }
                 }
                 "font-size" => {
@@ -237,6 +243,7 @@ impl Default for Config {
             remote_auth_key: None,
             keybinds: HashMap::new(),
             font_family: None,
+            font_fallbacks: Vec::new(),
             font_size: None,
             window_decoration: WindowDecoration::None,
             background_opacity: None,
@@ -429,6 +436,8 @@ mod tests {
         let content = r#"
 # visual settings
 font-family = "Fira Code"
+font-family = "Apple Color Emoji"
+font-family = "Hiragino Sans GB"
 font-size = 14
 background-opacity = 0.9
 background-opacity-cells = true
@@ -452,6 +461,10 @@ keybind = super+1 = goto_tab:1
         assert_eq!(config.remote_port, Some(7337));
         assert_eq!(config.remote_auth_key.as_deref(), Some("secret"));
         assert_eq!(config.font_family.as_deref(), Some("Fira Code"));
+        assert_eq!(
+            config.font_fallbacks,
+            vec!["Apple Color Emoji".to_string(), "Hiragino Sans GB".to_string()]
+        );
         assert_eq!(config.font_size, Some(14.0));
         assert_eq!(config.background_opacity, Some(0.9));
         assert!(config.background_opacity_cells);
@@ -489,6 +502,7 @@ keybind = super+1 = goto_tab:1
         assert!(config.prefix_key.is_none());
         assert!(config.keybinds.is_empty());
         assert!(config.font_family.is_none());
+        assert!(config.font_fallbacks.is_empty());
         assert!(config.background_opacity.is_none());
     }
 

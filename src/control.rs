@@ -83,6 +83,7 @@ pub struct UiSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UiAppearanceSnapshot {
     pub font_family: Option<String>,
+    pub font_fallbacks: Vec<String>,
     pub font_size: f32,
     pub background_opacity: f32,
     pub background_opacity_cells: bool,
@@ -795,6 +796,7 @@ mod tests {
                             focused_pane: 42,
                             appearance: UiAppearanceSnapshot {
                                 font_family: Some("JetBrains Mono".to_string()),
+                                font_fallbacks: vec!["Apple Color Emoji".to_string()],
                                 font_size: 14.0,
                                 background_opacity: 0.8,
                                 background_opacity_cells: true,
@@ -892,6 +894,7 @@ mod tests {
                 focused_pane: 7,
                 appearance: UiAppearanceSnapshot {
                     font_family: Some("Fira Code".to_string()),
+                    font_fallbacks: vec!["Apple Color Emoji".to_string()],
                     font_size: 15.0,
                     background_opacity: 0.7,
                     background_opacity_cells: false,

@@ -706,6 +706,7 @@ mod tests {
             remote_port: None,
             remote_auth_key: None,
             font_family: None,
+            font_fallbacks: Vec::new(),
             font_size: None,
             window_decoration: crate::config::WindowDecoration::None,
             background_opacity: None,
