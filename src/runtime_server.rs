@@ -29,6 +29,8 @@ fn stage_to_profile_path(stage: &str) -> &'static str {
     }
 }
 
+use std::sync::Arc;
+
 impl BooApp {
     pub(crate) fn remote_servers(&self) -> impl Iterator<Item = &remote::RemoteServer> {
         self.server
@@ -624,22 +626,27 @@ impl BooApp {
 
     pub(crate) fn publish_remote_session(&self, session_id: u32) {
         let started_at = Instant::now();
-        let mut sent = false;
-        for server in self.remote_servers() {
-            sent = true;
-            let Some(pane) = self.pane_for_session(session_id) else {
-                server.send_session_exited(session_id);
-                continue;
-            };
-            let Some(snapshot) = self.backend.render_snapshot_ref(pane.id()) else {
-                server.send_session_exited(session_id);
-                continue;
-            };
-            let state = remote::full_state_from_terminal(snapshot);
-            server.send_full_state_to_attached(session_id, &state);
-        }
-        if !sent {
+        let servers = self.remote_servers().collect::<Vec<_>>();
+        if servers.is_empty() {
             return;
+        }
+        let Some(pane) = self.pane_for_session(session_id) else {
+            for server in servers {
+                server.send_session_exited(session_id);
+            }
+            log_server_latency("publish_remote_session", started_at);
+            return;
+        };
+        let Some(snapshot) = self.backend.render_snapshot_ref(pane.id()) else {
+            for server in servers {
+                server.send_session_exited(session_id);
+            }
+            log_server_latency("publish_remote_session", started_at);
+            return;
+        };
+        let state = Arc::new(remote::full_state_from_terminal(snapshot));
+        for server in servers {
+            server.send_full_state_to_attached(session_id, Arc::clone(&state));
         }
         log_server_latency("publish_remote_session", started_at);
     }

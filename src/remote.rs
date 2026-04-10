@@ -214,7 +214,7 @@ struct ClientState {
     authenticated: bool,
     challenge: Option<[u8; 32]>,
     attached_session: Option<u32>,
-    last_state: Option<RemoteFullState>,
+    last_state: Option<Arc<RemoteFullState>>,
     latest_input_seq: Option<u64>,
     is_local: bool,
 }
@@ -490,10 +490,10 @@ impl RemoteServer {
         }
     }
 
-    pub fn send_full_state_to_attached(&self, session_id: u32, state: &RemoteFullState) {
+    pub fn send_full_state_to_attached(&self, session_id: u32, state: Arc<RemoteFullState>) {
         let client_ids = self.clients_for_session(session_id);
         for client_id in client_ids {
-            self.send_state_to_client(client_id, state);
+            self.send_state_to_client(client_id, Arc::clone(&state));
         }
     }
 
@@ -547,7 +547,7 @@ impl RemoteServer {
         }
     }
 
-    fn send_state_to_client(&self, client_id: u64, state: &RemoteFullState) {
+    fn send_state_to_client(&self, client_id: u64, state: Arc<RemoteFullState>) {
         let _scope =
             crate::profiling::scope("server.stream.encode_state", crate::profiling::Kind::Cpu);
         let (ty, payload, is_local) = {
@@ -560,16 +560,16 @@ impl RemoteServer {
             let encoded = match client
                 .last_state
                 .as_ref()
-                .and_then(|previous| encode_delta(previous, state, latest_input_seq, is_local))
+                .and_then(|previous| encode_delta(previous.as_ref(), state.as_ref(), latest_input_seq, is_local))
             {
                 Some(delta) => (MessageType::Delta, delta, is_local),
                 None => (
                     MessageType::FullState,
-                    encode_full_state(state, latest_input_seq, is_local),
+                    encode_full_state(state.as_ref(), latest_input_seq, is_local),
                     is_local,
                 ),
             };
-            client.last_state = Some(state.clone());
+            client.last_state = Some(Arc::clone(&state));
             encoded
         };
         crate::profiling::record_units(
