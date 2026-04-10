@@ -521,6 +521,7 @@ dependencies = [
  "env_logger",
  "hmac",
  "iced",
+ "iced_graphics",
  "image",
  "khronos-egl",
  "libc",
@@ -536,6 +537,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "unicode-script",
  "unicode-width",
 ]
 

@@ -2,11 +2,11 @@
 
 use crate::vt_backend_core;
 use iced::advanced::renderer;
-use iced::advanced::text::{self, Paragraph as _, Renderer as _};
 use iced::advanced::widget::Tree;
 use iced::advanced::{Layout, Widget, layout};
 use iced::alignment;
 use iced::font;
+use iced_graphics::text as graphics_text;
 use iced::mouse;
 use iced::widget::canvas::{self, Cache, Frame};
 use iced::{Color, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme};
@@ -457,7 +457,7 @@ impl Default for TerminalTextLayerState {
 }
 
 struct TextLayerEntry {
-    paragraph: <iced::Renderer as text::Renderer>::Paragraph,
+    buffer: Arc<graphics_text::cosmic_text::Buffer>,
     position: Point,
     color: Color,
 }
@@ -650,19 +650,16 @@ impl TerminalTextLayer {
         debug_text_layer_draw_run(
             content, row_index, col_index, width_cols, x, y, bounds.width, font, shaping, color,
         );
-        let paragraph = <iced::Renderer as text::Renderer>::Paragraph::with_text(iced::advanced::text::Text {
+        let buffer = Arc::new(new_text_buffer(
             content,
             bounds,
-            size: Pixels(self.font_size),
-            line_height: iced::advanced::text::LineHeight::Absolute(Pixels(self.cell_height)),
+            self.font_size,
+            self.cell_height,
             font,
-            align_x: iced::advanced::text::Alignment::Left,
-            align_y: alignment::Vertical::Top,
             shaping,
-            wrapping: iced::advanced::text::Wrapping::None,
-        });
+        ));
         entries.push(TextLayerEntry {
-            paragraph,
+            buffer,
             position: Point::new(x, y),
             color,
         });
@@ -807,12 +804,28 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TerminalTextLayer {
         let state = tree.state.downcast_ref::<TerminalTextLayerState>();
         for row_entries in &state.base_row_entries {
             for entry in row_entries {
-                renderer.fill_paragraph(&entry.paragraph, entry.position, entry.color, viewport);
+                <iced::Renderer as graphics_text::Renderer>::fill_raw(
+                    renderer,
+                    graphics_text::Raw {
+                        buffer: Arc::downgrade(&entry.buffer),
+                        position: entry.position,
+                        color: entry.color,
+                        clip_bounds: viewport,
+                    },
+                );
             }
         }
         for row_entries in &state.overlay_row_entries {
             for entry in row_entries {
-                renderer.fill_paragraph(&entry.paragraph, entry.position, entry.color, viewport);
+                <iced::Renderer as graphics_text::Renderer>::fill_raw(
+                    renderer,
+                    graphics_text::Raw {
+                        buffer: Arc::downgrade(&entry.buffer),
+                        position: entry.position,
+                        color: entry.color,
+                        clip_bounds: viewport,
+                    },
+                );
             }
         }
     }
@@ -1391,16 +1404,12 @@ fn font_for_cell(
 }
 
 fn font_for_terminal_text(
-    text: &str,
+    _text: &str,
     bold: bool,
     italic: bool,
     font_families: &[&'static str],
 ) -> Font {
-    let base = if text_prefers_primary_font(text) || !text_requires_explicit_fallback(text) {
-        configured_font(font_families.first().copied())
-    } else {
-        configured_fallback_font(font_families).unwrap_or(Font::MONOSPACE)
-    };
+    let base = configured_font(primary_terminal_font(font_families));
     Font {
         family: base.family,
         weight: if bold {
@@ -1421,46 +1430,8 @@ fn configured_font(family: Option<&'static str>) -> Font {
     family.map(Font::with_name).unwrap_or(Font::MONOSPACE)
 }
 
-fn configured_fallback_font(font_families: &[&'static str]) -> Option<Font> {
-    font_families.get(1).copied().map(Font::with_name)
-}
-
-fn text_prefers_primary_font(text: &str) -> bool {
-    text.is_ascii() || text.chars().all(is_private_use_scalar)
-}
-
-fn text_requires_explicit_fallback(text: &str) -> bool {
-    text.chars().any(is_cjk_scalar)
-}
-
-fn is_private_use_scalar(ch: char) -> bool {
-    matches!(
-        ch as u32,
-        0xE000..=0xF8FF | 0xF0000..=0xFFFFD | 0x100000..=0x10FFFD
-    )
-}
-
-fn is_cjk_scalar(ch: char) -> bool {
-    matches!(
-        ch as u32,
-        0x2E80..=0x2FDF
-            | 0x3000..=0x303F
-            | 0x3040..=0x30FF
-            | 0x3100..=0x312F
-            | 0x3130..=0x318F
-            | 0x3190..=0x319F
-            | 0x31A0..=0x31BF
-            | 0x31C0..=0x31EF
-            | 0x31F0..=0x31FF
-            | 0x3400..=0x4DBF
-            | 0x4E00..=0x9FFF
-            | 0xA960..=0xA97F
-            | 0xAC00..=0xD7AF
-            | 0xF900..=0xFAFF
-            | 0xFE30..=0xFE4F
-            | 0xFF00..=0xFFEF
-            | 0x20000..=0x2EBEF
-    )
+fn primary_terminal_font(font_families: &[&'static str]) -> Option<&'static str> {
+    font_families.first().copied()
 }
 
 fn color_from_rgb(color: crate::vt::GhosttyColorRgb, alpha: f32) -> Color {
@@ -1571,6 +1542,36 @@ fn hash_optional_color(
 fn render_debug_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("BOO_RENDER_DEBUG").is_some())
+}
+
+fn new_text_buffer(
+    content: &str,
+    bounds: Size,
+    font_size: f32,
+    cell_height: f32,
+    font: Font,
+    shaping: iced::widget::text::Shaping,
+) -> graphics_text::cosmic_text::Buffer {
+    let mut font_system = graphics_text::font_system()
+        .write()
+        .expect("Write font system");
+    let mut buffer = graphics_text::cosmic_text::Buffer::new(
+        font_system.raw(),
+        graphics_text::cosmic_text::Metrics::new(font_size, cell_height),
+    );
+    buffer.set_size(font_system.raw(), Some(bounds.width), Some(bounds.height));
+    buffer.set_wrap(
+        font_system.raw(),
+        graphics_text::cosmic_text::Wrap::None,
+    );
+    buffer.set_text(
+        font_system.raw(),
+        content,
+        &graphics_text::to_attributes(font),
+        graphics_text::to_shaping(shaping, content),
+        None,
+    );
+    buffer
 }
 
 fn text_run_max_width(run: &TextRun, draw_width: f32) -> f32 {
@@ -2128,40 +2129,11 @@ mod tests {
     }
 
     #[test]
-    fn cjk_text_uses_first_configured_fallback_family() {
-        let row = vec![
-            vt_backend_core::CellSnapshot {
-                text: "a".to_string(),
-                ..Default::default()
-            },
-            vt_backend_core::CellSnapshot {
-                text: "仮".to_string(),
-                display_width: 2,
-                bold: true,
-                ..Default::default()
-            },
-        ];
-        let runs = build_text_runs(
-            &row,
-            row.len(),
-            &["CodeNewRoman Nerd Font Mono", "Fallback CJK", "Fallback Emoji"],
-            None,
+    fn primary_terminal_font_is_first_configured_family() {
+        assert_eq!(
+            primary_terminal_font(&["Primary", "Fallback One", "Fallback Two"]),
+            Some("Primary")
         );
-
-        assert_eq!(runs[0].font.family, font::Family::Name("CodeNewRoman Nerd Font Mono"));
-        assert_eq!(runs[1].font.family, font::Family::Name("Fallback CJK"));
-        assert_eq!(runs[1].font.weight, font::Weight::Bold);
-    }
-
-    #[test]
-    fn cjk_font_selection_uses_first_configured_fallback_family() {
-        let font = font_for_terminal_text(
-            "仮",
-            false,
-            false,
-            &["CodeNewRoman Nerd Font Mono", "Fallback One", "Fallback Two"],
-        );
-        assert_eq!(font.family, font::Family::Name("Fallback One"));
     }
 
     #[test]

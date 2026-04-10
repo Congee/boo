@@ -1,7 +1,11 @@
 use crate::client_gui;
 use crate::config;
 use crate::control;
+use iced_graphics::text as graphics_text;
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use unicode_script::Script;
 
 static STARTUP_SESSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static STARTUP_CONTROL_SOCKET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -65,6 +69,7 @@ pub fn run_gui_client() {
 
     ensure_server_running(&socket_path, &boo_config);
     crate::platform::install_command_drag_monitor();
+    install_ordered_font_fallbacks(&boo_config);
 
     iced::application(
         move || client_gui::ClientApp::new(socket_path.clone()),
@@ -84,6 +89,106 @@ pub fn run_gui_client() {
     .subscription(client_gui::ClientApp::subscription)
     .run()
     .unwrap();
+}
+
+fn install_ordered_font_fallbacks(boo_config: &config::Config) {
+    let user_fallbacks = boo_config
+        .font_families
+        .iter()
+        .skip(1)
+        .map(|family| leak_font_family(family))
+        .collect::<Vec<_>>();
+
+    if user_fallbacks.is_empty() {
+        return;
+    }
+
+    let mut font_system = graphics_text::font_system()
+        .write()
+        .expect("Write font system");
+    let raw = std::mem::replace(
+        font_system.raw(),
+        graphics_text::cosmic_text::FontSystem::new_with_locale_and_db_and_fallback(
+            "en-US".to_string(),
+            graphics_text::cosmic_text::fontdb::Database::new(),
+            graphics_text::cosmic_text::PlatformFallback,
+        ),
+    );
+    let (locale, db) = raw.into_locale_and_db();
+    *font_system.raw() = graphics_text::cosmic_text::FontSystem::new_with_locale_and_db_and_fallback(
+        locale,
+        db,
+        BooFontFallback::new(user_fallbacks),
+    );
+}
+
+fn leak_font_family(name: &str) -> &'static str {
+    Box::leak(name.to_owned().into_boxed_str())
+}
+
+fn merge_family_lists(
+    preferred: &[&'static str],
+    fallback: &[&'static str],
+) -> Box<[&'static str]> {
+    let mut merged = Vec::with_capacity(preferred.len() + fallback.len());
+    for family in preferred.iter().chain(fallback.iter()) {
+        if !merged.iter().any(|existing| existing == family) {
+            merged.push(*family);
+        }
+    }
+    merged.into_boxed_slice()
+}
+
+struct BooFontFallback {
+    user_fallbacks: Box<[&'static str]>,
+    common_fallbacks: Box<[&'static str]>,
+    platform: graphics_text::cosmic_text::PlatformFallback,
+    script_fallbacks: Mutex<HashMap<Script, &'static [&'static str]>>,
+}
+
+impl BooFontFallback {
+    fn new(user_fallbacks: Vec<&'static str>) -> Self {
+        let platform = graphics_text::cosmic_text::PlatformFallback;
+        let user_fallbacks = user_fallbacks.into_boxed_slice();
+        let common_fallbacks = merge_family_lists(
+            &user_fallbacks,
+            graphics_text::cosmic_text::Fallback::common_fallback(&platform),
+        );
+        Self {
+            user_fallbacks,
+            common_fallbacks,
+            platform,
+            script_fallbacks: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl graphics_text::cosmic_text::Fallback for BooFontFallback {
+    fn common_fallback(&self) -> &[&'static str] {
+        &self.common_fallbacks
+    }
+
+    fn forbidden_fallback(&self) -> &[&'static str] {
+        graphics_text::cosmic_text::Fallback::forbidden_fallback(&self.platform)
+    }
+
+    fn script_fallback(&self, script: Script, locale: &str) -> &[&'static str] {
+        let mut cache = self
+            .script_fallbacks
+            .lock()
+            .expect("lock script fallback cache");
+        *cache.entry(script).or_insert_with(|| {
+            let merged = merge_family_lists(
+                &self.user_fallbacks,
+                graphics_text::cosmic_text::Fallback::script_fallback(
+                    &self.platform,
+                    script,
+                    locale,
+                ),
+            );
+            Box::leak(merged)
+        })
+    }
 }
 
 fn system_text_fallback_fonts() -> Vec<Cow<'static, [u8]>> {
@@ -126,6 +231,24 @@ fn system_text_fallback_fonts() -> Vec<Cow<'static, [u8]>> {
     #[cfg(not(target_os = "macos"))]
     {
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_family_lists;
+
+    #[test]
+    fn merge_family_lists_preserves_preferred_order_and_dedups() {
+        let merged = merge_family_lists(
+            &["User One", "User Two"],
+            &["User Two", "Platform One", "Platform Two"],
+        );
+
+        assert_eq!(
+            merged.as_ref(),
+            &["User One", "User Two", "Platform One", "Platform Two"]
+        );
     }
 }
 
