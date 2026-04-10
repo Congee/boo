@@ -73,6 +73,7 @@ pub fn run_gui_client() {
     )
     .settings(iced::Settings {
         fonts: system_text_fallback_fonts(),
+        vsync: boo_config.sync_to_monitor,
         ..iced::Settings::default()
     })
     .title("boo")

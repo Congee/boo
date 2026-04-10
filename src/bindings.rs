@@ -708,6 +708,7 @@ mod tests {
             font_family: None,
             font_fallbacks: Vec::new(),
             font_size: None,
+            sync_to_monitor: true,
             window_decoration: crate::config::WindowDecoration::None,
             background_opacity: None,
             background_opacity_cells: false,

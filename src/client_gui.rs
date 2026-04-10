@@ -20,7 +20,7 @@ use iced::{
     Color, Element, Event, Font, Length, Point, Rectangle, Size, Subscription, Task, Theme,
     keyboard, mouse, time,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixListener;
@@ -144,7 +144,7 @@ pub struct ClientApp {
     focused_cursor_position: Option<(u64, u16, u16)>,
     preedit_text: String,
     next_input_seq: u64,
-    pending_input_latencies: HashMap<u64, Instant>,
+    pending_input_latencies: BTreeMap<u64, Instant>,
     steady_state_snapshot_requests: u64,
     should_exit: bool,
     terminal_snapshot_generation: u64,
@@ -286,7 +286,7 @@ impl ClientApp {
             focused_cursor_position,
             preedit_text: String::new(),
             next_input_seq: 1,
-            pending_input_latencies: HashMap::new(),
+            pending_input_latencies: BTreeMap::new(),
             steady_state_snapshot_requests: 0,
             should_exit: false,
             terminal_snapshot_generation: 1,
@@ -1085,16 +1085,9 @@ impl ClientApp {
         let Some(ack_input_seq) = ack_input_seq else {
             return;
         };
-        let mut completed = None;
-        self.pending_input_latencies.retain(|seq, started_at| {
-            if *seq <= ack_input_seq {
-                completed = Some((*seq, *started_at));
-                false
-            } else {
-                true
-            }
-        });
-        if let Some((input_seq, started_at)) = completed {
+        for (input_seq, started_at) in
+            take_acknowledged_input_latencies(&mut self.pending_input_latencies, ack_input_seq)
+        {
             log_client_latency(stage, input_seq, started_at);
         }
     }
@@ -1320,6 +1313,15 @@ fn log_client_latency(stage: &str, input_seq: u64, started_at: Instant) {
         "boo_latency stage={stage} seq={input_seq} ms={:.3}",
         started_at.elapsed().as_secs_f64() * 1000.0
     );
+}
+
+fn take_acknowledged_input_latencies(
+    pending: &mut BTreeMap<u64, Instant>,
+    ack_input_seq: u64,
+) -> Vec<(u64, Instant)> {
+    let remaining = pending.split_off(&ack_input_seq.wrapping_add(1));
+    let acknowledged = std::mem::replace(pending, remaining);
+    acknowledged.into_iter().collect()
 }
 
 fn remote_full_state_to_vt_snapshot(
@@ -2987,6 +2989,24 @@ mod tests {
             }
             other => panic!("expected second batch entry to be delta, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn acknowledged_input_latencies_drain_in_sequence_order() {
+        let now = Instant::now();
+        let mut pending = BTreeMap::from([
+            (4_u64, now),
+            (5_u64, now + Duration::from_millis(1)),
+            (7_u64, now + Duration::from_millis(2)),
+        ]);
+
+        let acknowledged = take_acknowledged_input_latencies(&mut pending, 5);
+
+        assert_eq!(
+            acknowledged.iter().map(|(seq, _)| *seq).collect::<Vec<_>>(),
+            vec![4, 5]
+        );
+        assert_eq!(pending.keys().copied().collect::<Vec<_>>(), vec![7]);
     }
 
     #[test]

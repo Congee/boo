@@ -19,6 +19,7 @@ pub struct Config {
     pub font_family: Option<String>,
     pub font_fallbacks: Vec<String>,
     pub font_size: Option<f32>,
+    pub sync_to_monitor: bool,
     pub window_decoration: WindowDecoration,
     pub background_opacity: Option<f32>,
     pub background_opacity_cells: bool,
@@ -142,6 +143,9 @@ impl Config {
                         config.font_size = Some(size.max(1.0));
                     }
                 }
+                "sync-to-monitor" => {
+                    config.sync_to_monitor = parse_bool(value).unwrap_or(true);
+                }
                 "window-decoration" => {
                     if let Some(decoration) = parse_window_decoration(value) {
                         config.window_decoration = decoration;
@@ -245,6 +249,7 @@ impl Default for Config {
             font_family: None,
             font_fallbacks: Vec::new(),
             font_size: None,
+            sync_to_monitor: true,
             window_decoration: WindowDecoration::None,
             background_opacity: None,
             background_opacity_cells: false,
@@ -439,6 +444,7 @@ font-family = "Fira Code"
 font-family = "Apple Color Emoji"
 font-family = "Hiragino Sans GB"
 font-size = 14
+sync-to-monitor = false
 background-opacity = 0.9
 background-opacity-cells = true
 cursor-style = underline
@@ -466,6 +472,7 @@ keybind = super+1 = goto_tab:1
             vec!["Apple Color Emoji".to_string(), "Hiragino Sans GB".to_string()]
         );
         assert_eq!(config.font_size, Some(14.0));
+        assert!(!config.sync_to_monitor);
         assert_eq!(config.background_opacity, Some(0.9));
         assert!(config.background_opacity_cells);
         assert_eq!(config.cursor_style, Some(CursorStyle::Underline));
@@ -503,6 +510,7 @@ keybind = super+1 = goto_tab:1
         assert!(config.keybinds.is_empty());
         assert!(config.font_family.is_none());
         assert!(config.font_fallbacks.is_empty());
+        assert!(config.sync_to_monitor);
         assert!(config.background_opacity.is_none());
     }
 
