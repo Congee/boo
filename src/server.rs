@@ -68,6 +68,9 @@ pub enum Command {
     FocusSurface {
         index: usize,
     },
+    RemoteConnected {
+        client_id: u64,
+    },
     RemoteListSessions {
         client_id: u64,
     },
@@ -232,6 +235,7 @@ impl From<control::ControlCmd> for Command {
 impl From<remote::RemoteCmd> for Command {
     fn from(value: remote::RemoteCmd) -> Self {
         match value {
+            remote::RemoteCmd::Connected { client_id } => Self::RemoteConnected { client_id },
             remote::RemoteCmd::ListSessions { client_id } => Self::RemoteListSessions { client_id },
             remote::RemoteCmd::Attach {
                 client_id,

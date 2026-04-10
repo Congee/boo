@@ -305,7 +305,6 @@ impl ClientApp {
             Message::Frame => self.on_tick(),
             Message::StreamReady(tx) => {
                 self.stream_tx = Some(tx);
-                self.send_stream_command(StreamCommand::ListSessions);
             }
             Message::StreamEvent(event) => {
                 if let Some(task) = self.handle_stream_delivery(event) {
@@ -448,14 +447,20 @@ impl ClientApp {
         let selection_foreground = Self::theme_color(self.selection_foreground, 1.0);
         let cursor_text_color = Self::theme_color(self.cursor_text_color, 1.0);
         let url_color = Self::theme_color(self.url_color, 1.0);
-        let mut layers: Vec<Element<'a, Message>> = vec![
-            iced::widget::canvas(vt_terminal_canvas::TerminalBackgroundCanvas {
-                color: Self::theme_color(self.terminal_background, self.background_opacity),
-            })
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
-        ];
+        let mut layers: Vec<Element<'a, Message>> = {
+            let _scope = crate::profiling::scope(
+                "client.view.render_terminal_scene.background",
+                crate::profiling::Kind::Cpu,
+            );
+            vec![
+                iced::widget::canvas(vt_terminal_canvas::TerminalBackgroundCanvas {
+                    color: Self::theme_color(self.terminal_background, self.background_opacity),
+                })
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            ]
+        };
         for pane in &snapshot.visible_panes {
             crate::profiling::record_units(
                 "client.view.render_terminal_scene.pane",
@@ -480,28 +485,34 @@ impl ClientApp {
             };
             let preedit_text =
                 (pane.focused && !self.preedit_text.is_empty()).then(|| self.preedit_text.clone());
-            let terminal_canvas = vt_terminal_canvas::TerminalCanvas::new(
-                Arc::clone(terminal_snapshot),
-                self.cell_width as f32,
-                self.cell_height as f32,
-                self.font_size,
-                None,
-                self.font_fallbacks.clone(),
-                self.terminal_snapshot_generation,
-                1,
-                self.background_opacity,
-                self.background_opacity_cells,
-                cursor_blink_visible,
-                Vec::new(),
-                selection_background,
-                Some(selection_foreground),
-                Some(cursor_text_color),
-                Some(url_color),
-                preedit_text.clone(),
-            )
-            .without_base_fill()
-            .without_text_fill()
-            .new_with_viewport(viewport);
+            let terminal_canvas = {
+                let _scope = crate::profiling::scope(
+                    "client.view.render_terminal_scene.pane_canvas",
+                    crate::profiling::Kind::Cpu,
+                );
+                vt_terminal_canvas::TerminalCanvas::new(
+                    Arc::clone(terminal_snapshot),
+                    self.cell_width as f32,
+                    self.cell_height as f32,
+                    self.font_size,
+                    None,
+                    self.font_fallbacks.clone(),
+                    self.terminal_snapshot_generation,
+                    1,
+                    self.background_opacity,
+                    self.background_opacity_cells,
+                    cursor_blink_visible,
+                    Vec::new(),
+                    selection_background,
+                    Some(selection_foreground),
+                    Some(cursor_text_color),
+                    Some(url_color),
+                    preedit_text.clone(),
+                )
+                .without_base_fill()
+                .without_text_fill()
+                .new_with_viewport(viewport)
+            };
             layers.push(
                 container(
                     iced::widget::canvas(terminal_canvas)
@@ -512,7 +523,11 @@ impl ClientApp {
                 .height(Length::Fill)
                 .into(),
             );
-            layers.push(
+            let text_layer = {
+                let _scope = crate::profiling::scope(
+                    "client.view.render_terminal_scene.pane_text",
+                    crate::profiling::Kind::Cpu,
+                );
                 Element::new(
                     vt_terminal_canvas::TerminalTextLayer::new(
                         Arc::clone(terminal_snapshot),
@@ -529,27 +544,46 @@ impl ClientApp {
                         preedit_text,
                     )
                     .new_with_viewport(viewport),
-                ),
+                )
+            };
+            layers.push(text_layer);
+        }
+        {
+            let _scope = crate::profiling::scope(
+                "client.view.render_terminal_scene.borders",
+                crate::profiling::Kind::Cpu,
+            );
+            layers.push(
+                iced::widget::canvas(PaneBordersOverlay {
+                    panes: snapshot.visible_panes.clone(),
+                })
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
             );
         }
-        layers.push(
-            iced::widget::canvas(PaneBordersOverlay {
-                panes: snapshot.visible_panes.clone(),
-            })
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
-        );
-        layers.push(TerminalInputMethodLayer::new(
-            self.focused_cursor_rect(),
-            self.font_size,
-            self.preedit_text.clone(),
-            self.app_focused,
-        ));
-        stack(layers)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        {
+            let _scope = crate::profiling::scope(
+                "client.view.render_terminal_scene.ime_layer",
+                crate::profiling::Kind::Cpu,
+            );
+            layers.push(TerminalInputMethodLayer::new(
+                self.focused_cursor_rect(),
+                self.font_size,
+                self.preedit_text.clone(),
+                self.app_focused,
+            ));
+        }
+        {
+            let _scope = crate::profiling::scope(
+                "client.view.render_terminal_scene.stack",
+                crate::profiling::Kind::Cpu,
+            );
+            stack(layers)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        }
     }
 
     pub fn subscription(&self) -> Subscription<Message> {

@@ -150,6 +150,9 @@ pub struct RemoteFullState {
 
 #[derive(Debug)]
 pub enum RemoteCmd {
+    Connected {
+        client_id: u64,
+    },
     ListSessions {
         client_id: u64,
     },
@@ -351,6 +354,8 @@ impl RemoteServer {
 
                 let cmd_tx = cmd_tx.clone();
                 let state = Arc::clone(&state_for_listener);
+                let _ = cmd_tx.send(RemoteCmd::Connected { client_id });
+                crate::notify_headless_wakeup();
                 std::thread::spawn(move || read_loop(stream, client_id, state, cmd_tx));
             }
         });
