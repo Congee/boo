@@ -891,7 +891,6 @@ impl ClientApp {
             LocalStreamEvent::Attached(session_id) => {
                 self.active_session_id = Some(session_id);
                 self.ui_state.mark_active_session(Some(session_id));
-                self.refresh_snapshot();
             }
             LocalStreamEvent::Detached => {
                 self.mode = ClientMode::Recovering;
