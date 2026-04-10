@@ -459,6 +459,13 @@ impl ClientApp {
         &'a self,
         snapshot: &'a control::UiSnapshot,
     ) -> Element<'a, Message> {
+        let _scope =
+            crate::profiling::scope("client.view.render_terminal_scene", crate::profiling::Kind::Cpu);
+        crate::profiling::record_units(
+            "client.view.render_terminal_scene.panes",
+            crate::profiling::Kind::Cpu,
+            snapshot.visible_panes.len() as u64,
+        );
         let selection_background = Self::theme_color(self.selection_background, 0.35);
         let selection_foreground = Self::theme_color(self.selection_foreground, 1.0);
         let cursor_text_color = Self::theme_color(self.cursor_text_color, 1.0);
@@ -472,6 +479,11 @@ impl ClientApp {
             .into(),
         ];
         for pane in &snapshot.visible_panes {
+            crate::profiling::record_units(
+                "client.view.render_terminal_scene.pane",
+                crate::profiling::Kind::Cpu,
+                1,
+            );
             let Some(terminal_snapshot) = self.pane_snapshots.get(&pane.pane_id) else {
                 continue;
             };
@@ -1763,20 +1775,6 @@ pub(crate) struct RemoteDelta {
     changed_rows: Vec<RemoteRowDelta>,
 }
 
-fn stream_batch_window_for_event(event: &LocalStreamEvent) -> Option<Duration> {
-    match event {
-        LocalStreamEvent::FullState { ack_input_seq, .. }
-        | LocalStreamEvent::Delta { ack_input_seq, .. } => {
-            if ack_input_seq.is_none() {
-                Some(PASSIVE_STREAM_BATCH_WINDOW)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
 fn is_passive_screen_event(event: &LocalStreamEvent) -> bool {
     matches!(
         event,
@@ -1961,9 +1959,6 @@ fn local_stream_subscription(
                 });
 
                 while let Some(event) = event_rx.next().await {
-                    if let Some(batch_window) = stream_batch_window_for_event(&event) {
-                        std::thread::sleep(batch_window);
-                    }
                     let mut batch = Vec::new();
                     let mut pending_passive_screen = None;
                     push_coalesced_stream_event(&mut batch, &mut pending_passive_screen, event);
@@ -2915,44 +2910,6 @@ mod tests {
             split_direction: None,
             split_ratio: None,
         }
-    }
-
-    #[test]
-    fn stream_batch_window_only_applies_to_unacked_screen_updates() {
-        assert_eq!(
-            stream_batch_window_for_event(&LocalStreamEvent::Delta {
-                ack_input_seq: None,
-                delta: RemoteDelta {
-                    cursor_x: 0,
-                    cursor_y: 0,
-                    cursor_visible: true,
-                    cursor_blinking: false,
-                    cursor_style: 1,
-                    scroll_rows: 0,
-                    changed_rows: Vec::new(),
-                },
-            }),
-            Some(PASSIVE_STREAM_BATCH_WINDOW)
-        );
-        assert_eq!(
-            stream_batch_window_for_event(&LocalStreamEvent::Delta {
-                ack_input_seq: Some(1),
-                delta: RemoteDelta {
-                    cursor_x: 0,
-                    cursor_y: 0,
-                    cursor_visible: true,
-                    cursor_blinking: false,
-                    cursor_style: 1,
-                    scroll_rows: 0,
-                    changed_rows: Vec::new(),
-                },
-            }),
-            None
-        );
-        assert_eq!(
-            stream_batch_window_for_event(&LocalStreamEvent::SessionList(Vec::new())),
-            None
-        );
     }
 
     #[test]
