@@ -37,6 +37,10 @@ impl BooApp {
             .chain(self.server.local_gui_server.iter())
     }
 
+    pub(crate) fn has_attached_stream_sessions(&self) -> bool {
+        self.remote_servers().any(|server| server.has_attached_sessions())
+    }
+
     fn remote_server_for_client(&self, client_id: u64) -> Option<&remote::RemoteServer> {
         self.remote_servers()
             .find(|server| server.client_session(client_id).is_some())
@@ -131,14 +135,14 @@ impl BooApp {
                 self.sync_after_tab_change();
             }
             server::Command::ResizeViewportPoints { width, height } => {
-                self.resize_viewport_points(width, height);
-                if let Some(server) = self.server.local_gui_server.as_ref() {
+                let changed = self.resize_viewport_points(width, height);
+                if changed && let Some(server) = self.server.local_gui_server.as_ref() {
                     server.send_ui_snapshot_to_local_clients(&self.ui_snapshot());
                 }
             }
             server::Command::ResizeViewport { cols, rows } => {
-                self.resize_viewport_cells(cols, rows);
-                if let Some(server) = self.server.local_gui_server.as_ref() {
+                let changed = self.resize_viewport_cells(cols, rows);
+                if changed && let Some(server) = self.server.local_gui_server.as_ref() {
                     server.send_ui_snapshot_to_local_clients(&self.ui_snapshot());
                 }
             }
@@ -323,8 +327,9 @@ impl BooApp {
                     }
                     return;
                 };
-                self.resize_viewport_cells(cols, rows);
-                self.publish_remote_session(session_id);
+                if self.resize_viewport_cells(cols, rows) {
+                    self.publish_remote_session(session_id);
+                }
             }
             server::Command::RemoteExecuteCommand { client_id, input } => {
                 self.execute_command(&input);

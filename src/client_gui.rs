@@ -32,7 +32,6 @@ const STATUS_BAR_HEIGHT: f64 = 20.0;
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 const DEFAULT_CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(600);
 const STREAM_RECONNECT_DELAY: Duration = Duration::from_millis(250);
-const PASSIVE_STREAM_BATCH_WINDOW: Duration = Duration::from_millis(24);
 const LOCAL_STREAM_INPUT_SEQ_LEN: usize = 8;
 const REMOTE_FULL_STATE_HEADER_LEN: usize = 14;
 const LOCAL_FULL_STATE_HEADER_LEN: usize =
@@ -60,7 +59,6 @@ macro_rules! ime_debug {
 #[derive(Debug, Clone)]
 pub enum Message {
     Frame,
-    FlushPassiveStream,
     IcedEvent(Event),
     StreamReady(std::sync::mpsc::Sender<StreamCommand>),
     StreamEvent(LocalStreamEvent),
@@ -147,14 +145,13 @@ pub struct ClientApp {
     preedit_text: String,
     next_input_seq: u64,
     pending_input_latencies: HashMap<u64, Instant>,
-    pending_passive_stream: Option<LocalStreamEvent>,
-    passive_flush_scheduled: bool,
     steady_state_snapshot_requests: u64,
     should_exit: bool,
     terminal_snapshot_generation: u64,
     next_full_snapshot_revision: u64,
     next_snapshot_generation: u64,
     last_mouse_pos: Point,
+    last_requested_viewport_points: Option<(u32, u32)>,
 }
 
 #[derive(Clone, Copy)]
@@ -290,14 +287,13 @@ impl ClientApp {
             preedit_text: String::new(),
             next_input_seq: 1,
             pending_input_latencies: HashMap::new(),
-            pending_passive_stream: None,
-            passive_flush_scheduled: false,
             steady_state_snapshot_requests: 0,
             should_exit: false,
             terminal_snapshot_generation: 1,
             next_full_snapshot_revision: 1,
             next_snapshot_generation: 2,
             last_mouse_pos: Point::ORIGIN,
+            last_requested_viewport_points: None,
         };
         app.update_gui_test_status();
         (app, Task::none())
@@ -307,10 +303,6 @@ impl ClientApp {
         let mut tasks = Vec::new();
         match message {
             Message::Frame => self.on_tick(),
-            Message::FlushPassiveStream => {
-                self.passive_flush_scheduled = false;
-                self.flush_pending_passive_stream();
-            }
             Message::StreamReady(tx) => {
                 self.stream_tx = Some(tx);
                 self.send_stream_command(StreamCommand::ListSessions);
@@ -668,9 +660,15 @@ impl ClientApp {
     }
 
     fn send_resize(&mut self, size: Size) {
+        let width = size.width.max(1.0).round() as u32;
+        let height = size.height.max(1.0).round() as u32;
+        if self.last_requested_viewport_points == Some((width, height)) {
+            return;
+        }
+        self.last_requested_viewport_points = Some((width, height));
         let _ = self.client.send(&control::Request::ResizeViewportPoints {
-            width: size.width as f64,
-            height: size.height as f64,
+            width: width as f64,
+            height: height as f64,
         });
     }
 
@@ -915,12 +913,6 @@ impl ClientApp {
         }
     }
 
-    fn flush_pending_passive_stream(&mut self) {
-        if let Some(event) = self.pending_passive_stream.take() {
-            self.handle_stream_event(event);
-        }
-    }
-
     fn observe_focused_cursor_position(&mut self) {
         let current = focused_cursor_position(self.focused_pane_id, &self.pane_snapshots);
         if current.is_some() && self.focused_cursor_position != current {
@@ -950,37 +942,6 @@ impl ClientApp {
     }
 
     fn handle_stream_delivery(&mut self, event: LocalStreamEvent) -> Option<Task<Message>> {
-        if is_passive_screen_event(&event) && matches!(self.mode, ClientMode::Attached) {
-            match self.pending_passive_stream.take() {
-                Some(pending) if passive_screen_event_supersedes(&pending, &event) => {
-                    self.pending_passive_stream = Some(event);
-                }
-                Some(pending) => {
-                    self.handle_stream_event(pending);
-                    self.pending_passive_stream = Some(event);
-                }
-                None => self.pending_passive_stream = Some(event),
-            }
-            if !self.passive_flush_scheduled {
-                self.passive_flush_scheduled = true;
-                return Some(Task::perform(
-                    async move {
-                        std::thread::sleep(PASSIVE_STREAM_BATCH_WINDOW);
-                    },
-                    |_| Message::FlushPassiveStream,
-                ));
-            }
-            return None;
-        }
-
-        if matches!(
-            event,
-            LocalStreamEvent::FullState { .. } | LocalStreamEvent::Delta { .. }
-        ) {
-            self.pending_passive_stream = None;
-        } else {
-            self.flush_pending_passive_stream();
-        }
         self.handle_stream_event(event);
         None
     }

@@ -118,14 +118,19 @@ impl BooApp {
         self.relayout();
     }
 
-    pub(crate) fn resize_viewport_cells(&mut self, cols: u16, rows: u16) {
+    pub(crate) fn resize_viewport_cells(&mut self, cols: u16, rows: u16) -> bool {
         let (width, terminal_height) = self.session_size_pixels(cols, rows);
-        self.resize_viewport_points(width as f64, terminal_height as f64 + STATUS_BAR_HEIGHT);
+        self.resize_viewport_points(width as f64, terminal_height as f64 + STATUS_BAR_HEIGHT)
     }
 
-    pub(crate) fn resize_viewport_points(&mut self, width: f64, height: f64) {
-        self.last_size = Size::new(width.max(1.0) as f32, height.max(1.0) as f32);
+    pub(crate) fn resize_viewport_points(&mut self, width: f64, height: f64) -> bool {
+        let next_size = Size::new(width.max(1.0) as f32, height.max(1.0) as f32);
+        if self.last_size == next_size {
+            return false;
+        }
+        self.last_size = next_size;
         self.relayout();
+        true
     }
 
     pub(crate) fn init_surface(&mut self) {

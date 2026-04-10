@@ -498,7 +498,9 @@ impl BooApp {
             self.close_pane_by_id(pane_id);
             remote_dirty = true;
         }
-        self.remote_dirty |= remote_dirty;
+        if remote_dirty && self.has_attached_stream_sessions() {
+            self.remote_dirty = true;
+        }
     }
 
     pub(crate) fn apply_appearance(&mut self, appearance: ResolvedAppearance) {
