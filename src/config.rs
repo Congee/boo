@@ -16,8 +16,7 @@ pub struct Config {
     pub remote_port: Option<u16>,
     pub remote_auth_key: Option<String>,
     pub keybinds: HashMap<String, String>,
-    pub font_family: Option<String>,
-    pub font_fallbacks: Vec<String>,
+    pub font_families: Vec<String>,
     pub font_size: Option<f32>,
     pub sync_to_monitor: bool,
     pub window_decoration: WindowDecoration,
@@ -130,12 +129,9 @@ impl Config {
                 }
                 "font-family" => {
                     if value.is_empty() {
-                        config.font_family = None;
-                        config.font_fallbacks.clear();
-                    } else if config.font_family.is_none() {
-                        config.font_family = Some(value.to_string());
+                        config.font_families.clear();
                     } else {
-                        config.font_fallbacks.push(value.to_string());
+                        config.font_families.push(value.to_string());
                     }
                 }
                 "font-size" => {
@@ -246,8 +242,7 @@ impl Default for Config {
             remote_port: None,
             remote_auth_key: None,
             keybinds: HashMap::new(),
-            font_family: None,
-            font_fallbacks: Vec::new(),
+            font_families: Vec::new(),
             font_size: None,
             sync_to_monitor: true,
             window_decoration: WindowDecoration::None,
@@ -466,10 +461,13 @@ keybind = super+1 = goto_tab:1
         assert_eq!(config.control_socket.as_deref(), Some("/tmp/boo.sock"));
         assert_eq!(config.remote_port, Some(7337));
         assert_eq!(config.remote_auth_key.as_deref(), Some("secret"));
-        assert_eq!(config.font_family.as_deref(), Some("Fira Code"));
         assert_eq!(
-            config.font_fallbacks,
-            vec!["Apple Color Emoji".to_string(), "Hiragino Sans GB".to_string()]
+            config.font_families,
+            vec![
+                "Fira Code".to_string(),
+                "Apple Color Emoji".to_string(),
+                "Hiragino Sans GB".to_string()
+            ]
         );
         assert_eq!(config.font_size, Some(14.0));
         assert!(!config.sync_to_monitor);
@@ -508,8 +506,7 @@ keybind = super+1 = goto_tab:1
         let config = Config::parse("");
         assert!(config.prefix_key.is_none());
         assert!(config.keybinds.is_empty());
-        assert!(config.font_family.is_none());
-        assert!(config.font_fallbacks.is_empty());
+        assert!(config.font_families.is_empty());
         assert!(config.sync_to_monitor);
         assert!(config.background_opacity.is_none());
     }

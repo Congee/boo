@@ -253,6 +253,7 @@ nix develop
 - [ ] add session/window rename and move/link semantics closer to tmux
 - [ ] add hooks, formats, `run-shell`, and `if-shell`
 - [ ] Overhaul snapshot-heavy rendering/transport paths for performance: keep snapshots as authoritative state where needed, but eliminate whole-snapshot recompute/re-render patterns in hot paths in favor of row/pane-level dirty tracking, incremental caches, and delta-driven updates
+- [ ] Refactor font-family handling to remove the separate internal `font_fallbacks` field and represent configured font families as one ordered list end-to-end
 - [ ] Replace remaining headless/server sleep-poll paths with explicit event-driven wake sources so command input, PTY output, lifecycle changes, and publish work do not depend on periodic frame cadence
 
 ### Status Components

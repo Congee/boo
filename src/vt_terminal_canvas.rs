@@ -23,8 +23,7 @@ pub struct TerminalCanvas {
     pub cell_width: f32,
     pub cell_height: f32,
     pub font_size: f32,
-    pub font_family: Option<&'static str>,
-    pub font_fallbacks: Arc<[&'static str]>,
+    pub font_families: Arc<[&'static str]>,
     pub snapshot_generation: u64,
     pub appearance_revision: u64,
     pub background_opacity: f32,
@@ -91,8 +90,7 @@ impl TerminalCanvas {
         cell_width: f32,
         cell_height: f32,
         font_size: f32,
-        font_family: Option<&'static str>,
-        font_fallbacks: Arc<[&'static str]>,
+        font_families: Arc<[&'static str]>,
         snapshot_generation: u64,
         appearance_revision: u64,
         background_opacity: f32,
@@ -110,8 +108,7 @@ impl TerminalCanvas {
             cell_width,
             cell_height,
             font_size,
-            font_family,
-            font_fallbacks,
+            font_families,
             snapshot_generation,
             appearance_revision,
             background_opacity,
@@ -320,7 +317,7 @@ impl TerminalCanvas {
                     color: default_fg,
                     size: Pixels(self.font_size),
                     line_height: iced::widget::text::LineHeight::Absolute(Pixels(self.cell_height)),
-                font: font_for_terminal_text(preedit, false, false, self.font_family, &self.font_fallbacks),
+                font: font_for_terminal_text(preedit, false, false, &self.font_families),
                     align_x: iced::widget::text::Alignment::Left,
                     align_y: alignment::Vertical::Top,
                     shaping: iced::widget::text::Shaping::Advanced,
@@ -349,8 +346,7 @@ impl TerminalCanvas {
             for run in build_selection_text_runs(
                 row,
                 self.snapshot.cols as usize,
-                self.font_family,
-                &self.font_fallbacks,
+                &self.font_families,
                 selection_foreground,
                 |col_index, display_width| cell_is_selected_in_spans(&spans, col_index, display_width),
             ) {
@@ -374,7 +370,7 @@ impl TerminalCanvas {
             width_cols: usize::from(cell.display_width.max(1)),
             text: cell.text.clone(),
             fg: color,
-            font: font_for_cell(cell, self.font_family, &self.font_fallbacks),
+            font: font_for_cell(cell, &self.font_families),
             underline: cell.underline != 0,
             shaping: terminal_text_shaping(),
         };
@@ -424,8 +420,7 @@ pub struct TerminalTextLayer {
     pub cell_width: f32,
     pub cell_height: f32,
     pub font_size: f32,
-    pub font_family: Option<&'static str>,
-    pub font_fallbacks: Arc<[&'static str]>,
+    pub font_families: Arc<[&'static str]>,
     pub cursor_blink_visible: bool,
     pub selection_rects: Vec<TerminalSelectionRect>,
     pub selection_foreground: Option<Color>,
@@ -473,8 +468,7 @@ impl TerminalTextLayer {
         cell_width: f32,
         cell_height: f32,
         font_size: f32,
-        font_family: Option<&'static str>,
-        font_fallbacks: Arc<[&'static str]>,
+        font_families: Arc<[&'static str]>,
         cursor_blink_visible: bool,
         selection_rects: Vec<TerminalSelectionRect>,
         selection_foreground: Option<Color>,
@@ -487,8 +481,7 @@ impl TerminalTextLayer {
             cell_width,
             cell_height,
             font_size,
-            font_family,
-            font_fallbacks,
+            font_families,
             cursor_blink_visible,
             selection_rects,
             selection_foreground,
@@ -528,8 +521,7 @@ impl TerminalTextLayer {
         for run in build_text_runs(
             row,
             self.snapshot.cols as usize,
-            self.font_family,
-            &self.font_fallbacks,
+            &self.font_families,
             self.url_color,
         ) {
             self.push_text_entry(
@@ -562,8 +554,7 @@ impl TerminalTextLayer {
             for run in build_selection_text_runs(
                 row,
                 self.snapshot.cols as usize,
-                self.font_family,
-                &self.font_fallbacks,
+                &self.font_families,
                 selection_foreground,
                 |col_index, display_width| {
                     cell_is_selected_in_spans(selection_spans, col_index, display_width)
@@ -596,7 +587,7 @@ impl TerminalTextLayer {
                         col_index,
                         cell.text.as_str(),
                         usize::from(cell.display_width.max(1)),
-                        font_for_cell(cell, self.font_family, &self.font_fallbacks),
+                        font_for_cell(cell, &self.font_families),
                         terminal_text_shaping(),
                         cursor_text_color,
                     );
@@ -622,8 +613,7 @@ impl TerminalTextLayer {
                     preedit,
                     false,
                     false,
-                    self.font_family,
-                    &self.font_fallbacks,
+                    &self.font_families,
                 ),
                 terminal_text_shaping(),
                 color_from_rgb(self.snapshot.colors.foreground, 1.0),
@@ -695,7 +685,7 @@ impl TerminalTextLayer {
         self.font_size.to_bits().hash(&mut hasher);
         self.cell_width.to_bits().hash(&mut hasher);
         self.cell_height.to_bits().hash(&mut hasher);
-        self.font_family.hash(&mut hasher);
+        self.font_families.hash(&mut hasher);
         self.url_color.map(|c| c.r.to_bits()).hash(&mut hasher);
         self.url_color.map(|c| c.g.to_bits()).hash(&mut hasher);
         self.url_color.map(|c| c.b.to_bits()).hash(&mut hasher);
@@ -704,9 +694,6 @@ impl TerminalTextLayer {
         viewport.y.to_bits().hash(&mut hasher);
         viewport.width.to_bits().hash(&mut hasher);
         viewport.height.to_bits().hash(&mut hasher);
-        for family in self.font_fallbacks.iter() {
-            family.hash(&mut hasher);
-        }
         hasher.finish()
     }
 
@@ -1034,8 +1021,7 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
                             text_runs: build_text_runs(
                                 row,
                                 self.snapshot.cols as usize,
-                                self.font_family,
-                                &self.font_fallbacks,
+                                &self.font_families,
                                 self.url_color,
                             ),
                         };
@@ -1281,8 +1267,7 @@ fn build_background_spans(
 fn build_text_runs(
     row: &[vt_backend_core::CellSnapshot],
     cols: usize,
-    font_family: Option<&'static str>,
-    font_fallbacks: &[&'static str],
+    font_families: &[&'static str],
     url_color: Option<Color>,
 ) -> Vec<TextRun> {
     let mut runs: Vec<TextRun> = Vec::new();
@@ -1307,7 +1292,7 @@ fn build_text_runs(
         } else {
             color_from_rgb(cell.fg, 1.0)
         };
-        let font = font_for_cell(cell, font_family, font_fallbacks);
+        let font = font_for_cell(cell, font_families);
         let width_cols = usize::from(cell.display_width.max(1));
         let shaping = terminal_text_shaping();
 
@@ -1340,8 +1325,7 @@ fn build_text_runs(
 fn build_selection_text_runs<F>(
     row: &[vt_backend_core::CellSnapshot],
     cols: usize,
-    font_family: Option<&'static str>,
-    font_fallbacks: &[&'static str],
+    font_families: &[&'static str],
     selection_foreground: Color,
     is_selected: F,
 ) -> Vec<TextRun>
@@ -1369,7 +1353,7 @@ where
             continue;
         }
 
-        let font = font_for_cell(cell, font_family, font_fallbacks);
+        let font = font_for_cell(cell, font_families);
         let width_cols = usize::from(cell.display_width.max(1));
         let shaping = terminal_text_shaping();
 
@@ -1401,23 +1385,21 @@ where
 
 fn font_for_cell(
     cell: &vt_backend_core::CellSnapshot,
-    family: Option<&'static str>,
-    font_fallbacks: &[&'static str],
+    font_families: &[&'static str],
 ) -> Font {
-    font_for_terminal_text(&cell.text, cell.bold, cell.italic, family, font_fallbacks)
+    font_for_terminal_text(&cell.text, cell.bold, cell.italic, font_families)
 }
 
 fn font_for_terminal_text(
     text: &str,
     bold: bool,
     italic: bool,
-    family: Option<&'static str>,
-    font_fallbacks: &[&'static str],
+    font_families: &[&'static str],
 ) -> Font {
     let base = if text_prefers_primary_font(text) || !text_requires_explicit_fallback(text) {
-        configured_font(family)
+        configured_font(font_families.first().copied())
     } else {
-        configured_fallback_font(font_fallbacks).unwrap_or(Font::MONOSPACE)
+        configured_fallback_font(font_families).unwrap_or(Font::MONOSPACE)
     };
     Font {
         family: base.family,
@@ -1439,8 +1421,8 @@ fn configured_font(family: Option<&'static str>) -> Font {
     family.map(Font::with_name).unwrap_or(Font::MONOSPACE)
 }
 
-fn configured_fallback_font(font_fallbacks: &[&'static str]) -> Option<Font> {
-    font_fallbacks.first().copied().map(Font::with_name)
+fn configured_fallback_font(font_families: &[&'static str]) -> Option<Font> {
+    font_families.get(1).copied().map(Font::with_name)
 }
 
 fn text_prefers_primary_font(text: &str) -> bool {
@@ -1738,7 +1720,7 @@ impl TerminalCanvas {
         self.font_size.to_bits().hash(&mut hasher);
         self.background_opacity.to_bits().hash(&mut hasher);
         self.background_opacity_cells.hash(&mut hasher);
-        self.font_family.hash(&mut hasher);
+        self.font_families.hash(&mut hasher);
         self.appearance_revision.hash(&mut hasher);
         hash_optional_color(self.url_color, &mut hasher);
         self.snapshot.colors.background.r.hash(&mut hasher);
@@ -1860,8 +1842,7 @@ mod tests {
             8.0,
             16.0,
             14.0,
-            Some("CodeNewRoman Nerd Font Mono"),
-            Arc::from(["Fallback One", "Fallback Two"]),
+            Arc::from(["CodeNewRoman Nerd Font Mono", "Fallback One", "Fallback Two"]),
             1,
             revision,
             0.8,
@@ -1956,8 +1937,7 @@ mod tests {
             before.cell_width,
             before.cell_height,
             before.font_size,
-            before.font_family,
-            before.font_fallbacks.clone(),
+            before.font_families.clone(),
             before.snapshot_generation,
             before.appearance_revision,
             before.background_opacity,
@@ -2004,7 +1984,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let runs = build_text_runs(&row, row.len(), None, &[], None);
+        let runs = build_text_runs(&row, row.len(), &[], None);
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].text, "ab");
         assert_eq!(runs[0].start_col, 0);
@@ -2030,7 +2010,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let runs = build_text_runs(&row, row.len(), None, &[], None);
+        let runs = build_text_runs(&row, row.len(), &[], None);
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].text, "a");
         assert_eq!(runs[0].start_col, 0);
@@ -2059,7 +2039,6 @@ mod tests {
         let runs = build_selection_text_runs(
             &row,
             row.len(),
-            None,
             &[],
             Color::WHITE,
             |col_index, _display_width| col_index < 2,
@@ -2083,7 +2062,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let runs = build_text_runs(&row, row.len(), None, &[], None);
+        let runs = build_text_runs(&row, row.len(), &[], None);
         assert!(!runs.is_empty());
         assert!(runs
             .iter()
@@ -2165,8 +2144,7 @@ mod tests {
         let runs = build_text_runs(
             &row,
             row.len(),
-            Some("CodeNewRoman Nerd Font Mono"),
-            &["Fallback CJK", "Fallback Emoji"],
+            &["CodeNewRoman Nerd Font Mono", "Fallback CJK", "Fallback Emoji"],
             None,
         );
 
@@ -2181,8 +2159,7 @@ mod tests {
             "仮",
             false,
             false,
-            Some("CodeNewRoman Nerd Font Mono"),
-            &["Fallback One", "Fallback Two"],
+            &["CodeNewRoman Nerd Font Mono", "Fallback One", "Fallback Two"],
         );
         assert_eq!(font.family, font::Family::Name("Fallback One"));
     }
@@ -2193,8 +2170,7 @@ mod tests {
             "\u{f313}",
             false,
             false,
-            Some("CodeNewRoman Nerd Font Mono"),
-            &["Fallback CJK", "Fallback Emoji"],
+            &["CodeNewRoman Nerd Font Mono", "Fallback CJK", "Fallback Emoji"],
         );
         assert_eq!(font.family, font::Family::Name("CodeNewRoman Nerd Font Mono"));
     }
@@ -2205,8 +2181,7 @@ mod tests {
             "é",
             false,
             false,
-            Some("CodeNewRoman Nerd Font Mono"),
-            &["Fallback One", "Fallback Two"],
+            &["CodeNewRoman Nerd Font Mono", "Fallback One", "Fallback Two"],
         );
         assert_eq!(font.family, font::Family::Name("CodeNewRoman Nerd Font Mono"));
     }

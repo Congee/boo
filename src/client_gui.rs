@@ -121,7 +121,7 @@ pub struct ClientApp {
     pane_snapshots: HashMap<u64, Arc<vt_backend_core::TerminalSnapshot>>,
     focused_pane_id: u64,
     last_error: Option<String>,
-    font_fallbacks: Arc<[&'static str]>,
+    font_families: Arc<[&'static str]>,
     cell_width: f64,
     cell_height: f64,
     font_size: f32,
@@ -178,9 +178,9 @@ impl SnapshotRefreshReason {
 impl ClientApp {
     fn apply_ui_snapshot(&mut self, snapshot: control::UiSnapshot) {
         self.font_size = snapshot.appearance.font_size.max(8.0);
-        self.font_fallbacks = snapshot
+        self.font_families = snapshot
             .appearance
-            .font_fallbacks
+            .font_families
             .iter()
             .map(|family| crate::leak_font_family(family))
             .collect::<Vec<_>>()
@@ -232,7 +232,7 @@ impl ClientApp {
     pub fn new(socket_path: String) -> (Self, Task<Message>) {
         let client = control::Client::connect(socket_path.clone());
         let font_size = DEFAULT_FONT_SIZE;
-        let font_fallbacks = Arc::from([]);
+        let font_families = Arc::from([]);
         let background_opacity = 1.0;
         let background_opacity_cells = false;
         let cursor_blink_interval = DEFAULT_CURSOR_BLINK_INTERVAL;
@@ -263,7 +263,7 @@ impl ClientApp {
             pane_snapshots,
             focused_pane_id,
             last_error: None,
-            font_fallbacks,
+            font_families,
             cell_width,
             cell_height,
             font_size,
@@ -495,8 +495,7 @@ impl ClientApp {
                     self.cell_width as f32,
                     self.cell_height as f32,
                     self.font_size,
-                    None,
-                    self.font_fallbacks.clone(),
+                    self.font_families.clone(),
                     self.terminal_snapshot_generation,
                     1,
                     self.background_opacity,
@@ -534,8 +533,7 @@ impl ClientApp {
                         self.cell_width as f32,
                         self.cell_height as f32,
                         self.font_size,
-                        None,
-                        self.font_fallbacks.clone(),
+                        self.font_families.clone(),
                         cursor_blink_visible,
                         Vec::new(),
                         Some(selection_foreground),

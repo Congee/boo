@@ -124,7 +124,7 @@ impl BooApp {
 
     #[allow(dead_code)]
     pub(crate) fn ui_font(&self) -> Font {
-        configured_font(self.terminal_font_family)
+        configured_font(self.terminal_font_families.first().copied())
     }
 
     #[allow(dead_code)]
@@ -230,9 +230,8 @@ impl BooApp {
             active_tab: self.server.tabs.active_index(),
             focused_pane: focused_pane.id(),
             appearance: control::UiAppearanceSnapshot {
-                font_family: self.terminal_font_family.map(str::to_string),
-                font_fallbacks: self
-                    .terminal_font_fallbacks
+                font_families: self
+                    .terminal_font_families
                     .iter()
                     .map(|family| (*family).to_string())
                     .collect(),
@@ -368,8 +367,7 @@ impl BooApp {
                     self.cell_width as f32,
                     self.cell_height as f32,
                     self.terminal_font_size,
-                    self.terminal_font_family,
-                    self.terminal_font_fallbacks.clone().into(),
+                    self.terminal_font_families.clone().into(),
                     self.appearance_revision,
                     self.appearance_revision,
                     self.background_opacity,

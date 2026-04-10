@@ -114,8 +114,7 @@ pub(crate) fn notify_headless_wakeup() {
 
 #[derive(Debug)]
 struct ResolvedAppearance {
-    font_family: Option<&'static str>,
-    font_fallbacks: Vec<&'static str>,
+    font_families: Vec<&'static str>,
     font_size: f32,
     background_opacity: f32,
     background_opacity_cells: bool,
@@ -325,8 +324,7 @@ struct BooApp {
     find_window_selected: usize,
     copy_mode: Option<CopyModeState>,
     command_prompt: CommandPrompt,
-    terminal_font_family: Option<&'static str>,
-    terminal_font_fallbacks: Vec<&'static str>,
+    terminal_font_families: Vec<&'static str>,
     terminal_font_size: f32,
     background_opacity: f32,
     background_opacity_cells: bool,
