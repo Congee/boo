@@ -120,6 +120,21 @@ pub fn record_batch(records: &[Record]) {
     });
 }
 
+pub fn flush() {
+    if !enabled() {
+        return;
+    }
+    LOCAL_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        flush_local(&mut state);
+    });
+    let global = global_state();
+    let mut guard = global.lock().expect("profiling state poisoned");
+    if !guard.entries.is_empty() {
+        emit_summary(&mut guard);
+    }
+}
+
 fn record_with_units(name: &'static str, kind: Kind, elapsed: Duration, bytes: u64, units: u64) {
     if !enabled() {
         return;

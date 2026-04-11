@@ -89,6 +89,7 @@ pub fn run_gui_client() {
     .subscription(client_gui::ClientApp::subscription)
     .run()
     .unwrap();
+    crate::profiling::flush();
 }
 
 fn install_ordered_font_fallbacks(boo_config: &config::Config) {

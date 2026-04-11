@@ -561,6 +561,7 @@ impl BooApp {
 
     pub(crate) fn terminate(&self, code: i32) -> ! {
         control::cleanup(self.server.socket_path.as_deref());
+        crate::profiling::flush();
         std::process::exit(code);
     }
 
