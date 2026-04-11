@@ -2,11 +2,11 @@
 
 use crate::vt_backend_core;
 use iced::advanced::renderer;
+use iced::advanced::text::{self, Paragraph as _, Renderer as _};
 use iced::advanced::widget::Tree;
 use iced::advanced::{Layout, Widget, layout};
 use iced::alignment;
 use iced::font;
-use iced_graphics::text as graphics_text;
 use iced::mouse;
 use iced::widget::canvas::{self, Cache, Frame};
 use iced::{Color, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme};
@@ -457,7 +457,7 @@ impl Default for TerminalTextLayerState {
 }
 
 struct TextLayerEntry {
-    buffer: Arc<graphics_text::cosmic_text::Buffer>,
+    paragraph: <iced::Renderer as text::Renderer>::Paragraph,
     position: Point,
     color: Color,
 }
@@ -518,22 +518,30 @@ impl TerminalTextLayer {
             return Vec::new();
         };
         let mut entries = Vec::new();
-        for run in build_text_runs(
-            row,
-            self.snapshot.cols as usize,
-            &self.font_families,
-            self.url_color,
-        ) {
+        for (col_index, cell) in row.iter().enumerate() {
+            let content = cell.text.as_str();
+            if content.is_empty() || content == "\0" {
+                continue;
+            }
+            let underline = cell.underline != 0;
+            if content == " " && !underline {
+                continue;
+            }
             self.push_text_entry(
                 &mut entries,
                 viewport,
                 row_index,
-                run.start_col,
-                run.text.as_str(),
-                run.width_cols,
-                run.font,
-                run.shaping,
-                run.fg,
+                col_index,
+                content,
+                usize::from(cell.display_width.max(1)),
+                font_for_cell(cell, &self.font_families),
+                terminal_text_shaping(),
+                if cell.hyperlink {
+                    self.url_color
+                        .unwrap_or_else(|| color_from_rgb(cell.fg, 1.0))
+                } else {
+                    color_from_rgb(cell.fg, 1.0)
+                },
             );
         }
         entries
@@ -551,25 +559,28 @@ impl TerminalTextLayer {
         };
 
         if let Some(selection_foreground) = self.selection_foreground.filter(|_| !selection_spans.is_empty()) {
-            for run in build_selection_text_runs(
-                row,
-                self.snapshot.cols as usize,
-                &self.font_families,
-                selection_foreground,
-                |col_index, display_width| {
-                    cell_is_selected_in_spans(selection_spans, col_index, display_width)
-                },
-            ) {
+            for (col_index, cell) in row.iter().enumerate() {
+                let content = cell.text.as_str();
+                if content.is_empty() || content == "\0" {
+                    continue;
+                }
+                let underline = cell.underline != 0;
+                if content == " " && !underline {
+                    continue;
+                }
+                if !cell_is_selected_in_spans(selection_spans, col_index, cell.display_width) {
+                    continue;
+                }
                 self.push_text_entry(
                     &mut entries,
                     viewport,
                     row_index,
-                    run.start_col,
-                    run.text.as_str(),
-                    run.width_cols,
-                    run.font,
-                    run.shaping,
-                    run.fg,
+                    col_index,
+                    content,
+                    usize::from(cell.display_width.max(1)),
+                    font_for_cell(cell, &self.font_families),
+                    terminal_text_shaping(),
+                    selection_foreground,
                 );
             }
         }
@@ -650,16 +661,23 @@ impl TerminalTextLayer {
         debug_text_layer_draw_run(
             content, row_index, col_index, width_cols, x, y, bounds.width, font, shaping, color,
         );
-        let buffer = Arc::new(new_text_buffer(
-            content,
-            bounds,
-            self.font_size,
-            self.cell_height,
-            font,
-            shaping,
-        ));
+        let paragraph = <iced::Renderer as text::Renderer>::Paragraph::with_text(
+            iced::advanced::text::Text {
+                content,
+                bounds,
+                size: Pixels(self.font_size),
+                line_height: iced::advanced::text::LineHeight::Absolute(Pixels(
+                    self.cell_height,
+                )),
+                font,
+                align_x: iced::advanced::text::Alignment::Left,
+                align_y: alignment::Vertical::Top,
+                shaping,
+                wrapping: iced::advanced::text::Wrapping::None,
+            },
+        );
         entries.push(TextLayerEntry {
-            buffer,
+            paragraph,
             position: Point::new(x, y),
             color,
         });
@@ -804,27 +822,21 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TerminalTextLayer {
         let state = tree.state.downcast_ref::<TerminalTextLayerState>();
         for row_entries in &state.base_row_entries {
             for entry in row_entries {
-                <iced::Renderer as graphics_text::Renderer>::fill_raw(
-                    renderer,
-                    graphics_text::Raw {
-                        buffer: Arc::downgrade(&entry.buffer),
-                        position: entry.position,
-                        color: entry.color,
-                        clip_bounds: viewport,
-                    },
+                renderer.fill_paragraph(
+                    &entry.paragraph,
+                    entry.position,
+                    entry.color,
+                    viewport,
                 );
             }
         }
         for row_entries in &state.overlay_row_entries {
             for entry in row_entries {
-                <iced::Renderer as graphics_text::Renderer>::fill_raw(
-                    renderer,
-                    graphics_text::Raw {
-                        buffer: Arc::downgrade(&entry.buffer),
-                        position: entry.position,
-                        color: entry.color,
-                        clip_bounds: viewport,
-                    },
+                renderer.fill_paragraph(
+                    &entry.paragraph,
+                    entry.position,
+                    entry.color,
+                    viewport,
                 );
             }
         }
@@ -1542,36 +1554,6 @@ fn hash_optional_color(
 fn render_debug_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("BOO_RENDER_DEBUG").is_some())
-}
-
-fn new_text_buffer(
-    content: &str,
-    bounds: Size,
-    font_size: f32,
-    cell_height: f32,
-    font: Font,
-    shaping: iced::widget::text::Shaping,
-) -> graphics_text::cosmic_text::Buffer {
-    let mut font_system = graphics_text::font_system()
-        .write()
-        .expect("Write font system");
-    let mut buffer = graphics_text::cosmic_text::Buffer::new(
-        font_system.raw(),
-        graphics_text::cosmic_text::Metrics::new(font_size, cell_height),
-    );
-    buffer.set_size(font_system.raw(), Some(bounds.width), Some(bounds.height));
-    buffer.set_wrap(
-        font_system.raw(),
-        graphics_text::cosmic_text::Wrap::None,
-    );
-    buffer.set_text(
-        font_system.raw(),
-        content,
-        &graphics_text::to_attributes(font),
-        graphics_text::to_shaping(shaping, content),
-        None,
-    );
-    buffer
 }
 
 fn text_run_max_width(run: &TextRun, draw_width: f32) -> f32 {
