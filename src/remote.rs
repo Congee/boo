@@ -816,6 +816,11 @@ fn writer_loop<W: Write>(mut stream: W, outbound_rx: mpsc::Receiver<OutboundMess
             crate::profiling::Kind::Io,
             batch.coalesced_screen_updates as u64,
         );
+        crate::profiling::record_units(
+            "server.stream.batch_write.coalesced_control_frames",
+            crate::profiling::Kind::Io,
+            batch.coalesced_control_frames as u64,
+        );
         let mut failed = false;
         for frame in batch.frames {
             scope.add_bytes(frame.len() as u64);
@@ -834,6 +839,54 @@ struct OutboundBatch {
     frames: Vec<Vec<u8>>,
     message_count: usize,
     coalesced_screen_updates: usize,
+    coalesced_control_frames: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CoalescibleFrameKind {
+    SessionList,
+    UiRuntimeState,
+    UiAppearance,
+}
+
+#[derive(Default)]
+struct PendingOutboundFrames {
+    order: Vec<CoalescibleFrameKind>,
+    session_list: Option<Vec<u8>>,
+    ui_runtime_state: Option<Vec<u8>>,
+    ui_appearance: Option<Vec<u8>>,
+}
+
+impl PendingOutboundFrames {
+    fn push_kind_once(&mut self, kind: CoalescibleFrameKind) {
+        if !self.order.contains(&kind) {
+            self.order.push(kind);
+        }
+    }
+
+    fn set(&mut self, kind: CoalescibleFrameKind, frame: Vec<u8>) {
+        self.push_kind_once(kind);
+        match kind {
+            CoalescibleFrameKind::SessionList => self.session_list = Some(frame),
+            CoalescibleFrameKind::UiRuntimeState => self.ui_runtime_state = Some(frame),
+            CoalescibleFrameKind::UiAppearance => self.ui_appearance = Some(frame),
+        }
+    }
+
+    fn take_all(&mut self) -> Vec<Vec<u8>> {
+        let mut frames = Vec::with_capacity(self.order.len());
+        for kind in self.order.drain(..) {
+            let frame = match kind {
+                CoalescibleFrameKind::SessionList => self.session_list.take(),
+                CoalescibleFrameKind::UiRuntimeState => self.ui_runtime_state.take(),
+                CoalescibleFrameKind::UiAppearance => self.ui_appearance.take(),
+            };
+            if let Some(frame) = frame {
+                frames.push(frame);
+            }
+        }
+        frames
+    }
 }
 
 fn collect_outbound_batch(
@@ -842,13 +895,32 @@ fn collect_outbound_batch(
 ) -> OutboundBatch {
     let mut frames = Vec::new();
     let mut pending_screen = None;
+    let mut pending_control = PendingOutboundFrames::default();
     let mut message_count = 0usize;
     let mut screen_updates = 0usize;
     let mut emitted_screen_frames = 0usize;
+    let mut coalesced_control_frames = 0usize;
 
     let mut push = |message| match message {
         OutboundMessage::Frame(frame) => {
             message_count += 1;
+            if let Some(kind) = coalescible_frame_kind(&frame) {
+                let replaced = match kind {
+                    CoalescibleFrameKind::SessionList => pending_control.session_list.is_some(),
+                    CoalescibleFrameKind::UiRuntimeState => {
+                        pending_control.ui_runtime_state.is_some()
+                    }
+                    CoalescibleFrameKind::UiAppearance => pending_control.ui_appearance.is_some(),
+                };
+                if replaced {
+                    coalesced_control_frames += 1;
+                }
+                pending_control.set(kind, frame);
+                return;
+            }
+            for pending in pending_control.take_all() {
+                frames.push(pending);
+            }
             if let Some(screen) = pending_screen.take() {
                 frames.push(screen);
                 emitted_screen_frames += 1;
@@ -866,6 +938,9 @@ fn collect_outbound_batch(
     while let Ok(message) = outbound_rx.try_recv() {
         push(message);
     }
+    for pending in pending_control.take_all() {
+        frames.push(pending);
+    }
     if let Some(screen) = pending_screen {
         frames.push(screen);
         emitted_screen_frames += 1;
@@ -874,6 +949,17 @@ fn collect_outbound_batch(
         frames,
         message_count,
         coalesced_screen_updates: screen_updates.saturating_sub(emitted_screen_frames),
+        coalesced_control_frames,
+    }
+}
+
+fn coalescible_frame_kind(frame: &[u8]) -> Option<CoalescibleFrameKind> {
+    let ty = frame.get(2).copied().and_then(|value| MessageType::try_from(value).ok())?;
+    match ty {
+        MessageType::SessionList => Some(CoalescibleFrameKind::SessionList),
+        MessageType::UiRuntimeState => Some(CoalescibleFrameKind::UiRuntimeState),
+        MessageType::UiAppearance => Some(CoalescibleFrameKind::UiAppearance),
+        _ => None,
     }
 }
 
@@ -1793,6 +1879,27 @@ mod tests {
         assert_eq!(batch.frames, vec![vec![2], vec![9], vec![3]]);
         assert_eq!(batch.message_count, 4);
         assert_eq!(batch.coalesced_screen_updates, 1);
+    }
+
+    #[test]
+    fn outbound_batch_coalesces_superseded_control_frames() {
+        let (tx, rx) = mpsc::channel();
+        let runtime_a = encode_message(MessageType::UiRuntimeState, b"runtime-a");
+        let runtime_b = encode_message(MessageType::UiRuntimeState, b"runtime-b");
+        let appearance_a = encode_message(MessageType::UiAppearance, b"appearance-a");
+        let appearance_b = encode_message(MessageType::UiAppearance, b"appearance-b");
+        let barrier = encode_message(MessageType::Attached, &7_u32.to_le_bytes());
+        tx.send(OutboundMessage::Frame(runtime_a)).unwrap();
+        tx.send(OutboundMessage::Frame(appearance_a)).unwrap();
+        tx.send(OutboundMessage::Frame(runtime_b.clone())).unwrap();
+        tx.send(OutboundMessage::Frame(appearance_b.clone())).unwrap();
+        tx.send(OutboundMessage::Frame(barrier.clone())).unwrap();
+
+        let first = rx.recv().unwrap();
+        let batch = collect_outbound_batch(first, &rx);
+        assert_eq!(batch.frames, vec![runtime_b, appearance_b, barrier]);
+        assert_eq!(batch.message_count, 5);
+        assert_eq!(batch.coalesced_control_frames, 2);
     }
 
     #[test]
