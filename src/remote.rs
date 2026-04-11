@@ -299,7 +299,7 @@ impl RemoteServer {
                     state.clients.remove(&client_id);
                     continue;
                 };
-                std::thread::spawn(move || writer_loop(writer_stream, outbound_rx));
+                std::thread::spawn(move || writer_loop(writer_stream, outbound_rx, true));
 
                 let cmd_tx = cmd_tx.clone();
                 let state = Arc::clone(&state_for_listener);
@@ -368,7 +368,7 @@ impl RemoteServer {
                     state.clients.remove(&client_id);
                     continue;
                 };
-                std::thread::spawn(move || writer_loop(writer_stream, outbound_rx));
+                std::thread::spawn(move || writer_loop(writer_stream, outbound_rx, false));
 
                 let cmd_tx = cmd_tx.clone();
                 let state = Arc::clone(&state_for_listener);
@@ -869,11 +869,15 @@ impl Drop for RemoteServer {
     }
 }
 
-fn writer_loop<W: Write>(mut stream: W, outbound_rx: mpsc::Receiver<OutboundMessage>) {
+fn writer_loop<W: Write>(
+    mut stream: W,
+    outbound_rx: mpsc::Receiver<OutboundMessage>,
+    coalesce_screen_updates: bool,
+) {
     while let Ok(message) = outbound_rx.recv() {
         let mut scope =
             crate::profiling::scope("server.stream.batch_write", crate::profiling::Kind::Io);
-        let batch = collect_outbound_batch(message, &outbound_rx);
+        let batch = collect_outbound_batch(message, &outbound_rx, coalesce_screen_updates);
         crate::profiling::record_units(
             "server.stream.batch_write.frames",
             crate::profiling::Kind::Io,
@@ -965,6 +969,7 @@ impl PendingOutboundFrames {
 fn collect_outbound_batch(
     first: OutboundMessage,
     outbound_rx: &mpsc::Receiver<OutboundMessage>,
+    coalesce_screen_updates: bool,
 ) -> OutboundBatch {
     let mut frames = Vec::new();
     let mut pending_screen = None;
@@ -1003,7 +1008,19 @@ fn collect_outbound_batch(
         OutboundMessage::ScreenUpdate(frame) => {
             message_count += 1;
             screen_updates += 1;
-            pending_screen = Some(frame);
+            if coalesce_screen_updates {
+                pending_screen = Some(frame);
+            } else {
+                for pending in pending_control.take_all() {
+                    frames.push(pending);
+                }
+                if let Some(screen) = pending_screen.take() {
+                    frames.push(screen);
+                    emitted_screen_frames += 1;
+                }
+                frames.push(frame);
+                emitted_screen_frames += 1;
+            }
         }
     };
 
@@ -1948,10 +1965,24 @@ mod tests {
         tx.send(OutboundMessage::Frame(vec![9])).unwrap();
         tx.send(OutboundMessage::ScreenUpdate(vec![3])).unwrap();
         let first = rx.recv().unwrap();
-        let batch = collect_outbound_batch(first, &rx);
+        let batch = collect_outbound_batch(first, &rx, true);
         assert_eq!(batch.frames, vec![vec![2], vec![9], vec![3]]);
         assert_eq!(batch.message_count, 4);
         assert_eq!(batch.coalesced_screen_updates, 1);
+    }
+
+    #[test]
+    fn outbound_batch_keeps_all_screen_updates_when_coalescing_disabled() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(OutboundMessage::ScreenUpdate(vec![1])).unwrap();
+        tx.send(OutboundMessage::ScreenUpdate(vec![2])).unwrap();
+        tx.send(OutboundMessage::Frame(vec![9])).unwrap();
+        tx.send(OutboundMessage::ScreenUpdate(vec![3])).unwrap();
+        let first = rx.recv().unwrap();
+        let batch = collect_outbound_batch(first, &rx, false);
+        assert_eq!(batch.frames, vec![vec![1], vec![2], vec![9], vec![3]]);
+        assert_eq!(batch.message_count, 4);
+        assert_eq!(batch.coalesced_screen_updates, 0);
     }
 
     #[test]
@@ -1969,7 +2000,7 @@ mod tests {
         tx.send(OutboundMessage::Frame(barrier.clone())).unwrap();
 
         let first = rx.recv().unwrap();
-        let batch = collect_outbound_batch(first, &rx);
+        let batch = collect_outbound_batch(first, &rx, true);
         assert_eq!(batch.frames, vec![runtime_b, appearance_b, barrier]);
         assert_eq!(batch.message_count, 5);
         assert_eq!(batch.coalesced_control_frames, 2);
