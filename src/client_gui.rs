@@ -564,6 +564,7 @@ impl ClientApp {
                 Element::new(
                     vt_terminal_canvas::TerminalTextLayer::new(
                         Arc::clone(terminal_snapshot),
+                        self.terminal_snapshot_generation,
                         self.cell_width as f32,
                         self.cell_height as f32,
                         self.font_size,

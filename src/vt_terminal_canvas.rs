@@ -422,6 +422,7 @@ impl TerminalCanvas {
 #[derive(Debug)]
 pub struct TerminalTextLayer {
     pub snapshot: Arc<vt_backend_core::TerminalSnapshot>,
+    pub snapshot_generation: u64,
     pub cell_width: f32,
     pub cell_height: f32,
     pub font_size: f32,
@@ -444,6 +445,7 @@ struct TerminalTextLayerState {
     selection_spans_fingerprint: Option<u64>,
     selection_row_range: Option<(usize, usize)>,
     style_fingerprint: Option<u64>,
+    overall_fingerprint: Option<u64>,
 }
 
 impl Default for TerminalTextLayerState {
@@ -457,6 +459,7 @@ impl Default for TerminalTextLayerState {
             selection_spans_fingerprint: None,
             selection_row_range: None,
             style_fingerprint: None,
+            overall_fingerprint: None,
         }
     }
 }
@@ -470,6 +473,7 @@ struct TextLayerEntry {
 impl TerminalTextLayer {
     pub fn new(
         snapshot: Arc<vt_backend_core::TerminalSnapshot>,
+        snapshot_generation: u64,
         cell_width: f32,
         cell_height: f32,
         font_size: f32,
@@ -483,6 +487,7 @@ impl TerminalTextLayer {
     ) -> Self {
         Self {
             snapshot,
+            snapshot_generation,
             cell_width,
             cell_height,
             font_size,
@@ -789,6 +794,35 @@ impl TerminalTextLayer {
         viewport.height.to_bits().hash(&mut hasher);
         hasher.finish()
     }
+
+    fn overall_fingerprint(
+        &self,
+        viewport: Rectangle,
+        style_fingerprint: u64,
+        selection_spans_fingerprint: u64,
+    ) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.snapshot_generation.hash(&mut hasher);
+        style_fingerprint.hash(&mut hasher);
+        selection_spans_fingerprint.hash(&mut hasher);
+        self.cursor_blink_visible.hash(&mut hasher);
+        self.snapshot.cursor.visible.hash(&mut hasher);
+        self.snapshot.cursor.x.hash(&mut hasher);
+        self.snapshot.cursor.y.hash(&mut hasher);
+        self.snapshot.cursor.style.hash(&mut hasher);
+        self.selection_foreground
+            .map(|c| (c.r.to_bits(), c.g.to_bits(), c.b.to_bits(), c.a.to_bits()))
+            .hash(&mut hasher);
+        self.cursor_text_color
+            .map(|c| (c.r.to_bits(), c.g.to_bits(), c.b.to_bits(), c.a.to_bits()))
+            .hash(&mut hasher);
+        self.preedit_text.hash(&mut hasher);
+        viewport.x.to_bits().hash(&mut hasher);
+        viewport.y.to_bits().hash(&mut hasher);
+        viewport.width.to_bits().hash(&mut hasher);
+        viewport.height.to_bits().hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 impl<Message> Widget<Message, Theme, iced::Renderer> for TerminalTextLayer {
@@ -866,6 +900,13 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TerminalTextLayer {
         let viewport = self.viewport_rect(bounds);
         let style_fingerprint = self.style_fingerprint(viewport);
         let style_changed = state.style_fingerprint != Some(style_fingerprint);
+        let selection_spans_fingerprint = self.selection_spans_fingerprint();
+        let overall_fingerprint =
+            self.overall_fingerprint(viewport, style_fingerprint, selection_spans_fingerprint);
+        if state.overall_fingerprint == Some(overall_fingerprint) {
+            tree.children.clear();
+            return;
+        }
         let row_count = self.snapshot.rows_data.len();
         state.base_row_entries.resize_with(row_count, Vec::new);
         state.base_row_entries.truncate(row_count);
@@ -877,7 +918,6 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TerminalTextLayer {
         state.overlay_row_fingerprints.truncate(row_count);
         state.selection_row_spans.resize_with(row_count, Vec::new);
         state.selection_row_spans.truncate(row_count);
-        let selection_spans_fingerprint = self.selection_spans_fingerprint();
         let new_selection_row_range =
             selection_row_range(&self.selection_rects, self.cell_height, row_count);
         if style_changed || state.selection_spans_fingerprint != Some(selection_spans_fingerprint) {
@@ -934,6 +974,7 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TerminalTextLayer {
             }
         }
         state.style_fingerprint = Some(style_fingerprint);
+        state.overall_fingerprint = Some(overall_fingerprint);
         tree.children.clear();
     }
 }
@@ -942,6 +983,7 @@ pub struct TerminalCanvasState {
     base_cache: Cache,
     base_fingerprint: RefCell<Option<u64>>,
     row_band_caches: RefCell<Vec<Cache>>,
+    cached_bands: RefCell<Vec<(usize, usize)>>,
     row_style_fingerprint: RefCell<Option<u64>>,
     row_seen_revisions: RefCell<Vec<u64>>,
     row_artifact_fingerprints: RefCell<Vec<u64>>,
@@ -961,6 +1003,7 @@ impl Default for TerminalCanvasState {
             base_cache: Cache::new(),
             base_fingerprint: RefCell::new(None),
             row_band_caches: RefCell::new(Vec::new()),
+            cached_bands: RefCell::new(Vec::new()),
             row_style_fingerprint: RefCell::new(None),
             row_seen_revisions: RefCell::new(Vec::new()),
             row_artifact_fingerprints: RefCell::new(Vec::new()),
@@ -1006,7 +1049,6 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
         {
             let row_count = self.snapshot.rows_data.len();
             let chunk_size = self.row_cache_chunk_size();
-            let chunk_count = row_count.div_ceil(chunk_size);
             let row_style_fingerprint = self.row_style_fingerprint();
             let style_changed = {
                 let mut cached_style = state.row_style_fingerprint.borrow_mut();
@@ -1019,6 +1061,23 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
                 *cached_style = Some(row_style_fingerprint);
                 changed
             };
+            if !style_changed {
+                let cached_bands = state.cached_bands.borrow();
+                let row_band_caches = state.row_band_caches.borrow();
+                for (band_index, (band_start, band_end)) in cached_bands.iter().copied().enumerate()
+                {
+                    let start_row = band_start * chunk_size;
+                    let end_row = (band_end * chunk_size).min(row_count);
+                    geometries.push(row_band_caches[band_index].draw(
+                        renderer,
+                        bounds.size(),
+                        |frame| {
+                            self.draw_row_chunk(frame, start_row, end_row, state);
+                        },
+                    ));
+                }
+            } else {
+            let chunk_count = row_count.div_ceil(chunk_size);
             let mut row_seen_revisions = state.row_seen_revisions.borrow_mut();
             row_seen_revisions.resize(row_count, 0);
             row_seen_revisions.truncate(row_count);
@@ -1110,6 +1169,11 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
                 row_band_caches.resize_with(bands.len(), Cache::new);
             }
             row_band_caches.truncate(bands.len());
+            {
+                let mut cached_bands = state.cached_bands.borrow_mut();
+                cached_bands.clear();
+                cached_bands.extend(bands.iter().map(|(start, end, _)| (*start, *end)));
+            }
 
             for (band_index, (band_start, band_end, band_dirty)) in bands.into_iter().enumerate() {
                 if band_dirty {
@@ -1135,6 +1199,7 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
                 crate::profiling::Kind::Cpu,
                 dirty_chunks,
             );
+            }
         }
 
         let selection_spans_fingerprint = self.selection_spans_fingerprint();
