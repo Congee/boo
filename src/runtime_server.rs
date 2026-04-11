@@ -31,6 +31,13 @@ fn stage_to_profile_path(stage: &str) -> &'static str {
 
 use std::sync::Arc;
 
+#[derive(Clone, PartialEq, Eq)]
+struct LocalGuiTransportState {
+    session_id: Option<u32>,
+    focused_pane_id: u64,
+    pane_frames: Vec<(u64, u64, u64, u64, u64)>,
+}
+
 impl BooApp {
     fn publish_local_gui_runtime_state_for_active_session(&self) {
         let Some(session_id) = self.server.tabs.active_session_id() else {
@@ -39,9 +46,46 @@ impl BooApp {
         let Some(server) = self.server.local_gui_server.as_ref() else {
             return;
         };
+        server.send_attached_to_local_attached(session_id);
         server.send_ui_runtime_state_to_local_attached(session_id, &self.ui_runtime_state());
         server.send_session_list_to_local_clients(&self.remote_sessions());
-        self.publish_remote_session(session_id);
+    }
+
+    fn local_gui_transport_state(&self) -> LocalGuiTransportState {
+        let session_id = self.server.tabs.active_session_id();
+        let focused_pane_id = self.server.tabs.focused_pane().id();
+        let pane_frames = session_id
+            .and_then(|session_id| self.server.tabs.find_index_by_session_id(session_id))
+            .and_then(|tab_index| self.server.tabs.tab_tree(tab_index))
+            .map(|tree| {
+                tree.export_panes_with_frames(self.terminal_frame())
+                    .into_iter()
+                    .map(|pane| {
+                        let frame = pane.frame.unwrap_or_default();
+                        (
+                            pane.pane.id(),
+                            frame.origin.x.to_bits(),
+                            frame.origin.y.to_bits(),
+                            frame.size.width.to_bits(),
+                            frame.size.height.to_bits(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        LocalGuiTransportState {
+            session_id,
+            focused_pane_id,
+            pane_frames,
+        }
+    }
+
+    fn publish_local_gui_after_ui_action(&self, before: &LocalGuiTransportState) {
+        self.publish_local_gui_runtime_state_for_active_session();
+        let after = self.local_gui_transport_state();
+        if after != *before && let Some(session_id) = after.session_id {
+            self.publish_remote_session(session_id);
+        }
     }
 
     fn bootstrap_local_stream_client(&self, server: &remote::RemoteServer, client_id: u64, session_id: u32) {
@@ -83,10 +127,12 @@ impl BooApp {
                 let _ = reply.send(control::Response::Surfaces { surfaces: info });
             }
             server::Command::NewSplit { direction } => {
+                let before = self.local_gui_transport_state();
                 self.create_split(Self::split_direction_from_str(&direction));
-                self.publish_local_gui_runtime_state_for_active_session();
+                self.publish_local_gui_after_ui_action(&before);
             }
             server::Command::FocusSurface { index } => {
+                let before = self.local_gui_transport_state();
                 let old = self.server.tabs.focused_pane();
                 if let Some(tree) = self.server.tabs.active_tree_mut() {
                     tree.set_focus(index);
@@ -96,7 +142,7 @@ impl BooApp {
                     self.set_pane_focus(old, false);
                     self.set_pane_focus(new, true);
                 }
-                self.publish_local_gui_runtime_state_for_active_session();
+                self.publish_local_gui_after_ui_action(&before);
             }
             server::Command::ListTabs { reply } => {
                 let _ = reply.send(control::Response::Tabs {
@@ -121,22 +167,26 @@ impl BooApp {
                 self.execute_command(&input);
             }
             server::Command::AppKeyEvent { event } => {
+                let before = self.local_gui_transport_state();
                 if self.handle_app_key_event(event) {
-                    self.publish_local_gui_runtime_state_for_active_session();
+                    self.publish_local_gui_after_ui_action(&before);
                 }
             }
             server::Command::AppMouseEvent { event } => {
+                let before = self.local_gui_transport_state();
                 if self.handle_app_mouse_event(event) {
-                    self.publish_local_gui_runtime_state_for_active_session();
+                    self.publish_local_gui_after_ui_action(&before);
                 }
             }
             server::Command::AppAction { action } => {
+                let before = self.local_gui_transport_state();
                 self.dispatch_binding_action(action);
-                self.publish_local_gui_runtime_state_for_active_session();
+                self.publish_local_gui_after_ui_action(&before);
             }
             server::Command::FocusPane { pane_id } => {
+                let before = self.local_gui_transport_state();
                 if self.focus_pane_by_id(pane_id) {
-                    self.publish_local_gui_runtime_state_for_active_session();
+                    self.publish_local_gui_after_ui_action(&before);
                 }
             }
             server::Command::SendText { text } => {
@@ -147,34 +197,40 @@ impl BooApp {
                     .write_vt_bytes(self.server.tabs.focused_pane(), text.as_bytes());
             }
             server::Command::NewTab => {
+                let before = self.local_gui_transport_state();
                 let _ = self.new_tab();
-                self.publish_local_gui_runtime_state_for_active_session();
+                self.publish_local_gui_after_ui_action(&before);
             }
             server::Command::GotoTab { index } => {
+                let before = self.local_gui_transport_state();
                 self.server.tabs.goto_tab(index);
                 self.sync_after_tab_change();
-                self.publish_local_gui_runtime_state_for_active_session();
+                self.publish_local_gui_after_ui_action(&before);
             }
             server::Command::NextTab => {
+                let before = self.local_gui_transport_state();
                 self.server.tabs.next_tab();
                 self.sync_after_tab_change();
-                self.publish_local_gui_runtime_state_for_active_session();
+                self.publish_local_gui_after_ui_action(&before);
             }
             server::Command::PrevTab => {
+                let before = self.local_gui_transport_state();
                 self.server.tabs.prev_tab();
                 self.sync_after_tab_change();
-                self.publish_local_gui_runtime_state_for_active_session();
+                self.publish_local_gui_after_ui_action(&before);
             }
             server::Command::ResizeViewportPoints { width, height } => {
+                let before = self.local_gui_transport_state();
                 let changed = self.resize_viewport_points(width, height);
                 if changed {
-                    self.publish_local_gui_runtime_state_for_active_session();
+                    self.publish_local_gui_after_ui_action(&before);
                 }
             }
             server::Command::ResizeViewport { cols, rows } => {
+                let before = self.local_gui_transport_state();
                 let changed = self.resize_viewport_cells(cols, rows);
                 if changed {
-                    self.publish_local_gui_runtime_state_for_active_session();
+                    self.publish_local_gui_after_ui_action(&before);
                 }
             }
             server::Command::ResizeFocused { cols, rows } => {
@@ -183,8 +239,9 @@ impl BooApp {
                 self.resize_pane_backend(pane, self.scale_factor(), width, height);
             }
             server::Command::SendKey { keyspec } => {
+                let before = self.local_gui_transport_state();
                 self.inject_key(&keyspec);
-                self.publish_local_gui_runtime_state_for_active_session();
+                self.publish_local_gui_after_ui_action(&before);
             }
             server::Command::RemoteConnected { client_id } => {
                 if let Some(server) = self.server.local_gui_server.as_ref()

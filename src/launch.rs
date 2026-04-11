@@ -96,7 +96,7 @@ fn install_ordered_font_fallbacks(boo_config: &config::Config) {
         .font_families
         .iter()
         .skip(1)
-        .map(|family| leak_font_family(family))
+        .map(|family| crate::leak_font_family(family))
         .collect::<Vec<_>>();
 
     if user_fallbacks.is_empty() {
@@ -120,10 +120,6 @@ fn install_ordered_font_fallbacks(boo_config: &config::Config) {
         db,
         BooFontFallback::new(user_fallbacks),
     );
-}
-
-fn leak_font_family(name: &str) -> &'static str {
-    Box::leak(name.to_owned().into_boxed_str())
 }
 
 fn merge_family_lists(

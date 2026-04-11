@@ -516,6 +516,22 @@ impl RemoteServer {
         }
     }
 
+    pub fn send_attached_to_local_attached(&self, session_id: u32) {
+        let client_ids = {
+            let state_guard = self.state.lock().expect("remote server state poisoned");
+            state_guard
+                .clients
+                .iter()
+                .filter_map(|(client_id, client)| {
+                    (client.is_local && client.attached_session.is_some()).then_some(*client_id)
+                })
+                .collect::<Vec<_>>()
+        };
+        for client_id in client_ids {
+            self.send_attached(client_id, session_id);
+        }
+    }
+
     pub fn send_ui_appearance(
         &self,
         client_id: u64,
@@ -1301,17 +1317,50 @@ fn detect_scroll_rows(previous: &RemoteFullState, current: &RemoteFullState) -> 
     }
     let rows = current.rows as usize;
     let cols = current.cols as usize;
+    if previous.cells[cols..rows * cols] == current.cells[..(rows - 1) * cols] {
+        return Some(1);
+    }
+    if previous.cells[..(rows - 1) * cols] == current.cells[cols..rows * cols] {
+        return Some(-1);
+    }
+    let previous_rows = row_fingerprints(previous);
+    let current_rows = row_fingerprints(current);
 
     for shift in 1..rows {
         let overlap = rows - shift;
-        if previous.cells[shift * cols..rows * cols] == current.cells[..overlap * cols] {
+        if previous_rows[shift..rows] == current_rows[..overlap]
+            && previous.cells[shift * cols..rows * cols] == current.cells[..overlap * cols]
+        {
             return Some(shift as i16);
         }
-        if previous.cells[..overlap * cols] == current.cells[shift * cols..rows * cols] {
+        if previous_rows[..overlap] == current_rows[shift..rows]
+            && previous.cells[..overlap * cols] == current.cells[shift * cols..rows * cols]
+        {
             return Some(-(shift as i16));
         }
     }
     None
+}
+
+fn row_fingerprints(state: &RemoteFullState) -> Vec<u64> {
+    use std::hash::Hasher;
+
+    let cols = state.cols as usize;
+    state
+        .cells
+        .chunks(cols)
+        .map(|row| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            for cell in row {
+                hasher.write_u32(cell.codepoint);
+                hasher.write(&cell.fg);
+                hasher.write(&cell.bg);
+                hasher.write_u8(cell.style_flags);
+                hasher.write_u8(u8::from(cell.wide));
+            }
+            hasher.finish()
+        })
+        .collect()
 }
 
 fn rows_changed_after_scroll(rows: usize, scroll_rows: i16) -> Vec<u16> {
@@ -1953,5 +2002,74 @@ mod tests {
             OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
         }
         assert!(unattached_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn send_attached_to_local_attached_skips_unattached_and_remote_clients() {
+        let (local_attached_tx, local_attached_rx) = mpsc::channel();
+        let (local_unattached_tx, local_unattached_rx) = mpsc::channel();
+        let (remote_attached_tx, remote_attached_rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([
+                (
+                    1,
+                    ClientState {
+                        outbound: local_attached_tx,
+                        authenticated: true,
+                        challenge: None,
+                        attached_session: Some(11),
+                        last_state: None,
+                        pane_states: HashMap::new(),
+                        latest_input_seq: None,
+                        is_local: true,
+                    },
+                ),
+                (
+                    2,
+                    ClientState {
+                        outbound: local_unattached_tx,
+                        authenticated: true,
+                        challenge: None,
+                        attached_session: None,
+                        last_state: None,
+                        pane_states: HashMap::new(),
+                        latest_input_seq: None,
+                        is_local: true,
+                    },
+                ),
+                (
+                    3,
+                    ClientState {
+                        outbound: remote_attached_tx,
+                        authenticated: true,
+                        challenge: None,
+                        attached_session: Some(11),
+                        last_state: None,
+                        pane_states: HashMap::new(),
+                        latest_input_seq: None,
+                        is_local: false,
+                    },
+                ),
+            ]),
+            auth_key: None,
+        }));
+        let server = RemoteServer {
+            state,
+            _listener: std::thread::spawn(|| {}),
+            _advertiser: None,
+            local_socket_path: None,
+        };
+
+        server.send_attached_to_local_attached(22);
+
+        match local_attached_rx.recv().expect("local attached frame") {
+            OutboundMessage::Frame(frame) => {
+                assert_eq!(&frame[..2], &MAGIC);
+                assert_eq!(frame[2], MessageType::Attached as u8);
+            }
+            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+        }
+        assert!(local_unattached_rx.try_recv().is_err());
+        assert!(remote_attached_rx.try_recv().is_err());
     }
 }

@@ -137,8 +137,19 @@ struct ResolvedAppearance {
     font_bytes: Option<Vec<u8>>,
 }
 
-fn leak_font_family(name: &str) -> &'static str {
-    Box::leak(name.to_owned().into_boxed_str())
+pub(crate) fn leak_font_family(name: &str) -> &'static str {
+    static FONT_FAMILY_INTERNER: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, &'static str>>,
+    > = std::sync::OnceLock::new();
+    let interner = FONT_FAMILY_INTERNER
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut interner = interner.lock().expect("font family interner poisoned");
+    if let Some(existing) = interner.get(name) {
+        return existing;
+    }
+    let leaked = Box::leak(name.to_owned().into_boxed_str());
+    interner.insert(name.to_owned(), leaked);
+    leaked
 }
 
 fn platform_default_font_fallbacks(primary_family: Option<&str>) -> Vec<&'static str> {
