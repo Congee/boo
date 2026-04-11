@@ -69,6 +69,8 @@ pub enum MessageType {
     UiRuntimeState = 0x8d,
     UiAppearance = 0x8e,
     UiPaneTerminals = 0x8f,
+    UiPaneFullState = 0x90,
+    UiPaneDelta = 0x91,
 }
 
 impl TryFrom<u8> for MessageType {
@@ -108,6 +110,8 @@ impl TryFrom<u8> for MessageType {
             0x8d => Self::UiRuntimeState,
             0x8e => Self::UiAppearance,
             0x8f => Self::UiPaneTerminals,
+            0x90 => Self::UiPaneFullState,
+            0x91 => Self::UiPaneDelta,
             _ => return Err(()),
         };
         Ok(message)
@@ -219,6 +223,7 @@ struct ClientState {
     challenge: Option<[u8; 32]>,
     attached_session: Option<u32>,
     last_state: Option<Arc<RemoteFullState>>,
+    pane_states: HashMap<u64, Arc<RemoteFullState>>,
     latest_input_seq: Option<u64>,
     is_local: bool,
 }
@@ -275,6 +280,7 @@ impl RemoteServer {
                             challenge: None,
                             attached_session: None,
                             last_state: None,
+                            pane_states: HashMap::new(),
                             latest_input_seq: None,
                             is_local: false,
                         },
@@ -340,6 +346,7 @@ impl RemoteServer {
                             challenge: None,
                             attached_session: None,
                             last_state: None,
+                            pane_states: HashMap::new(),
                             latest_input_seq: None,
                             is_local: true,
                         },
@@ -435,6 +442,7 @@ impl RemoteServer {
             client.attached_session = Some(session_id);
             if !same_session {
                 client.last_state = None;
+                client.pane_states.clear();
                 client.latest_input_seq = None;
             }
         });
@@ -445,6 +453,7 @@ impl RemoteServer {
         self.update_client(client_id, |client| {
             client.attached_session = None;
             client.last_state = None;
+            client.pane_states.clear();
             client.latest_input_seq = None;
         });
         self.send_to_client(client_id, MessageType::Detached, Vec::new());
@@ -560,10 +569,18 @@ impl RemoteServer {
         self.send_to_client(client_id, MessageType::UiPaneTerminals, payload);
     }
 
-    pub fn send_ui_pane_terminals_to_local_attached_session(
+    pub fn send_full_state_to_attached(&self, session_id: u32, state: Arc<RemoteFullState>) {
+        let client_ids = self.clients_for_session(session_id);
+        for client_id in client_ids {
+            self.send_state_to_client(client_id, Arc::clone(&state));
+        }
+    }
+
+    pub fn send_pane_state_to_local_attached(
         &self,
         session_id: u32,
-        panes: &[crate::control::UiPaneTerminalSnapshot],
+        pane_id: u64,
+        state: Arc<RemoteFullState>,
     ) {
         let client_ids = {
             let state_guard = self.state.lock().expect("remote server state poisoned");
@@ -577,14 +594,7 @@ impl RemoteServer {
                 .collect::<Vec<_>>()
         };
         for client_id in client_ids {
-            self.send_ui_pane_terminals(client_id, panes);
-        }
-    }
-
-    pub fn send_full_state_to_attached(&self, session_id: u32, state: Arc<RemoteFullState>) {
-        let client_ids = self.clients_for_session(session_id);
-        for client_id in client_ids {
-            self.send_state_to_client(client_id, Arc::clone(&state));
+            self.send_pane_state_to_client(client_id, pane_id, Arc::clone(&state));
         }
     }
 
@@ -599,6 +609,7 @@ impl RemoteServer {
             self.update_client(client_id, |client| {
                 client.attached_session = None;
                 client.last_state = None;
+                client.pane_states.clear();
                 client.latest_input_seq = None;
             });
         }
@@ -675,6 +686,41 @@ impl RemoteServer {
             1,
         );
         let frame = encode_message(ty, &payload);
+        let state = self.state.lock().expect("remote server state poisoned");
+        if let Some(client) = state.clients.get(&client_id) {
+            let _ = client.outbound.send(OutboundMessage::ScreenUpdate(frame));
+        }
+    }
+
+    fn send_pane_state_to_client(
+        &self,
+        client_id: u64,
+        pane_id: u64,
+        state: Arc<RemoteFullState>,
+    ) {
+        let (ty, payload) = {
+            let mut guard = self.state.lock().expect("remote server state poisoned");
+            let Some(client) = guard.clients.get_mut(&client_id) else {
+                return;
+            };
+            let encoded = match client
+                .pane_states
+                .get(&pane_id)
+                .and_then(|previous| encode_delta(previous.as_ref(), state.as_ref(), None, true))
+            {
+                Some(delta) => (MessageType::UiPaneDelta, delta),
+                None => (
+                    MessageType::UiPaneFullState,
+                    encode_full_state(state.as_ref(), None, true),
+                ),
+            };
+            client.pane_states.insert(pane_id, Arc::clone(&state));
+            encoded
+        };
+        let mut prefixed = Vec::with_capacity(8 + payload.len());
+        prefixed.extend_from_slice(&pane_id.to_le_bytes());
+        prefixed.extend_from_slice(&payload);
+        let frame = encode_message(ty, &prefixed);
         let state = self.state.lock().expect("remote server state poisoned");
         if let Some(client) = state.clients.get(&client_id) {
             let _ = client.outbound.send(OutboundMessage::ScreenUpdate(frame));
@@ -1795,6 +1841,7 @@ mod tests {
                             wide: false,
                         }],
                     })),
+                    pane_states: HashMap::new(),
                     latest_input_seq: Some(42),
                     is_local: true,
                 },

@@ -923,6 +923,27 @@ impl ClientApp {
             LocalStreamEvent::UiPaneTerminals(panes) => {
                 self.apply_ui_pane_terminals(&panes);
             }
+            LocalStreamEvent::UiPaneFullState { pane_id, state } => {
+                let revision_seed = self.allocate_full_snapshot_revision_seed(state.rows as usize);
+                self.terminal_snapshot_generation = self.allocate_snapshot_generation();
+                self.pane_snapshots.insert(
+                    pane_id,
+                    Arc::new(remote_full_state_to_vt_snapshot(
+                        &state,
+                        revision_seed,
+                        self.terminal_foreground,
+                        self.terminal_background,
+                        self.cursor_color,
+                    )),
+                );
+                self.observe_focused_cursor_position();
+            }
+            LocalStreamEvent::UiPaneDelta { pane_id, delta } => {
+                if let Some(snapshot) = self.pane_snapshots.get_mut(&pane_id) {
+                    apply_remote_delta_snapshot(Arc::make_mut(snapshot), &delta);
+                }
+                self.observe_focused_cursor_position();
+            }
             LocalStreamEvent::Detached => {
                 self.mode = ClientMode::Recovering;
                 self.active_session_id = None;
@@ -1749,6 +1770,14 @@ pub(crate) enum LocalStreamEvent {
     UiRuntimeState(control::UiRuntimeState),
     UiAppearance(control::UiAppearanceSnapshot),
     UiPaneTerminals(Vec<control::UiPaneTerminalSnapshot>),
+    UiPaneFullState {
+        pane_id: u64,
+        state: remote::RemoteFullState,
+    },
+    UiPaneDelta {
+        pane_id: u64,
+        delta: RemoteDelta,
+    },
     Detached,
     SessionExited(u32),
     Disconnected,
@@ -2194,6 +2223,16 @@ fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStream
             remote::MessageType::UiPaneTerminals => serde_json::from_slice(&payload)
                 .ok()
                 .map(LocalStreamEvent::UiPaneTerminals),
+            remote::MessageType::UiPaneFullState => {
+                decode_remote_pane_full_state(&payload).map(|(pane_id, state)| {
+                    LocalStreamEvent::UiPaneFullState { pane_id, state }
+                })
+            }
+            remote::MessageType::UiPaneDelta => {
+                decode_remote_pane_delta(&payload).map(|(pane_id, delta)| {
+                    LocalStreamEvent::UiPaneDelta { pane_id, delta }
+                })
+            }
             remote::MessageType::Detached => Some(LocalStreamEvent::Detached),
             remote::MessageType::SessionExited => {
                 decode_u32(&payload).map(LocalStreamEvent::SessionExited)
@@ -2346,6 +2385,15 @@ fn decode_remote_full_state(payload: &[u8]) -> Option<(Option<u64>, remote::Remo
     ))
 }
 
+fn decode_remote_pane_full_state(payload: &[u8]) -> Option<(u64, remote::RemoteFullState)> {
+    if payload.len() < 8 {
+        return None;
+    }
+    let pane_id = u64::from_le_bytes(payload[..8].try_into().ok()?);
+    let (_, state) = decode_remote_full_state(&payload[8..])?;
+    Some((pane_id, state))
+}
+
 fn decode_remote_delta(payload: &[u8]) -> Option<(Option<u64>, RemoteDelta)> {
     if payload.len() < LOCAL_DELTA_HEADER_LEN {
         return None;
@@ -2437,6 +2485,15 @@ fn decode_remote_delta(payload: &[u8]) -> Option<(Option<u64>, RemoteDelta)> {
             changed_rows,
         },
     ))
+}
+
+fn decode_remote_pane_delta(payload: &[u8]) -> Option<(u64, RemoteDelta)> {
+    if payload.len() < 8 {
+        return None;
+    }
+    let pane_id = u64::from_le_bytes(payload[..8].try_into().ok()?);
+    let (_, delta) = decode_remote_delta(&payload[8..])?;
+    Some((pane_id, delta))
 }
 
 fn apply_remote_delta_snapshot(

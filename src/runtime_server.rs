@@ -657,10 +657,24 @@ impl BooApp {
             return;
         };
         let state = Arc::new(remote::full_state_from_terminal(snapshot));
-        let pane_terminals = self.visible_pane_terminal_snapshots();
         for server in servers {
-            server.send_ui_pane_terminals_to_local_attached_session(session_id, &pane_terminals);
             server.send_full_state_to_attached(session_id, Arc::clone(&state));
+            if let Some(tab_index) = self.server.tabs.find_index_by_session_id(session_id)
+                && let Some(tree) = self.server.tabs.tab_tree(tab_index)
+            {
+                let focused_pane_id = tree.focused_pane().id();
+                for exported in tree.export_panes() {
+                    let pane_id = exported.pane.id();
+                    if pane_id == focused_pane_id {
+                        continue;
+                    }
+                    let Some(snapshot) = self.backend.render_snapshot_ref(pane_id) else {
+                        continue;
+                    };
+                    let pane_state = Arc::new(remote::full_state_from_terminal(snapshot));
+                    server.send_pane_state_to_local_attached(session_id, pane_id, pane_state);
+                }
+            }
         }
         log_server_latency("publish_remote_session", started_at);
     }
