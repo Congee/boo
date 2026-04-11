@@ -39,6 +39,25 @@ struct LocalGuiTransportState {
 }
 
 impl BooApp {
+    fn send_client_runtime_metadata(
+        &self,
+        server: &remote::RemoteServer,
+        client_id: u64,
+        session_id: Option<u32>,
+        attach: bool,
+    ) {
+        let ui_state = self.ui_runtime_state();
+        let sessions = self.remote_sessions();
+        server.send_ui_runtime_state(client_id, &ui_state);
+        server.send_session_list(client_id, &sessions);
+        if let Some(session_id) = session_id {
+            if attach {
+                server.send_attached(client_id, session_id);
+            }
+            self.publish_remote_session(session_id);
+        }
+    }
+
     fn remote_full_state_for_pane(&self, pane_id: u64) -> Option<Arc<remote::RemoteFullState>> {
         if let Some(snapshot) = self.backend.render_snapshot_ref(pane_id) {
             return Some(Arc::new(remote::full_state_from_terminal(snapshot)));
@@ -466,11 +485,7 @@ impl BooApp {
                     .or(self.server.local_gui_server.as_ref())
                     .or(self.server.remote_server.as_ref())
                 {
-                    server.send_session_list(client_id, &self.remote_sessions());
-                    if let Some(session_id) = focused_session_id {
-                        server.send_attached(client_id, session_id);
-                        self.publish_remote_session(session_id);
-                    }
+                    self.send_client_runtime_metadata(server, client_id, focused_session_id, true);
                 }
             }
             server::Command::RemoteAppKeyEvent { client_id, event } => {
@@ -515,12 +530,12 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_ui_runtime_state(client_id, &self.ui_runtime_state());
-                        server.send_session_list(client_id, &self.remote_sessions());
-                        if let Some(session_id) = focused_session_id {
-                            server.send_attached(client_id, session_id);
-                            self.publish_remote_session(session_id);
-                        }
+                        self.send_client_runtime_metadata(
+                            server,
+                            client_id,
+                            focused_session_id,
+                            true,
+                        );
                     }
                 }
             }
@@ -562,10 +577,7 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                 {
-                    server.send_ui_runtime_state(client_id, &self.ui_runtime_state());
-                    server.send_session_list(client_id, &self.remote_sessions());
-                    server.send_attached(client_id, session_id);
-                    self.publish_remote_session(session_id);
+                    self.send_client_runtime_metadata(server, client_id, Some(session_id), true);
                 }
             }
             server::Command::RemoteAppAction { client_id, action } => {
@@ -576,12 +588,7 @@ impl BooApp {
                     .or(self.server.local_gui_server.as_ref())
                     .or(self.server.remote_server.as_ref())
                 {
-                    server.send_ui_runtime_state(client_id, &self.ui_runtime_state());
-                    server.send_session_list(client_id, &self.remote_sessions());
-                    if let Some(session_id) = focused_session_id {
-                        server.send_attached(client_id, session_id);
-                        self.publish_remote_session(session_id);
-                    }
+                    self.send_client_runtime_metadata(server, client_id, focused_session_id, true);
                 }
             }
             server::Command::RemoteFocusPane { client_id, pane_id } => {
@@ -621,10 +628,7 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                 {
-                    server.send_ui_runtime_state(client_id, &self.ui_runtime_state());
-                    server.send_session_list(client_id, &self.remote_sessions());
-                    server.send_attached(client_id, session_id);
-                    self.publish_remote_session(session_id);
+                    self.send_client_runtime_metadata(server, client_id, Some(session_id), true);
                 }
             }
             server::Command::RemoteDestroy {
