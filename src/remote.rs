@@ -430,15 +430,16 @@ impl RemoteServer {
 
     pub fn send_session_list(&self, client_id: u64, sessions: &[RemoteSessionInfo]) {
         let payload = encode_session_list(sessions);
-        self.send_cached_control_payload(
+        self.send_cached_control_payload_bytes(
             client_id,
             MessageType::SessionList,
-            payload,
+            &payload,
             |client| &mut client.last_session_list_payload,
         );
     }
 
     pub fn send_session_list_to_local_clients(&self, sessions: &[RemoteSessionInfo]) {
+        let payload = encode_session_list(sessions);
         let client_ids = {
             let state_guard = self.state.lock().expect("remote server state poisoned");
             state_guard
@@ -448,7 +449,12 @@ impl RemoteServer {
                 .collect::<Vec<_>>()
         };
         for client_id in client_ids {
-            self.send_session_list(client_id, sessions);
+            self.send_cached_control_payload_bytes(
+                client_id,
+                MessageType::SessionList,
+                &payload,
+                |client| &mut client.last_session_list_payload,
+            );
         }
     }
 
@@ -510,10 +516,10 @@ impl RemoteServer {
         let Ok(payload) = serde_json::to_vec(state) else {
             return;
         };
-        self.send_cached_control_payload(
+        self.send_cached_control_payload_bytes(
             client_id,
             MessageType::UiRuntimeState,
-            payload,
+            &payload,
             |client| &mut client.last_ui_runtime_state_payload,
         );
     }
@@ -523,6 +529,9 @@ impl RemoteServer {
         session_id: u32,
         state: &crate::control::UiRuntimeState,
     ) {
+        let Ok(payload) = serde_json::to_vec(state) else {
+            return;
+        };
         let client_ids = {
             let state_guard = self.state.lock().expect("remote server state poisoned");
             state_guard
@@ -535,7 +544,12 @@ impl RemoteServer {
                 .collect::<Vec<_>>()
         };
         for client_id in client_ids {
-            self.send_ui_runtime_state(client_id, state);
+            self.send_cached_control_payload_bytes(
+                client_id,
+                MessageType::UiRuntimeState,
+                &payload,
+                |client| &mut client.last_ui_runtime_state_payload,
+            );
         }
     }
 
@@ -573,10 +587,10 @@ impl RemoteServer {
         let Ok(payload) = serde_json::to_vec(appearance) else {
             return;
         };
-        self.send_cached_control_payload(
+        self.send_cached_control_payload_bytes(
             client_id,
             MessageType::UiAppearance,
-            payload,
+            &payload,
             |client| &mut client.last_ui_appearance_payload,
         );
     }
@@ -585,6 +599,9 @@ impl RemoteServer {
         &self,
         appearance: &crate::control::UiAppearanceSnapshot,
     ) {
+        let Ok(payload) = serde_json::to_vec(appearance) else {
+            return;
+        };
         let client_ids = {
             let state_guard = self.state.lock().expect("remote server state poisoned");
             state_guard
@@ -594,7 +611,12 @@ impl RemoteServer {
                 .collect::<Vec<_>>()
         };
         for client_id in client_ids {
-            self.send_ui_appearance(client_id, appearance);
+            self.send_cached_control_payload_bytes(
+                client_id,
+                MessageType::UiAppearance,
+                &payload,
+                |client| &mut client.last_ui_appearance_payload,
+            );
         }
     }
 
@@ -695,11 +717,11 @@ impl RemoteServer {
         }
     }
 
-    fn send_cached_control_payload(
+    fn send_cached_control_payload_bytes(
         &self,
         client_id: u64,
         ty: MessageType,
-        payload: Vec<u8>,
+        payload: &[u8],
         cache_slot: impl FnOnce(&mut ClientState) -> &mut Option<Vec<u8>>,
     ) {
         let outbound = {
@@ -708,13 +730,13 @@ impl RemoteServer {
                 return;
             };
             let cached_payload = cache_slot(client);
-            if cached_payload.as_ref() == Some(&payload) {
+            if cached_payload.as_deref() == Some(payload) {
                 return;
             }
-            *cached_payload = Some(payload.clone());
+            *cached_payload = Some(payload.to_vec());
             client.outbound.clone()
         };
-        let frame = encode_message(ty, &payload);
+        let frame = encode_message(ty, payload);
         let _ = outbound.send(OutboundMessage::Frame(frame));
     }
 
