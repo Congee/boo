@@ -431,9 +431,12 @@ impl RemoteServer {
     pub fn send_attached(&self, client_id: u64, session_id: u32) {
         let payload = session_id.to_le_bytes().to_vec();
         self.update_client(client_id, |client| {
+            let same_session = client.attached_session == Some(session_id);
             client.attached_session = Some(session_id);
-            client.last_state = None;
-            client.latest_input_seq = None;
+            if !same_session {
+                client.last_state = None;
+                client.latest_input_seq = None;
+            }
         });
         self.send_to_client(client_id, MessageType::Attached, payload);
     }
@@ -555,6 +558,27 @@ impl RemoteServer {
             return;
         };
         self.send_to_client(client_id, MessageType::UiPaneTerminals, payload);
+    }
+
+    pub fn send_ui_pane_terminals_to_local_attached_session(
+        &self,
+        session_id: u32,
+        panes: &[crate::control::UiPaneTerminalSnapshot],
+    ) {
+        let client_ids = {
+            let state_guard = self.state.lock().expect("remote server state poisoned");
+            state_guard
+                .clients
+                .iter()
+                .filter_map(|(client_id, client)| {
+                    (client.is_local && client.attached_session == Some(session_id))
+                        .then_some(*client_id)
+                })
+                .collect::<Vec<_>>()
+        };
+        for client_id in client_ids {
+            self.send_ui_pane_terminals(client_id, panes);
+        }
     }
 
     pub fn send_full_state_to_attached(&self, session_id: u32, state: Arc<RemoteFullState>) {
@@ -1742,5 +1766,63 @@ mod tests {
             u32::from_le_bytes(payload[row_offset + 6..row_offset + 10].try_into().unwrap()),
             u32::from('X')
         );
+    }
+
+    #[test]
+    fn send_attached_to_same_session_preserves_stream_state() {
+        let (outbound, outbound_rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                7,
+                ClientState {
+                    outbound,
+                    authenticated: true,
+                    challenge: None,
+                    attached_session: Some(11),
+                    last_state: Some(Arc::new(RemoteFullState {
+                        rows: 1,
+                        cols: 1,
+                        cursor_x: 0,
+                        cursor_y: 0,
+                        cursor_visible: true,
+                        cursor_blinking: false,
+                        cursor_style: 1,
+                        cells: vec![RemoteCell {
+                            codepoint: u32::from('A'),
+                            fg: [1, 2, 3],
+                            bg: [0, 0, 0],
+                            style_flags: 0,
+                            wide: false,
+                        }],
+                    })),
+                    latest_input_seq: Some(42),
+                    is_local: true,
+                },
+            )]),
+            auth_key: None,
+        }));
+        let server = RemoteServer {
+            state: Arc::clone(&state),
+            _listener: std::thread::spawn(|| {}),
+            _advertiser: None,
+            local_socket_path: None,
+        };
+
+        server.send_attached(7, 11);
+
+        let guard = state.lock().expect("remote server state poisoned");
+        let client = guard.clients.get(&7).expect("client state");
+        assert_eq!(client.attached_session, Some(11));
+        assert_eq!(client.latest_input_seq, Some(42));
+        assert!(client.last_state.is_some());
+        drop(guard);
+
+        match outbound_rx.recv().expect("attached frame") {
+            OutboundMessage::Frame(frame) => {
+                assert_eq!(&frame[..2], &MAGIC);
+                assert_eq!(frame[2], MessageType::Attached as u8);
+            }
+            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+        }
     }
 }

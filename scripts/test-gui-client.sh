@@ -372,6 +372,28 @@ if ! assert_focused_pane "$RIGHT_PANE"; then
   exit 1
 fi
 
+send_gui_command "prev-pane"
+
+if ! assert_focused_pane "$LEFT_PANE"; then
+  echo "prev-pane did not move focus back to the left pane before background output test" >&2
+  exit 1
+fi
+
+send_gui_text 'for i in 1 2 3 4 5; do echo BG$i; sleep 0.1; done'
+send_gui_key "enter"
+
+send_gui_command "next-pane"
+
+if ! assert_focused_pane "$RIGHT_PANE"; then
+  echo "next-pane did not return focus to the right pane for background output test" >&2
+  exit 1
+fi
+
+if ! assert_pane_contains "$LEFT_PANE" "BG5"; then
+  echo "left pane stopped receiving output updates after split" >&2
+  exit 1
+fi
+
 send_gui_command "next-pane"
 
 if ! assert_focused_pane "$LEFT_PANE"; then

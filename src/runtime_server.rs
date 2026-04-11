@@ -657,7 +657,9 @@ impl BooApp {
             return;
         };
         let state = Arc::new(remote::full_state_from_terminal(snapshot));
+        let pane_terminals = self.visible_pane_terminal_snapshots();
         for server in servers {
+            server.send_ui_pane_terminals_to_local_attached_session(session_id, &pane_terminals);
             server.send_full_state_to_attached(session_id, Arc::clone(&state));
         }
         log_server_latency("publish_remote_session", started_at);
