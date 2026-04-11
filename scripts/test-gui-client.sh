@@ -205,6 +205,24 @@ print(
 PY
 }
 
+pane_info_vertical() {
+python3 - <<'PY' "$1" "$2"
+import json, sys
+with open(sys.argv[1]) as fh:
+    data = json.load(fh)["snapshot"]
+side = sys.argv[2]
+panes = sorted(data["visible_panes"], key=lambda pane: pane["frame"]["y"])
+pane = panes[0 if side == "top" else -1]
+frame = pane["frame"]
+print(
+    pane["pane_id"],
+    frame["x"] + frame["width"] / 2.0,
+    frame["y"] + frame["height"] / 2.0,
+    frame["height"],
+)
+PY
+}
+
 assert_pane_contains() {
 for _ in $(seq 1 40); do
   SNAPSHOT_FILE="$(snapshot_to_file)"
@@ -245,6 +263,32 @@ pane = next((pane for pane in data["visible_panes"] if pane["pane_id"] == pane_i
 if pane is None:
     raise SystemExit(1)
 after = float(pane["frame"]["width"])
+raise SystemExit(0 if after > before + minimum_delta else 1)
+PY
+  then
+    rm -f "$SNAPSHOT_FILE"
+    return 0
+  fi
+  rm -f "$SNAPSHOT_FILE"
+  sleep 0.1
+done
+return 1
+}
+
+assert_pane_height_increased() {
+for _ in $(seq 1 40); do
+  SNAPSHOT_FILE="$(snapshot_to_file)"
+  if python3 - <<'PY' "$SNAPSHOT_FILE" "$1" "$2" "$3"
+import json, sys
+with open(sys.argv[1]) as fh:
+    data = json.load(fh)["snapshot"]
+pane_id = int(sys.argv[2])
+before = float(sys.argv[3])
+minimum_delta = float(sys.argv[4])
+pane = next((pane for pane in data["visible_panes"] if pane["pane_id"] == pane_id), None)
+if pane is None:
+    raise SystemExit(1)
+after = float(pane["frame"]["height"])
 raise SystemExit(0 if after > before + minimum_delta else 1)
 PY
   then
@@ -396,6 +440,46 @@ else
   exit 1
 fi
 rm -f "$SNAPSHOT_FILE"
+
+send_gui_command "new-tab"
+
+if ! assert_active_tab_and_row0 "~/" 2; then
+  echo "second new tab did not become active with a fresh prompt" >&2
+  exit 1
+fi
+
+send_gui_appkey "ctrl+s"
+send_gui_appkey "shift+0x17"
+
+if ! assert_visible_pane_count 2; then
+  echo "prefix down-split key did not create a second pane" >&2
+  exit 1
+fi
+
+SNAPSHOT_FILE="$(snapshot_to_file)"
+read -r TOP_PANE TOP_X TOP_Y TOP_H <<<"$(pane_info_vertical "$SNAPSHOT_FILE" top)"
+read -r BOTTOM_PANE BOTTOM_X BOTTOM_Y BOTTOM_H <<<"$(pane_info_vertical "$SNAPSHOT_FILE" bottom)"
+rm -f "$SNAPSHOT_FILE"
+
+if ! assert_focused_pane "$BOTTOM_PANE"; then
+  echo "new down split did not focus the new pane" >&2
+  exit 1
+fi
+
+send_gui_click "$TOP_X" "$TOP_Y"
+
+if ! assert_focused_pane "$TOP_PANE"; then
+  echo "click-to-focus did not move focus to top pane after down split" >&2
+  exit 1
+fi
+
+send_gui_appkey "ctrl+s"
+send_gui_appkey "shift+j"
+
+if ! assert_pane_height_increased "$TOP_PANE" "$TOP_H" 20.0; then
+  echo "tmux-style vertical resize did not expand the focused pane by cell count" >&2
+  exit 1
+fi
 
 kill "$GUI_PID" >/dev/null 2>&1 || true
 wait "$GUI_PID" >/dev/null 2>&1 || true
