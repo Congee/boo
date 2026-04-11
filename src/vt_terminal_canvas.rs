@@ -518,30 +518,22 @@ impl TerminalTextLayer {
             return Vec::new();
         };
         let mut entries = Vec::new();
-        for (col_index, cell) in row.iter().enumerate() {
-            let content = cell.text.as_str();
-            if content.is_empty() || content == "\0" {
-                continue;
-            }
-            let underline = cell.underline != 0;
-            if content == " " && !underline {
-                continue;
-            }
+        for run in build_text_runs(
+            row,
+            self.snapshot.cols as usize,
+            &self.font_families,
+            self.url_color,
+        ) {
             self.push_text_entry(
                 &mut entries,
                 viewport,
                 row_index,
-                col_index,
-                content,
-                usize::from(cell.display_width.max(1)),
-                font_for_cell(cell, &self.font_families),
-                terminal_text_shaping(),
-                if cell.hyperlink {
-                    self.url_color
-                        .unwrap_or_else(|| color_from_rgb(cell.fg, 1.0))
-                } else {
-                    color_from_rgb(cell.fg, 1.0)
-                },
+                run.start_col,
+                &run.text,
+                run.width_cols,
+                run.font,
+                run.shaping,
+                run.fg,
             );
         }
         entries
@@ -558,29 +550,28 @@ impl TerminalTextLayer {
             return entries;
         };
 
-        if let Some(selection_foreground) = self.selection_foreground.filter(|_| !selection_spans.is_empty()) {
-            for (col_index, cell) in row.iter().enumerate() {
-                let content = cell.text.as_str();
-                if content.is_empty() || content == "\0" {
-                    continue;
-                }
-                let underline = cell.underline != 0;
-                if content == " " && !underline {
-                    continue;
-                }
-                if !cell_is_selected_in_spans(selection_spans, col_index, cell.display_width) {
-                    continue;
-                }
+        if let Some(selection_foreground) =
+            self.selection_foreground.filter(|_| !selection_spans.is_empty())
+        {
+            for run in build_selection_text_runs(
+                row,
+                self.snapshot.cols as usize,
+                &self.font_families,
+                selection_foreground,
+                |col_index, display_width| {
+                    cell_is_selected_in_spans(selection_spans, col_index, display_width)
+                },
+            ) {
                 self.push_text_entry(
                     &mut entries,
                     viewport,
                     row_index,
-                    col_index,
-                    content,
-                    usize::from(cell.display_width.max(1)),
-                    font_for_cell(cell, &self.font_families),
-                    terminal_text_shaping(),
-                    selection_foreground,
+                    run.start_col,
+                    &run.text,
+                    run.width_cols,
+                    run.font,
+                    run.shaping,
+                    run.fg,
                 );
             }
         }
