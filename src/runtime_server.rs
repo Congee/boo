@@ -415,6 +415,7 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
+                        server.send_ui_snapshot(client_id, &self.ui_snapshot());
                         server.send_session_list(client_id, &self.remote_sessions());
                         if let Some(session_id) = focused_session_id {
                             server.send_attached(client_id, session_id);
@@ -461,6 +462,7 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                 {
+                    server.send_ui_snapshot(client_id, &self.ui_snapshot());
                     server.send_session_list(client_id, &self.remote_sessions());
                     server.send_attached(client_id, session_id);
                     self.publish_remote_session(session_id);
@@ -474,6 +476,7 @@ impl BooApp {
                     .or(self.server.local_gui_server.as_ref())
                     .or(self.server.remote_server.as_ref())
                 {
+                    server.send_ui_snapshot(client_id, &self.ui_snapshot());
                     server.send_session_list(client_id, &self.remote_sessions());
                     if let Some(session_id) = focused_session_id {
                         server.send_attached(client_id, session_id);
@@ -518,6 +521,7 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                 {
+                    server.send_ui_snapshot(client_id, &self.ui_snapshot());
                     server.send_session_list(client_id, &self.remote_sessions());
                     server.send_attached(client_id, session_id);
                     self.publish_remote_session(session_id);
