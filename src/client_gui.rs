@@ -1940,6 +1940,13 @@ fn flush_pending_passive_stream_event(
     batch.extend(pending.take_in_order());
 }
 
+fn batch_contains_passive_screen_event(
+    batch: &[LocalStreamEvent],
+    pending: &PendingCoalescedStreamEvents,
+) -> bool {
+    pending.passive_screen.is_some() || batch.iter().any(is_passive_screen_event)
+}
+
 fn passive_screen_event_supersedes(previous: &LocalStreamEvent, next: &LocalStreamEvent) -> bool {
     is_passive_screen_event(previous)
         && matches!(
@@ -2086,7 +2093,7 @@ fn local_stream_subscription(
                         batch.last().or(pending.passive_screen.as_ref()),
                         Some(LocalStreamEvent::Disconnected)
                     );
-                    while batch.len() < 64 {
+                    while batch.len() < 64 && !batch_contains_passive_screen_event(&batch, &pending) {
                         match event_rx.try_recv() {
                             Ok(event) => {
                                 saw_disconnect |= matches!(event, LocalStreamEvent::Disconnected);
