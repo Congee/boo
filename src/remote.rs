@@ -1350,20 +1350,47 @@ fn detect_scroll_rows(previous: &RemoteFullState, current: &RemoteFullState) -> 
     let previous_rows = row_fingerprints(previous);
     let current_rows = row_fingerprints(current);
 
-    for shift in 1..rows {
-        let overlap = rows - shift;
-        if previous_rows[shift..rows] == current_rows[..overlap]
-            && previous.cells[shift * cols..rows * cols] == current.cells[..overlap * cols]
-        {
+    let positive_overlap = longest_prefix_suffix_overlap(&current_rows, &previous_rows);
+    if positive_overlap > 0 {
+        let shift = rows - positive_overlap;
+        if previous.cells[shift * cols..rows * cols] == current.cells[..positive_overlap * cols] {
             return Some(shift as i16);
         }
-        if previous_rows[..overlap] == current_rows[shift..rows]
-            && previous.cells[..overlap * cols] == current.cells[shift * cols..rows * cols]
-        {
+    }
+
+    let negative_overlap = longest_prefix_suffix_overlap(&previous_rows, &current_rows);
+    if negative_overlap > 0 {
+        let shift = rows - negative_overlap;
+        if previous.cells[..negative_overlap * cols] == current.cells[shift * cols..rows * cols] {
             return Some(-(shift as i16));
         }
     }
     None
+}
+
+fn longest_prefix_suffix_overlap(prefix: &[u64], suffix_source: &[u64]) -> usize {
+    if prefix.is_empty() || suffix_source.is_empty() {
+        return 0;
+    }
+
+    let mut sequence = Vec::with_capacity(prefix.len() + 1 + suffix_source.len());
+    sequence.extend(prefix.iter().copied().map(Some));
+    sequence.push(None);
+    sequence.extend(suffix_source.iter().copied().map(Some));
+
+    let mut prefix_function = vec![0usize; sequence.len()];
+    for index in 1..sequence.len() {
+        let mut matched = prefix_function[index - 1];
+        while matched > 0 && sequence[index] != sequence[matched] {
+            matched = prefix_function[matched - 1];
+        }
+        if sequence[index] == sequence[matched] {
+            matched += 1;
+        }
+        prefix_function[index] = matched;
+    }
+
+    prefix_function.last().copied().unwrap_or(0).min(prefix.len())
 }
 
 fn row_fingerprints(state: &RemoteFullState) -> Vec<u64> {
@@ -1904,6 +1931,48 @@ mod tests {
             u32::from_le_bytes(payload[row_offset + 6..row_offset + 10].try_into().unwrap()),
             u32::from('X')
         );
+    }
+
+    #[test]
+    fn longest_prefix_suffix_overlap_matches_scroll_overlap() {
+        assert_eq!(longest_prefix_suffix_overlap(&[2, 3, 4], &[1, 2, 3, 4]), 3);
+        assert_eq!(longest_prefix_suffix_overlap(&[1, 2, 3], &[1, 2, 3, 4]), 0);
+        assert_eq!(longest_prefix_suffix_overlap(&[7, 8], &[5, 6, 7, 8]), 2);
+    }
+
+    #[test]
+    fn detect_scroll_rows_handles_multi_row_scroll() {
+        let row = |ch: char| -> Vec<RemoteCell> {
+            vec![RemoteCell {
+                codepoint: u32::from(ch),
+                fg: [1, 2, 3],
+                bg: [0, 0, 0],
+                style_flags: 0,
+                wide: false,
+            }]
+        };
+        let previous = RemoteFullState {
+            rows: 5,
+            cols: 1,
+            cursor_x: 0,
+            cursor_y: 4,
+            cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 1,
+            cells: [row('a'), row('b'), row('c'), row('d'), row('e')].concat(),
+        };
+        let current = RemoteFullState {
+            rows: 5,
+            cols: 1,
+            cursor_x: 0,
+            cursor_y: 4,
+            cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 1,
+            cells: [row('c'), row('d'), row('e'), row('f'), row('g')].concat(),
+        };
+
+        assert_eq!(detect_scroll_rows(&previous, &current), Some(2));
     }
 
     #[test]
