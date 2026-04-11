@@ -741,23 +741,40 @@ impl BooApp {
             return;
         };
         let state = Arc::new(remote::full_state_from_terminal(snapshot));
+        let needs_local_pane_states = servers
+            .iter()
+            .any(|server| server.local_attached_to_session(session_id));
+        let pane_states = if needs_local_pane_states {
+            self.server
+                .tabs
+                .find_index_by_session_id(session_id)
+                .and_then(|tab_index| self.server.tabs.tab_tree(tab_index))
+                .map(|tree| {
+                    let focused_pane_id = tree.focused_pane().id();
+                    tree.export_panes()
+                        .into_iter()
+                        .filter_map(|exported| {
+                            let pane_id = exported.pane.id();
+                            if pane_id == focused_pane_id {
+                                return None;
+                            }
+                            let snapshot = self.backend.render_snapshot_ref(pane_id)?;
+                            Some((pane_id, Arc::new(remote::full_state_from_terminal(snapshot))))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         for server in servers {
             server.send_full_state_to_attached(session_id, Arc::clone(&state));
-            if let Some(tab_index) = self.server.tabs.find_index_by_session_id(session_id)
-                && let Some(tree) = self.server.tabs.tab_tree(tab_index)
-            {
-                let focused_pane_id = tree.focused_pane().id();
-                for exported in tree.export_panes() {
-                    let pane_id = exported.pane.id();
-                    if pane_id == focused_pane_id {
-                        continue;
-                    }
-                    let Some(snapshot) = self.backend.render_snapshot_ref(pane_id) else {
-                        continue;
-                    };
-                    let pane_state = Arc::new(remote::full_state_from_terminal(snapshot));
-                    server.send_pane_state_to_local_attached(session_id, pane_id, pane_state);
-                }
+            for (pane_id, pane_state) in &pane_states {
+                server.send_pane_state_to_local_attached(
+                    session_id,
+                    *pane_id,
+                    Arc::clone(pane_state),
+                );
             }
         }
         log_server_latency("publish_remote_session", started_at);

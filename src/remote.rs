@@ -396,6 +396,13 @@ impl RemoteServer {
             .any(|client| client.attached_session == Some(session_id))
     }
 
+    pub fn local_attached_to_session(&self, session_id: u32) -> bool {
+        let state = self.state.lock().expect("remote server state poisoned");
+        state.clients.values().any(|client| {
+            client.is_local && client.attached_session == Some(session_id)
+        })
+    }
+
     pub fn client_session(&self, client_id: u64) -> Option<u32> {
         let state = self.state.lock().expect("remote server state poisoned");
         state
