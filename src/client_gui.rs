@@ -73,6 +73,7 @@ pub enum GuiTestCommand {
     AppKey(String),
     Command(String),
     Click { x: f64, y: f64 },
+    Drag { x1: f64, y1: f64, x2: f64, y2: f64 },
     Resize { cols: u16, rows: u16 },
     Refresh,
 }
@@ -117,6 +118,7 @@ pub struct ClientApp {
     bootstrapped: bool,
     ui_state: ClientUiState,
     visible_panes: Vec<control::UiPaneSnapshot>,
+    mouse_selection: control::UiMouseSelectionSnapshot,
     mode: ClientMode,
     active_session_id: Option<u32>,
     pane_snapshots: HashMap<u64, Arc<vt_backend_core::TerminalSnapshot>>,
@@ -242,8 +244,12 @@ impl ClientApp {
     }
 
     fn apply_ui_runtime_state(&mut self, state: control::UiRuntimeState) {
+        if self.active_session_id.is_none() && !matches!(self.mode, ClientMode::Attached) {
+            return;
+        }
         self.ui_state = ClientUiState::from_runtime_state(&state);
         self.visible_panes = state.visible_panes;
+        self.mouse_selection = state.mouse_selection;
         self.focused_pane_id = state.focused_pane;
         self.observe_focused_cursor_position();
         self.last_error = None;
@@ -253,6 +259,7 @@ impl ClientApp {
         self.apply_ui_appearance(&snapshot.appearance);
         self.ui_state = ClientUiState::from_snapshot(&snapshot);
         self.visible_panes = snapshot.visible_panes.clone();
+        self.mouse_selection = snapshot.mouse_selection.clone();
         self.focused_pane_id = snapshot.focused_pane;
         self.pane_snapshots = pane_snapshot_map_from_ui_snapshot(&snapshot);
         self.observe_focused_cursor_position();
@@ -309,6 +316,7 @@ impl ClientApp {
             bootstrapped: false,
             ui_state,
             visible_panes: Vec::new(),
+            mouse_selection: control::UiMouseSelectionSnapshot::default(),
             mode: ClientMode::Bootstrapping,
             active_session_id: None,
             pane_snapshots,
@@ -525,6 +533,22 @@ impl ClientApp {
                 self.cursor_blink_epoch,
                 self.cursor_blink_interval,
             );
+            let selection_rects = if self.mouse_selection.active
+                && self.mouse_selection.pane_id == Some(pane.pane_id)
+            {
+                self.mouse_selection
+                    .selection_rects
+                    .iter()
+                    .map(|rect| vt_terminal_canvas::TerminalSelectionRect {
+                        x: rect.x as f32,
+                        y: rect.y as f32,
+                        width: rect.width as f32,
+                        height: rect.height as f32,
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let viewport = vt_terminal_canvas::TerminalViewport {
                 x: pane.frame.x as f32,
                 y: pane.frame.y as f32,
@@ -549,7 +573,7 @@ impl ClientApp {
                     self.background_opacity,
                     self.background_opacity_cells,
                     cursor_blink_visible,
-                    Vec::new(),
+                    selection_rects.clone(),
                     selection_background,
                     Some(selection_foreground),
                     Some(cursor_text_color),
@@ -583,7 +607,7 @@ impl ClientApp {
                         self.font_size,
                         self.font_families.clone(),
                         cursor_blink_visible,
-                        Vec::new(),
+                        selection_rects,
                         Some(selection_foreground),
                         Some(cursor_text_color),
                         Some(url_color),
@@ -1104,6 +1128,27 @@ impl ClientApp {
                     button: AppMouseButton::Left,
                     x,
                     y,
+                    mods: 0,
+                });
+            }
+            GuiTestCommand::Drag { x1, y1, x2, y2 } => {
+                self.last_mouse_pos = Point::new(x1 as f32, y1 as f32);
+                self.send_mouse_event(AppMouseEvent::ButtonPressed {
+                    button: AppMouseButton::Left,
+                    x: x1,
+                    y: y1,
+                    mods: 0,
+                });
+                self.last_mouse_pos = Point::new(x2 as f32, y2 as f32);
+                self.send_mouse_event(AppMouseEvent::CursorMoved {
+                    x: x2,
+                    y: y2,
+                    mods: 0,
+                });
+                self.send_mouse_event(AppMouseEvent::ButtonReleased {
+                    button: AppMouseButton::Left,
+                    x: x2,
+                    y: y2,
                     mods: 0,
                 });
             }
@@ -2119,6 +2164,14 @@ fn parse_gui_test_command(line: &str) -> Option<GuiTestCommand> {
         let y = parts.next()?.parse().ok()?;
         return Some(GuiTestCommand::Click { x, y });
     }
+    if let Some(rest) = trimmed.strip_prefix("drag ") {
+        let mut parts = rest.split_whitespace();
+        let x1 = parts.next()?.parse().ok()?;
+        let y1 = parts.next()?.parse().ok()?;
+        let x2 = parts.next()?.parse().ok()?;
+        let y2 = parts.next()?.parse().ok()?;
+        return Some(GuiTestCommand::Drag { x1, y1, x2, y2 });
+    }
     if let Some(rest) = trimmed.strip_prefix("resize ") {
         let mut parts = rest.split_whitespace();
         let cols = parts.next()?.parse().ok()?;
@@ -2943,6 +2996,34 @@ mod tests {
     }
 
     #[test]
+    fn apply_ui_runtime_state_tracks_mouse_selection() {
+        let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
+        app.active_session_id = Some(7);
+        app.mode = ClientMode::Attached;
+        app.apply_ui_runtime_state(control::UiRuntimeState {
+            active_tab: 0,
+            focused_pane: 7,
+            tabs: vec![],
+            visible_panes: vec![test_pane_with_id(7, 0.0, 0.0, 80.0, 25.0)],
+            mouse_selection: control::UiMouseSelectionSnapshot {
+                active: true,
+                pane_id: Some(7),
+                selection_rects: vec![control::UiRectSnapshot {
+                    x: 10.0,
+                    y: 12.0,
+                    width: 30.0,
+                    height: 16.0,
+                }],
+            },
+            pwd: "/tmp".to_string(),
+        });
+
+        assert!(app.mouse_selection.active);
+        assert_eq!(app.mouse_selection.pane_id, Some(7));
+        assert_eq!(app.mouse_selection.selection_rects.len(), 1);
+    }
+
+    #[test]
     fn parse_gui_test_command_command() {
         assert_eq!(
             parse_gui_test_command("command new-tab"),
@@ -2955,6 +3036,19 @@ mod tests {
         assert_eq!(
             parse_gui_test_command("click 120.5 33.25"),
             Some(GuiTestCommand::Click { x: 120.5, y: 33.25 })
+        );
+    }
+
+    #[test]
+    fn parse_gui_test_drag_command() {
+        assert_eq!(
+            parse_gui_test_command("drag 10 20 30 40"),
+            Some(GuiTestCommand::Drag {
+                x1: 10.0,
+                y1: 20.0,
+                x2: 30.0,
+                y2: 40.0,
+            })
         );
     }
 

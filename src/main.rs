@@ -323,6 +323,8 @@ struct BooApp {
     find_window_query: String,
     find_window_selected: usize,
     copy_mode: Option<CopyModeState>,
+    mouse_selection: Option<MouseSelectionState>,
+    mouse_selection_drag_active: bool,
     command_prompt: CommandPrompt,
     terminal_font_families: Vec<&'static str>,
     terminal_font_size: f32,
@@ -347,13 +349,36 @@ struct BooApp {
     appearance_revision: u64,
     surface_initialized_once: bool,
     app_focused: bool,
-    remote_dirty: bool,
+    dirty_remote_sessions: Vec<u32>,
     desktop_notifications_enabled: bool,
     notify_on_command_finish: config::NotifyOnCommandFinish,
     notify_on_command_finish_action: config::NotifyOnCommandFinishAction,
     notify_on_command_finish_after_ns: u64,
     #[cfg(target_os = "linux")]
     pending_font_bytes: Option<Vec<u8>>,
+}
+
+#[derive(Clone, Copy)]
+struct MouseSelectionState {
+    pane_id: u64,
+    anchor_row: i64,
+    anchor_col: u32,
+    cursor_row: i64,
+    cursor_col: u32,
+}
+
+impl MouseSelectionState {
+    fn has_range(self) -> bool {
+        self.anchor_row != self.cursor_row || self.anchor_col != self.cursor_col
+    }
+
+    fn same_as(self, other: Self) -> bool {
+        self.pane_id == other.pane_id
+            && self.anchor_row == other.anchor_row
+            && self.anchor_col == other.anchor_col
+            && self.cursor_row == other.cursor_row
+            && self.cursor_col == other.cursor_col
+    }
 }
 
 #[derive(Debug, Clone)]

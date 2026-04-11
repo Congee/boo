@@ -1,6 +1,230 @@
 use super::*;
 
 impl BooApp {
+    fn clear_mouse_selection(&mut self) -> bool {
+        let had_selection = self.mouse_selection.is_some();
+        self.mouse_selection = None;
+        self.mouse_selection_drag_active = false;
+        had_selection
+    }
+
+    fn copy_mouse_selection(&mut self) -> bool {
+        let Some(selection) = self.mouse_selection.filter(|selection| selection.has_range()) else {
+            return false;
+        };
+        let Some(text) = self.mouse_selection_text(selection) else {
+            return false;
+        };
+        platform::clipboard_write(&text);
+        self.last_clipboard_text = text.clone();
+        self.push_paste_buffer(text);
+        true
+    }
+
+    fn mouse_selection_text(&self, selection: MouseSelectionState) -> Option<String> {
+        let pane = self.pane_handle_by_id(selection.pane_id)?;
+        self.backend
+            .read_selection_text(pane, self.viewport_selection(selection)?)
+    }
+
+    pub(crate) fn mouse_selection_rects(
+        &self,
+        selection: MouseSelectionState,
+        term_y: f64,
+    ) -> Vec<(f64, f64, f64, f64)> {
+        let Some(snapshot) = self
+            .pane_handle_by_id(selection.pane_id)
+            .and_then(|pane| self.backend.render_snapshot_ref(pane.id()))
+        else {
+            return Vec::new();
+        };
+        Self::compute_selection_rects_static(
+            SelectionMode::Char,
+            selection.cursor_row,
+            selection.cursor_col,
+            selection.anchor_row,
+            selection.anchor_col,
+            self.scrollbar.offset as i64,
+            snapshot.cols as u32,
+            self.cell_width,
+            self.cell_height,
+            term_y,
+        )
+    }
+
+    fn pane_handle_by_id(&self, pane_id: u64) -> Option<PaneHandle> {
+        self.server
+            .tabs
+            .active_tree()?
+            .export_panes()
+            .into_iter()
+            .find(|pane| pane.pane.id() == pane_id)
+            .map(|pane| pane.pane)
+    }
+
+    fn pane_cell_at_point(&self, point: (f64, f64)) -> Option<(u64, u32, u32)> {
+        let frame = self.terminal_frame();
+        let pane = self
+            .server
+            .tabs
+            .active_tree()?
+            .export_panes_with_frames(frame)
+            .into_iter()
+            .find(|pane| {
+                let Some(frame) = pane.frame else {
+                    return false;
+                };
+                point.0 >= frame.origin.x
+                    && point.1 >= frame.origin.y
+                    && point.0 < frame.origin.x + frame.size.width
+                    && point.1 < frame.origin.y + frame.size.height
+            })?;
+        let pane_frame = pane.frame?;
+        let snapshot = self.backend.render_snapshot_ref(pane.pane.id())?;
+        let local_x = (point.0 - pane_frame.origin.x).max(0.0);
+        let local_y = (point.1 - pane_frame.origin.y).max(0.0);
+        let col = ((local_x / self.cell_width).floor() as u32)
+            .min(snapshot.cols.saturating_sub(1) as u32);
+        let row = ((local_y / self.cell_height).floor() as u32).min(snapshot.rows.saturating_sub(1) as u32);
+        Some((pane.pane.id(), row, col))
+    }
+
+    fn selected_pane_frame(&self) -> Option<platform::Rect> {
+        let pane_id = self.mouse_selection?.pane_id;
+        self.server
+            .tabs
+            .active_tree()?
+            .export_panes_with_frames(self.terminal_frame())
+            .into_iter()
+            .find(|pane| pane.pane.id() == pane_id)
+            .and_then(|pane| pane.frame)
+    }
+
+    fn drag_autoscroll_selection(&mut self, point: (f64, f64)) -> Option<(f64, f64)> {
+        let frame = self.selected_pane_frame()?;
+        let rows = self
+            .mouse_selection
+            .and_then(|selection| self.pane_handle_by_id(selection.pane_id))
+            .and_then(|pane| self.backend.render_snapshot_ref(pane.id()))
+            .map(|snapshot| snapshot.rows)?;
+
+        let top = frame.origin.y;
+        let bottom = frame.origin.y + frame.size.height;
+        let left = frame.origin.x;
+        let right = frame.origin.x + frame.size.width;
+        let clamped_x = point.0.clamp(left, (right - 1.0).max(left));
+        let mut clamped_y = point.1.clamp(top, (bottom - 1.0).max(top));
+        let mut scrolled = false;
+
+        if point.1 < top && self.scrollbar.offset > 0 {
+            let lines = (((top - point.1) / self.cell_height).ceil() as u64).max(1);
+            let lines = lines.min(self.scrollbar.offset);
+            let _ = self
+                .backend
+                .scroll_viewport_delta(self.server.tabs.focused_pane(), -(lines as isize));
+            self.scrollbar.offset = self.scrollbar.offset.saturating_sub(lines);
+            clamped_y = top;
+            scrolled = true;
+        } else if point.1 >= bottom && self.scrollbar.total > self.scrollbar.len {
+            let max_offset = self.scrollbar.total.saturating_sub(self.scrollbar.len);
+            if self.scrollbar.offset < max_offset {
+                let lines = (((point.1 - bottom) / self.cell_height).ceil() as u64).max(1);
+                let lines = lines.min(max_offset.saturating_sub(self.scrollbar.offset));
+                let _ = self
+                    .backend
+                    .scroll_viewport_delta(self.server.tabs.focused_pane(), lines as isize);
+                self.scrollbar.offset = (self.scrollbar.offset + lines).min(max_offset);
+                clamped_y = (bottom - 1.0).max(top);
+                scrolled = true;
+            }
+        }
+
+        if !scrolled && point.0 >= left && point.0 < right && point.1 >= top && point.1 < bottom {
+            return None;
+        }
+
+        let max_y = rows.saturating_sub(1) as f64 * self.cell_height + top;
+        Some((clamped_x, clamped_y.min(max_y)))
+    }
+
+    fn begin_mouse_selection(&mut self, point: (f64, f64)) -> bool {
+        let Some((pane_id, row, col)) = self.pane_cell_at_point(point) else {
+            return self.clear_mouse_selection();
+        };
+        let absolute_row = i64::from(row) + self.scrollbar.offset as i64;
+        self.mouse_selection = Some(MouseSelectionState {
+            pane_id,
+            anchor_row: absolute_row,
+            anchor_col: col,
+            cursor_row: absolute_row,
+            cursor_col: col,
+        });
+        self.mouse_selection_drag_active = true;
+        true
+    }
+
+    fn update_mouse_selection(&mut self, point: (f64, f64)) -> bool {
+        if !self.mouse_selection_drag_active {
+            return false;
+        }
+        let Some(selection) = self.mouse_selection else {
+            return false;
+        };
+        let Some((pane_id, row, col)) = self.pane_cell_at_point(point) else {
+            return false;
+        };
+        if pane_id != selection.pane_id {
+            return false;
+        }
+        let absolute_row = i64::from(row) + self.scrollbar.offset as i64;
+        if absolute_row == selection.cursor_row && col == selection.cursor_col {
+            return false;
+        }
+        self.mouse_selection = Some(MouseSelectionState {
+            pane_id,
+            anchor_row: selection.anchor_row,
+            anchor_col: selection.anchor_col,
+            cursor_row: absolute_row,
+            cursor_col: col,
+        });
+        true
+    }
+
+    fn viewport_selection(&self, selection: MouseSelectionState) -> Option<ffi::ghostty_selection_s> {
+        let (top_row, left_col, bottom_row, right_col) = ordered_selection_bounds(selection);
+        let offset = self.scrollbar.offset as i64;
+        if bottom_row < offset {
+            return None;
+        }
+        Some(ffi::ghostty_selection_s {
+            top_left: ffi::ghostty_point_s {
+                tag: ffi::GHOSTTY_POINT_VIEWPORT,
+                coord: ffi::GHOSTTY_POINT_COORD_EXACT,
+                x: left_col,
+                y: top_row.saturating_sub(offset).max(0) as u32,
+            },
+            bottom_right: ffi::ghostty_point_s {
+                tag: ffi::GHOSTTY_POINT_VIEWPORT,
+                coord: ffi::GHOSTTY_POINT_COORD_EXACT,
+                x: right_col,
+                y: bottom_row.saturating_sub(offset).max(0) as u32,
+            },
+            rectangle: false,
+        })
+    }
+
+    fn finish_mouse_selection(&mut self) -> bool {
+        self.mouse_selection_drag_active = false;
+        let Some(selection) = self.mouse_selection else {
+            return false;
+        };
+        if selection.has_range() {
+            return false;
+        }
+        self.mouse_selection = None;
+        true
+    }
+
     pub(crate) fn forward_text_input_command(&mut self, command: platform::TextInputCommand) {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
@@ -83,9 +307,15 @@ impl BooApp {
         let key_char = event.key_char();
         let keyboard_key = event.keyboard_key();
 
+        if is_command_copy_shortcut(&event, key_char) && self.copy_mouse_selection() {
+            return true;
+        }
+
         if self.dispatch_app_key(&event, key_char, keyboard_key) {
             return true;
         }
+
+        self.clear_mouse_selection();
 
         let surface = self.focused_surface();
         let unshifted_codepoint = event
@@ -174,6 +404,8 @@ impl BooApp {
     }
 
     pub(crate) fn handle_committed_text(&mut self, committed: String) {
+        self.clear_mouse_selection();
+
         if self.display_panes_active {
             let mut consumed = false;
             for ch in committed.chars() {
@@ -213,6 +445,8 @@ impl BooApp {
         let old_focus = self.server.tabs.focused_pane();
         let old_divider_drag = self.divider_drag;
         let old_scrollbar_drag = self.scrollbar_drag;
+        let old_scrollbar_offset = self.scrollbar.offset;
+        let old_mouse_selection = self.mouse_selection;
         match event {
             AppMouseEvent::CursorMoved { x, y, .. } => {
                 self.handle_mouse(mouse::Event::CursorMoved {
@@ -247,6 +481,8 @@ impl BooApp {
         old_focus != self.server.tabs.focused_pane()
             || old_divider_drag != self.divider_drag
             || old_scrollbar_drag != self.scrollbar_drag
+            || old_scrollbar_offset != self.scrollbar.offset
+            || !same_mouse_selection(old_mouse_selection, self.mouse_selection)
     }
 
     #[cfg(target_os = "macos")]
@@ -931,7 +1167,7 @@ impl BooApp {
             "set-tab-title" => {
                 if parts.len() >= 2 {
                     self.server.tabs.set_active_title(parts[1..].join(" "));
-                    self.remote_dirty = true;
+                    self.mark_active_remote_session_dirty();
                     self.relayout();
                 }
             }
@@ -1064,6 +1300,8 @@ impl BooApp {
         self.choose_tree_active = false;
         self.choose_buffer_active = false;
         self.display_panes_active = false;
+        self.mouse_selection = None;
+        self.mouse_selection_drag_active = false;
         let focused = self.server.tabs.focused_pane();
         self.set_pane_focus(focused, true);
         self.relayout();
@@ -1132,6 +1370,17 @@ impl BooApp {
                     self.scroll_to_mouse_y(position.y as f64);
                     return;
                 }
+                if self.mouse_selection_drag_active
+                    && self.mouse_selection.is_some()
+                {
+                    if let Some(clamped) = self.drag_autoscroll_selection(self.last_mouse_pos) {
+                        if self.update_mouse_selection(clamped) {
+                            return;
+                        }
+                    } else if self.update_mouse_selection(self.last_mouse_pos) {
+                        return;
+                    }
+                }
                 #[cfg(any(target_os = "linux", target_os = "macos"))]
                 if self.focused_surface().is_null() {
                     let _ = self.backend.send_mouse_input(
@@ -1179,10 +1428,8 @@ impl BooApp {
                         }
                     }
 
-                    if let Some(url) = self.hyperlink_at_point(point) {
-                        std::thread::spawn(move || {
-                            let _ = open::that(url);
-                        });
+                    #[cfg(any(target_os = "linux", target_os = "macos"))]
+                    if self.focused_surface().is_null() && self.begin_mouse_selection(point) {
                         return;
                     }
                 }
@@ -1213,6 +1460,20 @@ impl BooApp {
                     }
                     if self.scrollbar_drag {
                         self.scrollbar_drag = false;
+                        return;
+                    }
+                    if self.mouse_selection.is_some() {
+                        let _ = self.update_mouse_selection(self.last_mouse_pos);
+                    }
+                    if self.finish_mouse_selection() {
+                        if let Some(url) = self.hyperlink_at_point(self.last_mouse_pos) {
+                            std::thread::spawn(move || {
+                                let _ = open::that(url);
+                            });
+                        }
+                        return;
+                    }
+                    if self.mouse_selection.is_some() {
                         return;
                     }
                 }
@@ -1604,5 +1865,80 @@ fn display_panes_digit_index(ch: char) -> Option<usize> {
     match ch {
         '1'..='9' => Some(ch as usize - '1' as usize),
         _ => None,
+    }
+}
+
+fn ordered_selection_bounds(selection: MouseSelectionState) -> (i64, u32, i64, u32) {
+    if selection.anchor_row < selection.cursor_row
+        || (selection.anchor_row == selection.cursor_row
+            && selection.anchor_col <= selection.cursor_col)
+    {
+        (
+            selection.anchor_row,
+            selection.anchor_col,
+            selection.cursor_row,
+            selection.cursor_col,
+        )
+    } else {
+        (
+            selection.cursor_row,
+            selection.cursor_col,
+            selection.anchor_row,
+            selection.anchor_col,
+        )
+    }
+}
+
+fn same_mouse_selection(
+    lhs: Option<MouseSelectionState>,
+    rhs: Option<MouseSelectionState>,
+) -> bool {
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => lhs.same_as(rhs),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn is_command_copy_shortcut(event: &AppKeyEvent, key_char: Option<char>) -> bool {
+    event.mods & ffi::GHOSTTY_MODS_SUPER != 0
+        && event.mods & (ffi::GHOSTTY_MODS_CTRL | ffi::GHOSTTY_MODS_ALT) == 0
+        && key_char.is_some_and(|ch| ch.eq_ignore_ascii_case(&'c'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ordered_selection_bounds_normalizes_reverse_drag() {
+        let selection = MouseSelectionState {
+            pane_id: 1,
+            anchor_row: 4,
+            anchor_col: 9,
+            cursor_row: 2,
+            cursor_col: 3,
+        };
+        assert_eq!(ordered_selection_bounds(selection), (2, 3, 4, 9));
+    }
+
+    #[test]
+    fn command_copy_shortcut_requires_super_c_without_ctrl_or_alt() {
+        let event = AppKeyEvent {
+            keycode: 8,
+            mods: ffi::GHOSTTY_MODS_SUPER,
+            text: Some("c".to_string()),
+            modified_text: Some("c".to_string()),
+            named_key: None,
+            repeat: false,
+            input_seq: None,
+        };
+        assert!(is_command_copy_shortcut(&event, Some('c')));
+
+        let ctrl_event = AppKeyEvent {
+            mods: ffi::GHOSTTY_MODS_SUPER | ffi::GHOSTTY_MODS_CTRL,
+            ..event.clone()
+        };
+        assert!(!is_command_copy_shortcut(&ctrl_event, Some('c')));
     }
 }

@@ -128,6 +128,8 @@ impl BooApp {
         let bindings = bindings::Bindings::from_config(&boo_config);
         let appearance = Self::resolve_appearance_config(&boo_config);
         let (cell_width, cell_height) = terminal_metrics(appearance.font_size);
+        let initial_dirty_remote_sessions =
+            server.tabs.active_session_id().into_iter().collect::<Vec<_>>();
 
         #[cfg(target_os = "linux")]
         {
@@ -177,6 +179,8 @@ impl BooApp {
                     find_window_query: String::new(),
                     find_window_selected: 0,
                     copy_mode: None,
+                    mouse_selection: None,
+                    mouse_selection_drag_active: false,
                     command_prompt: CommandPrompt::new(),
                     terminal_font_families: appearance.font_families.clone(),
                     terminal_font_size: appearance.font_size,
@@ -201,7 +205,7 @@ impl BooApp {
                     appearance_revision: 1,
                     surface_initialized_once: false,
                     app_focused: true,
-                    remote_dirty: true,
+                    dirty_remote_sessions: initial_dirty_remote_sessions.clone(),
                     desktop_notifications_enabled: boo_config.desktop_notifications,
                     notify_on_command_finish: boo_config.notify_on_command_finish,
                     notify_on_command_finish_action: boo_config.notify_on_command_finish_action,
@@ -260,6 +264,8 @@ impl BooApp {
                     find_window_query: String::new(),
                     find_window_selected: 0,
                     copy_mode: None,
+                    mouse_selection: None,
+                    mouse_selection_drag_active: false,
                     command_prompt: CommandPrompt::new(),
                     terminal_font_families: appearance.font_families.clone(),
                     terminal_font_size: appearance.font_size,
@@ -284,7 +290,7 @@ impl BooApp {
                     appearance_revision: 1,
                     surface_initialized_once: false,
                     app_focused: true,
-                    remote_dirty: true,
+                    dirty_remote_sessions: initial_dirty_remote_sessions,
                     desktop_notifications_enabled: boo_config.desktop_notifications,
                     notify_on_command_finish: boo_config.notify_on_command_finish,
                     notify_on_command_finish_action: boo_config.notify_on_command_finish_action,
@@ -297,6 +303,22 @@ impl BooApp {
 }
 
 impl BooApp {
+    pub(crate) fn mark_remote_session_dirty(&mut self, session_id: u32) {
+        if !self.dirty_remote_sessions.contains(&session_id) {
+            self.dirty_remote_sessions.push(session_id);
+        }
+    }
+
+    pub(crate) fn mark_active_remote_session_dirty(&mut self) {
+        if let Some(session_id) = self.server.tabs.active_session_id() {
+            self.mark_remote_session_dirty(session_id);
+        }
+    }
+
+    fn freeze_mouse_selection_viewport(&self) -> bool {
+        self.mouse_selection.is_some() && self.focused_surface().is_null()
+    }
+
     pub(crate) fn focused_surface(&self) -> ffi::ghostty_surface_t {
         self.server.tabs.focused_pane().surface()
     }
@@ -472,7 +494,18 @@ impl BooApp {
             }
         }
         if let Some(scrollbar) = poll.active_scrollbar {
-            if self.scrollbar.total != scrollbar.total
+            if self.freeze_mouse_selection_viewport() && self.scrollbar.offset != scrollbar.offset {
+                let delta = self.scrollbar.offset as i64 - scrollbar.offset as i64;
+                let _ = self
+                    .backend
+                    .scroll_viewport_delta(self.server.tabs.focused_pane(), delta as isize);
+                let mut frozen = scrollbar;
+                frozen.offset = self.scrollbar.offset;
+                if self.scrollbar.total != frozen.total || self.scrollbar.len != frozen.len {
+                    self.scrollbar = frozen;
+                    remote_dirty = true;
+                }
+            } else if self.scrollbar.total != scrollbar.total
                 || self.scrollbar.offset != scrollbar.offset
                 || self.scrollbar.len != scrollbar.len
             {
@@ -490,7 +523,7 @@ impl BooApp {
             remote_dirty = true;
         }
         if remote_dirty && self.has_attached_stream_sessions() {
-            self.remote_dirty = true;
+            self.mark_active_remote_session_dirty();
         }
     }
 
@@ -585,11 +618,13 @@ impl BooApp {
         while let Ok(cmd) = self.server.local_gui_rx.try_recv() {
             self.handle_server_cmd(cmd.into());
         }
-        if self.remote_dirty {
+        if !self.dirty_remote_sessions.is_empty() {
             let _scope =
                 crate::profiling::scope("server.publish_remote_state", crate::profiling::Kind::Cpu);
-            self.publish_remote_state();
-            self.remote_dirty = false;
+            let dirty_sessions = std::mem::take(&mut self.dirty_remote_sessions);
+            for session_id in dirty_sessions {
+                self.publish_remote_session(session_id);
+            }
         }
 
         while let Ok(scroll) = self.scroll_rx.try_recv() {

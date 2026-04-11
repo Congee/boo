@@ -74,6 +74,7 @@ pub struct UiSnapshot {
     pub visible_panes: Vec<UiPaneSnapshot>,
     pub pane_terminals: Vec<UiPaneTerminalSnapshot>,
     pub copy_mode: UiCopyModeSnapshot,
+    pub mouse_selection: UiMouseSelectionSnapshot,
     pub search: UiSearchSnapshot,
     pub command_prompt: UiCommandPromptSnapshot,
     pub pwd: String,
@@ -87,6 +88,7 @@ pub struct UiRuntimeState {
     pub focused_pane: u64,
     pub tabs: Vec<UiTabSnapshot>,
     pub visible_panes: Vec<UiPaneSnapshot>,
+    pub mouse_selection: UiMouseSelectionSnapshot,
     pub pwd: String,
 }
 
@@ -156,6 +158,13 @@ pub struct UiCopyModeSnapshot {
     pub anchor_col: Option<u32>,
     pub selection_rects: Vec<UiRectSnapshot>,
     pub show_position: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct UiMouseSelectionSnapshot {
+    pub active: bool,
+    pub pane_id: Option<u64>,
+    pub selection_rects: Vec<UiRectSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -596,8 +605,8 @@ pub fn cleanup(socket_path: Option<&str>) {
 mod tests {
     use super::{
         ControlCmd, Request, Response, UiAppearanceSnapshot, UiCommandPromptSnapshot,
-        UiCopyModeSnapshot, UiPaneSnapshot, UiRectSnapshot, UiScrollbarSnapshot, UiSearchSnapshot,
-        UiSnapshot, UiTabSnapshot, dispatch_request,
+        UiCopyModeSnapshot, UiMouseSelectionSnapshot, UiPaneSnapshot, UiRectSnapshot,
+        UiScrollbarSnapshot, UiSearchSnapshot, UiSnapshot, UiTabSnapshot, dispatch_request,
     };
     use std::sync::mpsc;
     use std::time::Duration;
@@ -911,6 +920,7 @@ mod tests {
                                 selection_rects: Vec::new(),
                                 show_position: false,
                             },
+                            mouse_selection: UiMouseSelectionSnapshot::default(),
                             search: UiSearchSnapshot {
                                 active: false,
                                 query: String::new(),
@@ -1024,6 +1034,16 @@ mod tests {
                     }],
                     show_position: true,
                 },
+                mouse_selection: UiMouseSelectionSnapshot {
+                    active: true,
+                    pane_id: Some(7),
+                    selection_rects: vec![UiRectSnapshot {
+                        x: 40.0,
+                        y: 64.0,
+                        width: 24.0,
+                        height: 16.0,
+                    }],
+                },
                 search: UiSearchSnapshot {
                     active: true,
                     query: "panic".to_string(),
@@ -1065,6 +1085,7 @@ mod tests {
             value["snapshot"]["copy_mode"]["selection_rects"][0]["width"],
             8.0
         );
+        assert_eq!(value["snapshot"]["mouse_selection"]["pane_id"], 7);
         assert_eq!(
             value["snapshot"]["visible_panes"][0]["frame"]["width"],
             200.0

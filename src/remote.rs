@@ -382,19 +382,6 @@ impl RemoteServer {
         ))
     }
 
-    pub fn attached_sessions(&self) -> Vec<u32> {
-        let state = self.state.lock().expect("remote server state poisoned");
-        let mut sessions = Vec::new();
-        for client in state.clients.values() {
-            if let Some(session_id) = client.attached_session {
-                if !sessions.contains(&session_id) {
-                    sessions.push(session_id);
-                }
-            }
-        }
-        sessions
-    }
-
     pub fn has_attached_sessions(&self) -> bool {
         let state = self.state.lock().expect("remote server state poisoned");
         state
@@ -433,6 +420,20 @@ impl RemoteServer {
             MessageType::SessionList,
             encode_session_list(sessions),
         );
+    }
+
+    pub fn send_session_list_to_local_clients(&self, sessions: &[RemoteSessionInfo]) {
+        let client_ids = {
+            let state_guard = self.state.lock().expect("remote server state poisoned");
+            state_guard
+                .clients
+                .iter()
+                .filter_map(|(client_id, client)| client.is_local.then_some(*client_id))
+                .collect::<Vec<_>>()
+        };
+        for client_id in client_ids {
+            self.send_session_list(client_id, sessions);
+        }
     }
 
     pub fn send_attached(&self, client_id: u64, session_id: u32) {
@@ -496,13 +497,20 @@ impl RemoteServer {
         self.send_to_client(client_id, MessageType::UiRuntimeState, payload);
     }
 
-    pub fn send_ui_runtime_state_to_local_clients(&self, state: &crate::control::UiRuntimeState) {
+    pub fn send_ui_runtime_state_to_local_attached(
+        &self,
+        session_id: u32,
+        state: &crate::control::UiRuntimeState,
+    ) {
         let client_ids = {
             let state_guard = self.state.lock().expect("remote server state poisoned");
             state_guard
                 .clients
                 .iter()
-                .filter_map(|(client_id, client)| client.is_local.then_some(*client_id))
+                .filter_map(|(client_id, client)| {
+                    (client.is_local && client.attached_session == Some(session_id))
+                        .then_some(*client_id)
+                })
                 .collect::<Vec<_>>()
         };
         for client_id in client_ids {
@@ -548,31 +556,10 @@ impl RemoteServer {
         }
     }
 
-    pub fn send_ui_pane_terminals(
-        &self,
-        client_id: u64,
-        panes: &[crate::control::UiPaneTerminalSnapshot],
-    ) {
-        let is_local = {
-            let state_guard = self.state.lock().expect("remote server state poisoned");
-            state_guard
-                .clients
-                .get(&client_id)
-                .is_some_and(|client| client.is_local)
-        };
-        if !is_local {
-            return;
-        }
-        let Ok(payload) = serde_json::to_vec(panes) else {
-            return;
-        };
-        self.send_to_client(client_id, MessageType::UiPaneTerminals, payload);
-    }
-
     pub fn send_full_state_to_attached(&self, session_id: u32, state: Arc<RemoteFullState>) {
         let client_ids = self.clients_for_session(session_id);
         for client_id in client_ids {
-            self.send_state_to_client(client_id, Arc::clone(&state));
+            self.send_state_to_client(client_id, session_id, Arc::clone(&state));
         }
     }
 
@@ -594,7 +581,7 @@ impl RemoteServer {
                 .collect::<Vec<_>>()
         };
         for client_id in client_ids {
-            self.send_pane_state_to_client(client_id, pane_id, Arc::clone(&state));
+            self.send_pane_state_to_client(client_id, session_id, pane_id, Arc::clone(&state));
         }
     }
 
@@ -649,31 +636,55 @@ impl RemoteServer {
         }
     }
 
-    fn send_state_to_client(&self, client_id: u64, state: Arc<RemoteFullState>) {
+    fn send_state_to_client(&self, client_id: u64, session_id: u32, state: Arc<RemoteFullState>) {
         let _scope =
             crate::profiling::scope("server.stream.encode_state", crate::profiling::Kind::Cpu);
-        let (ty, payload, is_local) = {
+        let (outbound, previous_state, latest_input_seq, is_local) = {
+            let guard = self.state.lock().expect("remote server state poisoned");
+            let Some(client) = guard.clients.get(&client_id) else {
+                return;
+            };
+            if client.attached_session != Some(session_id) {
+                return;
+            }
+            (
+                client.outbound.clone(),
+                client.last_state.clone(),
+                client.latest_input_seq,
+                client.is_local,
+            )
+        };
+        let (ty, payload) = match previous_state
+            .as_ref()
+            .and_then(|previous| {
+                encode_delta(
+                    previous.as_ref(),
+                    state.as_ref(),
+                    latest_input_seq,
+                    is_local,
+                )
+            }) {
+            Some(delta) => (MessageType::Delta, delta),
+            None => (
+                MessageType::FullState,
+                encode_full_state(state.as_ref(), latest_input_seq, is_local),
+            ),
+        };
+        let should_send = {
             let mut guard = self.state.lock().expect("remote server state poisoned");
             let Some(client) = guard.clients.get_mut(&client_id) else {
                 return;
             };
-            let latest_input_seq = client.latest_input_seq;
-            let is_local = client.is_local;
-            let encoded = match client
-                .last_state
-                .as_ref()
-                .and_then(|previous| encode_delta(previous.as_ref(), state.as_ref(), latest_input_seq, is_local))
-            {
-                Some(delta) => (MessageType::Delta, delta, is_local),
-                None => (
-                    MessageType::FullState,
-                    encode_full_state(state.as_ref(), latest_input_seq, is_local),
-                    is_local,
-                ),
-            };
-            client.last_state = Some(Arc::clone(&state));
-            encoded
+            if client.attached_session != Some(session_id) {
+                false
+            } else {
+                client.last_state = Some(Arc::clone(&state));
+                true
+            }
         };
+        if !should_send {
+            return;
+        }
         crate::profiling::record_units(
             match (ty, is_local) {
                 (MessageType::Delta, true) => "server.stream.publish_delta.local",
@@ -686,45 +697,56 @@ impl RemoteServer {
             1,
         );
         let frame = encode_message(ty, &payload);
-        let state = self.state.lock().expect("remote server state poisoned");
-        if let Some(client) = state.clients.get(&client_id) {
-            let _ = client.outbound.send(OutboundMessage::ScreenUpdate(frame));
-        }
+        let _ = outbound.send(OutboundMessage::ScreenUpdate(frame));
     }
 
     fn send_pane_state_to_client(
         &self,
         client_id: u64,
+        session_id: u32,
         pane_id: u64,
         state: Arc<RemoteFullState>,
     ) {
-        let (ty, payload) = {
+        let (outbound, previous_state) = {
+            let guard = self.state.lock().expect("remote server state poisoned");
+            let Some(client) = guard.clients.get(&client_id) else {
+                return;
+            };
+            if client.attached_session != Some(session_id) {
+                return;
+            }
+            (client.outbound.clone(), client.pane_states.get(&pane_id).cloned())
+        };
+        let (ty, payload) = match previous_state
+            .as_ref()
+            .and_then(|previous| encode_delta(previous.as_ref(), state.as_ref(), None, true))
+        {
+            Some(delta) => (MessageType::UiPaneDelta, delta),
+            None => (
+                MessageType::UiPaneFullState,
+                encode_full_state(state.as_ref(), None, true),
+            ),
+        };
+        let should_send = {
             let mut guard = self.state.lock().expect("remote server state poisoned");
             let Some(client) = guard.clients.get_mut(&client_id) else {
                 return;
             };
-            let encoded = match client
-                .pane_states
-                .get(&pane_id)
-                .and_then(|previous| encode_delta(previous.as_ref(), state.as_ref(), None, true))
-            {
-                Some(delta) => (MessageType::UiPaneDelta, delta),
-                None => (
-                    MessageType::UiPaneFullState,
-                    encode_full_state(state.as_ref(), None, true),
-                ),
-            };
-            client.pane_states.insert(pane_id, Arc::clone(&state));
-            encoded
+            if client.attached_session != Some(session_id) {
+                false
+            } else {
+                client.pane_states.insert(pane_id, Arc::clone(&state));
+                true
+            }
         };
+        if !should_send {
+            return;
+        }
         let mut prefixed = Vec::with_capacity(8 + payload.len());
         prefixed.extend_from_slice(&pane_id.to_le_bytes());
         prefixed.extend_from_slice(&payload);
         let frame = encode_message(ty, &prefixed);
-        let state = self.state.lock().expect("remote server state poisoned");
-        if let Some(client) = state.clients.get(&client_id) {
-            let _ = client.outbound.send(OutboundMessage::ScreenUpdate(frame));
-        }
+        let _ = outbound.send(OutboundMessage::ScreenUpdate(frame));
     }
 }
 
@@ -1871,5 +1893,67 @@ mod tests {
             }
             OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
         }
+    }
+
+    #[test]
+    fn send_ui_runtime_state_to_local_attached_only_targets_matching_session() {
+        let (attached_tx, attached_rx) = mpsc::channel();
+        let (unattached_tx, unattached_rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([
+                (
+                    1,
+                    ClientState {
+                        outbound: attached_tx,
+                        authenticated: true,
+                        challenge: None,
+                        attached_session: Some(11),
+                        last_state: None,
+                        pane_states: HashMap::new(),
+                        latest_input_seq: None,
+                        is_local: true,
+                    },
+                ),
+                (
+                    2,
+                    ClientState {
+                        outbound: unattached_tx,
+                        authenticated: true,
+                        challenge: None,
+                        attached_session: None,
+                        last_state: None,
+                        pane_states: HashMap::new(),
+                        latest_input_seq: None,
+                        is_local: true,
+                    },
+                ),
+            ]),
+            auth_key: None,
+        }));
+        let server = RemoteServer {
+            state,
+            _listener: std::thread::spawn(|| {}),
+            _advertiser: None,
+            local_socket_path: None,
+        };
+        let ui_state = control::UiRuntimeState {
+            active_tab: 0,
+            focused_pane: 7,
+            tabs: Vec::new(),
+            visible_panes: Vec::new(),
+            mouse_selection: control::UiMouseSelectionSnapshot::default(),
+            pwd: "/tmp".to_string(),
+        };
+
+        server.send_ui_runtime_state_to_local_attached(11, &ui_state);
+
+        match attached_rx.recv().expect("attached frame") {
+            OutboundMessage::Frame(frame) => {
+                assert_eq!(&frame[..2], &MAGIC);
+                assert_eq!(frame[2], MessageType::UiRuntimeState as u8);
+            }
+            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+        }
+        assert!(unattached_rx.try_recv().is_err());
     }
 }

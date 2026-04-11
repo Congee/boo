@@ -261,4 +261,4 @@ nix develop
 - [ ] Restore the Ghostty-fork Vim status bar feature on the libghostty-vt path: implement a Boo control-socket status component protocol inspired by `/Users/example/dev/ghostty/research/status-bar-component-protocol.md`, supporting left/right zones, styled text segments, source-scoped updates/clears, optional OSC 1337 SetUserVar ingestion for one-way updates, and clickable segment callbacks where practical
 
 ### UI Backlog
-- [ ] Allow mouse text selection and clipboard copy via `cmd+c`
+- [x] Allow mouse text selection and clipboard copy via `cmd+c`

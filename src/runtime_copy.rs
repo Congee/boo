@@ -1,7 +1,7 @@
 use super::*;
 
 impl BooApp {
-    fn push_paste_buffer(&mut self, text: String) {
+    pub(crate) fn push_paste_buffer(&mut self, text: String) {
         if text.is_empty() {
             return;
         }

@@ -6,6 +6,22 @@ use iced::widget::stack;
 use iced::{Pixels, Point, Rectangle, Renderer};
 
 impl BooApp {
+    fn ui_mouse_selection_snapshot(&self) -> control::UiMouseSelectionSnapshot {
+        let Some(selection) = self.mouse_selection.filter(|selection| selection.has_range()) else {
+            return control::UiMouseSelectionSnapshot::default();
+        };
+        let rects = self
+            .mouse_selection_rects(selection, 0.0)
+            .into_iter()
+            .map(|(x, y, width, height)| ui_rect_snapshot(x, y, width, height))
+            .collect();
+        control::UiMouseSelectionSnapshot {
+            active: true,
+            pane_id: Some(selection.pane_id),
+            selection_rects: rects,
+        }
+    }
+
     pub(crate) fn find_window_entries(&self) -> Vec<ChooseTreeEntry> {
         let query = self.find_window_query.trim().to_lowercase();
         self.choose_tree_entries()
@@ -234,6 +250,7 @@ impl BooApp {
             visible_panes,
             pane_terminals,
             copy_mode,
+            mouse_selection: self.ui_mouse_selection_snapshot(),
             search: control::UiSearchSnapshot {
                 active: self.search_active,
                 query: self.search_query.clone(),
@@ -268,6 +285,7 @@ impl BooApp {
                 })
                 .collect(),
             visible_panes: self.visible_pane_snapshots(),
+            mouse_selection: self.ui_mouse_selection_snapshot(),
             pwd: self.pwd.clone(),
         }
     }
@@ -367,6 +385,14 @@ impl BooApp {
                                 0.0,
                             )
                         })
+                    })
+                    .or_else(|| {
+                        self.mouse_selection
+                            .filter(|selection| {
+                                selection.pane_id == self.server.tabs.focused_pane().id()
+                                    && selection.has_range()
+                            })
+                            .map(|selection| self.mouse_selection_rects(selection, 0.0))
                     })
                     .unwrap_or_default()
                     .into_iter()
