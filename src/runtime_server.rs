@@ -140,9 +140,7 @@ impl BooApp {
                 }
             }
             server::Command::SendText { text } => {
-                let _ = self
-                    .backend
-                    .write_input(self.server.tabs.focused_pane(), text.as_bytes());
+                self.write_terminal_input(text.as_bytes());
             }
             server::Command::SendVt { text } => {
                 self.backend
@@ -314,7 +312,11 @@ impl BooApp {
                 if let Some(server) = self.remote_server_for_client(client_id) {
                     server.record_input_seq(client_id, input_seq);
                 }
-                let _ = self.backend.write_input(pane, &bytes);
+                if pane == self.server.tabs.focused_pane() {
+                    self.write_terminal_input(&bytes);
+                } else {
+                    let _ = self.backend.write_input(pane, &bytes);
+                }
                 log_server_latency("remote_input_applied", started_at);
             }
             server::Command::RemoteKey {

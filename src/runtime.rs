@@ -112,7 +112,7 @@ impl BooApp {
         }
     }
 
-    fn new_headless() -> Self {
+    pub(crate) fn new_headless() -> Self {
         Self::new_with_mode(true).0
     }
 

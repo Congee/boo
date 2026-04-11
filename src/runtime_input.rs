@@ -1,6 +1,27 @@
 use super::*;
 
 impl BooApp {
+    fn reset_scrolling_state_for_user_input(&mut self) {
+        if self.scrollbar.total <= self.scrollbar.len {
+            return;
+        }
+        let max_offset = self.scrollbar.total.saturating_sub(self.scrollbar.len);
+        if self.scrollbar.offset >= max_offset {
+            return;
+        }
+        let _ = self
+            .backend
+            .scroll_viewport_bottom(self.server.tabs.focused_pane());
+        self.scrollbar.offset = max_offset;
+    }
+
+    pub(crate) fn write_terminal_input(&mut self, bytes: &[u8]) {
+        self.reset_scrolling_state_for_user_input();
+        let _ = self
+            .backend
+            .write_input(self.server.tabs.focused_pane(), bytes);
+    }
+
     fn clear_mouse_selection(&mut self) -> bool {
         let had_selection = self.mouse_selection.is_some();
         self.mouse_selection = None;
@@ -226,6 +247,7 @@ impl BooApp {
     }
 
     pub(crate) fn forward_text_input_command(&mut self, command: platform::TextInputCommand) {
+        self.reset_scrolling_state_for_user_input();
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let (keycode, unshifted_codepoint) = text_input_command_key(command);
@@ -338,6 +360,7 @@ impl BooApp {
                     return false;
                 }
             }
+            self.reset_scrolling_state_for_user_input();
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             {
                 let Some(vt_keycode) = keymap::native_to_vt_keycode(event.keycode) else {
@@ -368,6 +391,7 @@ impl BooApp {
 
         let translation_mods = self.surface_key_translation_mods(surface, event.mods);
         let consumed_mods = translation_mods & !(ffi::GHOSTTY_MODS_CTRL | ffi::GHOSTTY_MODS_SUPER);
+        self.reset_scrolling_state_for_user_input();
         let text_cstring = event
             .text
             .as_ref()
@@ -436,9 +460,7 @@ impl BooApp {
             return;
         }
 
-        let _ = self
-            .backend
-            .write_input(self.server.tabs.focused_pane(), committed.as_bytes());
+        self.write_terminal_input(committed.as_bytes());
     }
 
     pub(crate) fn handle_app_mouse_event(&mut self, event: AppMouseEvent) -> bool {
@@ -697,6 +719,7 @@ impl BooApp {
                 } else {
                     ffi::GHOSTTY_MODS_NONE
                 };
+                self.reset_scrolling_state_for_user_input();
                 let _ = self.backend.forward_vt_key(
                     self.server.tabs.focused_pane(),
                     vt::GHOSTTY_KEY_ACTION_PRESS,
@@ -720,6 +743,7 @@ impl BooApp {
         } else {
             ffi::GHOSTTY_MODS_NONE
         };
+        self.reset_scrolling_state_for_user_input();
         let ev = ffi::ghostty_input_key_s {
             action: ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS,
             mods,
@@ -1805,9 +1829,7 @@ impl BooApp {
         self.choose_buffer_active = false;
         self.last_clipboard_text = text.clone();
         platform::clipboard_write(&text);
-        let _ = self
-            .backend
-            .write_input(self.server.tabs.focused_pane(), text.as_bytes());
+        self.write_terminal_input(text.as_bytes());
     }
 
     fn handle_display_panes_key(&mut self, key: &keyboard::Key, key_char: Option<char>) -> bool {
@@ -1940,5 +1962,53 @@ mod tests {
             ..event.clone()
         };
         assert!(!is_command_copy_shortcut(&ctrl_event, Some('c')));
+    }
+
+    #[test]
+    fn reset_scrolling_state_for_user_input_snaps_to_bottom() {
+        let mut app = BooApp::new_headless();
+        app.scrollbar.total = 200;
+        app.scrollbar.len = 20;
+        app.scrollbar.offset = 40;
+
+        app.reset_scrolling_state_for_user_input();
+
+        assert_eq!(app.scrollbar.offset, 180);
+    }
+
+    #[test]
+    fn reset_scrolling_state_for_user_input_is_noop_at_bottom() {
+        let mut app = BooApp::new_headless();
+        app.scrollbar.total = 200;
+        app.scrollbar.len = 20;
+        app.scrollbar.offset = 180;
+
+        app.reset_scrolling_state_for_user_input();
+
+        assert_eq!(app.scrollbar.offset, 180);
+    }
+
+    #[test]
+    fn inject_key_resets_scrolling_state_for_terminal_input() {
+        let mut app = BooApp::new_headless();
+        app.scrollbar.total = 200;
+        app.scrollbar.len = 20;
+        app.scrollbar.offset = 40;
+
+        app.inject_key("a");
+
+        assert_eq!(app.scrollbar.offset, 180);
+    }
+
+    #[test]
+    fn write_terminal_input_resets_scrolling_state() {
+        let mut app = BooApp::new_headless();
+        app.scrollbar.total = 200;
+        app.scrollbar.len = 20;
+        app.scrollbar.offset = 40;
+
+        app.write_terminal_input(b"x");
+
+        assert_eq!(app.scrollbar.offset, 180);
     }
 }
