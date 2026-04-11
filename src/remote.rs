@@ -220,6 +220,9 @@ struct ClientState {
     authenticated: bool,
     challenge: Option<[u8; 32]>,
     attached_session: Option<u32>,
+    last_session_list_payload: Option<Vec<u8>>,
+    last_ui_runtime_state_payload: Option<Vec<u8>>,
+    last_ui_appearance_payload: Option<Vec<u8>>,
     last_state: Option<Arc<RemoteFullState>>,
     pane_states: HashMap<u64, Arc<RemoteFullState>>,
     latest_input_seq: Option<u64>,
@@ -277,6 +280,9 @@ impl RemoteServer {
                             authenticated,
                             challenge: None,
                             attached_session: None,
+                            last_session_list_payload: None,
+                            last_ui_runtime_state_payload: None,
+                            last_ui_appearance_payload: None,
                             last_state: None,
                             pane_states: HashMap::new(),
                             latest_input_seq: None,
@@ -343,6 +349,9 @@ impl RemoteServer {
                             authenticated: true,
                             challenge: None,
                             attached_session: None,
+                            last_session_list_payload: None,
+                            last_ui_runtime_state_payload: None,
+                            last_ui_appearance_payload: None,
                             last_state: None,
                             pane_states: HashMap::new(),
                             latest_input_seq: None,
@@ -420,10 +429,12 @@ impl RemoteServer {
     }
 
     pub fn send_session_list(&self, client_id: u64, sessions: &[RemoteSessionInfo]) {
-        self.send_to_client(
+        let payload = encode_session_list(sessions);
+        self.send_cached_control_payload(
             client_id,
             MessageType::SessionList,
-            encode_session_list(sessions),
+            payload,
+            |client| &mut client.last_session_list_payload,
         );
     }
 
@@ -499,7 +510,12 @@ impl RemoteServer {
         let Ok(payload) = serde_json::to_vec(state) else {
             return;
         };
-        self.send_to_client(client_id, MessageType::UiRuntimeState, payload);
+        self.send_cached_control_payload(
+            client_id,
+            MessageType::UiRuntimeState,
+            payload,
+            |client| &mut client.last_ui_runtime_state_payload,
+        );
     }
 
     pub fn send_ui_runtime_state_to_local_attached(
@@ -557,7 +573,12 @@ impl RemoteServer {
         let Ok(payload) = serde_json::to_vec(appearance) else {
             return;
         };
-        self.send_to_client(client_id, MessageType::UiAppearance, payload);
+        self.send_cached_control_payload(
+            client_id,
+            MessageType::UiAppearance,
+            payload,
+            |client| &mut client.last_ui_appearance_payload,
+        );
     }
 
     pub fn send_ui_appearance_to_local_clients(
@@ -672,6 +693,29 @@ impl RemoteServer {
         if let Some(client) = state.clients.get(&client_id) {
             let _ = client.outbound.send(OutboundMessage::Frame(frame));
         }
+    }
+
+    fn send_cached_control_payload(
+        &self,
+        client_id: u64,
+        ty: MessageType,
+        payload: Vec<u8>,
+        cache_slot: impl FnOnce(&mut ClientState) -> &mut Option<Vec<u8>>,
+    ) {
+        let outbound = {
+            let mut state = self.state.lock().expect("remote server state poisoned");
+            let Some(client) = state.clients.get_mut(&client_id) else {
+                return;
+            };
+            let cached_payload = cache_slot(client);
+            if cached_payload.as_ref() == Some(&payload) {
+                return;
+            }
+            *cached_payload = Some(payload.clone());
+            client.outbound.clone()
+        };
+        let frame = encode_message(ty, &payload);
+        let _ = outbound.send(OutboundMessage::Frame(frame));
     }
 
     fn send_state_to_client(&self, client_id: u64, session_id: u32, state: Arc<RemoteFullState>) {
@@ -2093,6 +2137,9 @@ mod tests {
                     authenticated: true,
                     challenge: None,
                     attached_session: Some(11),
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
                     last_state: Some(Arc::new(RemoteFullState {
                         rows: 1,
                         cols: 1,
@@ -2154,6 +2201,9 @@ mod tests {
                         authenticated: true,
                         challenge: None,
                         attached_session: Some(11),
+                        last_session_list_payload: None,
+                        last_ui_runtime_state_payload: None,
+                        last_ui_appearance_payload: None,
                         last_state: None,
                         pane_states: HashMap::new(),
                         latest_input_seq: None,
@@ -2167,6 +2217,9 @@ mod tests {
                         authenticated: true,
                         challenge: None,
                         attached_session: None,
+                        last_session_list_payload: None,
+                        last_ui_runtime_state_payload: None,
+                        last_ui_appearance_payload: None,
                         last_state: None,
                         pane_states: HashMap::new(),
                         latest_input_seq: None,
@@ -2204,6 +2257,106 @@ mod tests {
     }
 
     #[test]
+    fn send_ui_runtime_state_skips_unchanged_payloads() {
+        let (tx, rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: tx,
+                    authenticated: true,
+                    challenge: None,
+                    attached_session: Some(11),
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: true,
+                },
+            )]),
+            auth_key: None,
+        }));
+        let server = RemoteServer {
+            state,
+            _listener: std::thread::spawn(|| {}),
+            _advertiser: None,
+            local_socket_path: None,
+        };
+        let ui_state = control::UiRuntimeState {
+            active_tab: 0,
+            focused_pane: 7,
+            tabs: Vec::new(),
+            visible_panes: Vec::new(),
+            mouse_selection: control::UiMouseSelectionSnapshot::default(),
+            pwd: "/tmp".to_string(),
+        };
+
+        server.send_ui_runtime_state(1, &ui_state);
+        server.send_ui_runtime_state(1, &ui_state);
+
+        match rx.recv().expect("runtime state frame") {
+            OutboundMessage::Frame(frame) => {
+                assert_eq!(&frame[..2], &MAGIC);
+                assert_eq!(frame[2], MessageType::UiRuntimeState as u8);
+            }
+            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn send_session_list_skips_unchanged_payloads() {
+        let (tx, rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: tx,
+                    authenticated: true,
+                    challenge: None,
+                    attached_session: Some(11),
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: true,
+                },
+            )]),
+            auth_key: None,
+        }));
+        let server = RemoteServer {
+            state,
+            _listener: std::thread::spawn(|| {}),
+            _advertiser: None,
+            local_socket_path: None,
+        };
+        let sessions = vec![RemoteSessionInfo {
+            id: 11,
+            name: "Tab 1".to_string(),
+            title: "boo".to_string(),
+            pwd: "/tmp".to_string(),
+            attached: true,
+            child_exited: false,
+        }];
+
+        server.send_session_list(1, &sessions);
+        server.send_session_list(1, &sessions);
+
+        match rx.recv().expect("session list frame") {
+            OutboundMessage::Frame(frame) => {
+                assert_eq!(&frame[..2], &MAGIC);
+                assert_eq!(frame[2], MessageType::SessionList as u8);
+            }
+            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
     fn send_attached_to_local_attached_skips_unattached_and_remote_clients() {
         let (local_attached_tx, local_attached_rx) = mpsc::channel();
         let (local_unattached_tx, local_unattached_rx) = mpsc::channel();
@@ -2217,6 +2370,9 @@ mod tests {
                         authenticated: true,
                         challenge: None,
                         attached_session: Some(11),
+                        last_session_list_payload: None,
+                        last_ui_runtime_state_payload: None,
+                        last_ui_appearance_payload: None,
                         last_state: None,
                         pane_states: HashMap::new(),
                         latest_input_seq: None,
@@ -2230,6 +2386,9 @@ mod tests {
                         authenticated: true,
                         challenge: None,
                         attached_session: None,
+                        last_session_list_payload: None,
+                        last_ui_runtime_state_payload: None,
+                        last_ui_appearance_payload: None,
                         last_state: None,
                         pane_states: HashMap::new(),
                         latest_input_seq: None,
@@ -2243,6 +2402,9 @@ mod tests {
                         authenticated: true,
                         challenge: None,
                         attached_session: Some(11),
+                        last_session_list_payload: None,
+                        last_ui_runtime_state_payload: None,
+                        last_ui_appearance_payload: None,
                         last_state: None,
                         pane_states: HashMap::new(),
                         latest_input_seq: None,
@@ -2283,6 +2445,9 @@ mod tests {
                     authenticated: true,
                     challenge: None,
                     attached_session: Some(11),
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
                     last_state: None,
                     pane_states: HashMap::from([
                         (
