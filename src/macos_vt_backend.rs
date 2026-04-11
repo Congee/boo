@@ -316,10 +316,6 @@ impl crate::backend::TerminalBackend for MacVtBackend {
             .map(|snapshot| ui_terminal_snapshot(snapshot.as_ref()))
     }
 
-    fn has_pending_terminal_work(&self) -> bool {
-        self.panes.values().any(VtPaneWorker::has_pending_pty_work)
-    }
-
     fn render_snapshot(
         &self,
         pane_id: pane::PaneId,

@@ -22,15 +22,10 @@ pub fn run_headless() {
                 crate::profiling::scope("server.headless.update", crate::profiling::Kind::Cpu);
             let _ = app.update(Message::Frame);
         }
-        let interactive = app.backend.has_pending_terminal_work() || app.remote_dirty;
         {
             let _scope =
                 crate::profiling::scope("server.headless.sleep", crate::profiling::Kind::Wait);
-            if interactive {
-                let _ = wake_rx.recv_timeout(std::time::Duration::from_millis(1));
-            } else {
-                let _ = wake_rx.recv();
-            }
+            let _ = wake_rx.recv();
         }
     }
 }

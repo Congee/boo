@@ -255,7 +255,7 @@ nix develop
 
 ### Performance Backlog
 - [x] Overhaul snapshot-heavy rendering/transport paths for performance: keep snapshots as authoritative state where needed, but eliminate whole-snapshot recompute/re-render patterns in hot paths in favor of row/pane-level dirty tracking, incremental caches, and delta-driven updates
-- [ ] Replace remaining headless/server sleep-poll paths with explicit event-driven wake sources so command input, PTY output, lifecycle changes, and publish work do not depend on periodic frame cadence
+- [x] Replace remaining headless/server sleep-poll paths with explicit event-driven wake sources so command input, PTY output, lifecycle changes, and publish work do not depend on periodic frame cadence
 
 ### Status Components
 - [ ] Restore the Ghostty-fork Vim status bar feature on the libghostty-vt path: implement a Boo control-socket status component protocol inspired by `/Users/example/dev/ghostty/research/status-bar-component-protocol.md`, supporting left/right zones, styled text segments, source-scoped updates/clears, optional OSC 1337 SetUserVar ingestion for one-way updates, and clickable segment callbacks where practical
