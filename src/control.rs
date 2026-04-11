@@ -82,6 +82,15 @@ pub struct UiSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UiRuntimeState {
+    pub active_tab: usize,
+    pub focused_pane: u64,
+    pub tabs: Vec<UiTabSnapshot>,
+    pub visible_panes: Vec<UiPaneSnapshot>,
+    pub pwd: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UiAppearanceSnapshot {
     pub font_families: Vec<String>,
     pub font_size: f32,

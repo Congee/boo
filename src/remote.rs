@@ -66,7 +66,9 @@ pub enum MessageType {
     ScrollData = 0x8a,
     Clipboard = 0x8b,
     Image = 0x8c,
-    UiSnapshot = 0x8d,
+    UiRuntimeState = 0x8d,
+    UiAppearance = 0x8e,
+    UiPaneTerminals = 0x8f,
 }
 
 impl TryFrom<u8> for MessageType {
@@ -103,7 +105,9 @@ impl TryFrom<u8> for MessageType {
             0x8a => Self::ScrollData,
             0x8b => Self::Clipboard,
             0x8c => Self::Image,
-            0x8d => Self::UiSnapshot,
+            0x8d => Self::UiRuntimeState,
+            0x8e => Self::UiAppearance,
+            0x8f => Self::UiPaneTerminals,
             _ => return Err(()),
         };
         Ok(message)
@@ -459,10 +463,14 @@ impl RemoteServer {
         );
     }
 
-    pub fn send_ui_snapshot(&self, client_id: u64, snapshot: &crate::control::UiSnapshot) {
+    pub fn send_ui_runtime_state(
+        &self,
+        client_id: u64,
+        state: &crate::control::UiRuntimeState,
+    ) {
         let is_local = {
-            let state = self.state.lock().expect("remote server state poisoned");
-            state
+            let state_guard = self.state.lock().expect("remote server state poisoned");
+            state_guard
                 .clients
                 .get(&client_id)
                 .is_some_and(|client| client.is_local)
@@ -470,24 +478,83 @@ impl RemoteServer {
         if !is_local {
             return;
         }
-        let Ok(payload) = serde_json::to_vec(snapshot) else {
+        let Ok(payload) = serde_json::to_vec(state) else {
             return;
         };
-        self.send_to_client(client_id, MessageType::UiSnapshot, payload);
+        self.send_to_client(client_id, MessageType::UiRuntimeState, payload);
     }
 
-    pub fn send_ui_snapshot_to_local_clients(&self, snapshot: &crate::control::UiSnapshot) {
+    pub fn send_ui_runtime_state_to_local_clients(&self, state: &crate::control::UiRuntimeState) {
         let client_ids = {
-            let state = self.state.lock().expect("remote server state poisoned");
-            state
+            let state_guard = self.state.lock().expect("remote server state poisoned");
+            state_guard
                 .clients
                 .iter()
                 .filter_map(|(client_id, client)| client.is_local.then_some(*client_id))
                 .collect::<Vec<_>>()
         };
         for client_id in client_ids {
-            self.send_ui_snapshot(client_id, snapshot);
+            self.send_ui_runtime_state(client_id, state);
         }
+    }
+
+    pub fn send_ui_appearance(
+        &self,
+        client_id: u64,
+        appearance: &crate::control::UiAppearanceSnapshot,
+    ) {
+        let is_local = {
+            let state_guard = self.state.lock().expect("remote server state poisoned");
+            state_guard
+                .clients
+                .get(&client_id)
+                .is_some_and(|client| client.is_local)
+        };
+        if !is_local {
+            return;
+        }
+        let Ok(payload) = serde_json::to_vec(appearance) else {
+            return;
+        };
+        self.send_to_client(client_id, MessageType::UiAppearance, payload);
+    }
+
+    pub fn send_ui_appearance_to_local_clients(
+        &self,
+        appearance: &crate::control::UiAppearanceSnapshot,
+    ) {
+        let client_ids = {
+            let state_guard = self.state.lock().expect("remote server state poisoned");
+            state_guard
+                .clients
+                .iter()
+                .filter_map(|(client_id, client)| client.is_local.then_some(*client_id))
+                .collect::<Vec<_>>()
+        };
+        for client_id in client_ids {
+            self.send_ui_appearance(client_id, appearance);
+        }
+    }
+
+    pub fn send_ui_pane_terminals(
+        &self,
+        client_id: u64,
+        panes: &[crate::control::UiPaneTerminalSnapshot],
+    ) {
+        let is_local = {
+            let state_guard = self.state.lock().expect("remote server state poisoned");
+            state_guard
+                .clients
+                .get(&client_id)
+                .is_some_and(|client| client.is_local)
+        };
+        if !is_local {
+            return;
+        }
+        let Ok(payload) = serde_json::to_vec(panes) else {
+            return;
+        };
+        self.send_to_client(client_id, MessageType::UiPaneTerminals, payload);
     }
 
     pub fn send_full_state_to_attached(&self, session_id: u32, state: Arc<RemoteFullState>) {

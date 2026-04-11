@@ -114,8 +114,9 @@ pub struct ClientApp {
     socket_path: String,
     client: control::Client,
     stream_tx: Option<std::sync::mpsc::Sender<StreamCommand>>,
-    bootstrap_snapshot: Option<control::UiSnapshot>,
+    bootstrapped: bool,
     ui_state: ClientUiState,
+    visible_panes: Vec<control::UiPaneSnapshot>,
     mode: ClientMode,
     active_session_id: Option<u32>,
     pane_snapshots: HashMap<u64, Arc<vt_backend_core::TerminalSnapshot>>,
@@ -176,37 +177,68 @@ impl SnapshotRefreshReason {
 }
 
 impl ClientApp {
-    fn apply_ui_snapshot(&mut self, snapshot: control::UiSnapshot) {
-        self.font_size = snapshot.appearance.font_size.max(8.0);
-        self.font_families = snapshot
-            .appearance
+    fn apply_ui_pane_terminals(&mut self, panes: &[control::UiPaneTerminalSnapshot]) {
+        let mut next = HashMap::with_capacity(panes.len());
+        for pane in panes {
+            next.insert(
+                pane.pane_id,
+                Arc::new(ui_terminal_to_vt_snapshot(
+                    &pane.terminal,
+                    self.terminal_foreground,
+                    self.terminal_background,
+                    self.cursor_color,
+                )),
+            );
+        }
+        self.pane_snapshots = next;
+        self.observe_focused_cursor_position();
+        self.bootstrapped = true;
+        self.terminal_snapshot_generation = self.allocate_snapshot_generation();
+        self.last_error = None;
+    }
+
+    fn apply_ui_appearance(&mut self, appearance: &control::UiAppearanceSnapshot) {
+        self.font_size = appearance.font_size.max(8.0);
+        self.font_families = appearance
             .font_families
             .iter()
             .map(|family| crate::leak_font_family(family))
             .collect::<Vec<_>>()
             .into();
-        self.background_opacity = snapshot.appearance.background_opacity;
-        self.background_opacity_cells = snapshot.appearance.background_opacity_cells;
-        self.terminal_foreground = snapshot.appearance.terminal_foreground;
-        self.terminal_background = snapshot.appearance.terminal_background;
-        self.cursor_color = snapshot.appearance.cursor_color;
-        self.selection_background = snapshot.appearance.selection_background;
-        self.selection_foreground = snapshot.appearance.selection_foreground;
-        self.cursor_text_color = snapshot.appearance.cursor_text_color;
-        self.url_color = snapshot.appearance.url_color;
-        self.active_tab_foreground = snapshot.appearance.active_tab_foreground;
-        self.active_tab_background = snapshot.appearance.active_tab_background;
-        self.inactive_tab_foreground = snapshot.appearance.inactive_tab_foreground;
-        self.inactive_tab_background = snapshot.appearance.inactive_tab_background;
-        self.cursor_blink_interval =
-            Duration::from_nanos(snapshot.appearance.cursor_blink_interval_ns);
+        self.background_opacity = appearance.background_opacity;
+        self.background_opacity_cells = appearance.background_opacity_cells;
+        self.terminal_foreground = appearance.terminal_foreground;
+        self.terminal_background = appearance.terminal_background;
+        self.cursor_color = appearance.cursor_color;
+        self.selection_background = appearance.selection_background;
+        self.selection_foreground = appearance.selection_foreground;
+        self.cursor_text_color = appearance.cursor_text_color;
+        self.url_color = appearance.url_color;
+        self.active_tab_foreground = appearance.active_tab_foreground;
+        self.active_tab_background = appearance.active_tab_background;
+        self.inactive_tab_foreground = appearance.inactive_tab_foreground;
+        self.inactive_tab_background = appearance.inactive_tab_background;
+        self.cursor_blink_interval = Duration::from_nanos(appearance.cursor_blink_interval_ns);
         self.cursor_blink_epoch = Instant::now();
         (self.cell_width, self.cell_height) = terminal_metrics(self.font_size);
+    }
+
+    fn apply_ui_runtime_state(&mut self, state: control::UiRuntimeState) {
+        self.ui_state = ClientUiState::from_runtime_state(&state);
+        self.visible_panes = state.visible_panes;
+        self.focused_pane_id = state.focused_pane;
+        self.observe_focused_cursor_position();
+        self.last_error = None;
+    }
+
+    fn apply_ui_snapshot(&mut self, snapshot: control::UiSnapshot) {
+        self.apply_ui_appearance(&snapshot.appearance);
         self.ui_state = ClientUiState::from_snapshot(&snapshot);
+        self.visible_panes = snapshot.visible_panes.clone();
         self.focused_pane_id = snapshot.focused_pane;
         self.pane_snapshots = pane_snapshot_map_from_ui_snapshot(&snapshot);
         self.observe_focused_cursor_position();
-        self.bootstrap_snapshot = Some(snapshot);
+        self.bootstrapped = true;
         self.terminal_snapshot_generation = self.allocate_snapshot_generation();
         self.last_error = None;
     }
@@ -256,8 +288,9 @@ impl ClientApp {
             socket_path,
             client,
             stream_tx: None,
-            bootstrap_snapshot: None,
+            bootstrapped: false,
             ui_state,
+            visible_panes: Vec::new(),
             mode: ClientMode::Bootstrapping,
             active_session_id: None,
             pane_snapshots,
@@ -348,9 +381,9 @@ impl ClientApp {
     pub fn view(&self) -> Element<'_, Message> {
         let mut main_col = column![].width(Length::Fill).height(Length::Fill);
 
-        if let Some(snapshot) = self.bootstrap_snapshot.as_ref() {
-            if !snapshot.visible_panes.is_empty() && !self.pane_snapshots.is_empty() {
-                main_col = main_col.push(self.render_terminal_scene(snapshot));
+        if self.bootstrapped {
+            if !self.visible_panes.is_empty() && !self.pane_snapshots.is_empty() {
+                main_col = main_col.push(self.render_terminal_scene());
             } else {
                 main_col = main_col.push(
                     iced::widget::Space::new()
@@ -432,16 +465,13 @@ impl ClientApp {
         Theme::Dark
     }
 
-    fn render_terminal_scene<'a>(
-        &'a self,
-        snapshot: &'a control::UiSnapshot,
-    ) -> Element<'a, Message> {
+    fn render_terminal_scene<'a>(&'a self) -> Element<'a, Message> {
         let _scope =
             crate::profiling::scope("client.view.render_terminal_scene", crate::profiling::Kind::Cpu);
         crate::profiling::record_units(
             "client.view.render_terminal_scene.panes",
             crate::profiling::Kind::Cpu,
-            snapshot.visible_panes.len() as u64,
+            self.visible_panes.len() as u64,
         );
         let selection_background = Self::theme_color(self.selection_background, 0.35);
         let selection_foreground = Self::theme_color(self.selection_foreground, 1.0);
@@ -461,7 +491,7 @@ impl ClientApp {
                 .into(),
             ]
         };
-        for pane in &snapshot.visible_panes {
+        for pane in &self.visible_panes {
             crate::profiling::record_units(
                 "client.view.render_terminal_scene.pane",
                 crate::profiling::Kind::Cpu,
@@ -553,7 +583,7 @@ impl ClientApp {
             );
             layers.push(
                 iced::widget::canvas(PaneBordersOverlay {
-                    panes: snapshot.visible_panes.clone(),
+                    panes: self.visible_panes.clone(),
                 })
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -866,8 +896,14 @@ impl ClientApp {
                 self.active_session_id = Some(session_id);
                 self.ui_state.mark_active_session(Some(session_id));
             }
-            LocalStreamEvent::UiSnapshot(snapshot) => {
-                self.apply_ui_snapshot(snapshot);
+            LocalStreamEvent::UiRuntimeState(state) => {
+                self.apply_ui_runtime_state(state);
+            }
+            LocalStreamEvent::UiAppearance(appearance) => {
+                self.apply_ui_appearance(&appearance);
+            }
+            LocalStreamEvent::UiPaneTerminals(panes) => {
+                self.apply_ui_pane_terminals(&panes);
             }
             LocalStreamEvent::Detached => {
                 self.mode = ClientMode::Recovering;
@@ -955,12 +991,10 @@ impl ClientApp {
 
     fn focused_cursor_rect(&self) -> Option<Rectangle> {
         let snapshot = self.pane_snapshots.get(&self.focused_pane_id)?;
-        let pane = self.bootstrap_snapshot.as_ref().and_then(|snapshot| {
-            snapshot
-                .visible_panes
-                .iter()
-                .find(|pane| pane.pane_id == self.focused_pane_id)
-        })?;
+        let pane = self
+            .visible_panes
+            .iter()
+            .find(|pane| pane.pane_id == self.focused_pane_id)?;
         let x = pane.frame.x
             + vt_terminal_canvas::PADDING_X as f64
             + snapshot.cursor.x as f64 * self.cell_width;
@@ -1113,23 +1147,6 @@ impl ClientApp {
                         .map(|cell| cell.text.as_str())
                         .collect::<String>()
                 })
-                .or_else(|| {
-                    self.bootstrap_snapshot
-                        .as_ref()
-                        .and_then(|snapshot| {
-                            snapshot
-                                .pane_terminals
-                                .iter()
-                                .find(|pane| pane.pane_id == self.focused_pane_id)
-                        })
-                        .and_then(|pane| pane.terminal.rows_data.first())
-                        .map(|row| {
-                            row.cells
-                                .iter()
-                                .map(|cell| cell.text.as_str())
-                                .collect::<String>()
-                        })
-                })
                 .unwrap_or_default(),
         };
         if let Some(status) = gui_test_status_handle()
@@ -1262,6 +1279,25 @@ impl ClientUiState {
             active_tab: active_index.min(sessions.len().saturating_sub(1)),
             pwd,
             pane_count: usize::from(!sessions.is_empty()),
+        }
+    }
+
+    fn from_runtime_state(state: &control::UiRuntimeState) -> Self {
+        Self {
+            tabs: state
+                .tabs
+                .iter()
+                .map(|tab| ClientTabState {
+                    index: tab.index,
+                    session_id: None,
+                    active: tab.active,
+                    title: tab.title.clone(),
+                    pane_count: tab.pane_count,
+                })
+                .collect(),
+            active_tab: state.active_tab,
+            pwd: state.pwd.clone(),
+            pane_count: state.visible_panes.len(),
         }
     }
 
@@ -1692,7 +1728,9 @@ impl Widget<Message, Theme, iced::Renderer> for TerminalInputMethodLayer {
 pub(crate) enum LocalStreamEvent {
     SessionList(Vec<remote::RemoteSessionInfo>),
     Attached(u32),
-    UiSnapshot(control::UiSnapshot),
+    UiRuntimeState(control::UiRuntimeState),
+    UiAppearance(control::UiAppearanceSnapshot),
+    UiPaneTerminals(Vec<control::UiPaneTerminalSnapshot>),
     Detached,
     SessionExited(u32),
     Disconnected,
@@ -2129,9 +2167,15 @@ fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStream
                 decode_remote_session_list(&payload).map(LocalStreamEvent::SessionList)
             }
             remote::MessageType::Attached => decode_u32(&payload).map(LocalStreamEvent::Attached),
-            remote::MessageType::UiSnapshot => serde_json::from_slice(&payload)
+            remote::MessageType::UiRuntimeState => serde_json::from_slice(&payload)
                 .ok()
-                .map(LocalStreamEvent::UiSnapshot),
+                .map(LocalStreamEvent::UiRuntimeState),
+            remote::MessageType::UiAppearance => serde_json::from_slice(&payload)
+                .ok()
+                .map(LocalStreamEvent::UiAppearance),
+            remote::MessageType::UiPaneTerminals => serde_json::from_slice(&payload)
+                .ok()
+                .map(LocalStreamEvent::UiPaneTerminals),
             remote::MessageType::Detached => Some(LocalStreamEvent::Detached),
             remote::MessageType::SessionExited => {
                 decode_u32(&payload).map(LocalStreamEvent::SessionExited)

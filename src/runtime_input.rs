@@ -721,6 +721,9 @@ impl BooApp {
                 let boo_config = config::Config::load();
                 self.bindings = bindings::Bindings::from_config(&boo_config);
                 self.apply_appearance(Self::resolve_appearance_config(&boo_config));
+                if let Some(server) = self.server.local_gui_server.as_ref() {
+                    server.send_ui_appearance_to_local_clients(&self.ui_appearance_snapshot());
+                }
                 self.backend.reload_config();
                 self.relayout();
                 log::info!("config reloaded");

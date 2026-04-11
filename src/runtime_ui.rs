@@ -229,30 +229,7 @@ impl BooApp {
         control::UiSnapshot {
             active_tab: self.server.tabs.active_index(),
             focused_pane: focused_pane.id(),
-            appearance: control::UiAppearanceSnapshot {
-                font_families: self
-                    .terminal_font_families
-                    .iter()
-                    .map(|family| (*family).to_string())
-                    .collect(),
-                font_size: self.terminal_font_size,
-                background_opacity: self.background_opacity,
-                background_opacity_cells: self.background_opacity_cells,
-                terminal_foreground: self.terminal_foreground,
-                terminal_background: self.terminal_background,
-                cursor_color: self.cursor_color,
-                selection_background: self.selection_background,
-                selection_foreground: self.selection_foreground,
-                cursor_text_color: self.cursor_text_color,
-                url_color: self.url_color,
-                active_tab_foreground: self.active_tab_foreground,
-                active_tab_background: self.active_tab_background,
-                inactive_tab_foreground: self.inactive_tab_foreground,
-                inactive_tab_background: self.inactive_tab_background,
-                cursor_style: self.cursor_style,
-                cursor_blink: self.cursor_blink,
-                cursor_blink_interval_ns: self.cursor_blink_interval.as_nanos() as u64,
-            },
+            appearance: self.ui_appearance_snapshot(),
             tabs,
             visible_panes,
             pane_terminals,
@@ -271,6 +248,54 @@ impl BooApp {
                 len: self.scrollbar.len,
             },
             terminal,
+        }
+    }
+
+    pub(crate) fn ui_runtime_state(&self) -> control::UiRuntimeState {
+        control::UiRuntimeState {
+            active_tab: self.server.tabs.active_index(),
+            focused_pane: self.server.tabs.focused_pane().id(),
+            tabs: self
+                .server
+                .tabs
+                .tab_info()
+                .into_iter()
+                .map(|tab| control::UiTabSnapshot {
+                    index: tab.index,
+                    active: tab.active,
+                    title: tab.title,
+                    pane_count: tab.surfaces,
+                })
+                .collect(),
+            visible_panes: self.visible_pane_snapshots(),
+            pwd: self.pwd.clone(),
+        }
+    }
+
+    pub(crate) fn ui_appearance_snapshot(&self) -> control::UiAppearanceSnapshot {
+        control::UiAppearanceSnapshot {
+            font_families: self
+                .terminal_font_families
+                .iter()
+                .map(|family| (*family).to_string())
+                .collect(),
+            font_size: self.terminal_font_size,
+            background_opacity: self.background_opacity,
+            background_opacity_cells: self.background_opacity_cells,
+            terminal_foreground: self.terminal_foreground,
+            terminal_background: self.terminal_background,
+            cursor_color: self.cursor_color,
+            selection_background: self.selection_background,
+            selection_foreground: self.selection_foreground,
+            cursor_text_color: self.cursor_text_color,
+            url_color: self.url_color,
+            active_tab_foreground: self.active_tab_foreground,
+            active_tab_background: self.active_tab_background,
+            inactive_tab_foreground: self.inactive_tab_foreground,
+            inactive_tab_background: self.inactive_tab_background,
+            cursor_style: self.cursor_style,
+            cursor_blink: self.cursor_blink,
+            cursor_blink_interval_ns: self.cursor_blink_interval.as_nanos() as u64,
         }
     }
 
