@@ -958,8 +958,10 @@ impl ClientApp {
                         self.terminal_foreground,
                         self.terminal_background,
                         self.cursor_color,
-                    )),
+                        )),
                 );
+                self.bootstrapped = true;
+                self.last_error = None;
                 self.observe_focused_cursor_position();
             }
             LocalStreamEvent::UiPaneDelta { pane_id, delta } => {
@@ -1021,6 +1023,8 @@ impl ClientApp {
                         )),
                     );
                 }
+                self.bootstrapped = true;
+                self.last_error = None;
                 self.observe_focused_cursor_position();
                 self.acknowledge_input_latency("stream_full_state", ack_input_seq);
             }
@@ -3021,6 +3025,53 @@ mod tests {
         assert!(app.mouse_selection.active);
         assert_eq!(app.mouse_selection.pane_id, Some(7));
         assert_eq!(app.mouse_selection.selection_rects.len(), 1);
+    }
+
+    #[test]
+    fn full_state_bootstraps_without_ui_pane_terminals() {
+        let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
+
+        app.handle_stream_event(LocalStreamEvent::Attached(7));
+        app.handle_stream_event(LocalStreamEvent::UiRuntimeState(control::UiRuntimeState {
+            active_tab: 0,
+            focused_pane: 7,
+            tabs: vec![],
+            visible_panes: vec![test_pane_with_id(7, 0.0, 0.0, 80.0, 25.0)],
+            mouse_selection: control::UiMouseSelectionSnapshot::default(),
+            pwd: String::new(),
+        }));
+        app.handle_stream_event(LocalStreamEvent::FullState {
+            ack_input_seq: None,
+            state: remote::RemoteFullState {
+                rows: 1,
+                cols: 2,
+                cursor_x: 1,
+                cursor_y: 0,
+                cursor_visible: true,
+                cursor_blinking: false,
+                cursor_style: 1,
+                cells: vec![
+                    remote::RemoteCell {
+                        codepoint: 'o' as u32,
+                        fg: [255, 255, 255],
+                        bg: [0, 0, 0],
+                        style_flags: 0,
+                        wide: false,
+                    },
+                    remote::RemoteCell {
+                        codepoint: 'k' as u32,
+                        fg: [255, 255, 255],
+                        bg: [0, 0, 0],
+                        style_flags: 0,
+                        wide: false,
+                    },
+                ],
+            },
+        });
+
+        assert!(app.bootstrapped);
+        assert!(matches!(app.mode, ClientMode::Attached));
+        assert!(app.has_paintable_terminal());
     }
 
     #[test]
