@@ -171,16 +171,6 @@ impl TerminalCanvas {
 
         for run in &artifacts.text_runs {
             if !self.paint_text {
-                if run.underline {
-                    let x = origin.x + PADDING_X + run.start_col as f32 * self.cell_width;
-                    let draw_width = run.width_cols as f32 * self.cell_width;
-                    let underline_y = y + self.cell_height - 2.0;
-                    frame.fill_rectangle(
-                        Point::new(x, underline_y),
-                        Size::new(draw_width, 1.5),
-                        run.fg,
-                    );
-                }
                 continue;
             }
             let x = origin.x + PADDING_X + run.start_col as f32 * self.cell_width;
@@ -206,6 +196,18 @@ impl TerminalCanvas {
                     Point::new(x, underline_y),
                     Size::new(draw_width, 1.5),
                     run.fg,
+                );
+            }
+        }
+        if !self.paint_text {
+            for span in &artifacts.underline_spans {
+                let x = origin.x + PADDING_X + span.start_col as f32 * self.cell_width;
+                let draw_width = span.width_cols as f32 * self.cell_width;
+                let underline_y = y + self.cell_height - 2.0;
+                frame.fill_rectangle(
+                    Point::new(x, underline_y),
+                    Size::new(draw_width, 1.5),
+                    span.color,
                 );
             }
         }
@@ -333,6 +335,9 @@ impl TerminalCanvas {
     }
 
     fn draw_selection_foreground(&self, frame: &mut Frame<Renderer>, state: &TerminalCanvasState) {
+        if !self.paint_text {
+            return;
+        }
         let Some(selection_foreground) = self.selection_foreground else {
             return;
         };
@@ -518,22 +523,30 @@ impl TerminalTextLayer {
             return Vec::new();
         };
         let mut entries = Vec::new();
-        for run in build_text_runs(
-            row,
-            self.snapshot.cols as usize,
-            &self.font_families,
-            self.url_color,
-        ) {
+        for (col_index, cell) in row.iter().enumerate() {
+            let content = cell.text.as_str();
+            if content.is_empty() || content == "\0" {
+                continue;
+            }
+            let underline = cell.underline != 0;
+            if content == " " && !underline {
+                continue;
+            }
             self.push_text_entry(
                 &mut entries,
                 viewport,
                 row_index,
-                run.start_col,
-                &run.text,
-                run.width_cols,
-                run.font,
-                run.shaping,
-                run.fg,
+                col_index,
+                content,
+                usize::from(cell.display_width.max(1)),
+                font_for_cell(cell, &self.font_families),
+                terminal_text_shaping(),
+                if cell.hyperlink {
+                    self.url_color
+                        .unwrap_or_else(|| color_from_rgb(cell.fg, 1.0))
+                } else {
+                    color_from_rgb(cell.fg, 1.0)
+                },
             );
         }
         entries
@@ -550,28 +563,29 @@ impl TerminalTextLayer {
             return entries;
         };
 
-        if let Some(selection_foreground) =
-            self.selection_foreground.filter(|_| !selection_spans.is_empty())
-        {
-            for run in build_selection_text_runs(
-                row,
-                self.snapshot.cols as usize,
-                &self.font_families,
-                selection_foreground,
-                |col_index, display_width| {
-                    cell_is_selected_in_spans(selection_spans, col_index, display_width)
-                },
-            ) {
+        if let Some(selection_foreground) = self.selection_foreground.filter(|_| !selection_spans.is_empty()) {
+            for (col_index, cell) in row.iter().enumerate() {
+                let content = cell.text.as_str();
+                if content.is_empty() || content == "\0" {
+                    continue;
+                }
+                let underline = cell.underline != 0;
+                if content == " " && !underline {
+                    continue;
+                }
+                if !cell_is_selected_in_spans(selection_spans, col_index, cell.display_width) {
+                    continue;
+                }
                 self.push_text_entry(
                     &mut entries,
                     viewport,
                     row_index,
-                    run.start_col,
-                    &run.text,
-                    run.width_cols,
-                    run.font,
-                    run.shaping,
-                    run.fg,
+                    col_index,
+                    content,
+                    usize::from(cell.display_width.max(1)),
+                    font_for_cell(cell, &self.font_families),
+                    terminal_text_shaping(),
+                    selection_foreground,
                 );
             }
         }
@@ -1034,10 +1048,19 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
                                 self.background_opacity,
                                 self.background_opacity_cells,
                             ),
-                            text_runs: build_text_runs(
+                            text_runs: if self.paint_text {
+                                build_text_runs(
+                                    row,
+                                    self.snapshot.cols as usize,
+                                    &self.font_families,
+                                    self.url_color,
+                                )
+                            } else {
+                                Vec::new()
+                            },
+                            underline_spans: build_underline_spans(
                                 row,
                                 self.snapshot.cols as usize,
-                                &self.font_families,
                                 self.url_color,
                             ),
                         };
@@ -1052,7 +1075,9 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
                 }
                 chunk_has_artifacts[chunk_index] = (start_row..end_row).any(|row_index| {
                     let artifacts = &row_artifacts[row_index];
-                    !artifacts.background_spans.is_empty() || !artifacts.text_runs.is_empty()
+                    !artifacts.background_spans.is_empty()
+                        || !artifacts.text_runs.is_empty()
+                        || !artifacts.underline_spans.is_empty()
                 });
                 if chunk_dirty {
                     dirty_chunks += 1;
@@ -1225,10 +1250,18 @@ struct TextRun {
     shaping: iced::widget::text::Shaping,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct UnderlineSpan {
+    start_col: usize,
+    width_cols: usize,
+    color: Color,
+}
+
 #[derive(Debug, Clone, Default)]
 struct RowArtifacts {
     background_spans: Vec<BackgroundSpan>,
     text_runs: Vec<TextRun>,
+    underline_spans: Vec<UnderlineSpan>,
 }
 
 fn build_background_spans(
@@ -1271,6 +1304,51 @@ fn build_background_spans(
                 });
             }
         }
+    }
+
+    if let Some(span) = current {
+        spans.push(span);
+    }
+
+    spans
+}
+
+fn build_underline_spans(
+    row: &[vt_backend_core::CellSnapshot],
+    cols: usize,
+    url_color: Option<Color>,
+) -> Vec<UnderlineSpan> {
+    let mut spans = Vec::new();
+    let mut current: Option<UnderlineSpan> = None;
+
+    for col_index in 0..cols {
+        let Some(cell) = row.get(col_index).filter(|cell| cell.underline != 0) else {
+            if let Some(span) = current.take() {
+                spans.push(span);
+            }
+            continue;
+        };
+        let fg = if cell.hyperlink {
+            url_color.unwrap_or_else(|| color_from_rgb(cell.fg, 1.0))
+        } else {
+            color_from_rgb(cell.fg, 1.0)
+        };
+        let width_cols = usize::from(cell.display_width.max(1));
+        if let Some(previous) = current.as_mut()
+            && previous.start_col + previous.width_cols == col_index
+            && previous.color == fg
+        {
+            previous.width_cols += width_cols;
+            continue;
+        }
+        if let Some(span) = current.take() {
+            spans.push(span);
+        }
+        current = Some(UnderlineSpan {
+            start_col: col_index,
+            width_cols,
+            color: fg,
+        });
     }
 
     if let Some(span) = current {
@@ -1991,6 +2069,37 @@ mod tests {
         assert_eq!(runs[1].text, " ");
         assert_eq!(runs[1].start_col, 2);
         assert!(runs[1].underline);
+    }
+
+    #[test]
+    fn underline_spans_coalesce_adjacent_underlined_cells() {
+        let row = vec![
+            vt_backend_core::CellSnapshot {
+                text: "a".to_string(),
+                underline: 1,
+                fg: crate::vt::GhosttyColorRgb { r: 1, g: 2, b: 3 },
+                ..Default::default()
+            },
+            vt_backend_core::CellSnapshot {
+                text: "b".to_string(),
+                underline: 1,
+                fg: crate::vt::GhosttyColorRgb { r: 1, g: 2, b: 3 },
+                ..Default::default()
+            },
+            vt_backend_core::CellSnapshot {
+                text: "c".to_string(),
+                fg: crate::vt::GhosttyColorRgb { r: 1, g: 2, b: 3 },
+                ..Default::default()
+            },
+        ];
+        let spans = build_underline_spans(&row, row.len(), None);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].start_col, 0);
+        assert_eq!(spans[0].width_cols, 2);
+        assert_eq!(
+            spans[0].color,
+            color_from_rgb(crate::vt::GhosttyColorRgb { r: 1, g: 2, b: 3 }, 1.0)
+        );
     }
 
     #[test]

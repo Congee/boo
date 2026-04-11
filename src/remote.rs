@@ -606,6 +606,23 @@ impl RemoteServer {
         }
     }
 
+    pub fn retain_local_attached_pane_states(
+        &self,
+        session_id: u32,
+        visible_pane_ids: &[u64],
+    ) {
+        let visible = visible_pane_ids
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        let mut guard = self.state.lock().expect("remote server state poisoned");
+        for client in guard.clients.values_mut() {
+            if client.is_local && client.attached_session == Some(session_id) {
+                client.pane_states.retain(|pane_id, _| visible.contains(pane_id));
+            }
+        }
+    }
+
     pub fn send_session_exited(&self, session_id: u32) {
         let client_ids = self.clients_for_session(session_id);
         for client_id in client_ids {
@@ -1433,7 +1450,6 @@ impl ServiceAdvertiser {
     }
 }
 
-#[cfg(test)]
 pub fn full_state_from_ui(snapshot: &crate::control::UiTerminalSnapshot) -> RemoteFullState {
     let cells = snapshot
         .rows_data
@@ -2078,5 +2094,78 @@ mod tests {
         }
         assert!(local_unattached_rx.try_recv().is_err());
         assert!(remote_attached_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn retain_local_attached_pane_states_prunes_invisible_panes() {
+        let (tx, _rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: tx,
+                    authenticated: true,
+                    challenge: None,
+                    attached_session: Some(11),
+                    last_state: None,
+                    pane_states: HashMap::from([
+                        (
+                            10,
+                            Arc::new(RemoteFullState {
+                                rows: 1,
+                                cols: 1,
+                                cursor_x: 0,
+                                cursor_y: 0,
+                                cursor_visible: true,
+                                cursor_blinking: false,
+                                cursor_style: 1,
+                                cells: vec![RemoteCell {
+                                    codepoint: u32::from('a'),
+                                    fg: [1, 2, 3],
+                                    bg: [0, 0, 0],
+                                    style_flags: 0,
+                                    wide: false,
+                                }],
+                            }),
+                        ),
+                        (
+                            20,
+                            Arc::new(RemoteFullState {
+                                rows: 1,
+                                cols: 1,
+                                cursor_x: 0,
+                                cursor_y: 0,
+                                cursor_visible: true,
+                                cursor_blinking: false,
+                                cursor_style: 1,
+                                cells: vec![RemoteCell {
+                                    codepoint: u32::from('b'),
+                                    fg: [1, 2, 3],
+                                    bg: [0, 0, 0],
+                                    style_flags: 0,
+                                    wide: false,
+                                }],
+                            }),
+                        ),
+                    ]),
+                    latest_input_seq: None,
+                    is_local: true,
+                },
+            )]),
+            auth_key: None,
+        }));
+        let server = RemoteServer {
+            state: Arc::clone(&state),
+            _listener: std::thread::spawn(|| {}),
+            _advertiser: None,
+            local_socket_path: None,
+        };
+
+        server.retain_local_attached_pane_states(11, &[20]);
+
+        let guard = state.lock().expect("remote server state poisoned");
+        let client = guard.clients.get(&1).expect("client state");
+        assert!(!client.pane_states.contains_key(&10));
+        assert!(client.pane_states.contains_key(&20));
     }
 }

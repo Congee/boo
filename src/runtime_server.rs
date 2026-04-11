@@ -39,6 +39,14 @@ struct LocalGuiTransportState {
 }
 
 impl BooApp {
+    fn remote_full_state_for_pane(&self, pane_id: u64) -> Option<Arc<remote::RemoteFullState>> {
+        if let Some(snapshot) = self.backend.render_snapshot_ref(pane_id) {
+            return Some(Arc::new(remote::full_state_from_terminal(snapshot)));
+        }
+        let snapshot = self.backend.ui_terminal_snapshot(pane_id)?;
+        Some(Arc::new(remote::full_state_from_ui(&snapshot)))
+    }
+
     fn publish_local_gui_runtime_state_for_active_session(&self) {
         let Some(session_id) = self.server.tabs.active_session_id() else {
             return;
@@ -733,14 +741,13 @@ impl BooApp {
             log_server_latency("publish_remote_session", started_at);
             return;
         };
-        let Some(snapshot) = self.backend.render_snapshot_ref(pane.id()) else {
+        let Some(state) = self.remote_full_state_for_pane(pane.id()) else {
             for server in servers {
                 server.send_session_exited(session_id);
             }
             log_server_latency("publish_remote_session", started_at);
             return;
         };
-        let state = Arc::new(remote::full_state_from_terminal(snapshot));
         let needs_local_pane_states = servers
             .iter()
             .any(|server| server.local_attached_to_session(session_id));
@@ -754,19 +761,25 @@ impl BooApp {
                     tree.export_panes()
                         .into_iter()
                         .filter_map(|exported| {
-                            let pane_id = exported.pane.id();
-                            if pane_id == focused_pane_id {
-                                return None;
-                            }
-                            let snapshot = self.backend.render_snapshot_ref(pane_id)?;
-                            Some((pane_id, Arc::new(remote::full_state_from_terminal(snapshot))))
-                        })
-                        .collect::<Vec<_>>()
+                        let pane_id = exported.pane.id();
+                        if pane_id == focused_pane_id {
+                            return None;
+                        }
+                        self.remote_full_state_for_pane(pane_id)
+                            .map(|state| (pane_id, state))
+                    })
+                    .collect::<Vec<_>>()
                 })
                 .unwrap_or_default()
         } else {
             Vec::new()
         };
+        if needs_local_pane_states {
+            let visible_pane_ids = pane_states.iter().map(|(pane_id, _)| *pane_id).collect::<Vec<_>>();
+            for server in &servers {
+                server.retain_local_attached_pane_states(session_id, &visible_pane_ids);
+            }
+        }
         for server in servers {
             server.send_full_state_to_attached(session_id, Arc::clone(&state));
             for (pane_id, pane_state) in &pane_states {
