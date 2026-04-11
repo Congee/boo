@@ -68,7 +68,6 @@ pub enum MessageType {
     Image = 0x8c,
     UiRuntimeState = 0x8d,
     UiAppearance = 0x8e,
-    UiPaneTerminals = 0x8f,
     UiPaneFullState = 0x90,
     UiPaneDelta = 0x91,
 }
@@ -109,7 +108,6 @@ impl TryFrom<u8> for MessageType {
             0x8c => Self::Image,
             0x8d => Self::UiRuntimeState,
             0x8e => Self::UiAppearance,
-            0x8f => Self::UiPaneTerminals,
             0x90 => Self::UiPaneFullState,
             0x91 => Self::UiPaneDelta,
             _ => return Err(()),

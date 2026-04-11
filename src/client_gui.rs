@@ -179,44 +179,6 @@ impl SnapshotRefreshReason {
 }
 
 impl ClientApp {
-    fn apply_ui_pane_terminals(&mut self, panes: &[control::UiPaneTerminalSnapshot]) {
-        let mut next = HashMap::with_capacity(panes.len());
-        let preserve_visible_gaps =
-            self.mode == ClientMode::Attached && !self.visible_panes.is_empty();
-        let preserve_focused = preserve_visible_gaps
-            && self.focused_pane_id != 0
-            && self.pane_snapshots.contains_key(&self.focused_pane_id);
-        for pane in panes {
-            if preserve_focused && pane.pane_id == self.focused_pane_id {
-                continue;
-            }
-            next.insert(
-                pane.pane_id,
-                Arc::new(ui_terminal_to_vt_snapshot(
-                    &pane.terminal,
-                    self.terminal_foreground,
-                    self.terminal_background,
-                    self.cursor_color,
-                )),
-            );
-        }
-        if preserve_visible_gaps {
-            for pane in &self.visible_panes {
-                if next.contains_key(&pane.pane_id) {
-                    continue;
-                }
-                if let Some(snapshot) = self.pane_snapshots.get(&pane.pane_id) {
-                    next.insert(pane.pane_id, Arc::clone(snapshot));
-                }
-            }
-        }
-        self.pane_snapshots = next;
-        self.observe_focused_cursor_position();
-        self.bootstrapped = true;
-        self.terminal_snapshot_generation = self.allocate_snapshot_generation();
-        self.last_error = None;
-    }
-
     fn apply_ui_appearance(&mut self, appearance: &control::UiAppearanceSnapshot) {
         self.font_size = appearance.font_size.max(8.0);
         self.font_families = appearance
@@ -943,9 +905,6 @@ impl ClientApp {
             }
             LocalStreamEvent::UiAppearance(appearance) => {
                 self.apply_ui_appearance(&appearance);
-            }
-            LocalStreamEvent::UiPaneTerminals(panes) => {
-                self.apply_ui_pane_terminals(&panes);
             }
             LocalStreamEvent::UiPaneFullState { pane_id, state } => {
                 let revision_seed = self.allocate_full_snapshot_revision_seed(state.rows as usize);
@@ -1818,7 +1777,6 @@ pub(crate) enum LocalStreamEvent {
     Attached(u32),
     UiRuntimeState(control::UiRuntimeState),
     UiAppearance(control::UiAppearanceSnapshot),
-    UiPaneTerminals(Vec<control::UiPaneTerminalSnapshot>),
     UiPaneFullState {
         pane_id: u64,
         state: remote::RemoteFullState,
@@ -2277,9 +2235,6 @@ fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStream
             remote::MessageType::UiAppearance => serde_json::from_slice(&payload)
                 .ok()
                 .map(LocalStreamEvent::UiAppearance),
-            remote::MessageType::UiPaneTerminals => serde_json::from_slice(&payload)
-                .ok()
-                .map(LocalStreamEvent::UiPaneTerminals),
             remote::MessageType::UiPaneFullState => {
                 decode_remote_pane_full_state(&payload).map(|(pane_id, state)| {
                     LocalStreamEvent::UiPaneFullState { pane_id, state }
@@ -2945,61 +2900,6 @@ mod tests {
     }
 
     #[test]
-    fn steady_state_ui_pane_terminals_does_not_clobber_focused_pane_snapshot() {
-        let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
-        app.mode = ClientMode::Attached;
-        app.focused_pane_id = 1;
-        app.visible_panes = vec![
-            test_pane_with_id(1, 0.0, 0.0, 50.0, 50.0),
-            test_pane_with_id(2, 50.0, 0.0, 50.0, 50.0),
-        ];
-        app.pane_snapshots.insert(
-            1,
-            Arc::new(test_terminal_snapshot_with_text("live", 4)),
-        );
-        app.pane_snapshots.insert(
-            2,
-            Arc::new(test_terminal_snapshot_with_text("old", 3)),
-        );
-
-        app.apply_ui_pane_terminals(&[
-            test_ui_pane_terminal_snapshot(1, "stale"),
-            test_ui_pane_terminal_snapshot(2, "fresh"),
-        ]);
-
-        let focused = app.pane_snapshots.get(&1).expect("focused pane snapshot");
-        let background = app.pane_snapshots.get(&2).expect("background pane snapshot");
-        assert_eq!(focused.rows_data[0][0].text, "l");
-        assert_eq!(background.rows_data[0][0].text, "f");
-    }
-
-    #[test]
-    fn steady_state_ui_pane_terminals_preserves_visible_panes_missing_from_payload() {
-        let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
-        app.mode = ClientMode::Attached;
-        app.focused_pane_id = 1;
-        app.visible_panes = vec![
-            test_pane_with_id(1, 0.0, 0.0, 34.0, 50.0),
-            test_pane_with_id(2, 34.0, 0.0, 33.0, 50.0),
-            test_pane_with_id(3, 67.0, 0.0, 33.0, 50.0),
-        ];
-        app.pane_snapshots
-            .insert(1, Arc::new(test_terminal_snapshot_with_text("one", 3)));
-        app.pane_snapshots
-            .insert(2, Arc::new(test_terminal_snapshot_with_text("two", 3)));
-        app.pane_snapshots
-            .insert(3, Arc::new(test_terminal_snapshot_with_text("old", 3)));
-
-        app.apply_ui_pane_terminals(&[
-            test_ui_pane_terminal_snapshot(1, "one"),
-            test_ui_pane_terminal_snapshot(2, "new"),
-        ]);
-
-        let preserved = app.pane_snapshots.get(&3).expect("missing visible pane");
-        assert_eq!(preserved.rows_data[0][0].text, "o");
-    }
-
-    #[test]
     fn apply_ui_runtime_state_tracks_mouse_selection() {
         let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
         app.active_session_id = Some(7);
@@ -3157,69 +3057,6 @@ mod tests {
             rows_data: vec![vec![vt_backend_core::CellSnapshot::default(); 2]],
             row_revisions: vec![0],
             ..Default::default()
-        }
-    }
-
-    fn test_terminal_snapshot_with_text(
-        text: &str,
-        cols: u16,
-    ) -> vt_backend_core::TerminalSnapshot {
-        let mut cells = vec![vt_backend_core::CellSnapshot::default(); cols as usize];
-        for (idx, ch) in text.chars().enumerate().take(cells.len()) {
-            cells[idx].text = ch.to_string();
-        }
-        vt_backend_core::TerminalSnapshot {
-            cols,
-            rows: 1,
-            cursor: vt_backend_core::CursorSnapshot {
-                visible: true,
-                blinking: false,
-                x: text.chars().count().min(cols as usize) as u16,
-                y: 0,
-                style: vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK,
-            },
-            rows_data: vec![cells],
-            row_revisions: vec![0],
-            ..Default::default()
-        }
-    }
-
-    fn test_ui_pane_terminal_snapshot(
-        pane_id: u64,
-        text: &str,
-    ) -> control::UiPaneTerminalSnapshot {
-        let cols = text.chars().count().max(1) as u16;
-        control::UiPaneTerminalSnapshot {
-            pane_id,
-            terminal: control::UiTerminalSnapshot {
-                cols,
-                rows: 1,
-                title: String::new(),
-                pwd: String::new(),
-                cursor: control::UiCursorSnapshot {
-                    visible: true,
-                    blinking: false,
-                    x: text.chars().count() as u16,
-                    y: 0,
-                    style: vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK,
-                },
-                rows_data: vec![control::UiTerminalRowSnapshot {
-                    cells: text
-                        .chars()
-                        .map(|ch| control::UiTerminalCellSnapshot {
-                            text: ch.to_string(),
-                            display_width: 1,
-                            fg: [0, 0, 0],
-                            bg: [0, 0, 0],
-                            bg_is_default: true,
-                            bold: false,
-                            italic: false,
-                            underline: 0,
-                            hyperlink: false,
-                        })
-                        .collect(),
-                }],
-            },
         }
     }
 
