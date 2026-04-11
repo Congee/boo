@@ -495,7 +495,8 @@ impl ClientApp {
                 self.cursor_blink_epoch,
                 self.cursor_blink_interval,
             );
-            let selection_rects = if self.mouse_selection.active
+            let selection_rects: Arc<[vt_terminal_canvas::TerminalSelectionRect]> =
+                if self.mouse_selection.active
                 && self.mouse_selection.pane_id == Some(pane.pane_id)
             {
                 self.mouse_selection
@@ -507,9 +508,10 @@ impl ClientApp {
                         width: rect.width as f32,
                         height: rect.height as f32,
                     })
-                    .collect()
+                    .collect::<Vec<_>>()
+                    .into()
             } else {
-                Vec::new()
+                Arc::from([])
             };
             let viewport = vt_terminal_canvas::TerminalViewport {
                 x: pane.frame.x as f32,
@@ -535,7 +537,7 @@ impl ClientApp {
                     self.background_opacity,
                     self.background_opacity_cells,
                     cursor_blink_visible,
-                    selection_rects.clone(),
+                    Arc::clone(&selection_rects),
                     selection_background,
                     Some(selection_foreground),
                     Some(cursor_text_color),

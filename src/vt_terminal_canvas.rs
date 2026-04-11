@@ -29,7 +29,7 @@ pub struct TerminalCanvas {
     pub background_opacity: f32,
     pub background_opacity_cells: bool,
     pub cursor_blink_visible: bool,
-    pub selection_rects: Vec<TerminalSelectionRect>,
+    pub selection_rects: Arc<[TerminalSelectionRect]>,
     pub selection_color: Color,
     pub selection_foreground: Option<Color>,
     pub cursor_text_color: Option<Color>,
@@ -96,7 +96,7 @@ impl TerminalCanvas {
         background_opacity: f32,
         background_opacity_cells: bool,
         cursor_blink_visible: bool,
-        selection_rects: Vec<TerminalSelectionRect>,
+        selection_rects: Arc<[TerminalSelectionRect]>,
         selection_color: Color,
         selection_foreground: Option<Color>,
         cursor_text_color: Option<Color>,
@@ -228,7 +228,7 @@ impl TerminalCanvas {
 
     fn draw_selection_overlay(&self, frame: &mut Frame<Renderer>, state: &TerminalCanvasState) {
         let origin = self.viewport_origin();
-        for rect in &self.selection_rects {
+        for rect in self.selection_rects.iter() {
             frame.fill_rectangle(
                 Point::new(origin.x + rect.x + PADDING_X, origin.y + rect.y + PADDING_Y),
                 Size::new(rect.width, rect.height),
@@ -428,7 +428,7 @@ pub struct TerminalTextLayer {
     pub font_size: f32,
     pub font_families: Arc<[&'static str]>,
     pub cursor_blink_visible: bool,
-    pub selection_rects: Vec<TerminalSelectionRect>,
+    pub selection_rects: Arc<[TerminalSelectionRect]>,
     pub selection_foreground: Option<Color>,
     pub cursor_text_color: Option<Color>,
     pub url_color: Option<Color>,
@@ -479,7 +479,7 @@ impl TerminalTextLayer {
         font_size: f32,
         font_families: Arc<[&'static str]>,
         cursor_blink_visible: bool,
-        selection_rects: Vec<TerminalSelectionRect>,
+        selection_rects: Arc<[TerminalSelectionRect]>,
         selection_foreground: Option<Color>,
         cursor_text_color: Option<Color>,
         url_color: Option<Color>,
@@ -729,7 +729,7 @@ impl TerminalTextLayer {
         self.cell_width.to_bits().hash(&mut hasher);
         self.cell_height.to_bits().hash(&mut hasher);
         self.selection_rects.len().hash(&mut hasher);
-        for rect in &self.selection_rects {
+        for rect in self.selection_rects.iter() {
             rect.x.to_bits().hash(&mut hasher);
             rect.y.to_bits().hash(&mut hasher);
             rect.width.to_bits().hash(&mut hasher);
@@ -1902,7 +1902,7 @@ impl TerminalCanvas {
         self.cell_width.to_bits().hash(&mut hasher);
         self.cell_height.to_bits().hash(&mut hasher);
         self.selection_rects.len().hash(&mut hasher);
-        for rect in &self.selection_rects {
+        for rect in self.selection_rects.iter() {
             rect.x.to_bits().hash(&mut hasher);
             rect.y.to_bits().hash(&mut hasher);
             rect.width.to_bits().hash(&mut hasher);
@@ -1965,7 +1965,7 @@ mod tests {
             0.8,
             true,
             true,
-            Vec::new(),
+            Arc::from([]),
             Color::from_rgba(0.65, 0.72, 0.95, 0.35),
             Some(Color::WHITE),
             Some(Color::BLACK),

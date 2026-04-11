@@ -424,7 +424,7 @@ impl BooApp {
                     self.background_opacity,
                     self.background_opacity_cells,
                     cursor_blink_visible,
-                    selection_rects,
+                    selection_rects.into(),
                     Self::theme_color(self.selection_background, 0.35),
                     Some(Self::theme_color(self.selection_foreground, 1.0)),
                     Some(Self::theme_color(self.cursor_text_color, 1.0)),
