@@ -55,11 +55,13 @@ impl BooApp {
             return;
         }
         let ui_state = self.ui_runtime_state();
-        {
+        let retargeted = {
             let server = self.server.local_gui_server.as_ref().expect("local gui server");
-            server.retarget_local_attached_to_session(session_id);
+            server.retarget_local_attached_to_session(session_id)
+        };
+        if retargeted {
+            self.invalidate_remote_sessions_cache();
         }
-        self.invalidate_remote_sessions_cache();
         let sessions = self.current_remote_sessions();
         let server = self.server.local_gui_server.as_ref().expect("local gui server");
         server.send_ui_runtime_state_to_local_attached(session_id, &ui_state);

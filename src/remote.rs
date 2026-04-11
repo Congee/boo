@@ -553,7 +553,7 @@ impl RemoteServer {
         }
     }
 
-    pub fn retarget_local_attached_to_session(&self, session_id: u32) {
+    pub fn retarget_local_attached_to_session(&self, session_id: u32) -> bool {
         let client_ids = {
             let state_guard = self.state.lock().expect("remote server state poisoned");
             state_guard
@@ -567,9 +567,13 @@ impl RemoteServer {
                 })
                 .collect::<Vec<_>>()
         };
+        if client_ids.is_empty() {
+            return false;
+        }
         for client_id in client_ids {
             self.send_attached(client_id, session_id);
         }
+        true
     }
 
     pub fn send_ui_appearance(
