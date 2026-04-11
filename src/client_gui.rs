@@ -1826,37 +1826,110 @@ fn is_passive_screen_event(event: &LocalStreamEvent) -> bool {
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CoalescedStreamKind {
+    SessionList,
+    UiAppearance,
+    UiRuntimeState,
+    PassiveScreen,
+}
+
+#[derive(Default)]
+struct PendingCoalescedStreamEvents {
+    order: Vec<CoalescedStreamKind>,
+    session_list: Option<LocalStreamEvent>,
+    ui_appearance: Option<LocalStreamEvent>,
+    ui_runtime_state: Option<LocalStreamEvent>,
+    passive_screen: Option<LocalStreamEvent>,
+}
+
+impl PendingCoalescedStreamEvents {
+    fn push_kind_once(&mut self, kind: CoalescedStreamKind) {
+        if !self.order.contains(&kind) {
+            self.order.push(kind);
+        }
+    }
+
+    fn set_session_list(&mut self, event: LocalStreamEvent) {
+        self.push_kind_once(CoalescedStreamKind::SessionList);
+        self.session_list = Some(event);
+    }
+
+    fn set_ui_appearance(&mut self, event: LocalStreamEvent) {
+        self.push_kind_once(CoalescedStreamKind::UiAppearance);
+        self.ui_appearance = Some(event);
+    }
+
+    fn set_ui_runtime_state(&mut self, event: LocalStreamEvent) {
+        self.push_kind_once(CoalescedStreamKind::UiRuntimeState);
+        self.ui_runtime_state = Some(event);
+    }
+
+    fn set_passive_screen(&mut self, event: LocalStreamEvent) {
+        self.push_kind_once(CoalescedStreamKind::PassiveScreen);
+        self.passive_screen = Some(event);
+    }
+
+    fn take_in_order(&mut self) -> Vec<LocalStreamEvent> {
+        let mut flushed = Vec::with_capacity(self.order.len());
+        for kind in self.order.drain(..) {
+            let event = match kind {
+                CoalescedStreamKind::SessionList => self.session_list.take(),
+                CoalescedStreamKind::UiAppearance => self.ui_appearance.take(),
+                CoalescedStreamKind::UiRuntimeState => self.ui_runtime_state.take(),
+                CoalescedStreamKind::PassiveScreen => self.passive_screen.take(),
+            };
+            if let Some(event) = event {
+                flushed.push(event);
+            }
+        }
+        flushed
+    }
+}
+
 fn push_coalesced_stream_event(
     batch: &mut Vec<LocalStreamEvent>,
-    pending_passive_screen: &mut Option<LocalStreamEvent>,
+    pending: &mut PendingCoalescedStreamEvents,
     event: LocalStreamEvent,
 ) {
+    match &event {
+        LocalStreamEvent::SessionList(_) => {
+            pending.set_session_list(event);
+            return;
+        }
+        LocalStreamEvent::UiAppearance(_) => {
+            pending.set_ui_appearance(event);
+            return;
+        }
+        LocalStreamEvent::UiRuntimeState(_) => {
+            pending.set_ui_runtime_state(event);
+            return;
+        }
+        _ => {}
+    }
     if is_passive_screen_event(&event) {
-        match pending_passive_screen.take() {
-            Some(pending) if passive_screen_event_supersedes(&pending, &event) => {
-                *pending_passive_screen = Some(event);
+        match pending.passive_screen.take() {
+            Some(previous) if passive_screen_event_supersedes(&previous, &event) => {
+                pending.set_passive_screen(event);
             }
-            Some(pending) => {
-                batch.push(pending);
-                *pending_passive_screen = Some(event);
+            Some(previous) => {
+                batch.extend(pending.take_in_order());
+                batch.push(previous);
+                pending.set_passive_screen(event);
             }
-            None => *pending_passive_screen = Some(event),
+            None => pending.set_passive_screen(event),
         }
         return;
     }
-    if let Some(pending) = pending_passive_screen.take() {
-        batch.push(pending);
-    }
+    batch.extend(pending.take_in_order());
     batch.push(event);
 }
 
 fn flush_pending_passive_stream_event(
     batch: &mut Vec<LocalStreamEvent>,
-    pending_passive_screen: &mut Option<LocalStreamEvent>,
+    pending: &mut PendingCoalescedStreamEvents,
 ) {
-    if let Some(pending) = pending_passive_screen.take() {
-        batch.push(pending);
-    }
+    batch.extend(pending.take_in_order());
 }
 
 fn passive_screen_event_supersedes(previous: &LocalStreamEvent, next: &LocalStreamEvent) -> bool {
@@ -1998,21 +2071,17 @@ fn local_stream_subscription(
 
                 while let Some(event) = event_rx.next().await {
                     let mut batch = Vec::new();
-                    let mut pending_passive_screen = None;
-                    push_coalesced_stream_event(&mut batch, &mut pending_passive_screen, event);
+                    let mut pending = PendingCoalescedStreamEvents::default();
+                    push_coalesced_stream_event(&mut batch, &mut pending, event);
                     let mut saw_disconnect = matches!(
-                        batch.last().or(pending_passive_screen.as_ref()),
+                        batch.last().or(pending.passive_screen.as_ref()),
                         Some(LocalStreamEvent::Disconnected)
                     );
                     while batch.len() < 64 {
                         match event_rx.try_recv() {
                             Ok(event) => {
                                 saw_disconnect |= matches!(event, LocalStreamEvent::Disconnected);
-                                push_coalesced_stream_event(
-                                    &mut batch,
-                                    &mut pending_passive_screen,
-                                    event,
-                                );
+                                push_coalesced_stream_event(&mut batch, &mut pending, event);
                                 if saw_disconnect {
                                     break;
                                 }
@@ -2020,7 +2089,7 @@ fn local_stream_subscription(
                             Err(_) => break,
                         }
                     }
-                    flush_pending_passive_stream_event(&mut batch, &mut pending_passive_screen);
+                    flush_pending_passive_stream_event(&mut batch, &mut pending);
                     let message = if batch.len() == 1 {
                         Message::StreamEvent(batch.pop().expect("single event batch"))
                     } else {
@@ -3138,7 +3207,7 @@ mod tests {
         let barrier = LocalStreamEvent::Attached(7);
 
         let mut batch = Vec::new();
-        let mut pending = None;
+        let mut pending = PendingCoalescedStreamEvents::default();
         push_coalesced_stream_event(&mut batch, &mut pending, passive_a);
         push_coalesced_stream_event(&mut batch, &mut pending, passive_b);
         push_coalesced_stream_event(&mut batch, &mut pending, acked.clone());
@@ -3199,7 +3268,7 @@ mod tests {
         };
 
         let mut batch = Vec::new();
-        let mut pending = None;
+        let mut pending = PendingCoalescedStreamEvents::default();
         push_coalesced_stream_event(&mut batch, &mut pending, passive_a.clone());
         push_coalesced_stream_event(&mut batch, &mut pending, passive_b.clone());
         flush_pending_passive_stream_event(&mut batch, &mut pending);
@@ -3219,6 +3288,74 @@ mod tests {
             }
             other => panic!("expected second batch entry to be delta, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn coalesces_ui_runtime_and_appearance_within_burst() {
+        let appearance = |family: &str| control::UiAppearanceSnapshot {
+            font_families: vec![family.into()],
+            font_size: 14.0,
+            background_opacity: 1.0,
+            background_opacity_cells: false,
+            terminal_foreground: [0, 0, 0],
+            terminal_background: [0, 0, 0],
+            cursor_color: [0, 0, 0],
+            selection_background: [0, 0, 0],
+            selection_foreground: [0, 0, 0],
+            cursor_text_color: [0, 0, 0],
+            url_color: [0, 0, 0],
+            active_tab_foreground: [0, 0, 0],
+            active_tab_background: [0, 0, 0],
+            inactive_tab_foreground: [0, 0, 0],
+            inactive_tab_background: [0, 0, 0],
+            cursor_style: None,
+            cursor_blink: true,
+            cursor_blink_interval_ns: 600_000_000,
+        };
+        let runtime_a = LocalStreamEvent::UiRuntimeState(control::UiRuntimeState {
+            tabs: vec![],
+            active_tab: 0,
+            pwd: "a".into(),
+            visible_panes: vec![],
+            focused_pane: 1,
+            mouse_selection: control::UiMouseSelectionSnapshot::default(),
+        });
+        let runtime_b = LocalStreamEvent::UiRuntimeState(control::UiRuntimeState {
+            tabs: vec![],
+            active_tab: 0,
+            pwd: "b".into(),
+            visible_panes: vec![],
+            focused_pane: 2,
+            mouse_selection: control::UiMouseSelectionSnapshot::default(),
+        });
+        let appearance_a = LocalStreamEvent::UiAppearance(appearance("A"));
+        let appearance_b = LocalStreamEvent::UiAppearance(appearance("B"));
+        let barrier = LocalStreamEvent::Attached(7);
+
+        let mut batch = Vec::new();
+        let mut pending = PendingCoalescedStreamEvents::default();
+        push_coalesced_stream_event(&mut batch, &mut pending, runtime_a);
+        push_coalesced_stream_event(&mut batch, &mut pending, appearance_a);
+        push_coalesced_stream_event(&mut batch, &mut pending, runtime_b.clone());
+        push_coalesced_stream_event(&mut batch, &mut pending, appearance_b.clone());
+        push_coalesced_stream_event(&mut batch, &mut pending, barrier.clone());
+        flush_pending_passive_stream_event(&mut batch, &mut pending);
+
+        assert_eq!(batch.len(), 3);
+        match &batch[0] {
+            LocalStreamEvent::UiRuntimeState(state) => {
+                assert_eq!(state.pwd, "b");
+                assert_eq!(state.focused_pane, 2);
+            }
+            other => panic!("expected coalesced runtime state, got {other:?}"),
+        }
+        match &batch[1] {
+            LocalStreamEvent::UiAppearance(appearance) => {
+                assert_eq!(appearance.font_families, vec!["B"]);
+            }
+            other => panic!("expected coalesced appearance, got {other:?}"),
+        }
+        assert!(matches!(batch[2], LocalStreamEvent::Attached(7)));
     }
 
     #[test]
