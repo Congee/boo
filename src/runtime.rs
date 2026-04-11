@@ -1,5 +1,7 @@
 use super::*;
 
+const SERVER_CMD_DRAIN_BUDGET: usize = 4;
+
 fn take_global_receiver<T>(
     cell: &std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Receiver<T>>>,
 ) -> std::sync::mpsc::Receiver<T> {
@@ -626,14 +628,35 @@ impl BooApp {
             self.update_text_input_cursor_rect();
         }
 
+        let mut server_cmd_budget = SERVER_CMD_DRAIN_BUDGET;
+        let mut more_server_cmds_pending = false;
         if let Ok(cmd) = self.server.ctl_rx.try_recv() {
             self.handle_server_cmd(cmd.into());
+            server_cmd_budget = server_cmd_budget.saturating_sub(1);
         }
-        while let Ok(cmd) = self.server.remote_rx.try_recv() {
-            self.handle_server_cmd(cmd.into());
+        while server_cmd_budget > 0 {
+            match self.server.local_gui_rx.try_recv() {
+                Ok(cmd) => {
+                    self.handle_server_cmd(cmd.into());
+                    server_cmd_budget -= 1;
+                }
+                Err(_) => break,
+            }
         }
-        while let Ok(cmd) = self.server.local_gui_rx.try_recv() {
-            self.handle_server_cmd(cmd.into());
+        if server_cmd_budget == 0 {
+            more_server_cmds_pending = true;
+        }
+        while server_cmd_budget > 0 {
+            match self.server.remote_rx.try_recv() {
+                Ok(cmd) => {
+                    self.handle_server_cmd(cmd.into());
+                    server_cmd_budget -= 1;
+                }
+                Err(_) => break,
+            }
+        }
+        if server_cmd_budget == 0 {
+            more_server_cmds_pending = true;
         }
         if !self.dirty_remote_sessions.is_empty() {
             let _scope =
@@ -642,6 +665,9 @@ impl BooApp {
             for session_id in dirty_sessions {
                 self.publish_remote_session(session_id);
             }
+        }
+        if more_server_cmds_pending {
+            crate::notify_headless_wakeup();
         }
 
         while let Ok(scroll) = self.scroll_rx.try_recv() {

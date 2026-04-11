@@ -1836,6 +1836,7 @@ enum CoalescedStreamKind {
 
 #[derive(Default)]
 struct PendingCoalescedStreamEvents {
+    coalesce_passive_screen: bool,
     order: Vec<CoalescedStreamKind>,
     session_list: Option<LocalStreamEvent>,
     ui_appearance: Option<LocalStreamEvent>,
@@ -1844,6 +1845,13 @@ struct PendingCoalescedStreamEvents {
 }
 
 impl PendingCoalescedStreamEvents {
+    fn with_passive_screen_coalescing(coalesce_passive_screen: bool) -> Self {
+        Self {
+            coalesce_passive_screen,
+            ..Default::default()
+        }
+    }
+
     fn push_kind_once(&mut self, kind: CoalescedStreamKind) {
         if !self.order.contains(&kind) {
             self.order.push(kind);
@@ -1907,7 +1915,7 @@ fn push_coalesced_stream_event(
         }
         _ => {}
     }
-    if is_passive_screen_event(&event) {
+    if pending.coalesce_passive_screen && is_passive_screen_event(&event) {
         match pending.passive_screen.take() {
             Some(previous) if passive_screen_event_supersedes(&previous, &event) => {
                 pending.set_passive_screen(event);
@@ -2071,7 +2079,8 @@ fn local_stream_subscription(
 
                 while let Some(event) = event_rx.next().await {
                     let mut batch = Vec::new();
-                    let mut pending = PendingCoalescedStreamEvents::default();
+                    let mut pending =
+                        PendingCoalescedStreamEvents::with_passive_screen_coalescing(false);
                     push_coalesced_stream_event(&mut batch, &mut pending, event);
                     let mut saw_disconnect = matches!(
                         batch.last().or(pending.passive_screen.as_ref()),
@@ -3207,7 +3216,7 @@ mod tests {
         let barrier = LocalStreamEvent::Attached(7);
 
         let mut batch = Vec::new();
-        let mut pending = PendingCoalescedStreamEvents::default();
+        let mut pending = PendingCoalescedStreamEvents::with_passive_screen_coalescing(true);
         push_coalesced_stream_event(&mut batch, &mut pending, passive_a);
         push_coalesced_stream_event(&mut batch, &mut pending, passive_b);
         push_coalesced_stream_event(&mut batch, &mut pending, acked.clone());
@@ -3268,7 +3277,7 @@ mod tests {
         };
 
         let mut batch = Vec::new();
-        let mut pending = PendingCoalescedStreamEvents::default();
+        let mut pending = PendingCoalescedStreamEvents::with_passive_screen_coalescing(true);
         push_coalesced_stream_event(&mut batch, &mut pending, passive_a.clone());
         push_coalesced_stream_event(&mut batch, &mut pending, passive_b.clone());
         flush_pending_passive_stream_event(&mut batch, &mut pending);
@@ -3333,7 +3342,7 @@ mod tests {
         let barrier = LocalStreamEvent::Attached(7);
 
         let mut batch = Vec::new();
-        let mut pending = PendingCoalescedStreamEvents::default();
+        let mut pending = PendingCoalescedStreamEvents::with_passive_screen_coalescing(true);
         push_coalesced_stream_event(&mut batch, &mut pending, runtime_a);
         push_coalesced_stream_event(&mut batch, &mut pending, appearance_a);
         push_coalesced_stream_event(&mut batch, &mut pending, runtime_b.clone());
