@@ -361,6 +361,7 @@ struct BooApp {
     surface_initialized_once: bool,
     app_focused: bool,
     dirty_remote_sessions: Vec<u32>,
+    cached_remote_sessions: Option<std::sync::Arc<[remote::RemoteSessionInfo]>>,
     desktop_notifications_enabled: bool,
     notify_on_command_finish: config::NotifyOnCommandFinish,
     notify_on_command_finish_action: config::NotifyOnCommandFinishAction,

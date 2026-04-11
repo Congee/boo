@@ -206,6 +206,7 @@ impl BooApp {
                     surface_initialized_once: false,
                     app_focused: true,
                     dirty_remote_sessions: initial_dirty_remote_sessions.clone(),
+                    cached_remote_sessions: None,
                     desktop_notifications_enabled: boo_config.desktop_notifications,
                     notify_on_command_finish: boo_config.notify_on_command_finish,
                     notify_on_command_finish_action: boo_config.notify_on_command_finish_action,
@@ -291,6 +292,7 @@ impl BooApp {
                     surface_initialized_once: false,
                     app_focused: true,
                     dirty_remote_sessions: initial_dirty_remote_sessions,
+                    cached_remote_sessions: None,
                     desktop_notifications_enabled: boo_config.desktop_notifications,
                     notify_on_command_finish: boo_config.notify_on_command_finish,
                     notify_on_command_finish_action: boo_config.notify_on_command_finish_action,
@@ -303,10 +305,24 @@ impl BooApp {
 }
 
 impl BooApp {
+    pub(crate) fn invalidate_remote_sessions_cache(&mut self) {
+        self.cached_remote_sessions = None;
+    }
+
+    pub(crate) fn current_remote_sessions(&mut self) -> std::sync::Arc<[remote::RemoteSessionInfo]> {
+        if let Some(cached) = self.cached_remote_sessions.as_ref() {
+            return std::sync::Arc::clone(cached);
+        }
+        let sessions = std::sync::Arc::<[remote::RemoteSessionInfo]>::from(self.remote_sessions());
+        self.cached_remote_sessions = Some(std::sync::Arc::clone(&sessions));
+        sessions
+    }
+
     pub(crate) fn mark_remote_session_dirty(&mut self, session_id: u32) {
         if !self.dirty_remote_sessions.contains(&session_id) {
             self.dirty_remote_sessions.push(session_id);
         }
+        self.invalidate_remote_sessions_cache();
     }
 
     pub(crate) fn mark_active_remote_session_dirty(&mut self) {

@@ -39,25 +39,6 @@ struct LocalGuiTransportState {
 }
 
 impl BooApp {
-    fn send_client_runtime_metadata(
-        &self,
-        server: &remote::RemoteServer,
-        client_id: u64,
-        session_id: Option<u32>,
-        attach: bool,
-    ) {
-        let ui_state = self.ui_runtime_state();
-        let sessions = self.remote_sessions();
-        server.send_ui_runtime_state(client_id, &ui_state);
-        server.send_session_list(client_id, &sessions);
-        if let Some(session_id) = session_id {
-            if attach {
-                server.send_attached(client_id, session_id);
-            }
-            self.publish_remote_session(session_id);
-        }
-    }
-
     fn remote_full_state_for_pane(&self, pane_id: u64) -> Option<Arc<remote::RemoteFullState>> {
         if let Some(snapshot) = self.backend.render_snapshot_ref(pane_id) {
             return Some(Arc::new(remote::full_state_from_terminal(snapshot)));
@@ -66,16 +47,23 @@ impl BooApp {
         Some(Arc::new(remote::full_state_from_ui(&snapshot)))
     }
 
-    fn publish_local_gui_runtime_state_for_active_session(&self) {
+    fn publish_local_gui_runtime_state_for_active_session(&mut self) {
         let Some(session_id) = self.server.tabs.active_session_id() else {
             return;
         };
-        let Some(server) = self.server.local_gui_server.as_ref() else {
+        if self.server.local_gui_server.is_none() {
             return;
-        };
-        server.retarget_local_attached_to_session(session_id);
-        server.send_ui_runtime_state_to_local_attached(session_id, &self.ui_runtime_state());
-        server.send_session_list_to_local_clients(&self.remote_sessions());
+        }
+        let ui_state = self.ui_runtime_state();
+        {
+            let server = self.server.local_gui_server.as_ref().expect("local gui server");
+            server.retarget_local_attached_to_session(session_id);
+        }
+        self.invalidate_remote_sessions_cache();
+        let sessions = self.current_remote_sessions();
+        let server = self.server.local_gui_server.as_ref().expect("local gui server");
+        server.send_ui_runtime_state_to_local_attached(session_id, &ui_state);
+        server.send_session_list_to_local_clients(sessions.as_ref());
     }
 
     fn local_gui_transport_state(&self) -> LocalGuiTransportState {
@@ -107,7 +95,7 @@ impl BooApp {
         }
     }
 
-    fn publish_local_gui_after_ui_action(&self, before: &LocalGuiTransportState) {
+    fn publish_local_gui_after_ui_action(&mut self, before: &LocalGuiTransportState) {
         self.publish_local_gui_runtime_state_for_active_session();
         let after = self.local_gui_transport_state();
         if after != *before && let Some(session_id) = after.session_id {
@@ -191,6 +179,7 @@ impl BooApp {
                 });
             }
             server::Command::ExecuteCommand { input } => {
+                self.invalidate_remote_sessions_cache();
                 self.execute_command(&input);
             }
             server::Command::AppKeyEvent { event } => {
@@ -225,6 +214,7 @@ impl BooApp {
             }
             server::Command::NewTab => {
                 let before = self.local_gui_transport_state();
+                self.invalidate_remote_sessions_cache();
                 let _ = self.new_tab();
                 self.publish_local_gui_after_ui_action(&before);
             }
@@ -281,7 +271,12 @@ impl BooApp {
                         self.bootstrap_local_stream_client(server, client_id, session_id);
                         self.publish_remote_session(session_id);
                     }
-                    server.send_session_list(client_id, &self.remote_sessions());
+                }
+                let sessions = self.current_remote_sessions();
+                if let Some(server) = self.server.local_gui_server.as_ref()
+                    && server.client_is_local(client_id)
+                {
+                    server.send_session_list(client_id, sessions.as_ref());
                 }
             }
             server::Command::RemoteListSessions { client_id } => {
@@ -292,14 +287,15 @@ impl BooApp {
                     && self.pane_for_session(session_id).is_some()
                 {
                     self.bootstrap_local_stream_client(server, client_id, session_id);
-                    self.publish_remote_session(session_id);
+                        self.publish_remote_session(session_id);
                 }
+                let sessions = self.current_remote_sessions();
                 if let Some(server) = self
                     .remote_server_for_client(client_id)
                     .or(self.server.local_gui_server.as_ref())
                     .or(self.server.remote_server.as_ref())
                 {
-                    server.send_session_list(client_id, &self.remote_sessions());
+                    server.send_session_list(client_id, sessions.as_ref());
                 }
             }
             server::Command::RemoteAttach {
@@ -307,6 +303,7 @@ impl BooApp {
                 session_id,
             } => {
                 if self.pane_for_session(session_id).is_some() {
+                    self.invalidate_remote_sessions_cache();
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -328,6 +325,7 @@ impl BooApp {
                 }
             }
             server::Command::RemoteDetach { client_id } => {
+                self.invalidate_remote_sessions_cache();
                 if let Some(server) = self
                     .remote_server_for_client(client_id)
                     .or(self.server.local_gui_server.as_ref())
@@ -356,6 +354,7 @@ impl BooApp {
                     let (width, height) = self.session_size_pixels(cols, rows);
                     self.resize_pane_backend(pane, self.scale_factor(), width, height);
                 }
+                self.invalidate_remote_sessions_cache();
                 if let Some(server) = self
                     .remote_server_for_client(client_id)
                     .or(self.server.local_gui_server.as_ref())
@@ -478,14 +477,22 @@ impl BooApp {
                 }
             }
             server::Command::RemoteExecuteCommand { client_id, input } => {
+                self.invalidate_remote_sessions_cache();
                 self.execute_command(&input);
                 let focused_session_id = self.server.tabs.active_session_id();
+                let ui_state = self.ui_runtime_state();
+                let sessions = self.current_remote_sessions();
                 if let Some(server) = self
                     .remote_server_for_client(client_id)
                     .or(self.server.local_gui_server.as_ref())
                     .or(self.server.remote_server.as_ref())
                 {
-                    self.send_client_runtime_metadata(server, client_id, focused_session_id, true);
+                    server.send_ui_runtime_state(client_id, &ui_state);
+                    server.send_session_list(client_id, sessions.as_ref());
+                    if let Some(session_id) = focused_session_id {
+                        server.send_attached(client_id, session_id);
+                        self.publish_remote_session(session_id);
+                    }
                 }
             }
             server::Command::RemoteAppKeyEvent { client_id, event } => {
@@ -525,17 +532,19 @@ impl BooApp {
                 let consumed = self.handle_app_key_event(event);
                 if consumed {
                     let focused_session_id = self.server.tabs.active_session_id();
+                    let ui_state = self.ui_runtime_state();
+                    let sessions = self.current_remote_sessions();
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        self.send_client_runtime_metadata(
-                            server,
-                            client_id,
-                            focused_session_id,
-                            true,
-                        );
+                        server.send_ui_runtime_state(client_id, &ui_state);
+                        server.send_session_list(client_id, sessions.as_ref());
+                        if let Some(session_id) = focused_session_id {
+                            server.send_attached(client_id, session_id);
+                            self.publish_remote_session(session_id);
+                        }
                     }
                 }
             }
@@ -571,24 +580,36 @@ impl BooApp {
                     self.set_pane_focus(new, true);
                 }
                 let changed_ui = self.handle_app_mouse_event(event);
+                let ui_state = self.ui_runtime_state();
+                let sessions = self.current_remote_sessions();
                 if changed_ui
                     && let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                 {
-                    self.send_client_runtime_metadata(server, client_id, Some(session_id), true);
+                    server.send_ui_runtime_state(client_id, &ui_state);
+                    server.send_session_list(client_id, sessions.as_ref());
+                    server.send_attached(client_id, session_id);
+                    self.publish_remote_session(session_id);
                 }
             }
             server::Command::RemoteAppAction { client_id, action } => {
                 self.dispatch_binding_action(action);
                 let focused_session_id = self.server.tabs.active_session_id();
+                let ui_state = self.ui_runtime_state();
+                let sessions = self.current_remote_sessions();
                 if let Some(server) = self
                     .remote_server_for_client(client_id)
                     .or(self.server.local_gui_server.as_ref())
                     .or(self.server.remote_server.as_ref())
                 {
-                    self.send_client_runtime_metadata(server, client_id, focused_session_id, true);
+                    server.send_ui_runtime_state(client_id, &ui_state);
+                    server.send_session_list(client_id, sessions.as_ref());
+                    if let Some(session_id) = focused_session_id {
+                        server.send_attached(client_id, session_id);
+                        self.publish_remote_session(session_id);
+                    }
                 }
             }
             server::Command::RemoteFocusPane { client_id, pane_id } => {
@@ -623,12 +644,19 @@ impl BooApp {
                     self.set_pane_focus(new, true);
                 }
                 if self.focus_pane_by_id(pane_id)
-                    && let Some(server) = self
+                {
+                    let ui_state = self.ui_runtime_state();
+                    let sessions = self.current_remote_sessions();
+                    if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
-                {
-                    self.send_client_runtime_metadata(server, client_id, Some(session_id), true);
+                    {
+                    server.send_ui_runtime_state(client_id, &ui_state);
+                    server.send_session_list(client_id, sessions.as_ref());
+                    server.send_attached(client_id, session_id);
+                    self.publish_remote_session(session_id);
+                    }
                 }
             }
             server::Command::RemoteDestroy {
@@ -677,6 +705,7 @@ impl BooApp {
                 if was_active && !self.server.tabs.is_empty() {
                     self.sync_after_tab_change();
                 }
+                self.invalidate_remote_sessions_cache();
                 if let Some(server) = self
                     .remote_server_for_client(client_id)
                     .or(self.server.local_gui_server.as_ref())
