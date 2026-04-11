@@ -54,7 +54,7 @@ impl BooApp {
         let Some(server) = self.server.local_gui_server.as_ref() else {
             return;
         };
-        server.send_attached_to_local_attached(session_id);
+        server.retarget_local_attached_to_session(session_id);
         server.send_ui_runtime_state_to_local_attached(session_id, &self.ui_runtime_state());
         server.send_session_list_to_local_clients(&self.remote_sessions());
     }

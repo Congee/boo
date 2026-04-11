@@ -553,14 +553,17 @@ impl RemoteServer {
         }
     }
 
-    pub fn send_attached_to_local_attached(&self, session_id: u32) {
+    pub fn retarget_local_attached_to_session(&self, session_id: u32) {
         let client_ids = {
             let state_guard = self.state.lock().expect("remote server state poisoned");
             state_guard
                 .clients
                 .iter()
                 .filter_map(|(client_id, client)| {
-                    (client.is_local && client.attached_session.is_some()).then_some(*client_id)
+                    (client.is_local
+                        && client.attached_session.is_some()
+                        && client.attached_session != Some(session_id))
+                        .then_some(*client_id)
                 })
                 .collect::<Vec<_>>()
         };
@@ -2379,9 +2382,10 @@ mod tests {
     }
 
     #[test]
-    fn send_attached_to_local_attached_skips_unattached_and_remote_clients() {
+    fn retarget_local_attached_to_session_skips_same_session_unattached_and_remote_clients() {
         let (local_attached_tx, local_attached_rx) = mpsc::channel();
         let (local_unattached_tx, local_unattached_rx) = mpsc::channel();
+        let (local_same_session_tx, local_same_session_rx) = mpsc::channel();
         let (remote_attached_tx, remote_attached_rx) = mpsc::channel();
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::from([
@@ -2420,6 +2424,22 @@ mod tests {
                 (
                     3,
                     ClientState {
+                        outbound: local_same_session_tx,
+                        authenticated: true,
+                        challenge: None,
+                        attached_session: Some(22),
+                        last_session_list_payload: None,
+                        last_ui_runtime_state_payload: None,
+                        last_ui_appearance_payload: None,
+                        last_state: None,
+                        pane_states: HashMap::new(),
+                        latest_input_seq: None,
+                        is_local: true,
+                    },
+                ),
+                (
+                    4,
+                    ClientState {
                         outbound: remote_attached_tx,
                         authenticated: true,
                         challenge: None,
@@ -2443,7 +2463,7 @@ mod tests {
             local_socket_path: None,
         };
 
-        server.send_attached_to_local_attached(22);
+        server.retarget_local_attached_to_session(22);
 
         match local_attached_rx.recv().expect("local attached frame") {
             OutboundMessage::Frame(frame) => {
@@ -2453,6 +2473,7 @@ mod tests {
             OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
         }
         assert!(local_unattached_rx.try_recv().is_err());
+        assert!(local_same_session_rx.try_recv().is_err());
         assert!(remote_attached_rx.try_recv().is_err());
     }
 
