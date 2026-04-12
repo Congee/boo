@@ -299,7 +299,7 @@ impl RemoteServer {
                     state.clients.remove(&client_id);
                     continue;
                 };
-                std::thread::spawn(move || writer_loop(writer_stream, outbound_rx, true));
+                std::thread::spawn(move || writer_loop(writer_stream, outbound_rx, true, true));
 
                 let cmd_tx = cmd_tx.clone();
                 let state = Arc::clone(&state_for_listener);
@@ -368,7 +368,7 @@ impl RemoteServer {
                     state.clients.remove(&client_id);
                     continue;
                 };
-                std::thread::spawn(move || writer_loop(writer_stream, outbound_rx, false));
+                std::thread::spawn(move || writer_loop(writer_stream, outbound_rx, false, false));
 
                 let cmd_tx = cmd_tx.clone();
                 let state = Arc::clone(&state_for_listener);
@@ -873,11 +873,16 @@ fn writer_loop<W: Write>(
     mut stream: W,
     outbound_rx: mpsc::Receiver<OutboundMessage>,
     coalesce_screen_updates: bool,
+    batch_messages: bool,
 ) {
     while let Ok(message) = outbound_rx.recv() {
         let mut scope =
             crate::profiling::scope("server.stream.batch_write", crate::profiling::Kind::Io);
-        let batch = collect_outbound_batch(message, &outbound_rx, coalesce_screen_updates);
+        let batch = if batch_messages {
+            collect_outbound_batch(message, &outbound_rx, coalesce_screen_updates)
+        } else {
+            collect_single_outbound_message(message)
+        };
         crate::profiling::record_units(
             "server.stream.batch_write.frames",
             crate::profiling::Kind::Io,
@@ -909,6 +914,19 @@ fn writer_loop<W: Write>(
         if failed || stream.flush().is_err() {
             break;
         }
+    }
+}
+
+fn collect_single_outbound_message(message: OutboundMessage) -> OutboundBatch {
+    let (frames, coalesced_screen_updates, coalesced_control_frames) = match message {
+        OutboundMessage::Frame(frame) => (vec![frame], 0, 0),
+        OutboundMessage::ScreenUpdate(frame) => (vec![frame], 0, 0),
+    };
+    OutboundBatch {
+        frames,
+        message_count: 1,
+        coalesced_screen_updates,
+        coalesced_control_frames,
     }
 }
 

@@ -77,8 +77,12 @@ static KEY_EVENT_RX: std::sync::OnceLock<
 static TEXT_INPUT_RX: std::sync::OnceLock<
     std::sync::Mutex<std::sync::mpsc::Receiver<platform::TextInputEvent>>,
 > = std::sync::OnceLock::new();
-static HEADLESS_WAKE_TX: std::sync::OnceLock<std::sync::mpsc::SyncSender<()>> =
-    std::sync::OnceLock::new();
+struct HeadlessWakeGate {
+    pending: std::sync::Mutex<bool>,
+    condvar: std::sync::Condvar,
+}
+
+static HEADLESS_WAKE_GATE: std::sync::OnceLock<HeadlessWakeGate> = std::sync::OnceLock::new();
 
 #[derive(Clone, Copy)]
 struct CommandFinishedEvent {
@@ -102,13 +106,35 @@ const DEFAULT_ACTIVE_TAB_BACKGROUND: config::RgbColor = [0x3D, 0x52, 0x9E];
 const DEFAULT_INACTIVE_TAB_FOREGROUND: config::RgbColor = [0xB8, 0xB8, 0xB8];
 const DEFAULT_INACTIVE_TAB_BACKGROUND: config::RgbColor = [0x1A, 0x1A, 0x1A];
 
-fn install_headless_waker(tx: std::sync::mpsc::SyncSender<()>) {
-    let _ = HEADLESS_WAKE_TX.set(tx);
+fn install_headless_waker() {
+    let _ = HEADLESS_WAKE_GATE.set(HeadlessWakeGate {
+        pending: std::sync::Mutex::new(false),
+        condvar: std::sync::Condvar::new(),
+    });
+}
+
+pub(crate) fn wait_for_headless_wakeup() {
+    let Some(gate) = HEADLESS_WAKE_GATE.get() else {
+        return;
+    };
+    let Ok(mut pending) = gate.pending.lock() else {
+        return;
+    };
+    while !*pending {
+        let Ok(next_pending) = gate.condvar.wait(pending) else {
+            return;
+        };
+        pending = next_pending;
+    }
+    *pending = false;
 }
 
 pub(crate) fn notify_headless_wakeup() {
-    if let Some(tx) = HEADLESS_WAKE_TX.get() {
-        let _ = tx.try_send(());
+    if let Some(gate) = HEADLESS_WAKE_GATE.get()
+        && let Ok(mut pending) = gate.pending.lock()
+    {
+        *pending = true;
+        gate.condvar.notify_one();
     }
 }
 

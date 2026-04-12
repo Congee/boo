@@ -1,6 +1,7 @@
 use super::*;
 
-const SERVER_CMD_DRAIN_BUDGET: usize = 4;
+const LOCAL_GUI_CMD_DRAIN_BUDGET: usize = 1;
+const REMOTE_CMD_DRAIN_BUDGET: usize = 4;
 
 fn take_global_receiver<T>(
     cell: &std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Receiver<T>>>,
@@ -16,8 +17,7 @@ fn take_global_receiver<T>(
 
 pub fn run_headless() {
     let mut app = BooApp::new_headless();
-    let (wake_tx, wake_rx) = std::sync::mpsc::sync_channel(1);
-    crate::install_headless_waker(wake_tx);
+    crate::install_headless_waker();
     loop {
         {
             let _scope =
@@ -27,7 +27,7 @@ pub fn run_headless() {
         {
             let _scope =
                 crate::profiling::scope("server.headless.sleep", crate::profiling::Kind::Wait);
-            let _ = wake_rx.recv();
+            crate::wait_for_headless_wakeup();
         }
     }
 }
@@ -628,34 +628,34 @@ impl BooApp {
             self.update_text_input_cursor_rect();
         }
 
-        let mut server_cmd_budget = SERVER_CMD_DRAIN_BUDGET;
         let mut more_server_cmds_pending = false;
         if let Ok(cmd) = self.server.ctl_rx.try_recv() {
             self.handle_server_cmd(cmd.into());
-            server_cmd_budget = server_cmd_budget.saturating_sub(1);
         }
-        while server_cmd_budget > 0 {
+        let mut local_gui_cmd_budget = LOCAL_GUI_CMD_DRAIN_BUDGET;
+        while local_gui_cmd_budget > 0 {
             match self.server.local_gui_rx.try_recv() {
                 Ok(cmd) => {
                     self.handle_server_cmd(cmd.into());
-                    server_cmd_budget -= 1;
+                    local_gui_cmd_budget -= 1;
                 }
                 Err(_) => break,
             }
         }
-        if server_cmd_budget == 0 {
+        if local_gui_cmd_budget == 0 {
             more_server_cmds_pending = true;
         }
-        while server_cmd_budget > 0 {
+        let mut remote_cmd_budget = REMOTE_CMD_DRAIN_BUDGET;
+        while remote_cmd_budget > 0 {
             match self.server.remote_rx.try_recv() {
                 Ok(cmd) => {
                     self.handle_server_cmd(cmd.into());
-                    server_cmd_budget -= 1;
+                    remote_cmd_budget -= 1;
                 }
                 Err(_) => break,
             }
         }
-        if server_cmd_budget == 0 {
+        if remote_cmd_budget == 0 {
             more_server_cmds_pending = true;
         }
         if !self.dirty_remote_sessions.is_empty() {

@@ -62,7 +62,6 @@ pub enum Message {
     IcedEvent(Event),
     StreamReady(std::sync::mpsc::Sender<StreamCommand>),
     StreamEvent(LocalStreamEvent),
-    StreamBatch(Vec<LocalStreamEvent>),
     GuiTest(GuiTestCommand),
 }
 
@@ -70,7 +69,8 @@ pub enum Message {
 pub enum GuiTestCommand {
     Text(String),
     Key(String),
-    AppKey(String),
+    AppKey { keyspec: String, repeat: bool },
+    Keyboard { keyspec: String, repeat: bool },
     Command(String),
     Click { x: f64, y: f64 },
     Drag { x1: f64, y1: f64, x2: f64, y2: f64 },
@@ -84,6 +84,15 @@ struct GuiTestStatus {
     stream_ready: bool,
     has_terminal: bool,
     active_tab: usize,
+    stream_seq: u64,
+    render_seq: u64,
+    keyboard_seq: u64,
+    input_method_commit_seq: u64,
+    last_stream_ms: u64,
+    last_render_ms: u64,
+    cursor_row: Option<u16>,
+    cursor_col: Option<u16>,
+    cursor_row_text: String,
     row0_text: String,
 }
 
@@ -332,13 +341,6 @@ impl ClientApp {
                     tasks.push(task);
                 }
             }
-            Message::StreamBatch(events) => {
-                for event in events {
-                    if let Some(task) = self.handle_stream_delivery(event) {
-                        tasks.push(task);
-                    }
-                }
-            }
             Message::GuiTest(command) => self.handle_gui_test(command),
             Message::IcedEvent(event) => match event {
                 Event::Window(window::Event::Resized(size)) => {
@@ -456,6 +458,7 @@ impl ClientApp {
     fn render_terminal_scene<'a>(&'a self) -> Element<'a, Message> {
         let _scope =
             crate::profiling::scope("client.view.render_terminal_scene", crate::profiling::Kind::Cpu);
+        note_gui_test_render_activity();
         crate::profiling::record_units(
             "client.view.render_terminal_scene.panes",
             crate::profiling::Kind::Cpu,
@@ -719,6 +722,7 @@ impl ClientApp {
                 }
             }
             input_method::Event::Commit(text) => {
+                note_gui_test_input_method_commit();
                 self.preedit_text.clear();
                 self.send_text_input(text);
             }
@@ -743,6 +747,7 @@ impl ClientApp {
 
     fn handle_keyboard(&mut self, event: keyboard::Event) {
         ime_debug!("client iced keyboard event");
+        note_gui_test_keyboard_event();
         let keyboard::Event::KeyPressed {
             key,
             modified_key,
@@ -1037,7 +1042,19 @@ impl ClientApp {
     }
 
     fn handle_stream_delivery(&mut self, event: LocalStreamEvent) -> Option<Task<Message>> {
+        let track_stream = matches!(
+            &event,
+            LocalStreamEvent::FullState { .. } | LocalStreamEvent::Delta { .. }
+        ) || matches!(
+            &event,
+            LocalStreamEvent::UiPaneFullState { pane_id, .. }
+                | LocalStreamEvent::UiPaneDelta { pane_id, .. }
+                if *pane_id == self.focused_pane_id
+        );
         self.handle_stream_event(event);
+        if track_stream {
+            note_gui_test_stream_activity();
+        }
         None
     }
 
@@ -1066,14 +1083,21 @@ impl ClientApp {
                     self.refresh_snapshot(SnapshotRefreshReason::GuiTestKey);
                 }
             }
-            GuiTestCommand::AppKey(keyspec) => {
-                if let Some(event) = gui_test_app_key_event(&keyspec, self.record_pending_input()) {
+            GuiTestCommand::AppKey { keyspec, repeat } => {
+                if let Some(event) =
+                    gui_test_app_key_event(&keyspec, self.record_pending_input(), repeat)
+                {
                     self.send_stream_or_control(
                         StreamCommand::AppKeyEvent {
                             event: event.clone(),
                         },
                         control::Request::AppKeyEvent { event },
                     );
+                }
+            }
+            GuiTestCommand::Keyboard { keyspec, repeat } => {
+                if let Some(event) = gui_test_keyboard_event(&keyspec, repeat) {
+                    self.handle_keyboard(event);
                 }
             }
             GuiTestCommand::Command(input) => self.send_stream_or_control(
@@ -1179,6 +1203,7 @@ impl ClientApp {
     }
 
     fn update_gui_test_status(&self) {
+        let focused_snapshot = self.pane_snapshots.get(&self.focused_pane_id);
         let status_value = GuiTestStatus {
             mode: match self.mode {
                 ClientMode::Bootstrapping => "bootstrapping",
@@ -1188,15 +1213,22 @@ impl ClientApp {
             stream_ready: self.stream_ready_for_terminal_io(),
             has_terminal: self.has_paintable_terminal(),
             active_tab: self.ui_state.active_tab,
-            row0_text: self
-                .pane_snapshots
-                .get(&self.focused_pane_id)
+            stream_seq: gui_test_stream_seq().load(std::sync::atomic::Ordering::Relaxed),
+            render_seq: gui_test_render_seq().load(std::sync::atomic::Ordering::Relaxed),
+            keyboard_seq: gui_test_keyboard_seq().load(std::sync::atomic::Ordering::Relaxed),
+            input_method_commit_seq: gui_test_input_method_commit_seq()
+                .load(std::sync::atomic::Ordering::Relaxed),
+            last_stream_ms: gui_test_last_stream_ms().load(std::sync::atomic::Ordering::Relaxed),
+            last_render_ms: gui_test_last_render_ms().load(std::sync::atomic::Ordering::Relaxed),
+            cursor_row: focused_snapshot.map(|snapshot| snapshot.cursor.y),
+            cursor_col: focused_snapshot.map(|snapshot| snapshot.cursor.x),
+            cursor_row_text: focused_snapshot
+                .and_then(|snapshot| snapshot.rows_data.get(snapshot.cursor.y as usize))
+                .map(|row| render_snapshot_row_text(row))
+                .unwrap_or_default(),
+            row0_text: focused_snapshot
                 .and_then(|snapshot| snapshot.rows_data.first())
-                .map(|row| {
-                    row.iter()
-                        .map(|cell| cell.text.as_str())
-                        .collect::<String>()
-                })
+                .map(|row| render_snapshot_row_text(row))
                 .unwrap_or_default(),
         };
         if let Some(status) = gui_test_status_handle()
@@ -1206,11 +1238,26 @@ impl ClientApp {
         }
         if let Some(path) = gui_test_status_path() {
             let line = format!(
-                "mode={} stream_ready={} has_terminal={} active_tab={} row0={:?}\n",
+                "mode={} stream_ready={} has_terminal={} active_tab={} stream_seq={} render_seq={} keyboard_seq={} input_method_commit_seq={} last_stream_ms={} last_render_ms={} cursor_row={} cursor_col={} cursor_row_text={:?} row0={:?}\n",
                 status_value.mode,
                 u8::from(status_value.stream_ready),
                 u8::from(status_value.has_terminal),
                 status_value.active_tab,
+                status_value.stream_seq,
+                status_value.render_seq,
+                status_value.keyboard_seq,
+                status_value.input_method_commit_seq,
+                status_value.last_stream_ms,
+                status_value.last_render_ms,
+                status_value
+                    .cursor_row
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                status_value
+                    .cursor_col
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                status_value.cursor_row_text,
                 status_value.row0_text
             );
             if let Ok(mut last_written) = gui_test_status_last_written().lock()
@@ -1244,6 +1291,65 @@ fn gui_test_status_path() -> Option<&'static str> {
 fn gui_test_status_last_written() -> &'static Mutex<Option<String>> {
     static LAST: OnceLock<Mutex<Option<String>>> = OnceLock::new();
     LAST.get_or_init(|| Mutex::new(None))
+}
+
+fn render_snapshot_row_text(row: &[vt_backend_core::CellSnapshot]) -> String {
+    row.iter().map(|cell| cell.text.as_str()).collect::<String>()
+}
+
+fn gui_test_stream_seq() -> &'static std::sync::atomic::AtomicU64 {
+    static VALUE: OnceLock<std::sync::atomic::AtomicU64> = OnceLock::new();
+    VALUE.get_or_init(|| std::sync::atomic::AtomicU64::new(0))
+}
+
+fn gui_test_render_seq() -> &'static std::sync::atomic::AtomicU64 {
+    static VALUE: OnceLock<std::sync::atomic::AtomicU64> = OnceLock::new();
+    VALUE.get_or_init(|| std::sync::atomic::AtomicU64::new(0))
+}
+
+fn gui_test_keyboard_seq() -> &'static std::sync::atomic::AtomicU64 {
+    static VALUE: OnceLock<std::sync::atomic::AtomicU64> = OnceLock::new();
+    VALUE.get_or_init(|| std::sync::atomic::AtomicU64::new(0))
+}
+
+fn gui_test_input_method_commit_seq() -> &'static std::sync::atomic::AtomicU64 {
+    static VALUE: OnceLock<std::sync::atomic::AtomicU64> = OnceLock::new();
+    VALUE.get_or_init(|| std::sync::atomic::AtomicU64::new(0))
+}
+
+fn gui_test_last_stream_ms() -> &'static std::sync::atomic::AtomicU64 {
+    static VALUE: OnceLock<std::sync::atomic::AtomicU64> = OnceLock::new();
+    VALUE.get_or_init(|| std::sync::atomic::AtomicU64::new(0))
+}
+
+fn gui_test_last_render_ms() -> &'static std::sync::atomic::AtomicU64 {
+    static VALUE: OnceLock<std::sync::atomic::AtomicU64> = OnceLock::new();
+    VALUE.get_or_init(|| std::sync::atomic::AtomicU64::new(0))
+}
+
+fn gui_test_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn note_gui_test_stream_activity() {
+    gui_test_stream_seq().fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    gui_test_last_stream_ms().store(gui_test_now_ms(), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn note_gui_test_render_activity() {
+    gui_test_render_seq().fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    gui_test_last_render_ms().store(gui_test_now_ms(), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn note_gui_test_keyboard_event() {
+    gui_test_keyboard_seq().fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn note_gui_test_input_method_commit() {
+    gui_test_input_method_commit_seq().fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 fn should_exit_after_stream_disconnect(
@@ -1813,6 +1919,7 @@ pub(crate) struct RemoteDelta {
     changed_rows: Vec<RemoteRowDelta>,
 }
 
+#[cfg(test)]
 fn is_passive_screen_event(event: &LocalStreamEvent) -> bool {
     matches!(
         event,
@@ -1826,6 +1933,7 @@ fn is_passive_screen_event(event: &LocalStreamEvent) -> bool {
     )
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CoalescedStreamKind {
     SessionList,
@@ -1834,6 +1942,7 @@ enum CoalescedStreamKind {
     PassiveScreen,
 }
 
+#[cfg(test)]
 #[derive(Default)]
 struct PendingCoalescedStreamEvents {
     coalesce_passive_screen: bool,
@@ -1844,6 +1953,7 @@ struct PendingCoalescedStreamEvents {
     passive_screen: Option<LocalStreamEvent>,
 }
 
+#[cfg(test)]
 impl PendingCoalescedStreamEvents {
     fn with_passive_screen_coalescing(coalesce_passive_screen: bool) -> Self {
         Self {
@@ -1895,6 +2005,7 @@ impl PendingCoalescedStreamEvents {
     }
 }
 
+#[cfg(test)]
 fn push_coalesced_stream_event(
     batch: &mut Vec<LocalStreamEvent>,
     pending: &mut PendingCoalescedStreamEvents,
@@ -1933,6 +2044,7 @@ fn push_coalesced_stream_event(
     batch.push(event);
 }
 
+#[cfg(test)]
 fn flush_pending_passive_stream_event(
     batch: &mut Vec<LocalStreamEvent>,
     pending: &mut PendingCoalescedStreamEvents,
@@ -1940,13 +2052,7 @@ fn flush_pending_passive_stream_event(
     batch.extend(pending.take_in_order());
 }
 
-fn batch_contains_passive_screen_event(
-    batch: &[LocalStreamEvent],
-    pending: &PendingCoalescedStreamEvents,
-) -> bool {
-    pending.passive_screen.is_some() || batch.iter().any(is_passive_screen_event)
-}
-
+#[cfg(test)]
 fn passive_screen_event_supersedes(previous: &LocalStreamEvent, next: &LocalStreamEvent) -> bool {
     is_passive_screen_event(previous)
         && matches!(
@@ -2085,33 +2191,8 @@ fn local_stream_subscription(
                 });
 
                 while let Some(event) = event_rx.next().await {
-                    let mut batch = Vec::new();
-                    let mut pending =
-                        PendingCoalescedStreamEvents::with_passive_screen_coalescing(false);
-                    push_coalesced_stream_event(&mut batch, &mut pending, event);
-                    let mut saw_disconnect = matches!(
-                        batch.last().or(pending.passive_screen.as_ref()),
-                        Some(LocalStreamEvent::Disconnected)
-                    );
-                    while batch.len() < 64 && !batch_contains_passive_screen_event(&batch, &pending) {
-                        match event_rx.try_recv() {
-                            Ok(event) => {
-                                saw_disconnect |= matches!(event, LocalStreamEvent::Disconnected);
-                                push_coalesced_stream_event(&mut batch, &mut pending, event);
-                                if saw_disconnect {
-                                    break;
-                                }
-                            }
-                            Err(_) => break,
-                        }
-                    }
-                    flush_pending_passive_stream_event(&mut batch, &mut pending);
-                    let message = if batch.len() == 1 {
-                        Message::StreamEvent(batch.pop().expect("single event batch"))
-                    } else {
-                        Message::StreamBatch(batch)
-                    };
-                    let _ = output.send(message).await;
+                    let saw_disconnect = matches!(event, LocalStreamEvent::Disconnected);
+                    let _ = output.send(Message::StreamEvent(event)).await;
                     if saw_disconnect {
                         break;
                     }
@@ -2202,8 +2283,29 @@ fn parse_gui_test_command(line: &str) -> Option<GuiTestCommand> {
     if let Some(rest) = trimmed.strip_prefix("key ") {
         return Some(GuiTestCommand::Key(rest.to_string()));
     }
+    if let Some(rest) = trimmed.strip_prefix("appkey-repeat ") {
+        return Some(GuiTestCommand::AppKey {
+            keyspec: rest.to_string(),
+            repeat: true,
+        });
+    }
     if let Some(rest) = trimmed.strip_prefix("appkey ") {
-        return Some(GuiTestCommand::AppKey(rest.to_string()));
+        return Some(GuiTestCommand::AppKey {
+            keyspec: rest.to_string(),
+            repeat: false,
+        });
+    }
+    if let Some(rest) = trimmed.strip_prefix("keyboard-repeat ") {
+        return Some(GuiTestCommand::Keyboard {
+            keyspec: rest.to_string(),
+            repeat: true,
+        });
+    }
+    if let Some(rest) = trimmed.strip_prefix("keyboard ") {
+        return Some(GuiTestCommand::Keyboard {
+            keyspec: rest.to_string(),
+            repeat: false,
+        });
     }
     if let Some(rest) = trimmed.strip_prefix("command ") {
         return Some(GuiTestCommand::Command(rest.to_string()));
@@ -2276,7 +2378,7 @@ fn decode_gui_test_text(input: &str) -> String {
     out
 }
 
-fn gui_test_app_key_event(spec: &str, input_seq: u64) -> Option<AppKeyEvent> {
+fn gui_test_app_key_event(spec: &str, input_seq: u64, repeat: bool) -> Option<AppKeyEvent> {
     let (keycode, mods) = crate::parse_keyspec(spec)?;
     let key_char = crate::shifted_char(keycode, mods);
     let text = if mods & (crate::ffi::GHOSTTY_MODS_CTRL | crate::ffi::GHOSTTY_MODS_ALT) == 0 {
@@ -2290,8 +2392,55 @@ fn gui_test_app_key_event(spec: &str, input_seq: u64) -> Option<AppKeyEvent> {
         text: text.clone(),
         modified_text: text,
         named_key: None,
-        repeat: false,
+        repeat,
         input_seq: Some(input_seq),
+    })
+}
+
+fn gui_test_keyboard_event(spec: &str, repeat: bool) -> Option<keyboard::Event> {
+    let mut chars = spec.chars();
+    let ch = chars.next()?;
+    if chars.next().is_some() || !ch.is_ascii_alphabetic() {
+        return None;
+    }
+    let code = match ch.to_ascii_lowercase() {
+        'a' => keyboard::key::Code::KeyA,
+        'b' => keyboard::key::Code::KeyB,
+        'c' => keyboard::key::Code::KeyC,
+        'd' => keyboard::key::Code::KeyD,
+        'e' => keyboard::key::Code::KeyE,
+        'f' => keyboard::key::Code::KeyF,
+        'g' => keyboard::key::Code::KeyG,
+        'h' => keyboard::key::Code::KeyH,
+        'i' => keyboard::key::Code::KeyI,
+        'j' => keyboard::key::Code::KeyJ,
+        'k' => keyboard::key::Code::KeyK,
+        'l' => keyboard::key::Code::KeyL,
+        'm' => keyboard::key::Code::KeyM,
+        'n' => keyboard::key::Code::KeyN,
+        'o' => keyboard::key::Code::KeyO,
+        'p' => keyboard::key::Code::KeyP,
+        'q' => keyboard::key::Code::KeyQ,
+        'r' => keyboard::key::Code::KeyR,
+        's' => keyboard::key::Code::KeyS,
+        't' => keyboard::key::Code::KeyT,
+        'u' => keyboard::key::Code::KeyU,
+        'v' => keyboard::key::Code::KeyV,
+        'w' => keyboard::key::Code::KeyW,
+        'x' => keyboard::key::Code::KeyX,
+        'y' => keyboard::key::Code::KeyY,
+        'z' => keyboard::key::Code::KeyZ,
+        _ => return None,
+    };
+    let text = ch.to_string();
+    Some(keyboard::Event::KeyPressed {
+        key: keyboard::Key::Character(text.clone().into()),
+        modified_key: keyboard::Key::Character(text.clone().into()),
+        physical_key: keyboard::key::Physical::Code(code),
+        location: keyboard::Location::Standard,
+        modifiers: keyboard::Modifiers::default(),
+        text: Some(text.into()),
+        repeat,
     })
 }
 
@@ -3095,7 +3244,24 @@ mod tests {
     fn parse_gui_test_appkey_command() {
         assert_eq!(
             parse_gui_test_command("appkey shift+0x27"),
-            Some(GuiTestCommand::AppKey("shift+0x27".to_string()))
+            Some(GuiTestCommand::AppKey {
+                keyspec: "shift+0x27".to_string(),
+                repeat: false,
+            })
+        );
+        assert_eq!(
+            parse_gui_test_command("appkey-repeat j"),
+            Some(GuiTestCommand::AppKey {
+                keyspec: "j".to_string(),
+                repeat: true,
+            })
+        );
+        assert_eq!(
+            parse_gui_test_command("keyboard-repeat j"),
+            Some(GuiTestCommand::Keyboard {
+                keyspec: "j".to_string(),
+                repeat: true,
+            })
         );
     }
 
