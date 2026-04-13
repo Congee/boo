@@ -43,3 +43,9 @@ Convenience runners:
   - applies the row-band movement metric to one or more MP4 recordings, for example:
     - `python3 scripts/analyze-terminal-recording.py /tmp/boo-plain.mp4`
     - `python3 scripts/analyze-terminal-recording.py /tmp/boo-a.mp4 /tmp/boo-b.mp4`
+
+Linux note:
+
+- Video capture is optional on Linux and should not be the default gate for correctness or performance work.
+- Prefer the existing scenario runner, UI snapshot assertions, `BOO_PROFILE=1`, and Linux samplers such as `perf` or `samply`.
+- Use video on Linux only when investigating a visual-only issue such as scroll cadence, stutter, or compositor behavior.

@@ -127,6 +127,11 @@ pub fn native_to_vt_keycode(keycode: u32) -> Option<u32> {
     })
 }
 
+#[cfg(target_os = "linux")]
+pub fn native_to_vt_keycode(keycode: u32) -> Option<u32> {
+    Some(keycode)
+}
+
 #[cfg(target_os = "macos")]
 fn code_to_native(code: Code) -> Option<u32> {
     Some(match code {

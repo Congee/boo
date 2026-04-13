@@ -1,19 +1,29 @@
+#[cfg(target_os = "macos")]
 use std::env;
+#[cfg(target_os = "macos")]
 use std::fs;
 #[cfg(target_os = "macos")]
 use std::os::unix::fs::symlink;
+#[cfg(target_os = "macos")]
 use std::path::PathBuf;
 
+#[cfg(target_os = "macos")]
 const MACOS_APP_BUNDLE_ID: &str = "me.congee.boo";
+#[cfg(target_os = "macos")]
 const MACOS_APP_NAME: &str = "boo";
+#[cfg(target_os = "macos")]
 const MACOS_APP_DISPLAY_NAME: &str = "boo";
+#[cfg(target_os = "macos")]
 const BOO_APP_DIR_NAME: &str = "boo.app";
+#[cfg(target_os = "macos")]
 const BOO_EXECUTABLE_NAME: &str = "boo";
 
 fn main() {
+    #[cfg(target_os = "macos")]
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
 
-    if cfg!(target_os = "macos") {
+    #[cfg(target_os = "macos")]
+    {
         if let Some(vt_lib_dir) = libghostty_vt_lib_dir(&manifest_dir) {
             println!(
                 "cargo:rustc-link-arg-bins=-Wl,-rpath,{}",
@@ -26,6 +36,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 }
 
+#[cfg(target_os = "macos")]
 fn libghostty_vt_lib_dir(manifest_dir: &std::path::Path) -> Option<PathBuf> {
     if let Ok(path) = env::var("DEP_GHOSTTY_VT_LIBDIR") {
         return Some(PathBuf::from(path));
@@ -47,6 +58,7 @@ fn libghostty_vt_lib_dir(manifest_dir: &std::path::Path) -> Option<PathBuf> {
     None
 }
 
+#[cfg(target_os = "macos")]
 fn ensure_macos_app_bundle(manifest_dir: &std::path::Path) {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let profile_dir = out_dir
@@ -97,6 +109,7 @@ fn ensure_macos_app_bundle(manifest_dir: &std::path::Path) {
         .unwrap_or_else(|e| panic!("failed to write {}: {e}", pkg_info.display()));
 }
 
+#[cfg(target_os = "macos")]
 fn macos_info_plist() -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>

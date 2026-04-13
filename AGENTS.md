@@ -26,6 +26,8 @@
 ## Benchmark Workflow
 
 - `FEATURES.md` is too small to use as the primary terminal performance artifact.
+- On Linux, video capture is optional. Treat socket-based scenario checks, UI snapshots, `BOO_PROFILE=1`, and sampled profiling as the primary benchmark and verification path.
+- Use video on Linux only when a regression is specifically visual, such as cadence, stutter, or compositor-facing behavior.
 - Generate the local benchmark corpus with:
   - `bash scripts/gen-terminal-bench-corpus.sh`
 - Use named scenarios instead of ad hoc commands:

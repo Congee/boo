@@ -20,3 +20,7 @@ the old embedded Ghostty EGL readback path is no longer part of the app.
   longer required to build or run Boo.
 - Linux and macOS now share the same terminal runtime model, which keeps the
   remaining platform-specific code much thinner.
+- Linux testing should prefer the existing control-socket and UI-snapshot
+  harnesses as the primary verification path.
+- Wayland video capture is optional on Linux. It is useful for visual-only
+  regressions, but it is not required for the main test or benchmark suite.

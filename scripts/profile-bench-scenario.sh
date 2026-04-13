@@ -3,15 +3,24 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-if [[ $# -lt 1 ]]; then
+usage() {
   cat <<'EOF' >&2
 Usage:
-  bash scripts/profile-bench-scenario.sh <scenario> [extra profile-macos-sample-client.sh args...]
+  bash scripts/profile-bench-scenario.sh <scenario> [extra profiler args...]
 
 Examples:
   bash scripts/profile-bench-scenario.sh plain-cat
   bash scripts/profile-bench-scenario.sh unicode-cat --duration 8
 EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ $# -lt 1 ]]; then
+  usage
   exit 1
 fi
 
@@ -26,4 +35,8 @@ if [[ -z "$COMMAND" ]]; then
 fi
 
 WORKLOAD="${COMMAND}\r"
-exec bash scripts/profile-macos-sample-client.sh --workload "$WORKLOAD" "$@"
+if [[ "${OSTYPE:-}" == darwin* ]]; then
+  exec bash scripts/profile-macos-sample-client.sh --workload "$WORKLOAD" "$@"
+else
+  exec bash scripts/profile-linux-bench-client.sh --workload "$WORKLOAD" "$@"
+fi

@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 if [[ "${OSTYPE:-}" != darwin* ]]; then
-  echo "this script is for macOS only" >&2
+  echo "no Linux recorder is configured here; on Linux, video capture is optional and not part of the default benchmark path" >&2
   exit 1
 fi
 

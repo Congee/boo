@@ -33,193 +33,199 @@ mod tests {
 }
 
 pub(crate) fn shifted_codepoint(keycode: u32, mods: i32) -> u32 {
-    let has_shift = mods & ffi::GHOSTTY_MODS_SHIFT != 0;
-    #[cfg(target_os = "macos")]
-    let base = match keycode {
-        0x00 => 'a',
-        0x01 => 's',
-        0x02 => 'd',
-        0x03 => 'f',
-        0x04 => 'h',
-        0x05 => 'g',
-        0x06 => 'z',
-        0x07 => 'x',
-        0x08 => 'c',
-        0x09 => 'v',
-        0x0B => 'b',
-        0x0C => 'q',
-        0x0D => 'w',
-        0x0E => 'e',
-        0x0F => 'r',
-        0x10 => 'y',
-        0x11 => 't',
-        0x20 => 'u',
-        0x22 => 'i',
-        0x1F => 'o',
-        0x23 => 'p',
-        0x25 => 'l',
-        0x26 => 'j',
-        0x28 => 'k',
-        0x2D => 'n',
-        0x2E => 'm',
-        0x31 => ' ',
-        0x24 => '\r',
-        0x30 => '\t',
-        0x12 => {
-            if has_shift {
-                '!'
-            } else {
-                '1'
-            }
-        }
-        0x13 => {
-            if has_shift {
-                '@'
-            } else {
-                '2'
-            }
-        }
-        0x14 => {
-            if has_shift {
-                '#'
-            } else {
-                '3'
-            }
-        }
-        0x15 => {
-            if has_shift {
-                '$'
-            } else {
-                '4'
-            }
-        }
-        0x17 => {
-            if has_shift {
-                '%'
-            } else {
-                '5'
-            }
-        }
-        0x16 => {
-            if has_shift {
-                '^'
-            } else {
-                '6'
-            }
-        }
-        0x1A => {
-            if has_shift {
-                '&'
-            } else {
-                '7'
-            }
-        }
-        0x1C => {
-            if has_shift {
-                '*'
-            } else {
-                '8'
-            }
-        }
-        0x19 => {
-            if has_shift {
-                '('
-            } else {
-                '9'
-            }
-        }
-        0x1D => {
-            if has_shift {
-                ')'
-            } else {
-                '0'
-            }
-        }
-        0x27 => {
-            if has_shift {
-                '"'
-            } else {
-                '\''
-            }
-        }
-        0x2A => {
-            if has_shift {
-                '|'
-            } else {
-                '\\'
-            }
-        }
-        0x2B => {
-            if has_shift {
-                '<'
-            } else {
-                ','
-            }
-        }
-        0x2F => {
-            if has_shift {
-                '>'
-            } else {
-                '.'
-            }
-        }
-        0x2C => {
-            if has_shift {
-                '?'
-            } else {
-                '/'
-            }
-        }
-        0x29 => {
-            if has_shift {
-                ':'
-            } else {
-                ';'
-            }
-        }
-        0x1B => {
-            if has_shift {
-                '_'
-            } else {
-                '-'
-            }
-        }
-        0x18 => {
-            if has_shift {
-                '+'
-            } else {
-                '='
-            }
-        }
-        0x21 => {
-            if has_shift {
-                '{'
-            } else {
-                '['
-            }
-        }
-        0x1E => {
-            if has_shift {
-                '}'
-            } else {
-                ']'
-            }
-        }
-        0x32 => {
-            if has_shift {
-                '~'
-            } else {
-                '`'
-            }
-        }
-        _ => return 0,
-    };
     #[cfg(target_os = "linux")]
-    return shifted_codepoint_vt(keycode, mods);
-    if has_shift && base.is_ascii_lowercase() {
-        base.to_ascii_uppercase() as u32
-    } else {
-        base as u32
+    {
+        shifted_codepoint_vt(keycode, mods)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+    let has_shift = mods & ffi::GHOSTTY_MODS_SHIFT != 0;
+        let base = match keycode {
+            0x00 => 'a',
+            0x01 => 's',
+            0x02 => 'd',
+            0x03 => 'f',
+            0x04 => 'h',
+            0x05 => 'g',
+            0x06 => 'z',
+            0x07 => 'x',
+            0x08 => 'c',
+            0x09 => 'v',
+            0x0B => 'b',
+            0x0C => 'q',
+            0x0D => 'w',
+            0x0E => 'e',
+            0x0F => 'r',
+            0x10 => 'y',
+            0x11 => 't',
+            0x20 => 'u',
+            0x22 => 'i',
+            0x1F => 'o',
+            0x23 => 'p',
+            0x25 => 'l',
+            0x26 => 'j',
+            0x28 => 'k',
+            0x2D => 'n',
+            0x2E => 'm',
+            0x31 => ' ',
+            0x24 => '\r',
+            0x30 => '\t',
+            0x12 => {
+                if has_shift {
+                    '!'
+                } else {
+                    '1'
+                }
+            }
+            0x13 => {
+                if has_shift {
+                    '@'
+                } else {
+                    '2'
+                }
+            }
+            0x14 => {
+                if has_shift {
+                    '#'
+                } else {
+                    '3'
+                }
+            }
+            0x15 => {
+                if has_shift {
+                    '$'
+                } else {
+                    '4'
+                }
+            }
+            0x17 => {
+                if has_shift {
+                    '%'
+                } else {
+                    '5'
+                }
+            }
+            0x16 => {
+                if has_shift {
+                    '^'
+                } else {
+                    '6'
+                }
+            }
+            0x1A => {
+                if has_shift {
+                    '&'
+                } else {
+                    '7'
+                }
+            }
+            0x1C => {
+                if has_shift {
+                    '*'
+                } else {
+                    '8'
+                }
+            }
+            0x19 => {
+                if has_shift {
+                    '('
+                } else {
+                    '9'
+                }
+            }
+            0x1D => {
+                if has_shift {
+                    ')'
+                } else {
+                    '0'
+                }
+            }
+            0x27 => {
+                if has_shift {
+                    '"'
+                } else {
+                    '\''
+                }
+            }
+            0x2A => {
+                if has_shift {
+                    '|'
+                } else {
+                    '\\'
+                }
+            }
+            0x2B => {
+                if has_shift {
+                    '<'
+                } else {
+                    ','
+                }
+            }
+            0x2F => {
+                if has_shift {
+                    '>'
+                } else {
+                    '.'
+                }
+            }
+            0x2C => {
+                if has_shift {
+                    '?'
+                } else {
+                    '/'
+                }
+            }
+            0x29 => {
+                if has_shift {
+                    ':'
+                } else {
+                    ';'
+                }
+            }
+            0x1B => {
+                if has_shift {
+                    '_'
+                } else {
+                    '-'
+                }
+            }
+            0x18 => {
+                if has_shift {
+                    '+'
+                } else {
+                    '='
+                }
+            }
+            0x21 => {
+                if has_shift {
+                    '{'
+                } else {
+                    '['
+                }
+            }
+            0x1E => {
+                if has_shift {
+                    '}'
+                } else {
+                    ']'
+                }
+            }
+            0x32 => {
+                if has_shift {
+                    '~'
+                } else {
+                    '`'
+                }
+            }
+            _ => return 0,
+        };
+
+        if has_shift && base.is_ascii_lowercase() {
+            base.to_ascii_uppercase() as u32
+        } else {
+            base as u32
+        }
     }
 }
 
@@ -650,6 +656,11 @@ pub(crate) fn should_route_macos_vt_key_via_appkit(vt_keycode: u32, mods: i32) -
     matches!(vt_keycode, 1..=16 | 20..=50 | 63)
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn should_route_macos_vt_key_via_appkit(_: u32, _: i32) -> bool {
+    false
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn native_keycode_to_named_key(keycode: u32) -> Option<bindings::NamedKey> {
     Some(match keycode {
@@ -664,6 +675,11 @@ pub(crate) fn native_keycode_to_named_key(keycode: u32) -> Option<bindings::Name
         0x35 => bindings::NamedKey::Escape,
         _ => return None,
     })
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn native_keycode_to_named_key(_: u32) -> Option<bindings::NamedKey> {
+    None
 }
 
 #[cfg(all(target_os = "macos", test))]

@@ -20,6 +20,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_SYS_LIBDIR");
     println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_SYS_INCLUDEDIR");
     println!("cargo:rerun-if-env-changed=GHOSTTY_SOURCE_DIR");
+    println!("cargo:rerun-if-env-changed=ZIG_GLOBAL_CACHE_DIR");
+    println!("cargo:rerun-if-env-changed=ZIG_LOCAL_CACHE_DIR");
+    println!("cargo:rerun-if-env-changed=XDG_CACHE_HOME");
+    println!("cargo:rerun-if-env-changed=HOME");
     println!("cargo:rerun-if-env-changed=TARGET");
     println!("cargo:rerun-if-env-changed=HOST");
     println!("cargo:rerun-if-changed=crates/libghostty-vt-sys/build.rs");
@@ -122,12 +126,15 @@ fn ensure_cached_install_prefix(out_dir: &Path, target: &str, host: &str) -> (Pa
         };
 
         let mut build = Command::new("zig");
+        let (zig_global_cache_dir, zig_local_cache_dir) = prepare_zig_cache_dirs(out_dir);
         build
             .arg("build")
             .arg("-Demit-lib-vt")
             .arg(format!("-Doptimize={optimize}"))
             .arg("--prefix")
             .arg(&raw_install_prefix)
+            .env("ZIG_GLOBAL_CACHE_DIR", &zig_global_cache_dir)
+            .env("ZIG_LOCAL_CACHE_DIR", &zig_local_cache_dir)
             .current_dir(&ghostty_dir);
 
         if target != host {
@@ -142,11 +149,88 @@ fn ensure_cached_install_prefix(out_dir: &Path, target: &str, host: &str) -> (Pa
         fs::write(&stamp_path, expected_stamp)
             .unwrap_or_else(|e| panic!("failed to write {}: {e}", stamp_path.display()));
     }
+    ensure_shared_lib_link_name(&lib_dir, target);
     let _ = fs::remove_dir_all(install_prefix.join("share"));
     let _ = fs::remove_dir_all(install_prefix.join("Ghostty.app"));
     let _ = fs::remove_dir_all(install_prefix.join("boo.app"));
 
     (lib_dir, include_dir)
+}
+
+fn ensure_shared_lib_link_name(lib_dir: &Path, target: &str) {
+    let (versioned_name, linker_name) = if target.contains("darwin") {
+        ("libghostty-vt.0.1.0.dylib", "libghostty-vt.dylib")
+    } else {
+        ("libghostty-vt.so.0.1.0", "libghostty-vt.so")
+    };
+
+    let versioned = lib_dir.join(versioned_name);
+    let linker_alias = lib_dir.join(linker_name);
+    if !versioned.exists() {
+        return;
+    }
+    if linker_alias.exists() {
+        return;
+    }
+    fs::copy(&versioned, &linker_alias).unwrap_or_else(|e| {
+        panic!(
+            "failed to create linker alias {} from {}: {e}",
+            linker_alias.display(),
+            versioned.display()
+        )
+    });
+}
+
+fn prepare_zig_cache_dirs(out_dir: &Path) -> (PathBuf, PathBuf) {
+    let global_cache_dir = env::var_os("ZIG_GLOBAL_CACHE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| out_dir.join("zig-global-cache"));
+    let local_cache_dir = env::var_os("ZIG_LOCAL_CACHE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| out_dir.join("zig-local-cache"));
+
+    fs::create_dir_all(&global_cache_dir).unwrap_or_else(|e| {
+        panic!(
+            "failed to create Zig global cache dir {}: {e}",
+            global_cache_dir.display()
+        )
+    });
+    fs::create_dir_all(&local_cache_dir).unwrap_or_else(|e| {
+        panic!(
+            "failed to create Zig local cache dir {}: {e}",
+            local_cache_dir.display()
+        )
+    });
+
+    let package_cache_dir = global_cache_dir.join("p");
+    if !package_cache_dir.exists() {
+        for candidate in zig_package_cache_candidates() {
+            if candidate.exists() {
+                copy_dir_all(&candidate, &package_cache_dir);
+                break;
+            }
+        }
+    }
+
+    (global_cache_dir, local_cache_dir)
+}
+
+fn zig_package_cache_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(dir) = env::var_os("ZIG_GLOBAL_CACHE_DIR") {
+        candidates.push(PathBuf::from(dir).join("p"));
+    }
+
+    if let Some(dir) = env::var_os("XDG_CACHE_HOME") {
+        candidates.push(PathBuf::from(dir).join("zig").join("p"));
+    }
+
+    if let Some(home) = env::var_os("HOME") {
+        candidates.push(PathBuf::from(home).join(".cache").join("zig").join("p"));
+    }
+
+    candidates
 }
 
 fn copy_dir_all(src: &Path, dst: &Path) {
