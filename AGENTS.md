@@ -49,18 +49,17 @@
 - Commit `e50f98d` added:
   - the terminal benchmark corpus/tooling
   - `TerminalBodyLayer`
-  - `ModelParagraph` as the current default body renderer
-  - experimental `canvas_text` behind `BOO_TERMINAL_BODY_IMPL=canvas_text`
-- `canvas_text` is not ready to become the default renderer.
+  - `ModelParagraph` as the older paragraph-heavy renderer
+  - `canvas_text` as the direct renderer path selected by default
 - Corpus-backed findings:
   - `pager-less` on the large generated pager corpus was promising for `canvas_text`
   - `unicode-cat` initially collapsed badly on `canvas_text`
-  - the finite-width fix in `src/vt_terminal_canvas.rs` removed that unicode collapse and brought `canvas_text` roughly back to parity with the default renderer on unicode
-  - `wrap-cat` still performs worse on current `canvas_text` than on the current default renderer
+  - the finite-width fix in `src/vt_terminal_canvas.rs` removed that unicode collapse
+  - the remaining paragraph path still pays per-run paragraph build/diff overhead that the direct canvas path avoids
 - Current conclusion:
-  - keep `canvas_text` experimental
-  - do not switch the default renderer yet
-  - if continuing this line of work, investigate canvas invalidation/redraw cadence before adding more rendering heuristics
+  - prefer the direct `canvas_text` path by default
+  - keep `BOO_TERMINAL_BODY_IMPL=model_paragraph` available for comparison and regression checks
+  - if continuing this line of work, investigate canvas invalidation/redraw cadence and row/run generation costs before adding more paragraph caching
 
 ## Held-j Findings
 

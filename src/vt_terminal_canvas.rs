@@ -1014,6 +1014,34 @@ impl TerminalBodyLayer {
         let body_impl = std::env::var("BOO_TERMINAL_BODY_IMPL").ok();
         Self {
             inner: match body_impl.as_deref() {
+                Some("paragraph") => TerminalBodyImpl::Paragraph(ParagraphTerminalBodyLayer::new(
+                    snapshot,
+                    cell_width,
+                    cell_height,
+                    font_size,
+                    font_families,
+                    cursor_blink_visible,
+                    selection_rects,
+                    selection_foreground,
+                    cursor_text_color,
+                    url_color,
+                    preedit_text,
+                )),
+                Some("model_paragraph") => {
+                    TerminalBodyImpl::ModelParagraph(ModelParagraphTerminalBodyLayer::new(
+                        snapshot,
+                        cell_width,
+                        cell_height,
+                        font_size,
+                        font_families,
+                        cursor_blink_visible,
+                        selection_rects,
+                        selection_foreground,
+                        cursor_text_color,
+                        url_color,
+                        preedit_text,
+                    ))
+                }
                 Some("canvas_text") => {
                     TerminalBodyImpl::CanvasText(CanvasTextTerminalBodyLayer::new(
                         snapshot,
@@ -1029,7 +1057,7 @@ impl TerminalBodyLayer {
                         preedit_text,
                     ))
                 }
-                _ => TerminalBodyImpl::ModelParagraph(ModelParagraphTerminalBodyLayer::new(
+                _ => TerminalBodyImpl::CanvasText(CanvasTextTerminalBodyLayer::new(
                     snapshot,
                     cell_width,
                     cell_height,

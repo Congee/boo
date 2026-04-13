@@ -35,8 +35,20 @@ if [[ -z "$COMMAND" ]]; then
 fi
 
 WORKLOAD="${COMMAND}\r"
+BENCH_ARGS=()
+case "$SCENARIO" in
+  pager-less)
+    BENCH_ARGS=(
+      --bench-key pagedown
+      --bench-key-repeat 24
+      --bench-key-delay 1.0
+      --bench-key-interval 0.15
+    )
+    ;;
+esac
+
 if [[ "${OSTYPE:-}" == darwin* ]]; then
   exec bash scripts/profile-macos-sample-client.sh --workload "$WORKLOAD" "$@"
 else
-  exec bash scripts/profile-linux-bench-client.sh --workload "$WORKLOAD" "$@"
+  exec bash scripts/profile-linux-bench-client.sh --workload "$WORKLOAD" "${BENCH_ARGS[@]}" "$@"
 fi

@@ -31,7 +31,7 @@ Examples:
   scripts/profile-macos-sample-client.sh
   scripts/profile-macos-sample-client.sh --workload 'cat ~/config.json\r'
   scripts/profile-macos-sample-client.sh --client-bin target/debug/boo
-  CLIENT_IMPL=canvas_text scripts/profile-macos-sample-client.sh --workload 'cat bench/generated/unicode-16mb.txt\r'
+  CLIENT_IMPL=model_paragraph scripts/profile-macos-sample-client.sh --workload 'cat bench/generated/unicode-16mb.txt\r'
 
 Notes:
   - Starts one Boo server and one Boo GUI client.

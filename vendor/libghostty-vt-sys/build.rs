@@ -158,27 +158,31 @@ fn ensure_cached_install_prefix(out_dir: &Path, target: &str, host: &str) -> (Pa
 }
 
 fn ensure_shared_lib_link_name(lib_dir: &Path, target: &str) {
-    let (versioned_name, linker_name) = if target.contains("darwin") {
-        ("libghostty-vt.0.1.0.dylib", "libghostty-vt.dylib")
+    let alias_names: &[(&str, &[&str])] = if target.contains("darwin") {
+        &[("libghostty-vt.0.1.0.dylib", &["libghostty-vt.dylib"])]
     } else {
-        ("libghostty-vt.so.0.1.0", "libghostty-vt.so")
+        &[("libghostty-vt.so.0.1.0", &["libghostty-vt.so", "libghostty-vt.so.0"])]
     };
 
-    let versioned = lib_dir.join(versioned_name);
-    let linker_alias = lib_dir.join(linker_name);
-    if !versioned.exists() {
-        return;
+    for (versioned_name, aliases) in alias_names {
+        let versioned = lib_dir.join(versioned_name);
+        if !versioned.exists() {
+            continue;
+        }
+        for alias in *aliases {
+            let alias_path = lib_dir.join(alias);
+            if alias_path.exists() {
+                continue;
+            }
+            fs::copy(&versioned, &alias_path).unwrap_or_else(|e| {
+                panic!(
+                    "failed to create shared library alias {} from {}: {e}",
+                    alias_path.display(),
+                    versioned.display()
+                )
+            });
+        }
     }
-    if linker_alias.exists() {
-        return;
-    }
-    fs::copy(&versioned, &linker_alias).unwrap_or_else(|e| {
-        panic!(
-            "failed to create linker alias {} from {}: {e}",
-            linker_alias.display(),
-            versioned.display()
-        )
-    });
 }
 
 fn prepare_zig_cache_dirs(out_dir: &Path) -> (PathBuf, PathBuf) {
