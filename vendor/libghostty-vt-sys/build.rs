@@ -57,6 +57,7 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=dylib=ghostty-vt");
+    println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
     println!("cargo:include={}", include_dir.display());
     println!("cargo:libdir={}", lib_dir.display());
 }

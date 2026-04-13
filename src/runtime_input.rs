@@ -1197,6 +1197,10 @@ impl BooApp {
             }
             "zoom" => self.dispatch_binding_action(bindings::Action::ToggleZoom),
             "reload-config" => self.dispatch_binding_action(bindings::Action::ReloadConfig),
+            "scroll-page-up" => self.ghostty_binding_action("scroll_page_up"),
+            "scroll-page-down" => self.ghostty_binding_action("scroll_page_down"),
+            "scroll-to-top" => self.ghostty_binding_action("scroll_to_top"),
+            "scroll-to-bottom" => self.ghostty_binding_action("scroll_to_bottom"),
             "goto-line" => {
                 if let Some(n) = arg1.and_then(|s| s.parse::<i64>().ok()) {
                     if let Some(ref mut cm) = self.copy_mode {

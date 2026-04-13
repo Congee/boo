@@ -8,6 +8,24 @@ SOCKET_PATH="${BOO_TEST_SOCKET:-/tmp/boo-ui-scenarios.sock}"
 LOG_PATH="${BOO_TEST_LOG:-/tmp/boo-ui-scenarios.log}"
 LOG_LEVEL="${BOO_TEST_LOG_LEVEL:-warn}"
 EXPECTED_FONT="$(fc-match -f '%{family[0]}' 'JetBrains Mono' 2>/dev/null || printf 'JetBrains Mono')"
+VT_LIB_DIR="${VT_LIB_DIR:-}"
+
+find_vt_lib_dir() {
+  local target="${TARGET:-$(rustc -vV | awk '/host:/ {print $2}')}"
+  local candidates=(
+    "$ROOT_DIR/target/libghostty-vt/$target/debug/lib"
+    "$ROOT_DIR/target/libghostty-vt/$target/profiling/lib"
+    "$ROOT_DIR/target/libghostty-vt/$target/release/lib"
+  )
+  local path
+  for path in "${candidates[@]}"; do
+    if [[ -e "$path/libghostty-vt.so.0" || -e "$path/libghostty-vt.so" ]]; then
+      printf '%s\n' "$path"
+      return 0
+    fi
+  done
+  return 1
+}
 
 mkdir -p "$CONFIG_DIR"
 cat > "$CONFIG_DIR/config.boo" <<EOF
@@ -37,7 +55,15 @@ trap cleanup EXIT
 
 (
   cd "$ROOT_DIR"
-  RUST_LOG="$LOG_LEVEL" XDG_CONFIG_HOME="$CONFIG_ROOT" target/debug/boo >"$LOG_PATH" 2>&1
+  if [[ -z "$VT_LIB_DIR" ]]; then
+    VT_LIB_DIR="$(find_vt_lib_dir || true)"
+  fi
+  if [[ -n "$VT_LIB_DIR" ]]; then
+    LD_LIBRARY_PATH="$VT_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+      RUST_LOG="$LOG_LEVEL" XDG_CONFIG_HOME="$CONFIG_ROOT" target/debug/boo >"$LOG_PATH" 2>&1
+  else
+    RUST_LOG="$LOG_LEVEL" XDG_CONFIG_HOME="$CONFIG_ROOT" target/debug/boo >"$LOG_PATH" 2>&1
+  fi
 ) &
 BOO_PID=$!
 
@@ -65,6 +91,7 @@ env = {
     "copy_mode": snapshot["copy_mode"],
     "search": snapshot["search"],
     "command_prompt": snapshot["command_prompt"],
+    "scrollbar": snapshot["scrollbar"],
     "terminal": snapshot["terminal"],
 }
 
@@ -288,7 +315,7 @@ wait_clipboard_matches() {
 }
 
 assert_snapshot /tmp/boo-ui-initial.json 'len(tabs) == 1 and len(visible_panes) == 1 and active_tab == 0'
-assert_snapshot /tmp/boo-ui-initial.json "appearance[\"font_family\"] == \"$EXPECTED_FONT\" and abs(appearance[\"font_size\"] - 18.0) < 0.01 and abs(appearance[\"background_opacity\"] - 0.72) < 0.01 and appearance[\"background_opacity_cells\"]"
+assert_snapshot /tmp/boo-ui-initial.json "\"$EXPECTED_FONT\" in appearance[\"font_families\"] and abs(appearance[\"font_size\"] - 18.0) < 0.01 and abs(appearance[\"background_opacity\"] - 0.72) < 0.01 and appearance[\"background_opacity_cells\"]"
 
 HAS_TERMINAL_SNAPSHOT=0
 if snapshot_has_terminal /tmp/boo-ui-initial.json; then
@@ -417,5 +444,36 @@ wait_snapshot /tmp/boo-ui-after-command-prompt-enter.json 'not command_prompt["a
 
 python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" request send-key key=esc >/tmp/boo-ui-search-after-prompt-esc-response.json
 wait_snapshot /tmp/boo-ui-after-search-close-2.json 'not search["active"]'
+
+python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" request resize-viewport cols=80 rows=12 >/tmp/boo-ui-scroll-reset-resize-response.json
+wait_snapshot /tmp/boo-ui-after-scroll-reset-resize.json 'scrollbar["len"] > 0'
+python3 - "$SOCKET_PATH" <<'PY'
+import json
+import socket
+import sys
+
+socket_path = sys.argv[1]
+payload = {
+    "cmd": "send-vt",
+    "text": "".join(f"SCROLL{i:03d}\r\n" for i in range(1, 121)),
+}
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+    sock.connect(socket_path)
+    sock.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+    data = b""
+    while not data.endswith(b"\n"):
+        chunk = sock.recv(65536)
+        if not chunk:
+            break
+        data += chunk
+    response = json.loads(data.decode("utf-8"))
+    if response != {"ok": True}:
+        raise SystemExit(f"unexpected response: {response}")
+PY
+wait_snapshot /tmp/boo-ui-after-scroll-fill.json 'scrollbar["total"] > scrollbar["len"] and scrollbar["offset"] + scrollbar["len"] == scrollbar["total"]'
+python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" request execute-command input=scroll-page-up >/tmp/boo-ui-scroll-page-up-response.json
+wait_snapshot /tmp/boo-ui-after-scroll-page-up.json 'scrollbar["total"] > scrollbar["len"] and scrollbar["offset"] + scrollbar["len"] < scrollbar["total"]'
+python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" request send-key key=a >/tmp/boo-ui-scroll-reset-key-response.json
+wait_snapshot /tmp/boo-ui-after-scroll-reset-key.json 'scrollbar["total"] > scrollbar["len"] and scrollbar["offset"] + scrollbar["len"] == scrollbar["total"]'
 
 echo "ui scenarios passed"

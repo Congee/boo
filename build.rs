@@ -1,10 +1,9 @@
-#[cfg(target_os = "macos")]
 use std::env;
 #[cfg(target_os = "macos")]
 use std::fs;
+use std::path::Path;
 #[cfg(target_os = "macos")]
 use std::os::unix::fs::symlink;
-#[cfg(target_os = "macos")]
 use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]
@@ -19,10 +18,9 @@ const BOO_APP_DIR_NAME: &str = "boo.app";
 const BOO_EXECUTABLE_NAME: &str = "boo";
 
 fn main() {
-    #[cfg(target_os = "macos")]
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         if let Some(vt_lib_dir) = libghostty_vt_lib_dir(&manifest_dir) {
             println!(
@@ -30,15 +28,25 @@ fn main() {
                 vt_lib_dir.display()
             );
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
         ensure_macos_app_bundle(&manifest_dir);
     }
 
     println!("cargo:rerun-if-changed=build.rs");
 }
 
-#[cfg(target_os = "macos")]
-fn libghostty_vt_lib_dir(manifest_dir: &std::path::Path) -> Option<PathBuf> {
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn libghostty_vt_lib_dir(manifest_dir: &Path) -> Option<PathBuf> {
     if let Ok(path) = env::var("DEP_GHOSTTY_VT_LIBDIR") {
+        return Some(PathBuf::from(path));
+    }
+    if let Ok(path) = env::var("DEP_LIBGHOSTTY_VT_LIBDIR") {
+        return Some(PathBuf::from(path));
+    }
+    if let Ok(path) = env::var("DEP_LIBGHOSTTY_VT_SYS_LIBDIR") {
         return Some(PathBuf::from(path));
     }
 
@@ -52,7 +60,12 @@ fn libghostty_vt_lib_dir(manifest_dir: &std::path::Path) -> Option<PathBuf> {
         .join(target)
         .join(profile)
         .join("lib");
-    if lib_dir.join("libghostty-vt.dylib").exists() {
+    let marker = if cfg!(target_os = "macos") {
+        "libghostty-vt.dylib"
+    } else {
+        "libghostty-vt.so.0"
+    };
+    if lib_dir.join(marker).exists() {
         return Some(lib_dir);
     }
     None

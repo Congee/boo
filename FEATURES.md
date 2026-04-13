@@ -262,4 +262,4 @@ nix develop
 
 ### UI Backlog
 - [x] Allow mouse text selection and clipboard copy via `cmd+c`
-- [ ] User text input shall reset scrolling state
+- [x] User text input shall reset scrolling state
