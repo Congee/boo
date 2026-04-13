@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 pub(crate) const PADDING_X: f32 = 4.0;
 pub(crate) const PADDING_Y: f32 = 2.0;
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TerminalCanvas {
     pub snapshot: Arc<vt_backend_core::TerminalSnapshot>,
     pub cell_width: f32,
@@ -38,6 +38,8 @@ pub struct TerminalCanvas {
     pub viewport: Option<TerminalViewport>,
     pub paint_base: bool,
     pub paint_text: bool,
+    pub paint_selection_overlay: bool,
+    pub paint_cursor_overlay: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -84,6 +86,7 @@ pub struct TerminalViewport {
     pub height: f32,
 }
 
+#[allow(dead_code)]
 impl TerminalCanvas {
     pub fn new(
         snapshot: Arc<vt_backend_core::TerminalSnapshot>,
@@ -123,6 +126,8 @@ impl TerminalCanvas {
             viewport: None,
             paint_base: true,
             paint_text: true,
+            paint_selection_overlay: true,
+            paint_cursor_overlay: true,
         }
     }
 
@@ -141,6 +146,16 @@ impl TerminalCanvas {
         self
     }
 
+    pub fn without_selection_overlay(mut self) -> Self {
+        self.paint_selection_overlay = false;
+        self
+    }
+
+    pub fn without_cursor_overlay(mut self) -> Self {
+        self.paint_cursor_overlay = false;
+        self
+    }
+
     fn draw_base(&self, frame: &mut Frame<Renderer>) {
         if !self.paint_base {
             return;
@@ -156,6 +171,13 @@ impl TerminalCanvas {
     fn draw_row(&self, frame: &mut Frame<Renderer>, row_index: usize, state: &TerminalCanvasState) {
         let origin = self.viewport_origin();
         let y = origin.y + PADDING_Y + row_index as f32 * self.cell_height;
+        let (_, viewport_size) = self.viewport_origin_and_size(frame.size());
+        let viewport = Rectangle {
+            x: origin.x,
+            y: origin.y,
+            width: viewport_size.width,
+            height: viewport_size.height,
+        };
         let artifacts = state.row_artifacts.borrow();
         let artifacts = &artifacts[row_index];
         for span in &artifacts.background_spans {
@@ -175,7 +197,7 @@ impl TerminalCanvas {
             }
             let x = origin.x + PADDING_X + run.start_col as f32 * self.cell_width;
             let draw_width = run.width_cols as f32 * self.cell_width;
-            let max_width = text_run_max_width(run, draw_width);
+            let max_width = text_run_max_width(run, draw_width, available_text_width(viewport, x));
             debug_non_ascii_draw_run(run, row_index, x, y, draw_width, max_width);
             frame.fill_text(canvas::Text {
                 content: run.text.clone(),
@@ -313,17 +335,28 @@ impl TerminalCanvas {
                 overlay,
             );
             if self.paint_text {
+                let (_, viewport_size) = self.viewport_origin_and_size(frame.size());
+                let viewport = Rectangle {
+                    x: origin.x,
+                    y: origin.y,
+                    width: viewport_size.width,
+                    height: viewport_size.height,
+                };
                 frame.fill_text(canvas::Text {
                     content: preedit.to_string(),
                     position: Point::new(x, y),
                     color: default_fg,
                     size: Pixels(self.font_size),
                     line_height: iced::widget::text::LineHeight::Absolute(Pixels(self.cell_height)),
-                font: font_for_terminal_text(preedit, false, false, &self.font_families),
+                    font: font_for_terminal_text(preedit, false, false, &self.font_families),
                     align_x: iced::widget::text::Alignment::Left,
                     align_y: alignment::Vertical::Top,
                     shaping: iced::widget::text::Shaping::Advanced,
-                    max_width: non_ascii_text_max_width(preedit, width),
+                    max_width: non_ascii_text_max_width(
+                        preedit,
+                        width,
+                        available_text_width(viewport, x),
+                    ),
                 });
             }
             frame.fill_rectangle(
@@ -390,6 +423,12 @@ impl TerminalCanvas {
         let x = origin.x + PADDING_X + run.start_col as f32 * self.cell_width;
         let y = origin.y + PADDING_Y + row_index as f32 * self.cell_height;
         let draw_width = run.width_cols as f32 * self.cell_width;
+        let viewport = Rectangle {
+            x: origin.x,
+            y: origin.y,
+            width: self.viewport.map(|vp| vp.width).unwrap_or(f32::INFINITY),
+            height: self.viewport.map(|vp| vp.height).unwrap_or(self.cell_height),
+        };
         frame.fill_text(canvas::Text {
             content: run.text.clone(),
             position: Point::new(x, y),
@@ -400,7 +439,7 @@ impl TerminalCanvas {
             align_x: iced::widget::text::Alignment::Left,
             align_y: alignment::Vertical::Top,
             shaping: run.shaping,
-            max_width: non_ascii_text_max_width(&run.text, draw_width),
+            max_width: non_ascii_text_max_width(&run.text, draw_width, available_text_width(viewport, x)),
         });
     }
 
@@ -435,6 +474,41 @@ pub struct TerminalTextLayer {
     pub viewport: Option<TerminalViewport>,
 }
 
+pub struct TerminalBodyLayer {
+    inner: TerminalBodyImpl,
+}
+
+enum TerminalBodyImpl {
+    #[allow(dead_code)]
+    Paragraph(ParagraphTerminalBodyLayer),
+    ModelParagraph(ModelParagraphTerminalBodyLayer),
+    #[allow(dead_code)]
+    CanvasText(CanvasTextTerminalBodyLayer),
+}
+
+struct ParagraphTerminalBodyLayer {
+    inner: TerminalTextLayer,
+}
+
+struct ModelParagraphTerminalBodyLayer {
+    snapshot: Arc<vt_backend_core::TerminalSnapshot>,
+    cell_width: f32,
+    cell_height: f32,
+    font_size: f32,
+    font_families: Arc<[&'static str]>,
+    cursor_blink_visible: bool,
+    selection_rects: Arc<[TerminalSelectionRect]>,
+    selection_foreground: Option<Color>,
+    cursor_text_color: Option<Color>,
+    url_color: Option<Color>,
+    preedit_text: Option<String>,
+    viewport: Option<TerminalViewport>,
+}
+
+struct CanvasTextTerminalBodyLayer {
+    inner: TerminalCanvas,
+}
+
 struct TerminalTextLayerState {
     base_row_entries: Vec<Vec<TextLayerEntry>>,
     base_row_fingerprints: Vec<u64>,
@@ -467,6 +541,13 @@ struct TextLayerEntry {
     color: Color,
 }
 
+#[derive(Debug, Clone, Default)]
+struct TerminalBodyRowModel {
+    base_runs: Vec<TextRun>,
+    overlay_runs: Vec<TextRun>,
+}
+
+#[allow(dead_code)]
 impl TerminalTextLayer {
     pub fn new(
         snapshot: Arc<vt_backend_core::TerminalSnapshot>,
@@ -519,37 +600,18 @@ impl TerminalTextLayer {
     }
 
     fn build_base_row_entries(&self, viewport: Rectangle, row_index: usize) -> Vec<TextLayerEntry> {
-        let Some(row) = self.snapshot.rows_data.get(row_index) else {
-            return Vec::new();
-        };
-        let mut entries = Vec::new();
-        for (col_index, cell) in row.iter().enumerate() {
-            let content = cell.text.as_str();
-            if content.is_empty() || content == "\0" {
-                continue;
-            }
-            let underline = cell.underline != 0;
-            if content == " " && !underline {
-                continue;
-            }
-            self.push_text_entry(
-                &mut entries,
-                viewport,
-                row_index,
-                col_index,
-                content,
-                usize::from(cell.display_width.max(1)),
-                font_for_cell(cell, &self.font_families),
-                terminal_text_shaping(),
-                if cell.hyperlink {
-                    self.url_color
-                        .unwrap_or_else(|| color_from_rgb(cell.fg, 1.0))
-                } else {
-                    color_from_rgb(cell.fg, 1.0)
-                },
-            );
-        }
-        entries
+        let row_model = build_terminal_body_row_model(
+            &self.snapshot,
+            row_index,
+            &self.font_families,
+            self.url_color,
+            &[],
+            self.selection_foreground,
+            self.cursor_text_color,
+            self.cursor_blink_visible,
+            self.preedit_text.as_deref(),
+        );
+        self.build_text_entries_from_runs(viewport, row_index, &row_model.base_runs)
     }
 
     fn build_overlay_row_entries(
@@ -558,84 +620,40 @@ impl TerminalTextLayer {
         row_index: usize,
         selection_spans: &[SelectionColSpan],
     ) -> Vec<TextLayerEntry> {
-        let mut entries = Vec::new();
-        let Some(row) = self.snapshot.rows_data.get(row_index) else {
-            return entries;
-        };
+        let row_model = build_terminal_body_row_model(
+            &self.snapshot,
+            row_index,
+            &self.font_families,
+            self.url_color,
+            selection_spans,
+            self.selection_foreground,
+            self.cursor_text_color,
+            self.cursor_blink_visible,
+            self.preedit_text.as_deref(),
+        );
+        self.build_text_entries_from_runs(viewport, row_index, &row_model.overlay_runs)
+    }
 
-        if let Some(selection_foreground) = self.selection_foreground.filter(|_| !selection_spans.is_empty()) {
-            for (col_index, cell) in row.iter().enumerate() {
-                let content = cell.text.as_str();
-                if content.is_empty() || content == "\0" {
-                    continue;
-                }
-                let underline = cell.underline != 0;
-                if content == " " && !underline {
-                    continue;
-                }
-                if !cell_is_selected_in_spans(selection_spans, col_index, cell.display_width) {
-                    continue;
-                }
-                self.push_text_entry(
-                    &mut entries,
-                    viewport,
-                    row_index,
-                    col_index,
-                    content,
-                    usize::from(cell.display_width.max(1)),
-                    font_for_cell(cell, &self.font_families),
-                    terminal_text_shaping(),
-                    selection_foreground,
-                );
-            }
-        }
-
-        if let Some(cursor_text_color) = self
-            .cursor_text_color
-            .filter(|_| self.snapshot.cursor.y as usize == row_index)
-        {
-            for (col_index, cell) in row.iter().enumerate() {
-                if !cell.text.is_empty() && self.should_draw_cursor_text(row_index, col_index) {
-                    self.push_text_entry(
-                        &mut entries,
-                        viewport,
-                        row_index,
-                        col_index,
-                        cell.text.as_str(),
-                        usize::from(cell.display_width.max(1)),
-                        font_for_cell(cell, &self.font_families),
-                        terminal_text_shaping(),
-                        cursor_text_color,
-                    );
-                }
-            }
-        }
-
-        if let Some(preedit) = self
-            .preedit_text
-            .as_deref()
-            .filter(|text| !text.is_empty())
-            .filter(|_| self.snapshot.cursor.y < self.snapshot.rows)
-            .filter(|_| self.snapshot.cursor.y as usize == row_index)
-        {
+    fn build_text_entries_from_runs(
+        &self,
+        viewport: Rectangle,
+        row_index: usize,
+        runs: &[TextRun],
+    ) -> Vec<TextLayerEntry> {
+        let mut entries = Vec::with_capacity(runs.len());
+        for run in runs {
             self.push_text_entry(
                 &mut entries,
                 viewport,
-                self.snapshot.cursor.y as usize,
-                self.snapshot.cursor.x as usize,
-                preedit,
-                preedit.chars().count().max(1),
-                font_for_terminal_text(
-                    preedit,
-                    false,
-                    false,
-                    &self.font_families,
-                ),
-                terminal_text_shaping(),
-                color_from_rgb(self.snapshot.colors.foreground, 1.0),
+                row_index,
+                run.start_col,
+                run.text.as_str(),
+                run.width_cols,
+                run.font,
+                run.shaping,
+                run.fg,
             );
         }
-
         entries
     }
 
@@ -686,18 +704,6 @@ impl TerminalTextLayer {
             position: Point::new(x, y),
             color,
         });
-    }
-
-    fn should_draw_cursor_text(&self, row_index: usize, col_index: usize) -> bool {
-        self.snapshot.cursor.visible
-            && self.cursor_blink_visible
-            && self.snapshot.cursor.y as usize == row_index
-            && self.snapshot.cursor.x as usize == col_index
-            && self.snapshot.cursor.style != crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR
-            && self.snapshot.cursor.style
-                != crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE
-            && self.snapshot.cursor.style
-                != crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW
     }
 
     fn style_fingerprint(&self, viewport: Rectangle) -> u64 {
@@ -824,10 +830,16 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TerminalTextLayer {
         _cursor: mouse::Cursor,
         _viewport: &Rectangle,
     ) {
+        let _scope = crate::profiling::scope(
+            "client.text_layer.draw",
+            crate::profiling::Kind::Cpu,
+        );
         let viewport = self.viewport_rect(layout.bounds());
         let state = tree.state.downcast_ref::<TerminalTextLayerState>();
+        let mut paragraph_count = 0u64;
         for row_entries in &state.base_row_entries {
             for entry in row_entries {
+                paragraph_count += 1;
                 renderer.fill_paragraph(
                     &entry.paragraph,
                     entry.position,
@@ -838,6 +850,7 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TerminalTextLayer {
         }
         for row_entries in &state.overlay_row_entries {
             for entry in row_entries {
+                paragraph_count += 1;
                 renderer.fill_paragraph(
                     &entry.paragraph,
                     entry.position,
@@ -846,9 +859,18 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TerminalTextLayer {
                 );
             }
         }
+        crate::profiling::record_units(
+            "client.text_layer.draw_paragraphs",
+            crate::profiling::Kind::Cpu,
+            paragraph_count,
+        );
     }
 
     fn diff(&self, tree: &mut Tree) {
+        let _scope = crate::profiling::scope(
+            "client.text_layer.diff",
+            crate::profiling::Kind::Cpu,
+        );
         let state = tree.state.downcast_mut::<TerminalTextLayerState>();
         let bounds = self
             .viewport
@@ -869,6 +891,10 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TerminalTextLayer {
         let style_changed = state.style_fingerprint != Some(style_fingerprint);
         let selection_spans_fingerprint = self.selection_spans_fingerprint();
         let row_count = self.snapshot.rows_data.len();
+        let mut rebuilt_base_rows = 0u64;
+        let mut rebuilt_overlay_rows = 0u64;
+        let mut base_paragraphs = 0u64;
+        let mut overlay_paragraphs = 0u64;
         state.base_row_entries.resize_with(row_count, Vec::new);
         state.base_row_entries.truncate(row_count);
         state.base_row_fingerprints.resize(row_count, 0);
@@ -916,7 +942,9 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TerminalTextLayer {
             if style_changed || state.base_row_fingerprints[row_index] != fingerprint {
                 state.base_row_entries[row_index] = self.build_base_row_entries(viewport, row_index);
                 state.base_row_fingerprints[row_index] = fingerprint;
+                rebuilt_base_rows += 1;
             }
+            base_paragraphs += state.base_row_entries[row_index].len() as u64;
             let overlay_fingerprint =
                 self.overlay_row_fingerprint(
                     row_index,
@@ -932,10 +960,891 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TerminalTextLayer {
                         &state.selection_row_spans[row_index],
                     );
                 state.overlay_row_fingerprints[row_index] = overlay_fingerprint;
+                rebuilt_overlay_rows += 1;
             }
+            overlay_paragraphs += state.overlay_row_entries[row_index].len() as u64;
         }
         state.style_fingerprint = Some(style_fingerprint);
+        crate::profiling::record_bytes_and_units(
+            "client.text_layer.diff_rebuilt_base_rows",
+            crate::profiling::Kind::Cpu,
+            std::time::Duration::from_nanos(rebuilt_base_rows),
+            0,
+            rebuilt_base_rows,
+        );
+        crate::profiling::record_bytes_and_units(
+            "client.text_layer.diff_rebuilt_overlay_rows",
+            crate::profiling::Kind::Cpu,
+            std::time::Duration::from_nanos(rebuilt_overlay_rows),
+            0,
+            rebuilt_overlay_rows,
+        );
+        crate::profiling::record_bytes_and_units(
+            "client.text_layer.diff_base_paragraphs",
+            crate::profiling::Kind::Cpu,
+            std::time::Duration::from_nanos(base_paragraphs),
+            0,
+            base_paragraphs,
+        );
+        crate::profiling::record_bytes_and_units(
+            "client.text_layer.diff_overlay_paragraphs",
+            crate::profiling::Kind::Cpu,
+            std::time::Duration::from_nanos(overlay_paragraphs),
+            0,
+            overlay_paragraphs,
+        );
         tree.children.clear();
+    }
+}
+
+impl TerminalBodyLayer {
+    pub fn new(
+        snapshot: Arc<vt_backend_core::TerminalSnapshot>,
+        cell_width: f32,
+        cell_height: f32,
+        font_size: f32,
+        font_families: Arc<[&'static str]>,
+        cursor_blink_visible: bool,
+        selection_rects: Arc<[TerminalSelectionRect]>,
+        selection_foreground: Option<Color>,
+        cursor_text_color: Option<Color>,
+        url_color: Option<Color>,
+        preedit_text: Option<String>,
+    ) -> Self {
+        let body_impl = std::env::var("BOO_TERMINAL_BODY_IMPL").ok();
+        Self {
+            inner: match body_impl.as_deref() {
+                Some("canvas_text") => {
+                    TerminalBodyImpl::CanvasText(CanvasTextTerminalBodyLayer::new(
+                        snapshot,
+                        cell_width,
+                        cell_height,
+                        font_size,
+                        font_families,
+                        cursor_blink_visible,
+                        selection_rects,
+                        selection_foreground,
+                        cursor_text_color,
+                        url_color,
+                        preedit_text,
+                    ))
+                }
+                _ => TerminalBodyImpl::ModelParagraph(ModelParagraphTerminalBodyLayer::new(
+                    snapshot,
+                    cell_width,
+                    cell_height,
+                    font_size,
+                    font_families,
+                    cursor_blink_visible,
+                    selection_rects,
+                    selection_foreground,
+                    cursor_text_color,
+                    url_color,
+                    preedit_text,
+                )),
+            },
+        }
+    }
+
+    pub fn new_with_viewport(mut self, viewport: TerminalViewport) -> Self {
+        self.inner = match self.inner {
+            TerminalBodyImpl::Paragraph(layer) => TerminalBodyImpl::Paragraph(layer.new_with_viewport(viewport)),
+            TerminalBodyImpl::ModelParagraph(layer) => {
+                TerminalBodyImpl::ModelParagraph(layer.new_with_viewport(viewport))
+            }
+            TerminalBodyImpl::CanvasText(layer) => {
+                TerminalBodyImpl::CanvasText(layer.new_with_viewport(viewport))
+            }
+        };
+        self
+    }
+}
+
+#[allow(dead_code)]
+impl ParagraphTerminalBodyLayer {
+    fn new(
+        snapshot: Arc<vt_backend_core::TerminalSnapshot>,
+        cell_width: f32,
+        cell_height: f32,
+        font_size: f32,
+        font_families: Arc<[&'static str]>,
+        cursor_blink_visible: bool,
+        selection_rects: Arc<[TerminalSelectionRect]>,
+        selection_foreground: Option<Color>,
+        cursor_text_color: Option<Color>,
+        url_color: Option<Color>,
+        preedit_text: Option<String>,
+    ) -> Self {
+        Self {
+            inner: TerminalTextLayer::new(
+                snapshot,
+                cell_width,
+                cell_height,
+                font_size,
+                font_families,
+                cursor_blink_visible,
+                selection_rects,
+                selection_foreground,
+                cursor_text_color,
+                url_color,
+                preedit_text,
+            ),
+        }
+    }
+
+    fn new_with_viewport(mut self, viewport: TerminalViewport) -> Self {
+        self.inner = self.inner.new_with_viewport(viewport);
+        self
+    }
+}
+
+impl ModelParagraphTerminalBodyLayer {
+    fn new(
+        snapshot: Arc<vt_backend_core::TerminalSnapshot>,
+        cell_width: f32,
+        cell_height: f32,
+        font_size: f32,
+        font_families: Arc<[&'static str]>,
+        cursor_blink_visible: bool,
+        selection_rects: Arc<[TerminalSelectionRect]>,
+        selection_foreground: Option<Color>,
+        cursor_text_color: Option<Color>,
+        url_color: Option<Color>,
+        preedit_text: Option<String>,
+    ) -> Self {
+        Self {
+            snapshot,
+            cell_width,
+            cell_height,
+            font_size,
+            font_families,
+            cursor_blink_visible,
+            selection_rects,
+            selection_foreground,
+            cursor_text_color,
+            url_color,
+            preedit_text,
+            viewport: None,
+        }
+    }
+
+    fn new_with_viewport(mut self, viewport: TerminalViewport) -> Self {
+        self.viewport = Some(viewport);
+        self
+    }
+
+    fn viewport_rect(&self, bounds: Rectangle) -> Rectangle {
+        self.viewport
+            .map(|viewport| Rectangle {
+                x: viewport.x,
+                y: viewport.y,
+                width: viewport.width,
+                height: viewport.height,
+            })
+            .unwrap_or(bounds)
+    }
+
+    fn viewport_origin(&self, bounds: Rectangle) -> Point {
+        let viewport = self.viewport_rect(bounds);
+        Point::new(viewport.x, viewport.y)
+    }
+
+    fn push_text_entry(
+        &self,
+        entries: &mut Vec<TextLayerEntry>,
+        viewport: Rectangle,
+        row_index: usize,
+        col_index: usize,
+        content: &str,
+        width_cols: usize,
+        font: Font,
+        shaping: iced::widget::text::Shaping,
+        color: Color,
+    ) {
+        if content.is_empty() || content == "\0" {
+            return;
+        }
+
+        let origin = self.viewport_origin(viewport);
+        let x = origin.x + PADDING_X + col_index as f32 * self.cell_width;
+        let y = origin.y + PADDING_Y + row_index as f32 * self.cell_height;
+        let draw_width = width_cols as f32 * self.cell_width;
+        let bounds = Size::new(
+            available_text_width(viewport, x),
+            self.cell_height.max(draw_width.min(self.cell_height)),
+        );
+        debug_text_layer_draw_run(
+            content, row_index, col_index, width_cols, x, y, bounds.width, font, shaping, color,
+        );
+        let paragraph = <iced::Renderer as text::Renderer>::Paragraph::with_text(
+            iced::advanced::text::Text {
+                content,
+                bounds,
+                size: Pixels(self.font_size),
+                line_height: iced::advanced::text::LineHeight::Absolute(Pixels(
+                    self.cell_height,
+                )),
+                font,
+                align_x: iced::advanced::text::Alignment::Left,
+                align_y: alignment::Vertical::Top,
+                shaping,
+                wrapping: iced::advanced::text::Wrapping::None,
+            },
+        );
+        entries.push(TextLayerEntry {
+            paragraph,
+            position: Point::new(x, y),
+            color,
+        });
+    }
+
+    fn build_text_entries_from_runs(
+        &self,
+        viewport: Rectangle,
+        row_index: usize,
+        runs: &[TextRun],
+    ) -> Vec<TextLayerEntry> {
+        let mut entries = Vec::with_capacity(runs.len());
+        for run in runs {
+            self.push_text_entry(
+                &mut entries,
+                viewport,
+                row_index,
+                run.start_col,
+                run.text.as_str(),
+                run.width_cols,
+                run.font,
+                run.shaping,
+                run.fg,
+            );
+        }
+        entries
+    }
+
+    fn build_row_entries(
+        &self,
+        viewport: Rectangle,
+        row_index: usize,
+        selection_spans: &[SelectionColSpan],
+    ) -> (Vec<TextLayerEntry>, Vec<TextLayerEntry>) {
+        let row_model = build_terminal_body_row_model(
+            &self.snapshot,
+            row_index,
+            &self.font_families,
+            self.url_color,
+            selection_spans,
+            self.selection_foreground,
+            self.cursor_text_color,
+            self.cursor_blink_visible,
+            self.preedit_text.as_deref(),
+        );
+        (
+            self.build_text_entries_from_runs(viewport, row_index, &row_model.base_runs),
+            self.build_text_entries_from_runs(viewport, row_index, &row_model.overlay_runs),
+        )
+    }
+
+    fn style_fingerprint(&self, viewport: Rectangle) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.font_size.to_bits().hash(&mut hasher);
+        self.cell_width.to_bits().hash(&mut hasher);
+        self.cell_height.to_bits().hash(&mut hasher);
+        self.font_families.hash(&mut hasher);
+        self.url_color.map(|c| c.r.to_bits()).hash(&mut hasher);
+        self.url_color.map(|c| c.g.to_bits()).hash(&mut hasher);
+        self.url_color.map(|c| c.b.to_bits()).hash(&mut hasher);
+        self.url_color.map(|c| c.a.to_bits()).hash(&mut hasher);
+        viewport.x.to_bits().hash(&mut hasher);
+        viewport.y.to_bits().hash(&mut hasher);
+        viewport.width.to_bits().hash(&mut hasher);
+        viewport.height.to_bits().hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn selection_spans_fingerprint(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.snapshot.rows.hash(&mut hasher);
+        self.snapshot.cols.hash(&mut hasher);
+        self.cell_width.to_bits().hash(&mut hasher);
+        self.cell_height.to_bits().hash(&mut hasher);
+        self.selection_rects.len().hash(&mut hasher);
+        for rect in self.selection_rects.iter() {
+            rect.x.to_bits().hash(&mut hasher);
+            rect.y.to_bits().hash(&mut hasher);
+            rect.width.to_bits().hash(&mut hasher);
+            rect.height.to_bits().hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    fn base_row_fingerprint(&self, row_index: usize, style_fingerprint: u64) -> u64 {
+        style_fingerprint
+            ^ self
+                .snapshot
+                .row_revisions
+                .get(row_index)
+                .copied()
+                .unwrap_or_default()
+                .rotate_left(17)
+            ^ (row_index as u64).rotate_left(33)
+    }
+
+    fn overlay_row_fingerprint(
+        &self,
+        row_index: usize,
+        viewport: Rectangle,
+        style_fingerprint: u64,
+        selection_spans: &[SelectionColSpan],
+    ) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        style_fingerprint.hash(&mut hasher);
+        row_index.hash(&mut hasher);
+        self.snapshot
+            .row_revisions
+            .get(row_index)
+            .copied()
+            .unwrap_or_default()
+            .hash(&mut hasher);
+
+        if !selection_spans.is_empty() {
+            self.selection_foreground
+                .map(|c| (c.r.to_bits(), c.g.to_bits(), c.b.to_bits(), c.a.to_bits()))
+                .hash(&mut hasher);
+            for span in selection_spans {
+                span.start_col.hash(&mut hasher);
+                span.end_col.hash(&mut hasher);
+            }
+        }
+
+        if self.snapshot.cursor.y as usize == row_index {
+            self.cursor_blink_visible.hash(&mut hasher);
+            self.snapshot.cursor.visible.hash(&mut hasher);
+            self.snapshot.cursor.x.hash(&mut hasher);
+            self.snapshot.cursor.y.hash(&mut hasher);
+            self.snapshot.cursor.style.hash(&mut hasher);
+            self.cursor_text_color
+                .map(|c| (c.r.to_bits(), c.g.to_bits(), c.b.to_bits(), c.a.to_bits()))
+                .hash(&mut hasher);
+            self.preedit_text.hash(&mut hasher);
+        }
+        viewport.x.to_bits().hash(&mut hasher);
+        viewport.y.to_bits().hash(&mut hasher);
+        viewport.width.to_bits().hash(&mut hasher);
+        viewport.height.to_bits().hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+#[allow(dead_code)]
+impl CanvasTextTerminalBodyLayer {
+    fn new(
+        snapshot: Arc<vt_backend_core::TerminalSnapshot>,
+        cell_width: f32,
+        cell_height: f32,
+        font_size: f32,
+        font_families: Arc<[&'static str]>,
+        cursor_blink_visible: bool,
+        selection_rects: Arc<[TerminalSelectionRect]>,
+        selection_foreground: Option<Color>,
+        cursor_text_color: Option<Color>,
+        url_color: Option<Color>,
+        preedit_text: Option<String>,
+    ) -> Self {
+        Self {
+            inner: TerminalCanvas::new(
+                snapshot,
+                cell_width,
+                cell_height,
+                font_size,
+                font_families,
+                0,
+                0,
+                0.0,
+                false,
+                cursor_blink_visible,
+                selection_rects,
+                Color::TRANSPARENT,
+                selection_foreground,
+                cursor_text_color,
+                url_color,
+                preedit_text,
+            )
+            .without_base_fill()
+            .without_selection_overlay()
+            .without_cursor_overlay(),
+        }
+    }
+
+    fn new_with_viewport(mut self, viewport: TerminalViewport) -> Self {
+        self.inner = self.inner.new_with_viewport(viewport);
+        self
+    }
+}
+
+impl<Message> Widget<Message, Theme, iced::Renderer> for TerminalBodyLayer {
+    fn tag(&self) -> iced::advanced::widget::tree::Tag {
+        match &self.inner {
+            TerminalBodyImpl::Paragraph(layer) => {
+                <ParagraphTerminalBodyLayer as Widget<Message, Theme, iced::Renderer>>::tag(layer)
+            }
+            TerminalBodyImpl::ModelParagraph(layer) => {
+                <ModelParagraphTerminalBodyLayer as Widget<Message, Theme, iced::Renderer>>::tag(layer)
+            }
+            TerminalBodyImpl::CanvasText(layer) => {
+                <CanvasTextTerminalBodyLayer as Widget<Message, Theme, iced::Renderer>>::tag(layer)
+            }
+        }
+    }
+
+    fn state(&self) -> iced::advanced::widget::tree::State {
+        match &self.inner {
+            TerminalBodyImpl::Paragraph(layer) => {
+                <ParagraphTerminalBodyLayer as Widget<Message, Theme, iced::Renderer>>::state(layer)
+            }
+            TerminalBodyImpl::ModelParagraph(layer) => {
+                <ModelParagraphTerminalBodyLayer as Widget<Message, Theme, iced::Renderer>>::state(layer)
+            }
+            TerminalBodyImpl::CanvasText(layer) => {
+                <CanvasTextTerminalBodyLayer as Widget<Message, Theme, iced::Renderer>>::state(layer)
+            }
+        }
+    }
+
+    fn size(&self) -> Size<Length> {
+        match &self.inner {
+            TerminalBodyImpl::Paragraph(layer) => {
+                <ParagraphTerminalBodyLayer as Widget<Message, Theme, iced::Renderer>>::size(layer)
+            }
+            TerminalBodyImpl::ModelParagraph(layer) => {
+                <ModelParagraphTerminalBodyLayer as Widget<Message, Theme, iced::Renderer>>::size(layer)
+            }
+            TerminalBodyImpl::CanvasText(layer) => {
+                <CanvasTextTerminalBodyLayer as Widget<Message, Theme, iced::Renderer>>::size(layer)
+            }
+        }
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &iced::Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        match &mut self.inner {
+            TerminalBodyImpl::Paragraph(layer) => {
+                <ParagraphTerminalBodyLayer as Widget<Message, Theme, iced::Renderer>>::layout(
+                    layer,
+                    tree,
+                    renderer,
+                    limits,
+                )
+            }
+            TerminalBodyImpl::ModelParagraph(layer) => {
+                <ModelParagraphTerminalBodyLayer as Widget<Message, Theme, iced::Renderer>>::layout(
+                    layer,
+                    tree,
+                    renderer,
+                    limits,
+                )
+            }
+            TerminalBodyImpl::CanvasText(layer) => {
+                <CanvasTextTerminalBodyLayer as Widget<Message, Theme, iced::Renderer>>::layout(
+                    layer,
+                    tree,
+                    renderer,
+                    limits,
+                )
+            }
+        }
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut iced::Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        match &self.inner {
+            TerminalBodyImpl::Paragraph(layer) => {
+                <ParagraphTerminalBodyLayer as Widget<Message, Theme, iced::Renderer>>::draw(
+                    layer,
+                    tree,
+                    renderer,
+                    theme,
+                    style,
+                    layout,
+                    cursor,
+                    viewport,
+                )
+            }
+            TerminalBodyImpl::ModelParagraph(layer) => {
+                <ModelParagraphTerminalBodyLayer as Widget<Message, Theme, iced::Renderer>>::draw(
+                    layer,
+                    tree,
+                    renderer,
+                    theme,
+                    style,
+                    layout,
+                    cursor,
+                    viewport,
+                )
+            }
+            TerminalBodyImpl::CanvasText(layer) => {
+                <CanvasTextTerminalBodyLayer as Widget<Message, Theme, iced::Renderer>>::draw(
+                    layer,
+                    tree,
+                    renderer,
+                    theme,
+                    style,
+                    layout,
+                    cursor,
+                    viewport,
+                )
+            }
+        }
+    }
+
+    fn diff(&self, tree: &mut Tree) {
+        match &self.inner {
+            TerminalBodyImpl::Paragraph(layer) => {
+                <ParagraphTerminalBodyLayer as Widget<Message, Theme, iced::Renderer>>::diff(layer, tree)
+            }
+            TerminalBodyImpl::ModelParagraph(layer) => {
+                <ModelParagraphTerminalBodyLayer as Widget<Message, Theme, iced::Renderer>>::diff(layer, tree)
+            }
+            TerminalBodyImpl::CanvasText(layer) => {
+                <CanvasTextTerminalBodyLayer as Widget<Message, Theme, iced::Renderer>>::diff(layer, tree)
+            }
+        }
+    }
+}
+
+impl<Message> Widget<Message, Theme, iced::Renderer> for ParagraphTerminalBodyLayer {
+    fn tag(&self) -> iced::advanced::widget::tree::Tag {
+        <TerminalTextLayer as Widget<Message, Theme, iced::Renderer>>::tag(&self.inner)
+    }
+
+    fn state(&self) -> iced::advanced::widget::tree::State {
+        <TerminalTextLayer as Widget<Message, Theme, iced::Renderer>>::state(&self.inner)
+    }
+
+    fn size(&self) -> Size<Length> {
+        <TerminalTextLayer as Widget<Message, Theme, iced::Renderer>>::size(&self.inner)
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &iced::Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        <TerminalTextLayer as Widget<Message, Theme, iced::Renderer>>::layout(
+            &mut self.inner,
+            tree,
+            renderer,
+            limits,
+        )
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut iced::Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        <TerminalTextLayer as Widget<Message, Theme, iced::Renderer>>::draw(
+            &self.inner,
+            tree,
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
+        )
+    }
+
+    fn diff(&self, tree: &mut Tree) {
+        <TerminalTextLayer as Widget<Message, Theme, iced::Renderer>>::diff(&self.inner, tree)
+    }
+}
+
+impl<Message> Widget<Message, Theme, iced::Renderer> for ModelParagraphTerminalBodyLayer {
+    fn tag(&self) -> iced::advanced::widget::tree::Tag {
+        iced::advanced::widget::tree::Tag::of::<TerminalTextLayerState>()
+    }
+
+    fn state(&self) -> iced::advanced::widget::tree::State {
+        iced::advanced::widget::tree::State::new(TerminalTextLayerState::default())
+    }
+
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fill, Length::Fill)
+    }
+
+    fn layout(
+        &mut self,
+        _tree: &mut Tree,
+        _renderer: &iced::Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        layout::atomic(limits, Length::Fill, Length::Fill)
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut iced::Renderer,
+        _theme: &Theme,
+        _style: &renderer::Style,
+        layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+        _viewport: &Rectangle,
+    ) {
+        let _scope = crate::profiling::scope(
+            "client.text_layer.draw",
+            crate::profiling::Kind::Cpu,
+        );
+        let viewport = self.viewport_rect(layout.bounds());
+        let state = tree.state.downcast_ref::<TerminalTextLayerState>();
+        let mut paragraph_count = 0u64;
+        for row_entries in &state.base_row_entries {
+            for entry in row_entries {
+                paragraph_count += 1;
+                renderer.fill_paragraph(&entry.paragraph, entry.position, entry.color, viewport);
+            }
+        }
+        for row_entries in &state.overlay_row_entries {
+            for entry in row_entries {
+                paragraph_count += 1;
+                renderer.fill_paragraph(&entry.paragraph, entry.position, entry.color, viewport);
+            }
+        }
+        crate::profiling::record_units(
+            "client.text_layer.draw_paragraphs",
+            crate::profiling::Kind::Cpu,
+            paragraph_count,
+        );
+    }
+
+    fn diff(&self, tree: &mut Tree) {
+        let _scope = crate::profiling::scope(
+            "client.text_layer.diff",
+            crate::profiling::Kind::Cpu,
+        );
+        let state = tree.state.downcast_mut::<TerminalTextLayerState>();
+        let bounds = self
+            .viewport
+            .map(|viewport| Rectangle {
+                x: viewport.x,
+                y: viewport.y,
+                width: viewport.width,
+                height: viewport.height,
+            })
+            .unwrap_or(Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            });
+        let viewport = self.viewport_rect(bounds);
+        let style_fingerprint = self.style_fingerprint(viewport);
+        let style_changed = state.style_fingerprint != Some(style_fingerprint);
+        let selection_spans_fingerprint = self.selection_spans_fingerprint();
+        let row_count = self.snapshot.rows_data.len();
+        let mut rebuilt_base_rows = 0u64;
+        let mut rebuilt_overlay_rows = 0u64;
+        let mut base_paragraphs = 0u64;
+        let mut overlay_paragraphs = 0u64;
+        state.base_row_entries.resize_with(row_count, Vec::new);
+        state.base_row_entries.truncate(row_count);
+        state.base_row_fingerprints.resize(row_count, 0);
+        state.base_row_fingerprints.truncate(row_count);
+        state.overlay_row_entries.resize_with(row_count, Vec::new);
+        state.overlay_row_entries.truncate(row_count);
+        state.overlay_row_fingerprints.resize(row_count, 0);
+        state.overlay_row_fingerprints.truncate(row_count);
+        state.selection_row_spans.resize_with(row_count, Vec::new);
+        state.selection_row_spans.truncate(row_count);
+        let new_selection_row_range =
+            selection_row_range(&self.selection_rects, self.cell_height, row_count);
+        if style_changed || state.selection_spans_fingerprint != Some(selection_spans_fingerprint) {
+            let previous_range = state.selection_row_range;
+            let affected_range = match (previous_range, new_selection_row_range) {
+                (Some((old_start, old_end)), Some((new_start, new_end))) => {
+                    Some((old_start.min(new_start), old_end.max(new_end)))
+                }
+                (Some(range), None) | (None, Some(range)) => Some(range),
+                (None, None) => None,
+            };
+            if let Some((affected_start, affected_end)) = affected_range {
+                for row_index in affected_start..affected_end.min(row_count) {
+                    state.selection_row_spans[row_index] = if new_selection_row_range
+                        .is_some_and(|(new_start, new_end)| row_index >= new_start && row_index < new_end)
+                    {
+                        selection_col_spans_for_row(
+                            &self.selection_rects,
+                            row_index,
+                            self.cell_width,
+                            self.cell_height,
+                            self.snapshot.cols as usize,
+                        )
+                    } else {
+                        Vec::new()
+                    };
+                }
+            }
+            state.selection_spans_fingerprint = Some(selection_spans_fingerprint);
+            state.selection_row_range = new_selection_row_range;
+        }
+        for row_index in 0..row_count {
+            let fingerprint = self.base_row_fingerprint(row_index, style_fingerprint);
+            let overlay_fingerprint = self.overlay_row_fingerprint(
+                row_index,
+                viewport,
+                style_fingerprint,
+                &state.selection_row_spans[row_index],
+            );
+            if style_changed
+                || state.base_row_fingerprints[row_index] != fingerprint
+                || state.overlay_row_fingerprints[row_index] != overlay_fingerprint
+            {
+                let (base_entries, overlay_entries) =
+                    self.build_row_entries(viewport, row_index, &state.selection_row_spans[row_index]);
+                if style_changed || state.base_row_fingerprints[row_index] != fingerprint {
+                    state.base_row_entries[row_index] = base_entries;
+                    state.base_row_fingerprints[row_index] = fingerprint;
+                    rebuilt_base_rows += 1;
+                }
+                if style_changed || state.overlay_row_fingerprints[row_index] != overlay_fingerprint {
+                    state.overlay_row_entries[row_index] = overlay_entries;
+                    state.overlay_row_fingerprints[row_index] = overlay_fingerprint;
+                    rebuilt_overlay_rows += 1;
+                }
+            }
+            base_paragraphs += state.base_row_entries[row_index].len() as u64;
+            overlay_paragraphs += state.overlay_row_entries[row_index].len() as u64;
+        }
+        state.style_fingerprint = Some(style_fingerprint);
+        crate::profiling::record_bytes_and_units(
+            "client.text_layer.diff_rebuilt_base_rows",
+            crate::profiling::Kind::Cpu,
+            std::time::Duration::from_nanos(rebuilt_base_rows),
+            0,
+            rebuilt_base_rows,
+        );
+        crate::profiling::record_bytes_and_units(
+            "client.text_layer.diff_rebuilt_overlay_rows",
+            crate::profiling::Kind::Cpu,
+            std::time::Duration::from_nanos(rebuilt_overlay_rows),
+            0,
+            rebuilt_overlay_rows,
+        );
+        crate::profiling::record_bytes_and_units(
+            "client.text_layer.diff_base_paragraphs",
+            crate::profiling::Kind::Cpu,
+            std::time::Duration::from_nanos(base_paragraphs),
+            0,
+            base_paragraphs,
+        );
+        crate::profiling::record_bytes_and_units(
+            "client.text_layer.diff_overlay_paragraphs",
+            crate::profiling::Kind::Cpu,
+            std::time::Duration::from_nanos(overlay_paragraphs),
+            0,
+            overlay_paragraphs,
+        );
+        tree.children.clear();
+    }
+}
+
+impl<Message> Widget<Message, Theme, iced::Renderer> for CanvasTextTerminalBodyLayer {
+    fn tag(&self) -> iced::advanced::widget::tree::Tag {
+        let canvas = iced::widget::canvas(self.inner.clone())
+            .width(Length::Fill)
+            .height(Length::Fill);
+        <iced::widget::canvas::Canvas<TerminalCanvas, Message, Theme, iced::Renderer> as Widget<
+            Message,
+            Theme,
+            iced::Renderer,
+        >>::tag(&canvas)
+    }
+
+    fn state(&self) -> iced::advanced::widget::tree::State {
+        let canvas = iced::widget::canvas(self.inner.clone())
+            .width(Length::Fill)
+            .height(Length::Fill);
+        <iced::widget::canvas::Canvas<TerminalCanvas, Message, Theme, iced::Renderer> as Widget<
+            Message,
+            Theme,
+            iced::Renderer,
+        >>::state(&canvas)
+    }
+
+    fn size(&self) -> Size<Length> {
+        let canvas = iced::widget::canvas(self.inner.clone())
+            .width(Length::Fill)
+            .height(Length::Fill);
+        <iced::widget::canvas::Canvas<TerminalCanvas, Message, Theme, iced::Renderer> as Widget<
+            Message,
+            Theme,
+            iced::Renderer,
+        >>::size(&canvas)
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &iced::Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let mut canvas = iced::widget::canvas(self.inner.clone())
+            .width(Length::Fill)
+            .height(Length::Fill);
+        <iced::widget::canvas::Canvas<TerminalCanvas, Message, Theme, iced::Renderer> as Widget<
+            Message,
+            Theme,
+            iced::Renderer,
+        >>::layout(&mut canvas, tree, renderer, limits)
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut iced::Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        let canvas = iced::widget::canvas(self.inner.clone())
+            .width(Length::Fill)
+            .height(Length::Fill);
+        <iced::widget::canvas::Canvas<TerminalCanvas, Message, Theme, iced::Renderer> as Widget<
+            Message,
+            Theme,
+            iced::Renderer,
+        >>::draw(&canvas, tree, renderer, theme, style, layout, cursor, viewport)
+    }
+
+    fn diff(&self, tree: &mut Tree) {
+        let canvas = iced::widget::canvas(self.inner.clone())
+            .width(Length::Fill)
+            .height(Length::Fill);
+        <iced::widget::canvas::Canvas<TerminalCanvas, Message, Theme, iced::Renderer> as Widget<
+            Message,
+            Theme,
+            iced::Renderer,
+        >>::diff(&canvas, tree)
     }
 }
 
@@ -1201,12 +2110,16 @@ impl<Message> canvas::Program<Message> for TerminalCanvas {
                 *cached = Some(cursor_overlay_fingerprint);
             }
         }
-        geometries.push(state.selection_overlay_cache.draw(renderer, bounds.size(), |frame| {
-            self.draw_selection_overlay(frame, state);
-        }));
-        geometries.push(state.cursor_overlay_cache.draw(renderer, bounds.size(), |frame| {
-            self.draw_cursor_overlay(frame);
-        }));
+        if self.paint_selection_overlay {
+            geometries.push(state.selection_overlay_cache.draw(renderer, bounds.size(), |frame| {
+                self.draw_selection_overlay(frame, state);
+            }));
+        }
+        if self.paint_cursor_overlay {
+            geometries.push(state.cursor_overlay_cache.draw(renderer, bounds.size(), |frame| {
+                self.draw_cursor_overlay(frame);
+            }));
+        }
 
         if let Some(started_at) = started_at {
             let elapsed = started_at.elapsed();
@@ -1247,7 +2160,7 @@ struct BackgroundSpan {
     color: Color,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct TextRun {
     start_col: usize,
     width_cols: usize,
@@ -1485,6 +2398,84 @@ where
     runs
 }
 
+fn build_terminal_body_row_model(
+    snapshot: &vt_backend_core::TerminalSnapshot,
+    row_index: usize,
+    font_families: &[&'static str],
+    url_color: Option<Color>,
+    selection_spans: &[SelectionColSpan],
+    selection_foreground: Option<Color>,
+    cursor_text_color: Option<Color>,
+    cursor_blink_visible: bool,
+    preedit_text: Option<&str>,
+) -> TerminalBodyRowModel {
+    let Some(row) = snapshot.rows_data.get(row_index) else {
+        return TerminalBodyRowModel::default();
+    };
+    let mut model = TerminalBodyRowModel {
+        base_runs: build_text_runs(row, snapshot.cols as usize, font_families, url_color),
+        overlay_runs: Vec::new(),
+    };
+
+    if let Some(selection_foreground) = selection_foreground.filter(|_| !selection_spans.is_empty())
+    {
+        model.overlay_runs.extend(build_selection_text_runs(
+            row,
+            snapshot.cols as usize,
+            font_families,
+            selection_foreground,
+            |col_index, display_width| {
+                cell_is_selected_in_spans(selection_spans, col_index, display_width)
+            },
+        ));
+    }
+
+    if let Some(cursor_text_color) = cursor_text_color.filter(|_| snapshot.cursor.y as usize == row_index)
+    {
+        for (col_index, cell) in row.iter().enumerate() {
+            if !cell.text.is_empty()
+                && cursor_blink_visible
+                && snapshot.cursor.visible
+                && snapshot.cursor.y as usize == row_index
+                && snapshot.cursor.x as usize == col_index
+                && snapshot.cursor.style != crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR
+                && snapshot.cursor.style
+                    != crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE
+                && snapshot.cursor.style
+                    != crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW
+            {
+                model.overlay_runs.push(TextRun {
+                    start_col: col_index,
+                    width_cols: usize::from(cell.display_width.max(1)),
+                    text: cell.text.clone(),
+                    fg: cursor_text_color,
+                    font: font_for_cell(cell, font_families),
+                    underline: cell.underline != 0,
+                    shaping: terminal_text_shaping(),
+                });
+            }
+        }
+    }
+
+    if let Some(preedit) = preedit_text
+        .filter(|text| !text.is_empty())
+        .filter(|_| snapshot.cursor.y < snapshot.rows)
+        .filter(|_| snapshot.cursor.y as usize == row_index)
+    {
+        model.overlay_runs.push(TextRun {
+            start_col: snapshot.cursor.x as usize,
+            width_cols: preedit.chars().count().max(1),
+            text: preedit.to_string(),
+            fg: color_from_rgb(snapshot.colors.foreground, 1.0),
+            font: font_for_terminal_text(preedit, false, false, font_families),
+            underline: false,
+            shaping: terminal_text_shaping(),
+        });
+    }
+
+    model
+}
+
 fn font_for_cell(
     cell: &vt_backend_core::CellSnapshot,
     font_families: &[&'static str],
@@ -1633,15 +2624,15 @@ fn render_debug_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("BOO_RENDER_DEBUG").is_some())
 }
 
-fn text_run_max_width(run: &TextRun, draw_width: f32) -> f32 {
-    non_ascii_text_max_width(&run.text, draw_width)
+fn text_run_max_width(run: &TextRun, draw_width: f32, available_width: f32) -> f32 {
+    non_ascii_text_max_width(&run.text, draw_width, available_width)
 }
 
-fn non_ascii_text_max_width(text: &str, draw_width: f32) -> f32 {
+fn non_ascii_text_max_width(text: &str, draw_width: f32, available_width: f32) -> f32 {
     if text.is_ascii() {
         draw_width
     } else {
-        f32::INFINITY
+        available_width.max(draw_width).max(1.0)
     }
 }
 
@@ -2250,8 +3241,9 @@ mod tests {
 
     #[test]
     fn non_ascii_text_is_not_clipped_to_cell_width() {
-        assert_eq!(non_ascii_text_max_width("a", 10.0), 10.0);
-        assert!(non_ascii_text_max_width("仮", 10.0).is_infinite());
+        assert_eq!(non_ascii_text_max_width("a", 10.0, 20.0), 10.0);
+        assert_eq!(non_ascii_text_max_width("仮", 10.0, 20.0), 20.0);
+        assert_eq!(non_ascii_text_max_width("仮", 10.0, 5.0), 10.0);
     }
 
     #[test]

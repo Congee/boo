@@ -18,6 +18,7 @@ READY_TIMEOUT="${READY_TIMEOUT:-20}"
 WORKLOAD="${WORKLOAD:-for i in {1..5}; do seq 1 10000; echo __SEP__; done\\r}"
 SERVER_BIN="${SERVER_BIN:-scripts/profiling-boo.sh}"
 CLIENT_BIN="${CLIENT_BIN:-scripts/profiling-boo.sh}"
+CLIENT_IMPL="${CLIENT_IMPL:-}"
 
 usage() {
   cat <<'EOF'
@@ -30,6 +31,7 @@ Examples:
   scripts/profile-macos-sample-client.sh
   scripts/profile-macos-sample-client.sh --workload 'cat ~/config.json\r'
   scripts/profile-macos-sample-client.sh --client-bin target/debug/boo
+  CLIENT_IMPL=canvas_text scripts/profile-macos-sample-client.sh --workload 'cat bench/generated/unicode-16mb.txt\r'
 
 Notes:
   - Starts one Boo server and one Boo GUI client.
@@ -111,7 +113,15 @@ rm -f "$SOCKET" "$SOCKET.stream" "$GUI_TEST_SOCKET" "$GUI_TEST_STATUS" "$OUT"
 "$SERVER_BIN" server --socket "$SOCKET" >/tmp/boo-profile-client-server.log 2>&1 &
 SERVER_PID=$!
 
-BOO_GUI_TEST_SOCKET="$GUI_TEST_SOCKET" BOO_GUI_TEST_STATUS_PATH="$GUI_TEST_STATUS" "$CLIENT_BIN" --socket "$SOCKET" >/tmp/boo-profile-client-gui.log 2>&1 &
+CLIENT_ENV=(
+  "BOO_GUI_TEST_SOCKET=$GUI_TEST_SOCKET"
+  "BOO_GUI_TEST_STATUS_PATH=$GUI_TEST_STATUS"
+)
+if [[ -n "$CLIENT_IMPL" ]]; then
+  CLIENT_ENV+=("BOO_TERMINAL_BODY_IMPL=$CLIENT_IMPL")
+fi
+
+env "${CLIENT_ENV[@]}" "$CLIENT_BIN" --socket "$SOCKET" >/tmp/boo-profile-client-gui.log 2>&1 &
 CLIENT_PID=$!
 
 for _ in $(seq 1 $((READY_TIMEOUT * 10))); do

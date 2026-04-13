@@ -5,3 +5,4 @@
 .tmp-ui-scenarios.log
 /ios/.derived/
 /ios/.derived-*/
+/bench/generated/

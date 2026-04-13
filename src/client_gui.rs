@@ -567,7 +567,7 @@ impl ClientApp {
                     crate::profiling::Kind::Cpu,
                 );
                 Element::new(
-                    vt_terminal_canvas::TerminalTextLayer::new(
+                    vt_terminal_canvas::TerminalBodyLayer::new(
                         Arc::clone(terminal_snapshot),
                         self.cell_width as f32,
                         self.cell_height as f32,
