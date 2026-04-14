@@ -43,6 +43,10 @@ pub fn startup_session() -> Option<&'static str> {
     STARTUP_SESSION.get().map(String::as_str)
 }
 
+pub fn startup_control_socket() -> Option<&'static str> {
+    STARTUP_CONTROL_SOCKET.get().map(String::as_str)
+}
+
 pub fn load_startup_config() -> config::Config {
     let mut boo_config = config::Config::load();
     if let Some(socket_path) = STARTUP_CONTROL_SOCKET.get() {
@@ -56,6 +60,9 @@ pub fn load_startup_config() -> config::Config {
     }
     if boo_config.control_socket.is_none() {
         boo_config.control_socket = Some(control::default_socket_path());
+    }
+    if let Some(socket_path) = boo_config.control_socket.as_ref() {
+        STARTUP_CONTROL_SOCKET.set(socket_path.clone()).ok();
     }
     boo_config
 }

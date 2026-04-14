@@ -3,6 +3,7 @@
 
 use crate::unix_pty::{PtyProcess, PtySize};
 use crate::vt;
+use base64::Engine;
 use crossbeam_channel as channel;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{CStr, c_void};
@@ -83,6 +84,7 @@ pub struct VtPane {
     finished_commands: Vec<CommandFinished>,
     pending_notifications: HashMap<String, PendingNotification>,
     completed_notifications: Vec<DesktopNotification>,
+    status_component_updates: Vec<crate::status_components::StatusComponentsUpdate>,
     pending_pty_chunks: VecDeque<PendingPtyChunk>,
     pending_pty_bytes: usize,
     pending_pty_profile: PendingPtyProfile,
@@ -100,6 +102,7 @@ pub struct VtPaneUpdate {
     pub version: u64,
     pub running_command: Option<Option<String>>,
     pub finished_commands: Vec<CommandFinished>,
+    pub status_component_updates: Vec<crate::status_components::StatusComponentsUpdate>,
     pub desktop_notifications: Vec<DesktopNotification>,
     pub exited: bool,
 }
@@ -128,6 +131,7 @@ struct WorkerState {
     version: u64,
     running_command: Option<Option<String>>,
     finished_commands: Vec<CommandFinished>,
+    status_component_updates: Vec<crate::status_components::StatusComponentsUpdate>,
     desktop_notifications: Vec<DesktopNotification>,
     exited: bool,
 }
@@ -246,6 +250,7 @@ impl VtPaneWorker {
                 .running_command()
                 .map(|running| running.command.clone()),
             finished_commands: Vec::new(),
+            status_component_updates: Vec::new(),
             desktop_notifications: Vec::new(),
             exited: false,
         }));
@@ -272,6 +277,7 @@ impl VtPaneWorker {
             version: state.version,
             running_command: state.running_command.clone(),
             finished_commands: std::mem::take(&mut state.finished_commands),
+            status_component_updates: std::mem::take(&mut state.status_component_updates),
             desktop_notifications: std::mem::take(&mut state.desktop_notifications),
             exited: state.exited,
         }
@@ -439,6 +445,7 @@ impl VtPane {
             finished_commands: Vec::new(),
             pending_notifications: HashMap::new(),
             completed_notifications: Vec::new(),
+            status_component_updates: Vec::new(),
             pending_pty_chunks: VecDeque::new(),
             pending_pty_bytes: 0,
             pending_pty_profile: PendingPtyProfile::default(),
@@ -461,6 +468,12 @@ impl VtPane {
 
     pub fn take_desktop_notifications(&mut self) -> Vec<DesktopNotification> {
         std::mem::take(&mut self.completed_notifications)
+    }
+
+    pub fn take_status_component_updates(
+        &mut self,
+    ) -> Vec<crate::status_components::StatusComponentsUpdate> {
+        std::mem::take(&mut self.status_component_updates)
     }
 
     fn enqueue_pty_chunk(&mut self, chunk: Vec<u8>) {
@@ -955,6 +968,11 @@ impl VtPane {
     }
 
     fn handle_osc_payload(&mut self, payload: &str) {
+        if let Some(rest) = payload.strip_prefix("1337;SetUserVar=") {
+            self.handle_osc_1337_set_user_var(rest);
+            return;
+        }
+
         if let Some(rest) = payload.strip_prefix("133;") {
             self.handle_osc_133(rest);
             return;
@@ -963,6 +981,43 @@ impl VtPane {
         if let Some(rest) = payload.strip_prefix("99;") {
             self.handle_osc_99(rest);
         }
+    }
+
+    fn handle_osc_1337_set_user_var(&mut self, payload: &str) {
+        let Some((name, encoded)) = payload.split_once('=') else {
+            return;
+        };
+        let zone = match name {
+            "ghostty_status_left" => crate::status_components::StatusBarZone::Left,
+            "ghostty_status_right" => crate::status_components::StatusBarZone::Right,
+            _ => return,
+        };
+        let decoded = if encoded.is_empty() {
+            Vec::new()
+        } else {
+            match base64::engine::general_purpose::STANDARD.decode(encoded) {
+                Ok(decoded) => decoded,
+                Err(_) => return,
+            }
+        };
+        let components = if decoded.is_empty() {
+            Vec::new()
+        } else {
+            let Ok(text) = std::str::from_utf8(&decoded) else {
+                return;
+            };
+            match serde_json::from_str::<Vec<crate::status_components::StatusComponent>>(text) {
+                Ok(components) => components,
+                Err(_) => return,
+            }
+        };
+        self.status_component_updates.push(
+            crate::status_components::StatusComponentsUpdate {
+                zone,
+                source: String::new(),
+                components,
+            },
+        );
     }
 
     fn handle_osc_133(&mut self, rest: &str) {
@@ -1154,6 +1209,7 @@ fn worker_loop(
                 .running_command()
                 .map(|running| running.command.clone());
             let finished_commands = pane.take_finished_commands();
+            let status_component_updates = pane.take_status_component_updates();
             let desktop_notifications = pane.take_desktop_notifications();
             if snapshot_changed {
                 shared.snapshot = Arc::new(snapshot.clone());
@@ -1165,6 +1221,12 @@ fn worker_loop(
             }
             if !finished_commands.is_empty() {
                 shared.finished_commands.extend(finished_commands);
+                should_wake_headless = true;
+            }
+            if !status_component_updates.is_empty() {
+                shared
+                    .status_component_updates
+                    .extend(status_component_updates);
                 should_wake_headless = true;
             }
             if !desktop_notifications.is_empty() {

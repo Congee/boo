@@ -213,6 +213,7 @@ impl BooApp {
                     notify_on_command_finish: boo_config.notify_on_command_finish,
                     notify_on_command_finish_action: boo_config.notify_on_command_finish_action,
                     notify_on_command_finish_after_ns: boo_config.notify_on_command_finish_after_ns,
+                    status_components: crate::status_components::StatusComponentStore::default(),
                     pending_font_bytes: appearance.font_bytes,
                 },
                 Task::none(),
@@ -299,6 +300,7 @@ impl BooApp {
                     notify_on_command_finish: boo_config.notify_on_command_finish,
                     notify_on_command_finish_action: boo_config.notify_on_command_finish_action,
                     notify_on_command_finish_after_ns: boo_config.notify_on_command_finish_after_ns,
+                    status_components: crate::status_components::StatusComponentStore::default(),
                 },
                 Task::none(),
             )
@@ -331,6 +333,18 @@ impl BooApp {
         if let Some(session_id) = self.server.tabs.active_session_id() {
             self.mark_remote_session_dirty(session_id);
         }
+    }
+
+    pub(crate) fn invoke_status_component(&mut self, source: &str, id: &str) -> bool {
+        let Some(action) = self.status_components.click_action(source, id) else {
+            return false;
+        };
+        if action.is_empty() {
+            return false;
+        }
+        self.invalidate_remote_sessions_cache();
+        self.execute_command(&action);
+        true
     }
 
     fn freeze_mouse_selection_viewport(&self) -> bool {
@@ -494,6 +508,9 @@ impl BooApp {
                 duration_ns: finished_command.duration_ns,
             });
         }
+        for update in poll.status_component_updates {
+            remote_dirty |= self.status_components.set(update);
+        }
         if self.desktop_notifications_enabled {
             for notification in poll.desktop_notifications {
                 platform::send_desktop_notification(&notification.title, &notification.body);
@@ -532,6 +549,8 @@ impl BooApp {
             }
         }
         for pane_id in poll.exited_panes {
+            self.status_components
+                .clear(&crate::status_components::osc_source_for_pane(pane_id), None);
             if let Some(session_id) = self.server.tabs.session_id_for_pane_id(pane_id) {
                 for server in self.remote_servers() {
                     server.send_session_exited(session_id);

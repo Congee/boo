@@ -13,6 +13,7 @@ pub struct BackendPollResult {
     pub active_scrollbar: Option<ffi::ghostty_action_scrollbar_s>,
     pub running_commands: Vec<PaneRunningCommand>,
     pub finished_commands: Vec<CommandFinished>,
+    pub status_component_updates: Vec<crate::status_components::StatusComponentsUpdate>,
     pub desktop_notifications: Vec<DesktopNotification>,
 }
 
@@ -379,6 +380,7 @@ impl TerminalBackend for LinuxBackend {
             active_scrollbar: None,
             running_commands: Vec::new(),
             finished_commands: Vec::new(),
+            status_component_updates: Vec::new(),
             desktop_notifications: Vec::new(),
         };
         for id in active_pane_ids {
@@ -394,6 +396,20 @@ impl TerminalBackend for LinuxBackend {
                     exit_code: finished.exit_code,
                     duration_ns: finished.duration_ns,
                 });
+            }
+            for status_update in update.status_component_updates {
+                let source = if status_update.source.is_empty() {
+                    crate::status_components::osc_source_for_pane(*id)
+                } else {
+                    status_update.source
+                };
+                result
+                    .status_component_updates
+                    .push(crate::status_components::StatusComponentsUpdate {
+                        zone: status_update.zone,
+                        source,
+                        components: status_update.components,
+                    });
             }
             for notification in update.desktop_notifications {
                 result.desktop_notifications.push(DesktopNotification {

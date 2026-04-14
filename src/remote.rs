@@ -2319,6 +2319,7 @@ mod tests {
             tabs: Vec::new(),
             visible_panes: Vec::new(),
             mouse_selection: control::UiMouseSelectionSnapshot::default(),
+            status_bar: crate::status_components::UiStatusBarSnapshot::default(),
             pwd: "/tmp".to_string(),
         };
 
@@ -2368,6 +2369,7 @@ mod tests {
             tabs: Vec::new(),
             visible_panes: Vec::new(),
             mouse_selection: control::UiMouseSelectionSnapshot::default(),
+            status_bar: crate::status_components::UiStatusBarSnapshot::default(),
             pwd: "/tmp".to_string(),
         };
 

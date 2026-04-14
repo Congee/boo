@@ -26,6 +26,7 @@ mod runtime_ui;
 mod server;
 mod session;
 mod splits;
+mod status_components;
 mod tabs;
 mod tmux;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -39,7 +40,7 @@ mod vt_snapshot;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vt_terminal_canvas;
 
-#[cfg(test)]
+#[cfg(all(target_os = "macos", test))]
 use app_helpers::native_keycode_to_keyboard_key;
 use app_helpers::{
     TextInputAction, apply_text_input_event, command_finish_notification,
@@ -60,6 +61,7 @@ use iced::widget::{container, row, text};
 use iced::window;
 use iced::{Color, Element, Event, Font, Length, Size, Subscription, Task, Theme, keyboard, mouse};
 use pane::PaneHandle;
+use status_components::StatusComponentStore;
 use std::ffi::{CStr, CString, c_void};
 #[cfg(target_os = "linux")]
 use std::process::Command;
@@ -392,6 +394,7 @@ struct BooApp {
     notify_on_command_finish: config::NotifyOnCommandFinish,
     notify_on_command_finish_action: config::NotifyOnCommandFinishAction,
     notify_on_command_finish_after_ns: u64,
+    status_components: StatusComponentStore,
     #[cfg(target_os = "linux")]
     pending_font_bytes: Option<Vec<u8>>,
 }
@@ -738,6 +741,7 @@ pub mod main_tests {
             pwd: "/tmp".to_string(),
             cursor: vt_backend_core::CursorSnapshot {
                 visible: true,
+                blinking: false,
                 x: 1,
                 y: 0,
                 style: 2,
@@ -748,9 +752,11 @@ pub mod main_tests {
                     display_width: 1,
                     fg: vt::GhosttyColorRgb { r: 1, g: 2, b: 3 },
                     bg: vt::GhosttyColorRgb { r: 4, g: 5, b: 6 },
+                    bg_is_default: false,
                     bold: true,
                     italic: false,
                     underline: 1,
+                    hyperlink: false,
                 },
                 vt_backend_core::CellSnapshot {
                     text: "b".to_string(),
@@ -761,9 +767,11 @@ pub mod main_tests {
                         g: 11,
                         b: 12,
                     },
+                    bg_is_default: false,
                     bold: false,
                     italic: true,
                     underline: 0,
+                    hyperlink: false,
                 },
             ]],
             row_revisions: vec![1],

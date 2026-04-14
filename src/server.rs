@@ -20,6 +20,19 @@ pub enum Command {
     GetUiSnapshot {
         reply: mpsc::Sender<control::Response>,
     },
+    SetStatusComponents {
+        zone: crate::status_components::StatusBarZone,
+        source: String,
+        components: Vec<crate::status_components::StatusComponent>,
+    },
+    ClearStatusComponents {
+        source: String,
+        zone: Option<crate::status_components::StatusBarZone>,
+    },
+    InvokeStatusComponent {
+        source: String,
+        id: String,
+    },
     AppKeyEvent {
         event: crate::AppKeyEvent,
     },
@@ -206,6 +219,21 @@ impl From<control::ControlCmd> for Command {
             control::ControlCmd::ListTabs { reply } => Self::ListTabs { reply },
             control::ControlCmd::GetClipboard { reply } => Self::GetClipboard { reply },
             control::ControlCmd::GetUiSnapshot { reply } => Self::GetUiSnapshot { reply },
+            control::ControlCmd::SetStatusComponents {
+                zone,
+                source,
+                components,
+            } => Self::SetStatusComponents {
+                zone,
+                source,
+                components,
+            },
+            control::ControlCmd::ClearStatusComponents { source, zone } => {
+                Self::ClearStatusComponents { source, zone }
+            }
+            control::ControlCmd::InvokeStatusComponent { source, id } => {
+                Self::InvokeStatusComponent { source, id }
+            }
             control::ControlCmd::AppKeyEvent { event } => Self::AppKeyEvent { event },
             control::ControlCmd::AppMouseEvent { event } => Self::AppMouseEvent { event },
             control::ControlCmd::AppAction { action } => Self::AppAction { action },

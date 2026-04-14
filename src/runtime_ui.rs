@@ -165,6 +165,7 @@ impl BooApp {
         let terminal_frame = self.terminal_frame();
         let visible_panes = self.visible_pane_snapshots();
         let pane_terminals = self.visible_pane_terminal_snapshots();
+        let status_bar = self.status_components.snapshot();
 
         let copy_mode_frame = terminal_frame;
         let copy_mode = self.copy_mode.as_ref().map_or(
@@ -258,6 +259,7 @@ impl BooApp {
                 selected: self.search_selected,
             },
             command_prompt,
+            status_bar,
             pwd: self.pwd.clone(),
             scrollbar: control::UiScrollbarSnapshot {
                 total: self.scrollbar.total,
@@ -286,6 +288,7 @@ impl BooApp {
                 .collect(),
             visible_panes: self.visible_pane_snapshots(),
             mouse_selection: self.ui_mouse_selection_snapshot(),
+            status_bar: self.status_components.snapshot(),
             pwd: self.pwd.clone(),
         }
     }
@@ -320,6 +323,7 @@ impl BooApp {
     #[allow(dead_code)]
     pub(crate) fn view(&self) -> Element<'_, Message> {
         let ui_font = self.ui_font();
+        let status_bar = self.status_components.snapshot();
         let search_bar: Option<Element<'_, Message>> = if self.search_active {
             let label = if self.search_total > 0 {
                 format!(
@@ -522,7 +526,12 @@ impl BooApp {
                 .map(|duration| (duration.as_millis() / 125) as usize)
                 .unwrap_or(0);
             let tabs = self.server.tabs.tab_info_with_spinner(spinner_frame);
-            let status_right = self.build_status_right();
+            let status_left = self.render_status_zone(status_bar.left.clone(), ui_font);
+            let status_right = if status_bar.right.is_empty() {
+                self.render_status_fallback(self.build_status_right(), ui_font)
+            } else {
+                self.render_status_zone(status_bar.right.clone(), ui_font)
+            };
             let mut tabs_row = row![].spacing(4);
             for tab in &tabs {
                 let display_idx = tab.index + 1;
@@ -554,12 +563,11 @@ impl BooApp {
             main_col = main_col.push(
                 container(
                     row![
+                        status_left,
+                        iced::widget::Space::new().width(Length::Fill),
                         tabs_row,
                         iced::widget::Space::new().width(Length::Fill),
-                        text(status_right)
-                            .font(ui_font)
-                            .size(13)
-                            .color(Color::from_rgb(0.6, 0.6, 0.6)),
+                        status_right,
                     ]
                     .width(Length::Fill),
                 )
@@ -893,6 +901,44 @@ impl BooApp {
             right_parts.push(display);
         }
         right_parts.join("  ")
+    }
+
+    fn render_status_zone(
+        &self,
+        segments: Vec<crate::status_components::UiStatusComponent>,
+        font: Font,
+    ) -> Element<'static, Message> {
+        let mut row = row![].spacing(0);
+        for segment in segments {
+            let fg = segment
+                .style
+                .fg
+                .as_deref()
+                .and_then(crate::status_components::parse_status_color)
+                .unwrap_or_else(|| Color::from_rgb(0.82, 0.82, 0.82));
+            let bg = segment
+                .style
+                .bg
+                .as_deref()
+                .and_then(crate::status_components::parse_status_color);
+            row = row.push(
+                container(text(segment.text.clone()).font(font).size(13).color(fg))
+                    .padding([2, 4])
+                    .style(move |_: &Theme| container::Style {
+                        background: bg.map(iced::Background::Color),
+                        ..Default::default()
+                    }),
+            );
+        }
+        row.into()
+    }
+
+    fn render_status_fallback<'a>(&self, text_value: String, font: Font) -> Element<'a, Message> {
+        text(text_value)
+            .font(font)
+            .size(13)
+            .color(Color::from_rgb(0.6, 0.6, 0.6))
+            .into()
     }
 
     #[allow(dead_code)]

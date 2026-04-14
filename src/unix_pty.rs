@@ -310,6 +310,9 @@ fn child_exec(
     // terminal type.
     set_env("TERM", "xterm-256color");
     set_env("COLORTERM", "truecolor");
+    if let Some(socket_path) = crate::launch::startup_control_socket() {
+        set_env("BOO_SOCKET", socket_path);
+    }
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     let shell_c = CString::new(shell).unwrap_or_else(|_| CString::new("/bin/sh").unwrap());

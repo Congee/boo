@@ -109,6 +109,7 @@ struct ClientUiState {
     active_tab: usize,
     pwd: String,
     pane_count: usize,
+    status_bar: crate::status_components::UiStatusBarSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -393,7 +394,17 @@ impl ClientApp {
             );
         }
 
-        let right = build_status_right(&self.ui_state);
+        let right = if self.ui_state.status_bar.right.is_empty() {
+            build_status_right(&self.ui_state)
+        } else {
+            String::new()
+        };
+        let left_segments = render_status_zone(&self.ui_state.status_bar.left);
+        let right_segments = if self.ui_state.status_bar.right.is_empty() {
+            render_status_text(right)
+        } else {
+            render_status_zone(&self.ui_state.status_bar.right)
+        };
         let mut tabs_row = row![].spacing(4);
         for tab in &self.ui_state.tabs {
             let display_idx = tab.index + 1;
@@ -425,12 +436,11 @@ impl ClientApp {
         main_col = main_col.push(
             container(
                 row![
+                    left_segments,
+                    iced::widget::Space::new().width(Length::Fill),
                     tabs_row,
                     iced::widget::Space::new().width(Length::Fill),
-                    text(right)
-                        .font(Font::MONOSPACE)
-                        .size(13)
-                        .color(Color::from_rgb(0.6, 0.6, 0.6)),
+                    right_segments,
                 ]
                 .width(Length::Fill),
             )
@@ -1399,6 +1409,7 @@ impl ClientUiState {
             active_tab: snapshot.active_tab,
             pwd: snapshot.pwd.clone(),
             pane_count: snapshot.visible_panes.len(),
+            status_bar: snapshot.status_bar.clone(),
         }
     }
 
@@ -1434,6 +1445,7 @@ impl ClientUiState {
             active_tab: active_index.min(sessions.len().saturating_sub(1)),
             pwd,
             pane_count: usize::from(!sessions.is_empty()),
+            status_bar: crate::status_components::UiStatusBarSnapshot::default(),
         }
     }
 
@@ -1453,6 +1465,7 @@ impl ClientUiState {
             active_tab: state.active_tab,
             pwd: state.pwd.clone(),
             pane_count: state.visible_panes.len(),
+            status_bar: state.status_bar.clone(),
         }
     }
 
@@ -2904,6 +2917,47 @@ fn build_status_right(ui_state: &ClientUiState) -> String {
     right_parts.join("  ")
 }
 
+fn render_status_text<'a>(value: String) -> Element<'a, Message> {
+    text(value)
+        .font(Font::MONOSPACE)
+        .size(13)
+        .color(Color::from_rgb(0.6, 0.6, 0.6))
+        .into()
+}
+
+fn render_status_zone<'a>(
+    segments: &'a [crate::status_components::UiStatusComponent],
+) -> Element<'a, Message> {
+    let mut segments_row = row![].spacing(0);
+    for segment in segments {
+        let fg = segment
+            .style
+            .fg
+            .as_deref()
+            .and_then(crate::status_components::parse_status_color)
+            .unwrap_or_else(|| Color::from_rgb(0.82, 0.82, 0.82));
+        let bg = segment
+            .style
+            .bg
+            .as_deref()
+            .and_then(crate::status_components::parse_status_color);
+        segments_row = segments_row.push(
+            container(
+                text(segment.text.clone())
+                    .font(Font::MONOSPACE)
+                    .size(13)
+                    .color(fg),
+            )
+            .padding([2, 4])
+            .style(move |_: &Theme| container::Style {
+                background: bg.map(iced::Background::Color),
+                ..Default::default()
+            }),
+        );
+    }
+    segments_row.into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3155,6 +3209,7 @@ mod tests {
                     height: 16.0,
                 }],
             },
+            status_bar: crate::status_components::UiStatusBarSnapshot::default(),
             pwd: "/tmp".to_string(),
         });
 
@@ -3174,6 +3229,7 @@ mod tests {
             tabs: vec![],
             visible_panes: vec![test_pane_with_id(7, 0.0, 0.0, 80.0, 25.0)],
             mouse_selection: control::UiMouseSelectionSnapshot::default(),
+            status_bar: crate::status_components::UiStatusBarSnapshot::default(),
             pwd: String::new(),
         }));
         app.handle_stream_event(LocalStreamEvent::FullState {
@@ -3500,6 +3556,7 @@ mod tests {
             visible_panes: vec![],
             focused_pane: 1,
             mouse_selection: control::UiMouseSelectionSnapshot::default(),
+            status_bar: crate::status_components::UiStatusBarSnapshot::default(),
         });
         let runtime_b = LocalStreamEvent::UiRuntimeState(control::UiRuntimeState {
             tabs: vec![],
@@ -3508,6 +3565,7 @@ mod tests {
             visible_panes: vec![],
             focused_pane: 2,
             mouse_selection: control::UiMouseSelectionSnapshot::default(),
+            status_bar: crate::status_components::UiStatusBarSnapshot::default(),
         });
         let appearance_a = LocalStreamEvent::UiAppearance(appearance("A"));
         let appearance_b = LocalStreamEvent::UiAppearance(appearance("B"));

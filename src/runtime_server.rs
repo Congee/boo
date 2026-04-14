@@ -180,6 +180,34 @@ impl BooApp {
                     snapshot: self.ui_snapshot(),
                 });
             }
+            server::Command::SetStatusComponents {
+                zone,
+                source,
+                components,
+            } => {
+                if self.status_components.set(crate::status_components::StatusComponentsUpdate {
+                    zone,
+                    source,
+                    components,
+                }) {
+                    if self.has_attached_stream_sessions() {
+                        self.mark_active_remote_session_dirty();
+                    }
+                }
+            }
+            server::Command::ClearStatusComponents { source, zone } => {
+                if self.status_components.clear(&source, zone)
+                    && self.has_attached_stream_sessions()
+                {
+                    self.mark_active_remote_session_dirty();
+                }
+            }
+            server::Command::InvokeStatusComponent { source, id } => {
+                let before = self.local_gui_transport_state();
+                if self.invoke_status_component(&source, &id) {
+                    self.publish_local_gui_after_ui_action(&before);
+                }
+            }
             server::Command::ExecuteCommand { input } => {
                 self.invalidate_remote_sessions_cache();
                 self.execute_command(&input);

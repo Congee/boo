@@ -1,6 +1,53 @@
 use super::*;
 
 impl BooApp {
+    fn status_bar_top(&self) -> f64 {
+        (self.last_size.height as f64 - STATUS_BAR_HEIGHT).max(0.0)
+    }
+
+    fn status_segment_width(text: &str) -> f64 {
+        let (char_width, _) = terminal_metrics(13.0);
+        unicode_width::UnicodeWidthStr::width(text) as f64 * char_width + 8.0
+    }
+
+    fn status_component_at_point(&self, point: (f64, f64)) -> Option<(String, String, f64)> {
+        let bar_top = self.status_bar_top();
+        if point.1 < bar_top || point.1 >= self.last_size.height as f64 {
+            return None;
+        }
+        let snapshot = self.status_components.snapshot();
+        let mut x = 6.0;
+        for segment in snapshot.left {
+            let width = Self::status_segment_width(&segment.text);
+            if point.0 >= x
+                && point.0 < x + width
+                && let Some(click) = segment.click
+            {
+                return Some((segment.source, click.id, point.0 - x));
+            }
+            x += width;
+        }
+
+        let right_width = snapshot
+            .right
+            .iter()
+            .map(|segment| Self::status_segment_width(&segment.text))
+            .sum::<f64>();
+        let mut x = (self.last_size.width as f64 - 6.0 - right_width).max(0.0);
+        for segment in snapshot.right {
+            let width = Self::status_segment_width(&segment.text);
+            if point.0 >= x
+                && point.0 < x + width
+                && let Some(click) = segment.click
+            {
+                return Some((segment.source, click.id, point.0 - x));
+            }
+            x += width;
+        }
+
+        None
+    }
+
     fn reset_scrolling_state_for_user_input(&mut self) {
         if self.scrollbar.total <= self.scrollbar.len {
             return;
@@ -465,6 +512,8 @@ impl BooApp {
 
     pub(crate) fn handle_app_mouse_event(&mut self, event: AppMouseEvent) -> bool {
         let old_focus = self.server.tabs.focused_pane();
+        let old_active_tab = self.server.tabs.active_index();
+        let old_tab_count = self.server.tabs.len();
         let old_divider_drag = self.divider_drag;
         let old_scrollbar_drag = self.scrollbar_drag;
         let old_scrollbar_offset = self.scrollbar.offset;
@@ -501,6 +550,8 @@ impl BooApp {
             }
         }
         old_focus != self.server.tabs.focused_pane()
+            || old_active_tab != self.server.tabs.active_index()
+            || old_tab_count != self.server.tabs.len()
             || old_divider_drag != self.divider_drag
             || old_scrollbar_drag != self.scrollbar_drag
             || old_scrollbar_offset != self.scrollbar.offset
@@ -1430,6 +1481,13 @@ impl BooApp {
             mouse::Event::ButtonPressed(button) => {
                 if button == mouse::Button::Left {
                     let (mx, my) = self.last_mouse_pos;
+                    if let Some((source, id, x_offset)) = self.status_component_at_point((mx, my))
+                    {
+                        let _ = self.clear_mouse_selection();
+                        crate::control::notify_status_click(&source, &id, "left", x_offset);
+                        let _ = self.invoke_status_component(&source, &id);
+                        return;
+                    }
                     let terminal_h = self.last_size.height as f64 - STATUS_BAR_HEIGHT;
                     if mx >= self.last_size.width as f64 - 10.0 && my < terminal_h {
                         self.scrollbar_drag = true;

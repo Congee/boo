@@ -91,6 +91,7 @@ env = {
     "copy_mode": snapshot["copy_mode"],
     "search": snapshot["search"],
     "command_prompt": snapshot["command_prompt"],
+    "status_bar": snapshot["status_bar"],
     "scrollbar": snapshot["scrollbar"],
     "terminal": snapshot["terminal"],
 }
@@ -314,6 +315,65 @@ wait_clipboard_matches() {
   clipboard_matches "$path" "$expected"
 }
 
+wait_file_contains() {
+  local path="$1"
+  local predicate="$2"
+  for _ in $(seq 1 40); do
+    if [[ -f "$path" ]]; then
+      python3 - "$path" "$predicate" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+predicate = sys.argv[2]
+with open(path, "r", encoding="utf-8") as f:
+    payload = json.load(f)
+env = {"payload": payload}
+if not eval(predicate, {"__builtins__": {}}, env):
+    raise SystemExit(f"assertion failed: {predicate}\npayload={payload!r}")
+PY
+      return 0
+    fi
+    sleep 0.1
+  done
+  python3 - "$path" "$predicate" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+predicate = sys.argv[2]
+with open(path, "r", encoding="utf-8") as f:
+    payload = json.load(f)
+env = {"payload": payload}
+if not eval(predicate, {"__builtins__": {}}, env):
+    raise SystemExit(f"assertion failed: {predicate}\npayload={payload!r}")
+PY
+}
+
+send_control_json() {
+  local payload="$1"
+  python3 - "$SOCKET_PATH" "$payload" <<'PY'
+import json
+import socket
+import sys
+
+socket_path = sys.argv[1]
+payload = json.loads(sys.argv[2])
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+    sock.connect(socket_path)
+    sock.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+    data = b""
+    while not data.endswith(b"\n"):
+        chunk = sock.recv(65536)
+        if not chunk:
+            break
+        data += chunk
+    response = json.loads(data.decode("utf-8"))
+    if response != {"ok": True}:
+        raise SystemExit(f"unexpected response: {response}")
+PY
+}
+
 assert_snapshot /tmp/boo-ui-initial.json 'len(tabs) == 1 and len(visible_panes) == 1 and active_tab == 0'
 assert_snapshot /tmp/boo-ui-initial.json "\"$EXPECTED_FONT\" in appearance[\"font_families\"] and abs(appearance[\"font_size\"] - 18.0) < 0.01 and abs(appearance[\"background_opacity\"] - 0.72) < 0.01 and appearance[\"background_opacity_cells\"]"
 
@@ -444,6 +504,146 @@ wait_snapshot /tmp/boo-ui-after-command-prompt-enter.json 'not command_prompt["a
 
 python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" request send-key key=esc >/tmp/boo-ui-search-after-prompt-esc-response.json
 wait_snapshot /tmp/boo-ui-after-search-close-2.json 'not search["active"]'
+
+send_control_json '{"cmd":"set-status-components","zone":"left","source":"nvim-status","components":[{"text":"NVIM","style":{"fg":"#101820","bg":"#c0ffee"},"click":{"id":"open-tab","action":"new-tab"}}]}'
+send_control_json '{"cmd":"set-status-components","zone":"right","source":"build-status","components":[{"text":"BUILD OK","style":{"fg":"#00ff00"}}]}'
+wait_snapshot /tmp/boo-ui-after-status-components.json 'len(status_bar["left"]) == 1 and status_bar["left"][0]["source"] == "nvim-status" and status_bar["left"][0]["text"] == "NVIM" and status_bar["left"][0]["style"]["bg"] == "#c0ffee" and any(segment["source"] == "build-status" and segment["text"] == "BUILD OK" for segment in status_bar["right"])'
+rm -f /tmp/boo-status-click-event.json
+python3 - "$SOCKET_PATH" /tmp/boo-status-click-event.json <<'PY' &
+import json
+import socket
+import sys
+
+socket_path = sys.argv[1]
+output_path = sys.argv[2]
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+    sock.connect(socket_path)
+    sock.sendall(json.dumps({"cmd": "subscribe-status-clicks", "source": "nvim-status"}).encode("utf-8") + b"\n")
+    data = b""
+    while not data.endswith(b"\n"):
+        chunk = sock.recv(65536)
+        if not chunk:
+            raise SystemExit("subscription closed before ack")
+        data += chunk
+    response = json.loads(data.decode("utf-8"))
+    if response != {"ok": True}:
+        raise SystemExit(f"unexpected subscribe response: {response}")
+    data = b""
+    while not data.endswith(b"\n"):
+        chunk = sock.recv(65536)
+        if not chunk:
+            raise SystemExit("subscription closed before click event")
+        data += chunk
+    payload = json.loads(data.decode("utf-8"))
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f)
+PY
+STATUS_SUB_PID=$!
+python3 - "$SOCKET_PATH" /tmp/boo-ui-after-status-components.json <<'PY'
+import json
+import socket
+import sys
+
+socket_path = sys.argv[1]
+snapshot_path = sys.argv[2]
+with open(snapshot_path, "r", encoding="utf-8") as f:
+    snapshot = json.load(f)["snapshot"]
+visible = snapshot["visible_panes"]
+status_y = max(pane["frame"]["y"] + pane["frame"]["height"] for pane in visible) + 10.0
+x = 20.0
+events = [
+    {
+        "cmd": "app-mouse-event",
+        "event": {
+            "ButtonPressed": {
+                "button": "Left",
+                "x": x,
+                "y": status_y,
+                "mods": 0,
+            }
+        },
+    },
+    {
+        "cmd": "app-mouse-event",
+        "event": {
+            "ButtonReleased": {
+                "button": "Left",
+                "x": x,
+                "y": status_y,
+                "mods": 0,
+            }
+        },
+    },
+]
+for payload in events:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.connect(socket_path)
+        sock.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+        data = b""
+        while not data.endswith(b"\n"):
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+        response = json.loads(data.decode("utf-8"))
+        if response != {"ok": True}:
+            raise SystemExit(f"unexpected response: {response}")
+PY
+wait_file_contains /tmp/boo-status-click-event.json 'payload["event"] == "status-click" and payload["source"] == "nvim-status" and payload["id"] == "open-tab" and payload["button"] == "left"'
+wait "$STATUS_SUB_PID"
+wait_snapshot /tmp/boo-ui-after-status-click.json 'len(tabs) == 4 and active_tab == 3'
+send_control_json '{"cmd":"clear-status-components","source":"nvim-status","zone":"left"}'
+wait_snapshot /tmp/boo-ui-after-status-clear.json 'len(status_bar["left"]) == 0 and any(segment["source"] == "build-status" for segment in status_bar["right"])'
+python3 - "$SOCKET_PATH" <<'PY'
+import base64
+import json
+import socket
+import sys
+
+socket_path = sys.argv[1]
+components = [{"text": "OSC", "style": {"fg": "#ff00ff"}}]
+payload = {
+    "cmd": "send-vt",
+    "text": "\x1b]1337;SetUserVar=ghostty_status_right=" + base64.b64encode(json.dumps(components).encode("utf-8")).decode("ascii") + "\x07",
+}
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+    sock.connect(socket_path)
+    sock.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+    data = b""
+    while not data.endswith(b"\n"):
+        chunk = sock.recv(65536)
+        if not chunk:
+            break
+        data += chunk
+    response = json.loads(data.decode("utf-8"))
+    if response != {"ok": True}:
+        raise SystemExit(f"unexpected response: {response}")
+PY
+wait_snapshot /tmp/boo-ui-after-status-osc.json 'any(segment["text"] == "OSC" and segment["source"].startswith("pane:") for segment in status_bar["right"])'
+python3 - "$SOCKET_PATH" <<'PY'
+import json
+import socket
+import sys
+
+socket_path = sys.argv[1]
+payload = {
+    "cmd": "send-vt",
+    "text": "\x1b]1337;SetUserVar=ghostty_status_right=\x07",
+}
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+    sock.connect(socket_path)
+    sock.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+    data = b""
+    while not data.endswith(b"\n"):
+        chunk = sock.recv(65536)
+        if not chunk:
+            break
+        data += chunk
+    response = json.loads(data.decode("utf-8"))
+    if response != {"ok": True}:
+        raise SystemExit(f"unexpected response: {response}")
+PY
+wait_snapshot /tmp/boo-ui-after-status-osc-clear.json 'not any(segment["text"] == "OSC" and segment["source"].startswith("pane:") for segment in status_bar["right"])'
 
 python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" request resize-viewport cols=80 rows=12 >/tmp/boo-ui-scroll-reset-resize-response.json
 wait_snapshot /tmp/boo-ui-after-scroll-reset-resize.json 'scrollbar["len"] > 0'

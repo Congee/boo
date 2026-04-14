@@ -13,9 +13,11 @@
 //! Also supports the legacy named pipe at /tmp/boo.ctl for simple commands.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
+use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -27,6 +29,22 @@ pub enum Request {
     ListTabs,
     GetClipboard,
     GetUiSnapshot,
+    SubscribeStatusClicks {
+        source: String,
+    },
+    SetStatusComponents {
+        zone: crate::status_components::StatusBarZone,
+        source: String,
+        components: Vec<crate::status_components::StatusComponent>,
+    },
+    ClearStatusComponents {
+        source: String,
+        zone: Option<crate::status_components::StatusBarZone>,
+    },
+    InvokeStatusComponent {
+        source: String,
+        id: String,
+    },
     AppKeyEvent { event: crate::AppKeyEvent },
     AppMouseEvent { event: crate::AppMouseEvent },
     AppAction { action: crate::bindings::Action },
@@ -59,6 +77,15 @@ pub enum Response {
     Error { error: String },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StatusClickEvent {
+    pub event: String,
+    pub source: String,
+    pub id: String,
+    pub button: String,
+    pub x_offset: f64,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SurfaceInfo {
     pub index: usize,
@@ -77,6 +104,7 @@ pub struct UiSnapshot {
     pub mouse_selection: UiMouseSelectionSnapshot,
     pub search: UiSearchSnapshot,
     pub command_prompt: UiCommandPromptSnapshot,
+    pub status_bar: crate::status_components::UiStatusBarSnapshot,
     pub pwd: String,
     pub scrollbar: UiScrollbarSnapshot,
     pub terminal: Option<UiTerminalSnapshot>,
@@ -89,6 +117,7 @@ pub struct UiRuntimeState {
     pub tabs: Vec<UiTabSnapshot>,
     pub visible_panes: Vec<UiPaneSnapshot>,
     pub mouse_selection: UiMouseSelectionSnapshot,
+    pub status_bar: crate::status_components::UiStatusBarSnapshot,
     pub pwd: String,
 }
 
@@ -242,6 +271,19 @@ pub enum ControlCmd {
     ListTabs { reply: mpsc::Sender<Response> },
     GetClipboard { reply: mpsc::Sender<Response> },
     GetUiSnapshot { reply: mpsc::Sender<Response> },
+    SetStatusComponents {
+        zone: crate::status_components::StatusBarZone,
+        source: String,
+        components: Vec<crate::status_components::StatusComponent>,
+    },
+    ClearStatusComponents {
+        source: String,
+        zone: Option<crate::status_components::StatusBarZone>,
+    },
+    InvokeStatusComponent {
+        source: String,
+        id: String,
+    },
     AppKeyEvent { event: crate::AppKeyEvent },
     AppMouseEvent { event: crate::AppMouseEvent },
     AppAction { action: crate::bindings::Action },
@@ -347,6 +389,62 @@ pub fn start(socket_path: Option<&str>) -> mpsc::Receiver<ControlCmd> {
     rx
 }
 
+type StatusClickSubscribers = HashMap<String, Vec<UnixStream>>;
+
+fn status_click_subscribers() -> &'static Arc<Mutex<StatusClickSubscribers>> {
+    static SUBSCRIBERS: std::sync::OnceLock<Arc<Mutex<StatusClickSubscribers>>> =
+        std::sync::OnceLock::new();
+    SUBSCRIBERS.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
+pub fn notify_status_click(source: &str, id: &str, button: &str, x_offset: f64) {
+    let Ok(mut guard) = status_click_subscribers().lock() else {
+        return;
+    };
+    let Some(subscribers) = guard.get_mut(source) else {
+        return;
+    };
+    let event = StatusClickEvent {
+        event: "status-click".to_string(),
+        source: source.to_string(),
+        id: id.to_string(),
+        button: button.to_string(),
+        x_offset,
+    };
+    let payload = match serde_json::to_vec(&event) {
+        Ok(mut payload) => {
+            payload.push(b'\n');
+            payload
+        }
+        Err(_) => return,
+    };
+    subscribers.retain_mut(|stream| stream.write_all(&payload).is_ok() && stream.flush().is_ok());
+    if subscribers.is_empty() {
+        guard.remove(source);
+    }
+}
+
+fn register_status_click_subscription(source: String, stream: &UnixStream) -> Response {
+    if source.is_empty() {
+        return Response::Error {
+            error: "source must not be empty".to_string(),
+        };
+    }
+    let Ok(cloned) = stream.try_clone() else {
+        return Response::Error {
+            error: "failed to clone subscriber stream".to_string(),
+        };
+    };
+    let _ = cloned.set_write_timeout(Some(Duration::from_secs(2)));
+    let Ok(mut guard) = status_click_subscribers().lock() else {
+        return Response::Error {
+            error: "subscriber registry poisoned".to_string(),
+        };
+    };
+    guard.entry(source).or_default().push(cloned);
+    Response::Ok { ok: true }
+}
+
 fn run_socket(path: &str, tx: &mpsc::Sender<ControlCmd>) {
     let _ = std::fs::remove_file(path);
     let listener = match UnixListener::bind(path) {
@@ -371,7 +469,12 @@ fn run_socket(path: &str, tx: &mpsc::Sender<ControlCmd>) {
                 }
                 match serde_json::from_str::<Request>(line) {
                     Ok(req) => {
-                        let resp = dispatch_request(req, &tx);
+                        let resp = match req {
+                            Request::SubscribeStatusClicks { source } => {
+                                register_status_click_subscription(source, &stream)
+                            }
+                            other => dispatch_request(other, &tx),
+                        };
                         let mut writer = &stream;
                         let _ = serde_json::to_writer(&mut writer, &resp);
                         let _ = writer.write_all(b"\n");
@@ -508,6 +611,33 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
                     error: "timeout".into(),
                 },
             }
+        }
+        Request::SubscribeStatusClicks { .. } => Response::Error {
+            error: "status click subscriptions require a persistent control socket connection"
+                .to_string(),
+        },
+        Request::SetStatusComponents {
+            zone,
+            source,
+            components,
+        } => {
+            let _ = tx.send(ControlCmd::SetStatusComponents {
+                zone,
+                source,
+                components,
+            });
+            notify();
+            Response::Ok { ok: true }
+        }
+        Request::ClearStatusComponents { source, zone } => {
+            let _ = tx.send(ControlCmd::ClearStatusComponents { source, zone });
+            notify();
+            Response::Ok { ok: true }
+        }
+        Request::InvokeStatusComponent { source, id } => {
+            let _ = tx.send(ControlCmd::InvokeStatusComponent { source, id });
+            notify();
+            Response::Ok { ok: true }
         }
         Request::NewTab => {
             let _ = tx.send(ControlCmd::NewTab);
@@ -933,6 +1063,7 @@ mod tests {
                                 selected_suggestion: 0,
                                 suggestions: Vec::new(),
                             },
+                            status_bar: crate::status_components::UiStatusBarSnapshot::default(),
                             pwd: "/tmp".to_string(),
                             scrollbar: UiScrollbarSnapshot {
                                 total: 10,
@@ -1056,6 +1187,7 @@ mod tests {
                     selected_suggestion: 0,
                     suggestions: Vec::new(),
                 },
+                status_bar: crate::status_components::UiStatusBarSnapshot::default(),
                 pwd: "/repo".to_string(),
                 scrollbar: UiScrollbarSnapshot {
                     total: 100,
