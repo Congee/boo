@@ -144,7 +144,7 @@ Goal:
 
 #### Manual UX
 
-- [ ] Confirm user-visible remote state remains understandable when:
+- [x] Confirm user-visible remote state remains understandable when:
   - bootstrap fails
   - attach succeeds
   - the tunnel is rebuilding

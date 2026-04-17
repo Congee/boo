@@ -238,9 +238,15 @@ pub fn run_gui_client() {
     ensure_server_running(&socket_path, &boo_config);
     crate::platform::install_command_drag_monitor();
     install_ordered_font_fallbacks(&boo_config);
+    let remote_host = boo_config.remote_host.clone();
 
     iced::application(
-        move || client_gui::ClientApp::new(socket_path.clone()),
+        move || {
+            client_gui::ClientApp::new_with_remote_host(
+                socket_path.clone(),
+                remote_host.clone(),
+            )
+        },
         client_gui::ClientApp::update,
         client_gui::ClientApp::view,
     )

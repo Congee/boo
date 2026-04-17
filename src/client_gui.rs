@@ -122,6 +122,7 @@ struct ClientTabState {
 
 pub struct ClientApp {
     socket_path: String,
+    remote_host: Option<String>,
     client: control::Client,
     stream_tx: Option<std::sync::mpsc::Sender<StreamCommand>>,
     bootstrapped: bool,
@@ -268,7 +269,10 @@ impl ClientApp {
         Color::from_rgba8(color[0], color[1], color[2], alpha.clamp(0.0, 1.0))
     }
 
-    pub fn new(socket_path: String) -> (Self, Task<Message>) {
+    pub fn new_with_remote_host(
+        socket_path: String,
+        remote_host: Option<String>,
+    ) -> (Self, Task<Message>) {
         let client = control::Client::connect(socket_path.clone());
         let font_size = DEFAULT_FONT_SIZE;
         let font_families: Arc<[&'static str]> = Arc::from([]);
@@ -294,6 +298,7 @@ impl ClientApp {
         let focused_cursor_position = focused_cursor_position(focused_pane_id, &pane_snapshots);
         let app = Self {
             socket_path,
+            remote_host,
             client,
             stream_tx: None,
             bootstrapped: false,
@@ -340,6 +345,11 @@ impl ClientApp {
         };
         app.update_gui_test_status();
         (app, Task::none())
+    }
+
+    #[cfg(test)]
+    pub fn new(socket_path: String) -> (Self, Task<Message>) {
+        Self::new_with_remote_host(socket_path, None)
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -410,7 +420,12 @@ impl ClientApp {
         }
 
         let right = if self.ui_state.status_bar.right.is_empty() {
-            build_status_right(&self.ui_state, self.mode, self.last_error.as_deref())
+            build_status_right(
+                &self.ui_state,
+                self.mode,
+                self.last_error.as_deref(),
+                self.remote_host.as_deref(),
+            )
         } else {
             String::new()
         };
@@ -2922,15 +2937,24 @@ fn build_status_right(
     ui_state: &ClientUiState,
     mode: ClientMode,
     last_error: Option<&str>,
+    remote_host: Option<&str>,
 ) -> String {
     let mut right_parts = Vec::new();
+    let remote_prefix = match remote_host.filter(|value| !value.is_empty()) {
+        Some(host) => format!("remote:{host}"),
+        None => "remote".to_string(),
+    };
     if let Some(error) = last_error.filter(|value| !value.is_empty()) {
-        right_parts.push(format!("remote: error {error}"));
+        right_parts.push(format!("{remote_prefix}: error {error}"));
     } else {
         match mode {
-            ClientMode::Bootstrapping => right_parts.push("remote: bootstrapping".to_string()),
-            ClientMode::Recovering => right_parts.push("remote: recovering".to_string()),
-            ClientMode::Attached => right_parts.push("remote: connected".to_string()),
+            ClientMode::Bootstrapping => {
+                right_parts.push(format!("{remote_prefix}: bootstrapping"))
+            }
+            ClientMode::Recovering => {
+                right_parts.push(format!("{remote_prefix}: recovering"))
+            }
+            ClientMode::Attached => right_parts.push(format!("{remote_prefix}: connected")),
         }
     }
     if ui_state.pane_count > 1 {
@@ -3931,7 +3955,7 @@ mod tests {
     fn fallback_status_right_shows_bootstrap_state() {
         let ui_state = ClientUiState::default();
         assert_eq!(
-            build_status_right(&ui_state, ClientMode::Bootstrapping, None),
+            build_status_right(&ui_state, ClientMode::Bootstrapping, None, None),
             "remote: bootstrapping"
         );
     }
@@ -3944,7 +3968,7 @@ mod tests {
             ..ClientUiState::default()
         };
         assert_eq!(
-            build_status_right(&ui_state, ClientMode::Recovering, None),
+            build_status_right(&ui_state, ClientMode::Recovering, None, None),
             "remote: recovering  2 panes  /tmp"
         );
     }
@@ -3959,7 +3983,8 @@ mod tests {
             build_status_right(
                 &ui_state,
                 ClientMode::Recovering,
-                Some("boo server stream disconnected")
+                Some("boo server stream disconnected"),
+                None,
             ),
             "remote: error boo server stream disconnected  /work"
         );
@@ -3973,8 +3998,25 @@ mod tests {
             ..ClientUiState::default()
         };
         assert_eq!(
-            build_status_right(&ui_state, ClientMode::Attached, None),
+            build_status_right(&ui_state, ClientMode::Attached, None, None),
             "remote: connected  2 panes  /repo"
+        );
+    }
+
+    #[test]
+    fn fallback_status_right_includes_remote_host_context() {
+        let ui_state = ClientUiState {
+            pwd: "/repo".to_string(),
+            ..ClientUiState::default()
+        };
+        assert_eq!(
+            build_status_right(
+                &ui_state,
+                ClientMode::Recovering,
+                Some("boo server stream disconnected"),
+                Some("example-mbp.local"),
+            ),
+            "remote:example-mbp.local: error boo server stream disconnected  /repo"
         );
     }
 }
