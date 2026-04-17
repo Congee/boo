@@ -64,6 +64,8 @@ final class ScreenState: ObservableObject {
     @Published var cursorX: UInt16 = 0
     @Published var cursorY: UInt16 = 0
     @Published var cursorVisible: Bool = true
+    @Published var cursorBlinking: Bool = false
+    @Published var cursorStyle: Int32 = 0
 
     func getCell(col: Int, row: Int) -> WireCell {
         let index = row * Int(cols) + col
@@ -146,6 +148,9 @@ final class BonjourBrowser: ObservableObject {
 final class GSPClient: ObservableObject {
     @Published var connected = false
     @Published var authenticated = false
+    @Published var protocolVersion: UInt16?
+    @Published var transportCapabilities: UInt32 = 0
+    @Published var serverBuildId: String?
     @Published var sessions: [SessionInfo] = []
     @Published var screen = ScreenState()
     @Published var attachedSessionId: UInt32?
@@ -194,6 +199,9 @@ final class GSPClient: ObservableObject {
         connection = nil
         connected = false
         authenticated = false
+        protocolVersion = nil
+        transportCapabilities = 0
+        serverBuildId = nil
         attachedSessionId = nil
         sessions = []
         screen = ScreenState()
@@ -371,11 +379,16 @@ final class GSPClient: ObservableObject {
         screen.cursorX = decoded.cursorX
         screen.cursorY = decoded.cursorY
         screen.cursorVisible = decoded.cursorVisible
+        screen.cursorBlinking = decoded.cursorBlinking
+        screen.cursorStyle = decoded.cursorStyle
     }
 
     private func applyReducedMessage(_ message: ClientWireMessageType, payload: Data) {
         var state = ClientWireState(
             authenticated: authenticated,
+            protocolVersion: protocolVersion,
+            transportCapabilities: transportCapabilities,
+            serverBuildId: serverBuildId,
             sessions: sessions.map {
                 DecodedWireSessionInfo(
                     id: $0.id,
@@ -404,13 +417,18 @@ final class GSPClient: ObservableObject {
                 },
                 cursorX: screen.cursorX,
                 cursorY: screen.cursorY,
-                cursorVisible: screen.cursorVisible
+                cursorVisible: screen.cursorVisible,
+                cursorBlinking: screen.cursorBlinking,
+                cursorStyle: screen.cursorStyle
             ),
             attachedSessionId: attachedSessionId,
             lastError: lastError
         )
         let effect = ClientWireReducer.reduce(message: message, payload: payload, state: &state)
         authenticated = state.authenticated
+        protocolVersion = state.protocolVersion
+        transportCapabilities = state.transportCapabilities
+        serverBuildId = state.serverBuildId
         lastError = state.lastError
         attachedSessionId = state.attachedSessionId
         applyDecodedSessions(state.sessions)

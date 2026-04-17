@@ -21,6 +21,9 @@ enum ClientWireEffect: Equatable {
 
 struct ClientWireState: Equatable {
     var authenticated = false
+    var protocolVersion: UInt16?
+    var transportCapabilities: UInt32 = 0
+    var serverBuildId: String?
     var sessions: [DecodedWireSessionInfo] = []
     var screen: DecodedWireScreenState?
     var attachedSessionId: UInt32?
@@ -32,6 +35,22 @@ enum ClientWireReducer {
         switch message {
         case .authOk:
             state.authenticated = true
+            if payload.count >= 6 {
+                state.protocolVersion = payload.withUnsafeBytes {
+                    UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt16.self))
+                }
+                state.transportCapabilities = payload.withUnsafeBytes {
+                    UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 2, as: UInt32.self))
+                }
+                if payload.count >= 8 {
+                    let buildLength = payload.withUnsafeBytes {
+                        Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 6, as: UInt16.self)))
+                    }
+                    if payload.count >= 8 + buildLength {
+                        state.serverBuildId = String(data: payload[8..<(8 + buildLength)], encoding: .utf8)
+                    }
+                }
+            }
             state.lastError = nil
             return .listSessions
         case .authFail:

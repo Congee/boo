@@ -15,6 +15,15 @@ type HmacSha256 = Hmac<Sha256>;
 const MAGIC: [u8; 2] = [0x47, 0x53];
 const HEADER_LEN: usize = 7;
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
+pub const REMOTE_PROTOCOL_VERSION: u16 = 1;
+pub const REMOTE_CAPABILITY_HMAC_AUTH: u32 = 1 << 0;
+pub const REMOTE_CAPABILITY_SCREEN_DELTAS: u32 = 1 << 1;
+pub const REMOTE_CAPABILITY_UI_STATE: u32 = 1 << 2;
+pub const REMOTE_CAPABILITY_IMAGES: u32 = 1 << 3;
+pub const REMOTE_CAPABILITIES: u32 = REMOTE_CAPABILITY_HMAC_AUTH
+    | REMOTE_CAPABILITY_SCREEN_DELTAS
+    | REMOTE_CAPABILITY_UI_STATE
+    | REMOTE_CAPABILITY_IMAGES;
 
 const LOCAL_INPUT_SEQ_LEN: usize = 8;
 const REMOTE_FULL_STATE_HEADER_LEN: usize = 14;
@@ -266,7 +275,7 @@ impl RemoteServer {
                 let Ok(stream) = stream else {
                     continue;
                 };
-                let (client_id, outbound_rx) = {
+                let (client_id, outbound_rx, authenticated) = {
                     let mut state = state_for_listener
                         .lock()
                         .expect("remote server state poisoned");
@@ -289,7 +298,7 @@ impl RemoteServer {
                             is_local: false,
                         },
                     );
-                    (client_id, outbound_rx)
+                    (client_id, outbound_rx, authenticated)
                 };
 
                 let Ok(writer_stream) = stream.try_clone() else {
@@ -303,6 +312,10 @@ impl RemoteServer {
 
                 let cmd_tx = cmd_tx.clone();
                 let state = Arc::clone(&state_for_listener);
+                if authenticated {
+                    let _ = cmd_tx.send(RemoteCmd::Connected { client_id });
+                    crate::notify_headless_wakeup();
+                }
                 std::thread::spawn(move || read_loop(stream, client_id, state, cmd_tx));
             }
         });
@@ -420,6 +433,11 @@ impl RemoteServer {
             .and_then(|client| client.attached_session)
     }
 
+    pub fn has_client(&self, client_id: u64) -> bool {
+        let state = self.state.lock().expect("remote server state poisoned");
+        state.clients.contains_key(&client_id)
+    }
+
     pub fn client_is_local(&self, client_id: u64) -> bool {
         let state = self.state.lock().expect("remote server state poisoned");
         state
@@ -436,6 +454,14 @@ impl RemoteServer {
             &payload,
             |client| &mut client.last_session_list_payload,
         );
+    }
+
+    pub fn reply_session_list(&self, client_id: u64, sessions: &[RemoteSessionInfo]) {
+        let payload = encode_session_list(sessions);
+        self.update_client(client_id, |client| {
+            client.last_session_list_payload = Some(payload.clone());
+        });
+        self.send_to_client(client_id, MessageType::SessionList, payload);
     }
 
     pub fn send_session_list_to_local_clients(&self, sessions: &[RemoteSessionInfo]) {
@@ -1094,7 +1120,10 @@ fn read_loop(
         };
 
         if matches!(ty, MessageType::Auth) {
-            handle_auth_message(client_id, &payload, &state);
+            if handle_auth_message(client_id, &payload, &state) {
+                let _ = cmd_tx.send(RemoteCmd::Connected { client_id });
+                crate::notify_headless_wakeup();
+            }
             continue;
         }
 
@@ -1174,20 +1203,20 @@ fn read_loop(
     state.clients.remove(&client_id);
 }
 
-fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>) {
+fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>) -> bool {
     let mut state = state.lock().expect("remote server state poisoned");
     let auth_key = state.auth_key.clone();
     let Some(client) = state.clients.get_mut(&client_id) else {
-        return;
+        return false;
     };
 
     if auth_key.is_none() {
         client.authenticated = true;
         let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
             MessageType::AuthOk,
-            &[],
+            &encode_auth_ok_payload(),
         )));
-        return;
+        return true;
     }
 
     if payload.is_empty() {
@@ -1197,7 +1226,7 @@ fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>
             MessageType::AuthChallenge,
             &challenge,
         )));
-        return;
+        return false;
     }
 
     let Some(challenge) = client.challenge.take() else {
@@ -1205,14 +1234,14 @@ fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>
             MessageType::AuthFail,
             &[],
         )));
-        return;
+        return false;
     };
     let Some(key) = auth_key else {
         let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
             MessageType::AuthFail,
             &[],
         )));
-        return;
+        return false;
     };
 
     let mut mac = HmacSha256::new_from_slice(&key).expect("valid HMAC key");
@@ -1222,16 +1251,49 @@ fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>
             client.authenticated = true;
             let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
                 MessageType::AuthOk,
-                &[],
+                &encode_auth_ok_payload(),
             )));
+            true
         }
         Err(_) => {
             let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
                 MessageType::AuthFail,
                 &[],
             )));
+            false
         }
     }
+}
+
+fn encode_auth_ok_payload() -> Vec<u8> {
+    let build_id = env!("CARGO_PKG_VERSION").as_bytes();
+    let mut payload = Vec::with_capacity(8 + build_id.len());
+    payload.extend_from_slice(&REMOTE_PROTOCOL_VERSION.to_le_bytes());
+    payload.extend_from_slice(&REMOTE_CAPABILITIES.to_le_bytes());
+    payload.extend_from_slice(&(build_id.len() as u16).to_le_bytes());
+    payload.extend_from_slice(build_id);
+    payload
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn decode_auth_ok_payload(payload: &[u8]) -> Option<(u16, u32, Option<String>)> {
+    if payload.is_empty() {
+        return None;
+    }
+    if payload.len() < 6 {
+        return None;
+    }
+    let version = u16::from_le_bytes([payload[0], payload[1]]);
+    let capabilities = u32::from_le_bytes([payload[2], payload[3], payload[4], payload[5]]);
+    if payload.len() < 8 {
+        return Some((version, capabilities, None));
+    }
+    let build_len = u16::from_le_bytes([payload[6], payload[7]]) as usize;
+    if payload.len() < 8 + build_len {
+        return None;
+    }
+    let build_id = String::from_utf8(payload[8..8 + build_len].to_vec()).ok();
+    Some((version, capabilities, build_id))
 }
 
 fn send_direct_error(state: &Arc<Mutex<State>>, client_id: u64, message: &str) {
@@ -2025,6 +2087,56 @@ mod tests {
     }
 
     #[test]
+    fn auth_ok_payload_round_trips_protocol_version_and_capabilities() {
+        let frame = encode_message(MessageType::AuthOk, &encode_auth_ok_payload());
+        let mut cursor = std::io::Cursor::new(frame);
+        let (ty, payload) = read_message(&mut cursor).expect("auth ok frame");
+        assert_eq!(ty, MessageType::AuthOk);
+        assert_eq!(
+            decode_auth_ok_payload(&payload),
+            Some((
+                REMOTE_PROTOCOL_VERSION,
+                REMOTE_CAPABILITIES,
+                Some(env!("CARGO_PKG_VERSION").to_string()),
+            ))
+        );
+    }
+
+    #[test]
+    fn read_loop_emits_list_sessions_for_authenticated_client() {
+        let (outbound_tx, _outbound_rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: outbound_tx,
+                    authenticated: true,
+                    challenge: None,
+                    attached_session: None,
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: false,
+                },
+            )]),
+            auth_key: Some(b"test-key".to_vec()),
+        }));
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let mut frames = Vec::new();
+        frames.extend_from_slice(&encode_message(MessageType::ListSessions, &[]));
+
+        read_loop(std::io::Cursor::new(frames), 1, state, cmd_tx);
+
+        match cmd_rx.recv().expect("remote command") {
+            RemoteCmd::ListSessions { client_id } => assert_eq!(client_id, 1),
+            other => panic!("unexpected remote command: {other:?}"),
+        }
+    }
+
+    #[test]
     fn encode_delta_uses_scroll_delta_for_scrolling_output() {
         let row = |ch: char| -> Vec<RemoteCell> {
             vec![RemoteCell {
@@ -2434,6 +2546,91 @@ mod tests {
             OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
         }
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn reply_session_list_does_not_skip_unchanged_payloads() {
+        let (tx, rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: tx,
+                    authenticated: true,
+                    challenge: None,
+                    attached_session: Some(11),
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: true,
+                },
+            )]),
+            auth_key: None,
+        }));
+        let server = RemoteServer {
+            state,
+            _listener: std::thread::spawn(|| {}),
+            _advertiser: None,
+            local_socket_path: None,
+        };
+        let sessions = vec![RemoteSessionInfo {
+            id: 11,
+            name: "Tab 1".to_string(),
+            title: "boo".to_string(),
+            pwd: "/tmp".to_string(),
+            attached: true,
+            child_exited: false,
+        }];
+
+        server.reply_session_list(1, &sessions);
+        server.reply_session_list(1, &sessions);
+
+        for _ in 0..2 {
+            match rx.recv().expect("session list frame") {
+                OutboundMessage::Frame(frame) => {
+                    assert_eq!(&frame[..2], &MAGIC);
+                    assert_eq!(frame[2], MessageType::SessionList as u8);
+                }
+                OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+            }
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn has_client_is_true_before_attach() {
+        let (tx, _rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: tx,
+                    authenticated: true,
+                    challenge: None,
+                    attached_session: None,
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: false,
+                },
+            )]),
+            auth_key: None,
+        }));
+        let server = RemoteServer {
+            state,
+            _listener: std::thread::spawn(|| {}),
+            _advertiser: None,
+            local_socket_path: None,
+        };
+
+        assert!(server.has_client(1));
+        assert_eq!(server.client_session(1), None);
     }
 
     #[test]

@@ -165,10 +165,10 @@ Goal:
 ### 1. Handshake and Versioning
 
 - [ ] Define and implement a protocol handshake that includes:
-  - protocol version
-  - server version/build identifier
-  - transport capabilities
-  - reconnect/resume capabilities
+  - [x] protocol version
+  - [ ] server version/build identifier
+  - [x] transport capabilities
+  - [ ] reconnect/resume capabilities
 - [ ] Reject incompatible peers early and clearly
 - [ ] Add upgrade path from SSH bootstrap to canonical Boo transport
 
@@ -219,8 +219,8 @@ Goal:
 #### Protocol-Level
 
 - [ ] Add tests for:
-  - handshake
-  - capability negotiation
+  - [x] handshake
+  - [x] capability negotiation
   - reconnect/resume
   - multiplexed channels
   - heartbeat loss and recovery
@@ -289,10 +289,14 @@ Goal:
 #### Protocol-Level
 
 - [ ] Extend protocol validation to cover the canonical iOS handshake and resume flow
+  - [x] initial handshake with protocol version and capability decoding
+  - [ ] resume flow
 
 #### End-to-End
 
 - [ ] Extend `scripts/test-ios-remote-view.sh` for the canonical protocol
+  - [x] auth/list/create/attach/input/state-update validation on the current protocol
+  - [ ] resume/reconnect validation
 - [ ] Add reconnect/resume validation for the iOS client
 
 #### Manual UX

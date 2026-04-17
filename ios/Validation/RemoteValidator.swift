@@ -26,6 +26,9 @@ enum WireMessageType: UInt8 {
 }
 
 final class RemoteValidator {
+    private let protocolVersionExpected: UInt16 = 1
+    private let capabilityHmacAuth: UInt32 = 1 << 0
+
     private let magic: [UInt8] = [0x47, 0x53]
     private let queue = DispatchQueue(label: "boo-ios-remote-validator")
     private let lock = NSLock()
@@ -35,12 +38,19 @@ final class RemoteValidator {
 
     private var connected = false
     private var authenticated = false
+    private var protocolVersion: UInt16?
+    private var transportCapabilities: UInt32 = 0
+    private var serverBuildId: String?
+    private var sessionListReceived = false
     private var sessions: [DecodedWireSessionInfo] = []
     private var attachedSessionId: UInt32?
     private var createdSessionId: UInt32?
+    private var screenState: DecodedWireScreenState?
     private var lastScreenText = ""
+    private var screenUpdateReceived = false
     private var lastError: String?
     private var discoveredEndpoint: NWEndpoint?
+    private var messageTrace: [String] = []
 
     init(authKey: String) {
         self.authKey = authKey.isEmpty ? nil : SymmetricKey(data: Data(authKey.utf8))
@@ -113,8 +123,9 @@ final class RemoteValidator {
     }
 
     func validateRoundTrip() throws {
+        sessionListReceived = false
         sendMessage(type: .listSessions, payload: Data())
-        try waitUntil("session list") { !self.sessions.isEmpty || self.lastError != nil || self.connected }
+        try waitUntil("session list") { self.sessionListReceived }
 
         var createPayload = Data(count: 4)
         createPayload.withUnsafeMutableBytes { bytes in
@@ -133,6 +144,9 @@ final class RemoteValidator {
         }
         sendMessage(type: .attach, payload: attachPayload)
         try waitUntil("attach acknowledgement") { self.attachedSessionId == sessionId }
+        try waitUntil("initial terminal screen update after attach", timeout: 8) {
+            self.screenUpdateReceived
+        }
 
         var resizePayload = Data(count: 4)
         resizePayload.withUnsafeMutableBytes { bytes in
@@ -225,6 +239,10 @@ final class RemoteValidator {
         }
         lock.lock()
         defer { lock.unlock() }
+        messageTrace.append(String(describing: message))
+        if messageTrace.count > 16 {
+            messageTrace.removeFirst(messageTrace.count - 16)
+        }
         switch message {
         case .authChallenge:
             guard payload.count == 32, let key = authKey else {
@@ -236,10 +254,35 @@ final class RemoteValidator {
             sendMessage(type: .auth, payload: Data(mac))
             lock.lock()
         case .authOk:
+            if payload.count >= 6 {
+                protocolVersion = payload.withUnsafeBytes {
+                    UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt16.self))
+                }
+                transportCapabilities = payload.withUnsafeBytes {
+                    UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 2, as: UInt32.self))
+                }
+                if payload.count >= 8 {
+                    let buildLength = payload.withUnsafeBytes {
+                        Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 6, as: UInt16.self)))
+                    }
+                    if payload.count >= 8 + buildLength {
+                        serverBuildId = String(data: payload[8..<(8 + buildLength)], encoding: .utf8)
+                    }
+                }
+                if protocolVersion != protocolVersionExpected {
+                    lastError = "unexpected protocol version: \(protocolVersion ?? 0)"
+                    return
+                }
+                if authKey != nil && (transportCapabilities & capabilityHmacAuth) == 0 {
+                    lastError = "server did not advertise HMAC auth capability"
+                    return
+                }
+            }
             authenticated = true
         case .authFail:
             lastError = "authentication failed"
         case .sessionList:
+            sessionListReceived = true
             sessions = WireCodec.decodeSessionList(payload)
         case .sessionCreated:
             guard payload.count >= 4 else { return }
@@ -252,7 +295,15 @@ final class RemoteValidator {
                 UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
             }
         case .fullState:
+            screenUpdateReceived = true
             if let screen = WireCodec.decodeFullState(payload) {
+                screenState = screen
+                lastScreenText = WireCodec.screenText(from: screen)
+            }
+        case .delta:
+            screenUpdateReceived = true
+            if var screen = screenState, WireCodec.applyDelta(payload, to: &screen) {
+                screenState = screen
                 lastScreenText = WireCodec.screenText(from: screen)
             }
         case .detached, .sessionExited:
@@ -276,7 +327,13 @@ final class RemoteValidator {
             }
             Thread.sleep(forTimeInterval: 0.05)
         }
-        throw ValidationError("timed out waiting for \(description)")
+        lock.lock()
+        let screenSnippet = lastScreenText
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .prefix(160)
+        let stateSummary = "authenticated=\(authenticated) sessionListReceived=\(sessionListReceived) sessions=\(sessions.count) createdSessionId=\(String(describing: createdSessionId)) attachedSessionId=\(String(describing: attachedSessionId)) buildId=\(serverBuildId ?? "nil") screenUpdateReceived=\(screenUpdateReceived) screen=\"\(screenSnippet)\" trace=\(messageTrace.joined(separator: ","))"
+        lock.unlock()
+        throw ValidationError("timed out waiting for \(description) (\(stateSummary))")
     }
 
     private func throwIfError() throws {

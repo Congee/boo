@@ -28,7 +28,8 @@ func makeFullStatePayload() -> Data {
     data.append(contentsOf: UInt16(1).littleEndianBytes)
     data.append(contentsOf: UInt16(0).littleEndianBytes)
     data.append(1)
-    data.append(contentsOf: [0, 0, 0])
+    data.append(0)
+    data.append(contentsOf: Int32(0).littleEndianBytes)
 
     data.append(contentsOf: UInt32(Character("A").unicodeScalars.first!.value).littleEndianBytes)
     data.append(contentsOf: [1, 2, 3, 4, 5, 6, 0x21, 0])
@@ -44,7 +45,10 @@ func makeDeltaPayload() -> Data {
     data.append(contentsOf: UInt16(0).littleEndianBytes)
     data.append(contentsOf: UInt16(0).littleEndianBytes)
     data.append(1)
-    data.append(contentsOf: [0])
+    data.append(0)
+    data.append(0)
+    data.append(contentsOf: Int32(0).littleEndianBytes)
+    data.append(contentsOf: UInt16(0).littleEndianBytes)
     data.append(contentsOf: UInt16(0).littleEndianBytes)
     data.append(contentsOf: UInt16(2).littleEndianBytes)
 

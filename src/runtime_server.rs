@@ -123,8 +123,7 @@ impl BooApp {
     }
 
     fn remote_server_for_client(&self, client_id: u64) -> Option<&remote::RemoteServer> {
-        self.remote_servers()
-            .find(|server| server.client_session(client_id).is_some())
+        self.remote_servers().find(|server| server.has_client(client_id))
     }
 
     pub(crate) fn handle_server_cmd(&mut self, cmd: server::Command) {
@@ -313,10 +312,12 @@ impl BooApp {
                     self.publish_remote_session(session_id);
                 }
                 let sessions = self.current_remote_sessions();
-                if let Some(server) = self.server.local_gui_server.as_ref()
-                    && server.client_is_local(client_id)
+                if let Some(server) = self
+                    .remote_server_for_client(client_id)
+                    .or(self.server.local_gui_server.as_ref())
+                    .or(self.server.remote_server.as_ref())
                 {
-                    server.send_session_list(client_id, sessions.as_ref());
+                    server.reply_session_list(client_id, sessions.as_ref());
                 }
             }
             server::Command::RemoteListSessions { client_id } => {
@@ -347,7 +348,7 @@ impl BooApp {
                     .or(self.server.local_gui_server.as_ref())
                     .or(self.server.remote_server.as_ref())
                 {
-                    server.send_session_list(client_id, sessions.as_ref());
+                    server.reply_session_list(client_id, sessions.as_ref());
                 }
             }
             server::Command::RemoteAttach {

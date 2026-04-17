@@ -28,9 +28,15 @@ struct DecodedWireScreenState: Equatable {
     var cursorX: UInt16
     var cursorY: UInt16
     var cursorVisible: Bool
+    var cursorBlinking: Bool
+    var cursorStyle: Int32
 }
 
 enum WireCodec {
+    private static let cellEncodedLen = 12
+    private static let remoteFullStateHeaderLen = 14
+    private static let remoteDeltaHeaderLen = 13
+
     static func decodeSessionList(_ data: Data) -> [DecodedWireSessionInfo] {
         guard data.count >= 4 else { return [] }
         let count = data.withUnsafeBytes {
@@ -76,7 +82,7 @@ enum WireCodec {
     }
 
     static func decodeFullState(_ data: Data) -> DecodedWireScreenState? {
-        guard data.count >= 12 else { return nil }
+        guard data.count >= remoteFullStateHeaderLen else { return nil }
         let rows = data.withUnsafeBytes {
             UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt16.self))
         }
@@ -90,13 +96,17 @@ enum WireCodec {
             UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 6, as: UInt16.self))
         }
         let cursorVisible = data[8] != 0
+        let cursorBlinking = data[9] != 0
+        let cursorStyle = data.withUnsafeBytes {
+            Int32(littleEndian: $0.loadUnaligned(fromByteOffset: 10, as: Int32.self))
+        }
         let cellCount = Int(rows) * Int(cols)
-        let expected = 12 + cellCount * 12
+        let expected = remoteFullStateHeaderLen + cellCount * cellEncodedLen
         guard data.count >= expected else { return nil }
         var cells = [DecodedWireCell](repeating: DecodedWireCell(), count: cellCount)
         data.withUnsafeBytes { buf in
             for i in 0..<cellCount {
-                let base = 12 + (i * 12)
+                let base = remoteFullStateHeaderLen + (i * cellEncodedLen)
                 cells[i] = DecodedWireCell(
                     codepoint: UInt32(littleEndian: buf.loadUnaligned(fromByteOffset: base, as: UInt32.self)),
                     fg_r: buf[base + 4],
@@ -116,12 +126,14 @@ enum WireCodec {
             cells: cells,
             cursorX: cursorX,
             cursorY: cursorY,
-            cursorVisible: cursorVisible
+            cursorVisible: cursorVisible,
+            cursorBlinking: cursorBlinking,
+            cursorStyle: cursorStyle
         )
     }
 
     static func applyDelta(_ data: Data, to state: inout DecodedWireScreenState) -> Bool {
-        guard data.count >= 8 else { return false }
+        guard data.count >= remoteDeltaHeaderLen else { return false }
         let numRows = data.withUnsafeBytes {
             UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt16.self))
         }
@@ -132,26 +144,42 @@ enum WireCodec {
             UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 4, as: UInt16.self))
         }
         state.cursorVisible = data[6] != 0
-        var offset = 8
+        state.cursorBlinking = data[7] != 0
+        let flags = data[8]
+        state.cursorStyle = data.withUnsafeBytes {
+            Int32(littleEndian: $0.loadUnaligned(fromByteOffset: 9, as: Int32.self))
+        }
+        var offset = remoteDeltaHeaderLen
+        if (flags & 0x01) != 0 {
+            guard offset + 2 <= data.count else { return false }
+            let scrollRows = data.withUnsafeBytes {
+                Int(Int16(littleEndian: $0.loadUnaligned(fromByteOffset: offset, as: Int16.self)))
+            }
+            offset += 2
+            applyScrollRows(scrollRows, to: &state)
+        }
         for _ in 0..<numRows {
-            guard offset + 4 <= data.count else { return false }
+            guard offset + 6 <= data.count else { return false }
             let rowIndex = data.withUnsafeBytes {
                 Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt16.self)))
             }
-            let numCols = data.withUnsafeBytes {
+            let startCol = data.withUnsafeBytes {
                 Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: offset + 2, as: UInt16.self)))
             }
-            offset += 4
-            let rowBytes = numCols * 12
+            let numCols = data.withUnsafeBytes {
+                Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: offset + 4, as: UInt16.self)))
+            }
+            offset += 6
+            let rowBytes = numCols * cellEncodedLen
             guard offset + rowBytes <= data.count else { return false }
-            guard rowIndex < Int(state.rows), numCols <= Int(state.cols) else {
+            guard rowIndex < Int(state.rows), startCol < Int(state.cols), startCol + numCols <= Int(state.cols) else {
                 offset += rowBytes
                 continue
             }
-            let dstStart = rowIndex * Int(state.cols)
+            let dstStart = rowIndex * Int(state.cols) + startCol
             data.withUnsafeBytes { buf in
                 for c in 0..<numCols {
-                    let base = offset + (c * 12)
+                    let base = offset + (c * cellEncodedLen)
                     state.cells[dstStart + c] = DecodedWireCell(
                         codepoint: UInt32(littleEndian: buf.loadUnaligned(fromByteOffset: base, as: UInt32.self)),
                         fg_r: buf[base + 4],
@@ -168,6 +196,23 @@ enum WireCodec {
             offset += rowBytes
         }
         return true
+    }
+
+    private static func applyScrollRows(_ scrollRows: Int, to state: inout DecodedWireScreenState) {
+        guard scrollRows != 0 else { return }
+        let rows = Int(state.rows)
+        let cols = Int(state.cols)
+        guard rows > 0, cols > 0 else { return }
+
+        var shifted = [DecodedWireCell](repeating: DecodedWireCell(), count: state.cells.count)
+        for row in 0..<rows {
+            let sourceRow = row + scrollRows
+            guard sourceRow >= 0, sourceRow < rows else { continue }
+            let dstStart = row * cols
+            let srcStart = sourceRow * cols
+            shifted[dstStart..<(dstStart + cols)] = state.cells[srcStart..<(srcStart + cols)]
+        }
+        state.cells = shifted
     }
 
     static func screenText(from state: DecodedWireScreenState) -> String {
