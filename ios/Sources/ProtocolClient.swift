@@ -157,6 +157,7 @@ final class GSPClient: ObservableObject {
     @Published var transportCapabilities: UInt32 = 0
     @Published var serverBuildId: String?
     @Published var lastHeartbeatAck: Date?
+    @Published var lastHeartbeatRttMs: Double?
     @Published var sessions: [SessionInfo] = []
     @Published var screen = ScreenState()
     @Published var attachedSessionId: UInt32?
@@ -167,6 +168,7 @@ final class GSPClient: ObservableObject {
     private let queue = DispatchQueue(label: "boo-gsp-client", qos: .userInteractive)
     private var heartbeatTimer: DispatchSourceTimer?
     private var lastHeartbeatSent: Date?
+    private var pendingHeartbeatToken: UInt64?
 
     private nonisolated static let magic: [UInt8] = [0x47, 0x53]
     private nonisolated static let headerLen = 7
@@ -175,12 +177,16 @@ final class GSPClient: ObservableObject {
         guard let protocolVersion, let serverBuildId, !serverBuildId.isEmpty else {
             return nil
         }
-        return "proto \(protocolVersion) · caps 0x\(String(transportCapabilities, radix: 16)) · \(serverBuildId)"
+        let heartbeat = lastHeartbeatRttMs.map { String(format: "hb %.0fms", $0) }
+        let base = "proto \(protocolVersion) · caps 0x\(String(transportCapabilities, radix: 16)) · \(serverBuildId)"
+        if let heartbeat {
+            return "\(base) · \(heartbeat)"
+        }
+        return base
     }
 
     func connect(host: String, port: UInt16, authKey: String = "") {
         self.authKey = authKey.isEmpty ? nil : SymmetricKey(data: Data(authKey.utf8))
-        let hasAuth = !authKey.isEmpty
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
         connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: params)
@@ -191,12 +197,7 @@ final class GSPClient: ObservableObject {
                     self?.connected = true
                     self?.lastError = nil
                     self?.readHeader()
-                    if hasAuth {
-                        self?.sendAuth()
-                    } else {
-                        self?.authenticated = true
-                        self?.startHeartbeatLoop()
-                    }
+                    self?.sendAuth()
                 case .failed(let error):
                     self?.protocolError("Connection failed: \(error)")
                 case .cancelled:
@@ -219,7 +220,9 @@ final class GSPClient: ObservableObject {
         transportCapabilities = 0
         serverBuildId = nil
         lastHeartbeatAck = nil
+        lastHeartbeatRttMs = nil
         lastHeartbeatSent = nil
+        pendingHeartbeatToken = nil
         attachedSessionId = nil
         sessions = []
         screen = ScreenState()
@@ -268,7 +271,9 @@ final class GSPClient: ObservableObject {
     }
 
     func sendHeartbeat() {
-        sendMessage(type: .heartbeat, payload: Data("ping".utf8))
+        let token = UInt64(Date().timeIntervalSince1970 * 1000)
+        pendingHeartbeatToken = token
+        sendMessage(type: .heartbeat, payload: Data(withUnsafeBytes(of: token.littleEndian, Array.init)))
     }
 
     private func startHeartbeatLoop() {
@@ -400,6 +405,15 @@ final class GSPClient: ObservableObject {
             applyReducedMessage(.errorMsg, payload: payload)
         case .heartbeatAck:
             lastHeartbeatAck = Date()
+            if payload.count >= 8 {
+                let token = payload.withUnsafeBytes {
+                    UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt64.self))
+                }
+                if let pendingHeartbeatToken, token == pendingHeartbeatToken, let lastHeartbeatSent {
+                    lastHeartbeatRttMs = Date().timeIntervalSince(lastHeartbeatSent) * 1000
+                    self.pendingHeartbeatToken = nil
+                }
+            }
         case .clipboard:
             handleClipboard(payload)
         default:
@@ -420,7 +434,9 @@ final class GSPClient: ObservableObject {
         transportCapabilities = 0
         serverBuildId = nil
         lastHeartbeatAck = nil
+        lastHeartbeatRttMs = nil
         lastHeartbeatSent = nil
+        pendingHeartbeatToken = nil
         attachedSessionId = nil
         sessions = []
         screen = ScreenState()
