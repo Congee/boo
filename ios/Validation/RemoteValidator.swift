@@ -92,6 +92,7 @@ final class RemoteValidator {
     private var transportCapabilities: UInt32 = 0
     private var serverBuildId: String?
     private var heartbeatAckReceived = false
+    private var expectedHeartbeatPayload = Data()
     private var sessionListReceived = false
     private var sessions: [DecodedWireSessionInfo] = []
     private var attachedSessionId: UInt32?
@@ -172,7 +173,8 @@ final class RemoteValidator {
             authenticated = true
         }
         heartbeatAckReceived = false
-        sendMessage(type: .heartbeat, payload: Data("ping".utf8))
+        expectedHeartbeatPayload = Data(withUnsafeBytes(of: UInt64(0x424f4f5f50494e47).littleEndian, Array.init))
+        sendMessage(type: .heartbeat, payload: expectedHeartbeatPayload)
         try waitUntil("heartbeat acknowledgement") { self.heartbeatAckReceived }
     }
 
@@ -321,6 +323,10 @@ final class RemoteValidator {
         case .authFail:
             lastError = "authentication failed"
         case .heartbeatAck:
+            if payload != expectedHeartbeatPayload {
+                lastError = "heartbeat acknowledgement payload mismatch"
+                return
+            }
             heartbeatAckReceived = true
         case .sessionList:
             sessionListReceived = true
