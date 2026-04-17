@@ -2,6 +2,54 @@ import Foundation
 import Network
 import CryptoKit
 
+private struct ValidationAuthOkMetadata {
+    let protocolVersion: UInt16
+    let transportCapabilities: UInt32
+    let serverBuildId: String?
+}
+
+private func decodeValidationAuthOkMetadata(_ payload: Data) -> ValidationAuthOkMetadata? {
+    guard payload.count >= 6 else { return nil }
+    let protocolVersion = payload.withUnsafeBytes {
+        UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt16.self))
+    }
+    let transportCapabilities = payload.withUnsafeBytes {
+        UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 2, as: UInt32.self))
+    }
+    guard payload.count >= 8 else {
+        return ValidationAuthOkMetadata(
+            protocolVersion: protocolVersion,
+            transportCapabilities: transportCapabilities,
+            serverBuildId: nil
+        )
+    }
+    let buildLength = payload.withUnsafeBytes {
+        Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 6, as: UInt16.self)))
+    }
+    guard payload.count >= 8 + buildLength else { return nil }
+    return ValidationAuthOkMetadata(
+        protocolVersion: protocolVersion,
+        transportCapabilities: transportCapabilities,
+        serverBuildId: String(data: payload[8..<(8 + buildLength)], encoding: .utf8)
+    )
+}
+
+private func validateValidationAuthOkMetadata(_ payload: Data, authRequired: Bool) -> String? {
+    guard let metadata = decodeValidationAuthOkMetadata(payload) else {
+        return "Remote handshake is malformed"
+    }
+    if metadata.protocolVersion != 1 {
+        return "Unsupported remote protocol version: \(metadata.protocolVersion)"
+    }
+    if authRequired && (metadata.transportCapabilities & (1 << 0)) == 0 {
+        return "Remote server does not advertise HMAC authentication"
+    }
+    if metadata.serverBuildId?.isEmpty != false {
+        return "Remote handshake is missing server build metadata"
+    }
+    return nil
+}
+
 enum WireMessageType: UInt8 {
     case auth = 0x01
     case listSessions = 0x02
@@ -26,9 +74,6 @@ enum WireMessageType: UInt8 {
 }
 
 final class RemoteValidator {
-    private let protocolVersionExpected: UInt16 = 1
-    private let capabilityHmacAuth: UInt32 = 1 << 0
-
     private let magic: [UInt8] = [0x47, 0x53]
     private let queue = DispatchQueue(label: "boo-ios-remote-validator")
     private let lock = NSLock()
@@ -254,29 +299,14 @@ final class RemoteValidator {
             sendMessage(type: .auth, payload: Data(mac))
             lock.lock()
         case .authOk:
-            if payload.count >= 6 {
-                protocolVersion = payload.withUnsafeBytes {
-                    UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt16.self))
-                }
-                transportCapabilities = payload.withUnsafeBytes {
-                    UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 2, as: UInt32.self))
-                }
-                if payload.count >= 8 {
-                    let buildLength = payload.withUnsafeBytes {
-                        Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 6, as: UInt16.self)))
-                    }
-                    if payload.count >= 8 + buildLength {
-                        serverBuildId = String(data: payload[8..<(8 + buildLength)], encoding: .utf8)
-                    }
-                }
-                if protocolVersion != protocolVersionExpected {
-                    lastError = "unexpected protocol version: \(protocolVersion ?? 0)"
-                    return
-                }
-                if authKey != nil && (transportCapabilities & capabilityHmacAuth) == 0 {
-                    lastError = "server did not advertise HMAC auth capability"
-                    return
-                }
+            if let metadata = decodeValidationAuthOkMetadata(payload) {
+                protocolVersion = metadata.protocolVersion
+                transportCapabilities = metadata.transportCapabilities
+                serverBuildId = metadata.serverBuildId
+            }
+            if let error = validateValidationAuthOkMetadata(payload, authRequired: authKey != nil) {
+                lastError = error
+                return
             }
             authenticated = true
         case .authFail:

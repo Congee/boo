@@ -53,6 +53,28 @@ struct ProtocolCodecSelfTestMain {
         assertEqual(clientState.protocolVersion, 1, "auth ok protocol version decode")
         assertEqual(clientState.transportCapabilities, 0x0f, "auth ok capability decode")
         assertEqual(clientState.serverBuildId, buildId, "auth ok build id decode")
+        assertEqual(validateAuthOkMetadata(authOkPayload, authRequired: true), nil, "auth ok metadata validation")
+
+        var missingBuildPayload = Data(count: 6)
+        missingBuildPayload.withUnsafeMutableBytes { bytes in
+            bytes.storeBytes(of: UInt16(1).littleEndian, as: UInt16.self)
+            bytes.storeBytes(of: UInt32(0x0f).littleEndian, toByteOffset: 2, as: UInt32.self)
+        }
+        assertEqual(
+            validateAuthOkMetadata(missingBuildPayload, authRequired: true),
+            "Remote handshake is missing server build metadata",
+            "missing build metadata rejected"
+        )
+
+        var wrongVersionPayload = authOkPayload
+        wrongVersionPayload.withUnsafeMutableBytes { bytes in
+            bytes.storeBytes(of: UInt16(2).littleEndian, as: UInt16.self)
+        }
+        assertEqual(
+            validateAuthOkMetadata(wrongVersionPayload, authRequired: true),
+            "Unsupported remote protocol version: 2",
+            "wrong protocol version rejected"
+        )
 
         let listEffect = ClientWireReducer.reduce(message: .sessionList, payload: makeSessionListPayload(), state: &clientState)
         assertEqual(listEffect, .none, "session list has no side effect")

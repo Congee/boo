@@ -19,6 +19,15 @@ enum ClientWireEffect: Equatable {
     case attach(UInt32)
 }
 
+struct AuthOkMetadata: Equatable {
+    let protocolVersion: UInt16
+    let transportCapabilities: UInt32
+    let serverBuildId: String?
+}
+
+private let expectedRemoteProtocolVersion: UInt16 = 1
+private let remoteCapabilityHmacAuth: UInt32 = 1 << 0
+
 struct ClientWireState: Equatable {
     var authenticated = false
     var protocolVersion: UInt16?
@@ -30,26 +39,57 @@ struct ClientWireState: Equatable {
     var lastError: String?
 }
 
+func decodeAuthOkMetadata(_ payload: Data) -> AuthOkMetadata? {
+    guard payload.count >= 6 else { return nil }
+    let protocolVersion = payload.withUnsafeBytes {
+        UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt16.self))
+    }
+    let transportCapabilities = payload.withUnsafeBytes {
+        UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 2, as: UInt32.self))
+    }
+    guard payload.count >= 8 else {
+        return AuthOkMetadata(
+            protocolVersion: protocolVersion,
+            transportCapabilities: transportCapabilities,
+            serverBuildId: nil
+        )
+    }
+    let buildLength = payload.withUnsafeBytes {
+        Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 6, as: UInt16.self)))
+    }
+    guard payload.count >= 8 + buildLength else { return nil }
+    return AuthOkMetadata(
+        protocolVersion: protocolVersion,
+        transportCapabilities: transportCapabilities,
+        serverBuildId: String(data: payload[8..<(8 + buildLength)], encoding: .utf8)
+    )
+}
+
+func validateAuthOkMetadata(_ payload: Data, authRequired: Bool) -> String? {
+    guard let metadata = decodeAuthOkMetadata(payload) else {
+        return "Remote handshake is malformed"
+    }
+    if metadata.protocolVersion != expectedRemoteProtocolVersion {
+        return "Unsupported remote protocol version: \(metadata.protocolVersion)"
+    }
+    if authRequired && (metadata.transportCapabilities & remoteCapabilityHmacAuth) == 0 {
+        return "Remote server does not advertise HMAC authentication"
+    }
+    if metadata.serverBuildId?.isEmpty != false {
+        return "Remote handshake is missing server build metadata"
+    }
+    return nil
+}
+
 enum ClientWireReducer {
     static func reduce(message: ClientWireMessageType, payload: Data, state: inout ClientWireState) -> ClientWireEffect {
         switch message {
         case .authOk:
             state.authenticated = true
-            if payload.count >= 6 {
-                state.protocolVersion = payload.withUnsafeBytes {
-                    UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt16.self))
-                }
-                state.transportCapabilities = payload.withUnsafeBytes {
-                    UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 2, as: UInt32.self))
-                }
-                if payload.count >= 8 {
-                    let buildLength = payload.withUnsafeBytes {
-                        Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 6, as: UInt16.self)))
-                    }
-                    if payload.count >= 8 + buildLength {
-                        state.serverBuildId = String(data: payload[8..<(8 + buildLength)], encoding: .utf8)
-                    }
-                }
+            if let metadata = decodeAuthOkMetadata(payload) {
+                state.protocolVersion = metadata.protocolVersion
+                state.transportCapabilities = metadata.transportCapabilities
+                state.serverBuildId = metadata.serverBuildId
             }
             state.lastError = nil
             return .listSessions

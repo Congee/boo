@@ -321,6 +321,10 @@ final class GSPClient: ObservableObject {
         case .authChallenge:
             handleAuthChallenge(payload)
         case .authOk:
+            if let error = validateAuthOkPayload(payload) {
+                protocolError(error)
+                return
+            }
             applyReducedMessage(.authOk, payload: payload)
         case .authFail:
             applyReducedMessage(.authFail, payload: payload)
@@ -345,6 +349,24 @@ final class GSPClient: ObservableObject {
         default:
             break
         }
+    }
+
+    private func validateAuthOkPayload(_ payload: Data) -> String? {
+        validateAuthOkMetadata(payload, authRequired: authKey != nil)
+    }
+
+    private func protocolError(_ message: String) {
+        connection?.cancel()
+        connection = nil
+        connected = false
+        authenticated = false
+        protocolVersion = nil
+        transportCapabilities = 0
+        serverBuildId = nil
+        attachedSessionId = nil
+        sessions = []
+        screen = ScreenState()
+        lastError = message
     }
 
     private func applyDecodedSessions(_ decodedSessions: [DecodedWireSessionInfo]) {
