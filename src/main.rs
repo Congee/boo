@@ -407,14 +407,14 @@ fn configured_font(family: Option<&'static str>) -> Font {
 fn main() {
     env_logger::init();
 
-    let args: Vec<String> = std::env::args().collect();
-    let server_mode = launch::parse_startup_args(&args);
+    let cli = cli::Cli::parse_args();
+    let server_mode = launch::parse_startup_args(&cli);
     let startup_config = launch::load_startup_config();
-    match cli::handle_command(&args, &startup_config, launch::ensure_server_running) {
+    match cli::handle_command(&cli, &startup_config, launch::ensure_server_running) {
         cli::Outcome::Continue => {}
         cli::Outcome::Exit(code) => std::process::exit(code),
     }
-    let headless = server_mode || args.iter().any(|a| a == "--headless");
+    let headless = server_mode || cli.global.headless;
     if headless {
         runtime::run_headless();
         return;

@@ -1,159 +1,130 @@
 use crate::config;
 use crate::control;
-use std::io::Write;
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::{Generator, Shell, generate};
 
-const CLI_SUBCOMMANDS: &[(&str, &str)] = &[
-    ("attach", "connect the GUI client to the local Boo server"),
-    ("completions", "print shell completion scripts"),
-    ("kill-server", "stop the local Boo server"),
-    ("ls", "list live sessions on the local Boo server"),
-    (
-        "new-session",
-        "create a new live session on the local Boo server",
-    ),
-    ("quit-server", "stop the local Boo server"),
-    ("server", "run the Boo session server without a GUI"),
-];
+#[derive(Debug, Clone, Parser)]
+#[command(
+    name = "boo",
+    about = "Terminal multiplexer and GUI client for Boo sessions",
+    disable_help_flag = true,
+    long_about = "Terminal multiplexer and GUI client for Boo sessions.\n\nRunning `boo` with no subcommand opens the GUI client.",
+    after_long_help = "Remote flags apply both before and after subcommands, for example `boo --host macbook ls` and `boo ls --host macbook`."
+)]
+pub struct Cli {
+    #[command(flatten)]
+    pub global: GlobalArgs,
+
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+#[derive(Debug, Clone, clap::Args, Default)]
+pub struct GlobalArgs {
+    #[arg(short = 'h', action = clap::ArgAction::HelpShort, global = true, help = "Print help")]
+    pub help_short: bool,
+
+    #[arg(long = "help", action = clap::ArgAction::HelpLong, global = true, help = "Print long help")]
+    pub help_long: bool,
+
+    #[arg(long, global = true, help = "Run without opening the GUI window")]
+    pub headless: bool,
+
+    #[arg(long, global = true, help = "Connect through SSH to a remote Boo host")]
+    pub host: Option<String>,
+
+    #[arg(long, global = true, help = "Override the local control socket path")]
+    pub socket: Option<String>,
+
+    #[arg(
+        long = "remote-workdir",
+        global = true,
+        help = "Remote workdir used before starting Boo over SSH"
+    )]
+    pub remote_workdir: Option<String>,
+
+    #[arg(
+        long = "remote-socket",
+        global = true,
+        help = "Remote control socket path used on the SSH host"
+    )]
+    pub remote_socket: Option<String>,
+
+    #[arg(
+        long = "remote-binary",
+        global = true,
+        help = "Remote Boo binary path used on the SSH host"
+    )]
+    pub remote_binary: Option<String>,
+
+    #[arg(long = "remote-port", global = true, help = "Start the TCP remote daemon on this port")]
+    pub remote_port: Option<u16>,
+
+    #[arg(
+        long = "remote-auth-key",
+        global = true,
+        help = "Shared secret for the TCP remote daemon"
+    )]
+    pub remote_auth_key: Option<String>,
+
+    #[arg(long, global = true, help = "Session layout to load at startup")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum Command {
+    /// Connect the GUI client to a Boo server
+    Attach,
+    /// Print shell completion scripts
+    Completions {
+        #[arg(value_enum, default_value_t = CompletionShell::Bash)]
+        shell: CompletionShell,
+    },
+    /// Stop the Boo server
+    KillServer,
+    /// List live sessions on the Boo server
+    Ls,
+    /// Create a new live session
+    NewSession,
+    /// Stop the Boo server
+    QuitServer,
+    /// Run the Boo session server without a GUI
+    Server,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum CompletionShell {
+    Bash,
+    Zsh,
+    Fish,
+}
 
 pub enum Outcome {
     Continue,
     Exit(i32),
 }
 
-fn bash_completion_script() -> String {
-    let commands = CLI_SUBCOMMANDS
-        .iter()
-        .map(|(name, _)| *name)
-        .collect::<Vec<_>>()
-        .join(" ");
-    format!(
-        r#"_boo_completions() {{
-    local cur prev words cword
-    _init_completion || return
-
-    prev="${{COMP_WORDS[COMP_CWORD-1]}}"
-    case "$prev" in
-        --socket)
-            COMPREPLY=($(compgen -f -- "$cur"))
-            return
-            ;;
-        --remote-port)
-            return
-            ;;
-        --remote-auth-key|--session)
-            return
-            ;;
-        completions)
-            COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur"))
-            return
-            ;;
-    esac
-
-    if [[ $COMP_CWORD -eq 1 ]]; then
-        COMPREPLY=($(compgen -W "{commands}" -- "$cur"))
-        return
-    fi
-
-    COMPREPLY=($(compgen -W "--headless --socket --remote-port --remote-auth-key --session --help" -- "$cur"))
-}}
-
-complete -F _boo_completions boo
-"#
-    )
-}
-
-fn zsh_completion_script() -> String {
-    let mut lines = vec![
-        "#compdef boo".to_string(),
-        String::new(),
-        "_boo() {".to_string(),
-        "  local -a commands".to_string(),
-        "  commands=(".to_string(),
-    ];
-    for (name, description) in CLI_SUBCOMMANDS {
-        lines.push(format!("    '{}:{}'", name, description));
+impl Cli {
+    pub fn parse_args() -> Self {
+        Self::parse()
     }
-    lines.extend([
-        "  )".to_string(),
-        "  _arguments -C \\".to_string(),
-        "    '--headless[run without opening the GUI window]' \\".to_string(),
-        "    '--socket=[override local control socket path]:socket path:_files' \\".to_string(),
-        "    '--remote-port=[start the TCP remote daemon]:port:' \\".to_string(),
-        "    '--remote-auth-key=[shared secret for remote auth]:secret:' \\".to_string(),
-        "    '--session=[session layout to load]:session:' \\".to_string(),
-        "    '--help[show help]' \\".to_string(),
-        "    '1:command:->command' \\".to_string(),
-        "    '*::arg:->args'".to_string(),
-        String::new(),
-        "  case $state in".to_string(),
-        "    command)".to_string(),
-        "      _describe 'boo command' commands".to_string(),
-        "      ;;".to_string(),
-        "    args)".to_string(),
-        "      if [[ ${words[2]} == completions ]]; then".to_string(),
-        "        _values 'shell' bash zsh fish".to_string(),
-        "      fi".to_string(),
-        "      ;;".to_string(),
-        "  esac".to_string(),
-        "}".to_string(),
-        String::new(),
-        "_boo \"$@\"".to_string(),
-    ]);
-    lines.join("\n")
 }
 
-fn fish_completion_script() -> String {
-    let mut lines = vec![
-        "complete -c boo -f".to_string(),
-        "complete -c boo -l headless -d 'run without opening the GUI window'".to_string(),
-        "complete -c boo -l socket -r -d 'override local control socket path'".to_string(),
-        "complete -c boo -l remote-port -r -d 'start the TCP remote daemon'".to_string(),
-        "complete -c boo -l remote-auth-key -r -d 'shared secret for remote auth'".to_string(),
-        "complete -c boo -l session -r -d 'session layout to load'".to_string(),
-    ];
-    for (name, description) in CLI_SUBCOMMANDS {
-        lines.push(format!(
-            "complete -c boo -n '__fish_use_subcommand' -a '{name}' -d '{description}'"
-        ));
-    }
-    lines.push(
-        "complete -c boo -n '__fish_seen_subcommand_from completions' -a 'bash zsh fish' -d 'shell'"
-            .to_string(),
-    );
-    lines.join("\n")
-}
-
-fn print_completions(shell: &str) -> Result<(), String> {
-    let script = match shell {
-        "bash" => bash_completion_script(),
-        "zsh" => zsh_completion_script(),
-        "fish" => fish_completion_script(),
-        other => return Err(format!("unsupported shell: {other}")),
-    };
+fn print_completions<G: Generator>(generator: G) -> Result<(), String> {
+    let mut command = Cli::command();
     let mut stdout = std::io::stdout().lock();
-    stdout
-        .write_all(script.as_bytes())
-        .map_err(|error| format!("write completions: {error}"))?;
-    stdout
-        .write_all(b"\n")
-        .map_err(|error| format!("write completions: {error}"))?;
-    stdout
-        .flush()
-        .map_err(|error| format!("flush completions: {error}"))
+    generate(generator, &mut command, "boo", &mut stdout);
+    Ok(())
 }
 
-pub fn handle_command<F>(
-    args: &[String],
-    boo_config: &config::Config,
-    mut ensure_server_running: F,
-) -> Outcome
+pub fn handle_command<F>(cli: &Cli, boo_config: &config::Config, mut ensure_server_running: F) -> Outcome
 where
     F: FnMut(&str, &config::Config),
 {
-    let Some(command) = args.get(1).map(String::as_str) else {
+    let Some(command) = cli.command.as_ref() else {
         return Outcome::Continue;
     };
-    if matches!(command, "server") {
+    if matches!(command, Command::Server) {
         return Outcome::Continue;
     }
 
@@ -163,11 +134,13 @@ where
         .unwrap_or_else(control::default_socket_path);
 
     match command {
-        "ls" => {
+        Command::Ls => {
+            ensure_server_running(&socket_path, boo_config);
             let client = control::Client::connect(socket_path);
             match client.request(&control::Request::ListTabs) {
                 Ok(control::Response::Tabs { tabs }) => {
                     let mut stdout = std::io::stdout().lock();
+                    use std::io::Write;
                     for tab in tabs {
                         let marker = if tab.active { "*" } else { " " };
                         let _ = writeln!(stdout, "{marker} {}\t{}", tab.index + 1, tab.title);
@@ -189,15 +162,20 @@ where
                 }
             }
         }
-        "completions" => {
-            let shell = args.get(2).map(String::as_str).unwrap_or("bash");
-            if let Err(error) = print_completions(shell) {
+        Command::Completions { shell } => {
+            let result = match shell {
+                CompletionShell::Bash => print_completions(Shell::Bash),
+                CompletionShell::Zsh => print_completions(Shell::Zsh),
+                CompletionShell::Fish => print_completions(Shell::Fish),
+            };
+            if let Err(error) = result {
                 eprintln!("{error}");
                 return Outcome::Exit(1);
             }
             Outcome::Exit(0)
         }
-        "kill-server" | "quit-server" => {
+        Command::KillServer | Command::QuitServer => {
+            ensure_server_running(&socket_path, boo_config);
             let client = control::Client::connect(socket_path);
             if let Err(error) = client.send(&control::Request::Quit) {
                 eprintln!("{error}");
@@ -205,7 +183,7 @@ where
             }
             Outcome::Exit(0)
         }
-        "new-session" => {
+        Command::NewSession => {
             ensure_server_running(&socket_path, boo_config);
             let client = control::Client::connect(socket_path);
             if let Err(error) = client.send(&control::Request::NewTab) {
@@ -214,26 +192,80 @@ where
             }
             Outcome::Exit(0)
         }
-        "attach" => Outcome::Continue,
-        _ => Outcome::Continue,
+        Command::Attach => Outcome::Continue,
+        Command::Server => Outcome::Continue,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{bash_completion_script, fish_completion_script, zsh_completion_script};
+    use super::{Cli, CompletionShell};
+    use clap::{CommandFactory, Parser, error::ErrorKind};
 
     #[test]
-    fn completion_scripts_include_core_subcommands() {
-        let bash = bash_completion_script();
-        let zsh = zsh_completion_script();
-        let fish = fish_completion_script();
+    fn parse_global_flags_after_subcommand() {
+        let cli = Cli::parse_from([
+            "boo",
+            "ls",
+            "--host",
+            "example-mbp.local",
+            "--remote-binary",
+            "/Users/example/dev/boo/target/debug/boo",
+        ]);
+        assert_eq!(cli.global.host.as_deref(), Some("example-mbp.local"));
+        assert_eq!(
+            cli.global.remote_binary.as_deref(),
+            Some("/Users/example/dev/boo/target/debug/boo")
+        );
+    }
 
-        for script in [bash, zsh, fish] {
-            assert!(script.contains("new-session"));
-            assert!(script.contains("kill-server"));
-            assert!(script.contains("quit-server"));
-            assert!(script.contains("completions"));
+    #[test]
+    fn parse_global_flags_before_subcommand() {
+        let cli = Cli::parse_from([
+            "boo",
+            "--host",
+            "example-mbp.local",
+            "--remote-binary",
+            "/Users/example/dev/boo/target/debug/boo",
+            "ls",
+        ]);
+        assert_eq!(cli.global.host.as_deref(), Some("example-mbp.local"));
+        assert_eq!(
+            cli.global.remote_binary.as_deref(),
+            Some("/Users/example/dev/boo/target/debug/boo")
+        );
+        assert!(matches!(cli.command, Some(super::Command::Ls)));
+    }
+
+    #[test]
+    fn parse_completions_shell() {
+        let cli = Cli::parse_from(["boo", "completions", "zsh"]);
+        match cli.command {
+            Some(super::Command::Completions { shell }) => {
+                assert!(matches!(shell, CompletionShell::Zsh));
+            }
+            other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn help_mentions_default_gui_behavior() {
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("Running `boo` with no subcommand opens the GUI client."));
+        assert!(help.contains("Connect through SSH to a remote Boo host"));
+    }
+
+    #[test]
+    fn short_and_long_help_are_different() {
+        let short = Cli::try_parse_from(["boo", "-h"]).unwrap_err();
+        let long = Cli::try_parse_from(["boo", "--help"]).unwrap_err();
+        assert_eq!(short.kind(), ErrorKind::DisplayHelp);
+        assert_eq!(long.kind(), ErrorKind::DisplayHelp);
+        let short_text = short.to_string();
+        let long_text = long.to_string();
+        assert_ne!(short_text, long_text);
+        assert!(!short_text.contains("Running `boo` with no subcommand opens the GUI client."));
+        assert!(long_text.contains("Running `boo` with no subcommand opens the GUI client."));
+        assert!(long_text.contains("Remote flags apply both before and after subcommands"));
     }
 }

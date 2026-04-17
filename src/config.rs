@@ -13,6 +13,10 @@ pub type RgbColor = [u8; 3];
 pub struct Config {
     pub prefix_key: Option<String>,
     pub control_socket: Option<String>,
+    pub remote_host: Option<String>,
+    pub remote_workdir: Option<String>,
+    pub remote_socket: Option<String>,
+    pub remote_binary: Option<String>,
     pub remote_port: Option<u16>,
     pub remote_auth_key: Option<String>,
     pub keybinds: HashMap<String, String>,
@@ -117,6 +121,26 @@ impl Config {
             match key {
                 "prefix-key" => config.prefix_key = Some(value.to_string()),
                 "control-socket" => config.control_socket = Some(value.to_string()),
+                "remote-host" => {
+                    if !value.is_empty() {
+                        config.remote_host = Some(value.to_string());
+                    }
+                }
+                "remote-workdir" => {
+                    if !value.is_empty() {
+                        config.remote_workdir = Some(value.to_string());
+                    }
+                }
+                "remote-socket" => {
+                    if !value.is_empty() {
+                        config.remote_socket = Some(value.to_string());
+                    }
+                }
+                "remote-binary" => {
+                    if !value.is_empty() {
+                        config.remote_binary = Some(value.to_string());
+                    }
+                }
                 "remote-port" => {
                     if let Ok(port) = value.parse::<u16>() {
                         config.remote_port = Some(port);
@@ -239,6 +263,10 @@ impl Default for Config {
         Config {
             prefix_key: None,
             control_socket: None,
+            remote_host: None,
+            remote_workdir: None,
+            remote_socket: None,
+            remote_binary: None,
             remote_port: None,
             remote_auth_key: None,
             keybinds: HashMap::new(),
@@ -488,6 +516,24 @@ keybind = super+1 = goto_tab:1
         assert_eq!(
             config.keybinds.get("super+1").map(|s| s.as_str()),
             Some("goto_tab:1")
+        );
+    }
+
+    #[test]
+    fn test_parse_remote_ssh_settings() {
+        let content = r#"
+remote-host = example-mbp.local
+remote-workdir = /Users/example/dev/boo
+remote-socket = /tmp/boo.sock
+remote-binary = /Users/example/dev/boo/target/debug/boo
+"#;
+        let config = Config::parse(content);
+        assert_eq!(config.remote_host.as_deref(), Some("example-mbp.local"));
+        assert_eq!(config.remote_workdir.as_deref(), Some("/Users/example/dev/boo"));
+        assert_eq!(config.remote_socket.as_deref(), Some("/tmp/boo.sock"));
+        assert_eq!(
+            config.remote_binary.as_deref(),
+            Some("/Users/example/dev/boo/target/debug/boo")
         );
     }
 
