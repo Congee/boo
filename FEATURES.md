@@ -253,6 +253,12 @@ nix develop
 - [ ] add session/window rename and move/link semantics closer to tmux
 - [ ] add hooks, formats, `run-shell`, and `if-shell`
 
+### CLI Backlog
+- [ ] Replace the hand-rolled CLI arg parsing/completion plumbing with `clap` so global flags, subcommands, help text, and completions come from one typed source of truth
+
+### Remote Backlog
+- [ ] Expand `remote-binary` and related remote path settings so `~` and `$HOME` work naturally before SSH bootstrap builds the remote command
+
 ### Performance Backlog
 - [x] Overhaul snapshot-heavy rendering/transport paths for performance: keep snapshots as authoritative state where needed, but eliminate whole-snapshot recompute/re-render patterns in hot paths in favor of row/pane-level dirty tracking, incremental caches, and delta-driven updates
 - [x] Replace remaining headless/server sleep-poll paths with explicit event-driven wake sources so command input, PTY output, lifecycle changes, and publish work do not depend on periodic frame cadence
