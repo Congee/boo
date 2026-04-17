@@ -3363,7 +3363,13 @@ mod tests {
 
         match rx.recv().unwrap() {
             StreamCommand::AppKeyEvent { event } => {
-                assert_eq!(event.keycode, 0x27);
+                assert_eq!(
+                    event.keycode,
+                    crate::keymap::physical_to_native_keycode(
+                        &keyboard::key::Physical::Code(keyboard::key::Code::Quote)
+                    )
+                    .expect("quote key should map to a native keycode")
+                );
                 assert_eq!(event.text.as_deref(), Some("\""));
                 assert_eq!(event.modified_text.as_deref(), Some("\""));
                 assert_eq!(event.named_key, None);

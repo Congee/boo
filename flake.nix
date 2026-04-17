@@ -11,42 +11,156 @@
     let
       overlays = [ (import rust-overlay) ];
       pkgs = import nixpkgs { inherit system overlays; };
+      lib = pkgs.lib;
+      ghosttyCommit = "bebca84668947bfc92b9a30ed58712e1c34eee1d";
 
       toolchain = pkgs.rust-bin.stable.latest.default.override {
         extensions = [ "rust-src" "rust-std" "clippy" "rustfmt" "rust-analyzer" ];
+      };
+      rustPlatform = pkgs.makeRustPlatform {
+        cargo = toolchain;
+        rustc = toolchain;
       };
       llvm = (if pkgs.stdenv.isLinux then pkgs.pkgsLLVM else pkgs).llvmPackages_latest;
       mkShell = if pkgs.stdenv.isLinux
         then llvm.stdenv.mkDerivation
         else pkgs.mkShellNoCC;
+      booNativeBuildInputs = with pkgs; [
+        toolchain
+        pkg-config
+        clang-tools
+        fontconfig
+      ];
+      devNativeBuildInputs = booNativeBuildInputs ++ (with pkgs; [
+        zig.packages.${system}."0.15.2"
+        git
+      ]);
+      commonBuildInputs = with pkgs; [
+        openssl
+      ]
+      ++ lib.optional pkgs.stdenv.isDarwin apple-sdk
+      ++ lib.optional pkgs.stdenv.isDarwin libiconv
+      ++ lib.optionals pkgs.stdenv.isLinux [
+        libGL
+        libxkbcommon
+        wayland
+        vulkan-loader
+        gtk4
+        glib
+        fontconfig
+        freetype
+      ];
+      ghosttySrc = pkgs.fetchFromGitHub {
+        owner = "ghostty-org";
+        repo = "ghostty";
+        rev = ghosttyCommit;
+        hash = "sha256-7MPEjIAQD+Z/zdP4h/yslysuVnhCESOPvdvwoLoPVmI=";
+      };
+      ghosttyBuildInputs = import "${ghosttySrc}/nix/build-support/build-inputs.nix" {
+        inherit pkgs lib;
+        stdenv = pkgs.stdenv;
+        enableX11 = pkgs.stdenv.isLinux;
+        enableWayland = pkgs.stdenv.isLinux;
+      };
+      libghosttyVtPackage = pkgs.stdenv.mkDerivation (finalAttrs: {
+        pname = "libghostty-vt";
+        version = "0.1.1-ghostty-${builtins.substring 0 12 ghosttyCommit}";
+        src = ghosttySrc;
+        deps = pkgs.callPackage "${ghosttySrc}/build.zig.zon.nix" {
+          name = "ghostty-cache-libghostty-vt-${builtins.substring 0 12 ghosttyCommit}";
+        };
+        nativeBuildInputs = with pkgs; [
+          ncurses
+          zig_0_15
+          pkg-config
+        ] ++ lib.optionals pkgs.stdenv.isLinux [
+          wayland-scanner
+          wayland-protocols
+        ];
+        buildInputs = ghosttyBuildInputs ++ commonBuildInputs;
+        dontConfigure = true;
+        doCheck = false;
+        dontSetZigDefaultFlags = true;
+        zigBuildFlags = [
+          "--system"
+          "${finalAttrs.deps}"
+          "-Demit-lib-vt"
+          "-Dcpu=baseline"
+          "-Doptimize=ReleaseFast"
+        ];
+        preBuild = lib.optionalString pkgs.stdenv.isLinux ''
+          export NIX_CFLAGS_COMPILE="$(echo "$NIX_CFLAGS_COMPILE" | sed 's/ *-fmacro-prefix-map=[^ ]*//g')"
+          export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-global-cache"
+          export ZIG_LOCAL_CACHE_DIR="$TMPDIR/zig-local-cache"
+          mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
+        '' + lib.optionalString pkgs.stdenv.isDarwin ''
+          export PATH="$PATH:/usr/bin"
+          export DEVELOPER_DIR="$(xcode-select -p)"
+          export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+          export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-global-cache"
+          export ZIG_LOCAL_CACHE_DIR="$TMPDIR/zig-local-cache"
+          mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
+        '';
+        postInstall = lib.optionalString pkgs.stdenv.isLinux ''
+          if [ -f "$out/lib/libghostty-vt.so.0.1.0" ]; then
+            ln -sf libghostty-vt.so.0.1.0 "$out/lib/libghostty-vt.so"
+            ln -sf libghostty-vt.so.0.1.0 "$out/lib/libghostty-vt.so.0"
+          fi
+        '' + lib.optionalString pkgs.stdenv.isDarwin ''
+          if [ -f "$out/lib/libghostty-vt.0.1.0.dylib" ]; then
+            ln -sf libghostty-vt.0.1.0.dylib "$out/lib/libghostty-vt.dylib"
+          fi
+        '' + ''
+          rm -rf "$out/share" "$out/Ghostty.app" "$out/boo.app"
+        '';
+        meta = with lib; {
+          description = "Ghostty terminal emulation library";
+          platforms = platforms.unix;
+        };
+      });
+      booPackage = rustPlatform.buildRustPackage {
+        pname = "boo";
+        version = "0.1.0";
+        src = ./.;
+        cargoLock.lockFile = ./Cargo.lock;
+        nativeBuildInputs = booNativeBuildInputs;
+        buildInputs = commonBuildInputs ++ [ libghosttyVtPackage ];
+        RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
+        preBuild = lib.optionalString pkgs.stdenv.isLinux ''
+          export NIX_CFLAGS_COMPILE="$(echo "$NIX_CFLAGS_COMPILE" | sed 's/ *-fmacro-prefix-map=[^ ]*//g')"
+          export LIBGHOSTTY_VT_SYS_LIBDIR="${libghosttyVtPackage}/lib"
+          export LIBGHOSTTY_VT_SYS_INCLUDEDIR="${libghosttyVtPackage}/include"
+        '' + lib.optionalString pkgs.stdenv.isDarwin ''
+          export PATH="$PATH:/usr/bin"
+          export DEVELOPER_DIR="$(xcode-select -p)"
+          export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+          export LIBGHOSTTY_VT_SYS_LIBDIR="${libghosttyVtPackage}/lib"
+          export LIBGHOSTTY_VT_SYS_INCLUDEDIR="${libghosttyVtPackage}/include"
+        '';
+        meta = with lib; {
+          description = "Rust/iced terminal app built on libghostty-vt";
+          mainProgram = "boo";
+          platforms = platforms.unix;
+        };
+      };
     in {
+      packages.libghostty-vt = libghosttyVtPackage;
+      packages.default = booPackage;
+
+      apps.default = flake-utils.lib.mkApp {
+        drv = booPackage;
+      };
+
+      checks.default = booPackage;
+
       devShells.default = mkShell {
         name = "boo-dev";
-        nativeBuildInputs = with pkgs; [
-          toolchain
-          zig.packages.${system}."0.15.2"
-          pkg-config
-          clang-tools
+        nativeBuildInputs = devNativeBuildInputs ++ (with pkgs; [
           lldb
           gdb
-          fontconfig
-        ] ++ lib.optional stdenv.isLinux valgrind;
+        ]) ++ lib.optional pkgs.stdenv.isLinux pkgs.valgrind;
 
-        buildInputs = with pkgs; [
-          openssl
-        ]
-        ++ lib.optional stdenv.isDarwin apple-sdk
-        ++ lib.optional stdenv.isDarwin libiconv
-        ++ lib.optionals stdenv.isLinux [
-          libGL
-          libxkbcommon
-          wayland
-          vulkan-loader
-          gtk4
-          glib
-          fontconfig
-          freetype
-        ];
+        buildInputs = commonBuildInputs;
 
         RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
 
@@ -64,9 +178,9 @@
           # Strip -fmacro-prefix-map flags that zig doesn't understand
           export NIX_CFLAGS_COMPILE="$(echo "$NIX_CFLAGS_COMPILE" | sed 's/ *-fmacro-prefix-map=[^ ]*//g')"
         '' + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
-          unset SDKROOT
-          unset DEVELOPER_DIR
-          export PATH=$(echo "$PATH" | tr ':' '\n' | grep -v xcbuild | tr '\n' ':')
+          export PATH="$PATH:/usr/bin"
+          export DEVELOPER_DIR="$(xcode-select -p)"
+          export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
         '';
       };
     });
