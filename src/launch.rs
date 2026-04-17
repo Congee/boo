@@ -457,8 +457,9 @@ fn ensure_remote_server_running(host: &str, local_socket_path: &str, boo_config:
         }
     };
     log::info!(
-        "remote boo target host={} socket={} binary={} workdir={}",
+        "remote boo target host={} local_socket={} remote_socket={} binary={} workdir={}",
         host,
+        local_socket_path,
         resolved_paths.socket_path,
         resolved_paths.binary_path,
         resolved_paths.workdir.as_deref().unwrap_or("<default>")
@@ -477,6 +478,12 @@ fn ensure_remote_server_running(host: &str, local_socket_path: &str, boo_config:
     }
     if let Err(error) = ensure_remote_tunnel(host, local_socket_path, &resolved_paths.socket_path) {
         log::error!("failed to establish SSH tunnel to {host}: {error}");
+        return;
+    }
+    if let Err(error) =
+        ensure_remote_control_version_compatible(host, local_socket_path, &resolved_paths)
+    {
+        log::error!("failed remote control version check on {host}: {error}");
         return;
     }
 
@@ -500,7 +507,13 @@ fn bootstrap_remote_server(
         script_parts.push(format!("cd {}", shell_single_quote(workdir)));
     }
     script_parts.push(format!(
-        "if [ ! -S {socket} ]; then \
+        "if [ -S {socket} ]; then \
+            if {binary} ping --socket {socket} >/dev/null 2>&1; then \
+                exit 0; \
+            fi; \
+            rm -f {socket}; \
+        fi; \
+        if [ ! -S {socket} ]; then \
             nohup {binary} server --socket {socket} >{log} 2>&1 </dev/null & \
             pid=$!; \
             i=0; \
@@ -694,8 +707,40 @@ fn ensure_remote_version_compatible(
     if remote_version == LOCAL_BOO_VERSION {
         return Ok(());
     }
-    Err(format!(
-        "version mismatch: local boo {LOCAL_BOO_VERSION} vs remote boo {remote_version}"
+    Err(format_remote_version_mismatch(
+        host,
+        &resolved_paths.binary_path,
+        &remote_version,
+    ))
+}
+
+fn ensure_remote_control_version_compatible(
+    host: &str,
+    local_socket_path: &str,
+    resolved_paths: &ResolvedRemotePaths,
+) -> Result<(), String> {
+    let client = control::Client::connect(local_socket_path);
+    let remote_version = match client.get_version() {
+        Ok(version) => version,
+        Err(error)
+            if error.contains("unknown variant")
+                || error.contains("parse error")
+                || error.contains("unexpected response") =>
+        {
+            return Err(format!(
+                "remote boo server on {host} does not support control version negotiation; rebuild the remote binary at {} so both sides match",
+                resolved_paths.binary_path
+            ));
+        }
+        Err(error) => return Err(format!("control get-version failed: {error}")),
+    };
+    if remote_version == LOCAL_BOO_VERSION {
+        return Ok(());
+    }
+    Err(format_remote_version_mismatch(
+        host,
+        &resolved_paths.binary_path,
+        &remote_version,
     ))
 }
 
@@ -714,7 +759,7 @@ fn fetch_remote_boo_version(host: &str, resolved_paths: &ResolvedRemotePaths) ->
         let stderr = String::from_utf8_lossy(&output.stderr);
         if stderr.contains("--version") {
             return Err(
-                "remote boo binary does not support --version; the remote install is too old for version negotiation"
+                "remote boo binary does not support --version; rebuild the remote checkout so it matches the local Boo binary"
                     .to_string(),
             );
         }
@@ -725,6 +770,12 @@ fn fetch_remote_boo_version(host: &str, resolved_paths: &ResolvedRemotePaths) ->
         ));
     }
     parse_boo_version_output(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn format_remote_version_mismatch(host: &str, remote_binary_path: &str, remote_version: &str) -> String {
+    format!(
+        "version mismatch: local boo {LOCAL_BOO_VERSION} vs remote boo {remote_version} on {host}; rebuild the remote binary at {remote_binary_path} so both sides match"
+    )
 }
 
 const REMOTE_PREFLIGHT_MARKER: &str = "__boo_remote_preflight__:";
@@ -836,10 +887,11 @@ fn ensure_remote_tunnel(
     let local_stream_path = format!("{local_socket_path}.stream");
     let remote_stream_path = format!("{remote_socket_path}.stream");
 
-    if ssh_master_healthy(host, &control_path)
-        && forwarded_control_socket_healthy(local_socket_path)
-        && forwarded_stream_socket_healthy(&local_stream_path)
-    {
+    if remote_tunnel_healthy(
+        ssh_master_healthy(host, &control_path),
+        forwarded_control_socket_healthy(local_socket_path),
+        forwarded_stream_socket_healthy(&local_stream_path),
+    ) {
         return Ok(());
     }
 
@@ -853,8 +905,7 @@ fn ensure_remote_tunnel(
             .status();
     }
 
-    let _ = std::fs::remove_file(local_socket_path);
-    let _ = std::fs::remove_file(&local_stream_path);
+    cleanup_local_forwarded_sockets(local_socket_path, &local_stream_path);
     let status = std::process::Command::new("ssh")
         .arg("-M")
         .arg("-S")
@@ -878,6 +929,19 @@ fn ensure_remote_tunnel(
     } else {
         Err(format!("ssh forward exited with status {status}"))
     }
+}
+
+fn remote_tunnel_healthy(
+    ssh_master_healthy: bool,
+    control_socket_healthy: bool,
+    stream_socket_healthy: bool,
+) -> bool {
+    ssh_master_healthy && control_socket_healthy && stream_socket_healthy
+}
+
+fn cleanup_local_forwarded_sockets(local_socket_path: &str, local_stream_path: &str) {
+    let _ = std::fs::remove_file(local_socket_path);
+    let _ = std::fs::remove_file(local_stream_path);
 }
 
 fn forwarded_control_socket_healthy(local_socket_path: &str) -> bool {
@@ -948,16 +1012,19 @@ fn server_ui_ready(client: &control::Client) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_startup_overrides, classify_remote_bootstrap_failure, classify_remote_preflight_failure,
+        apply_startup_overrides, cleanup_local_forwarded_sockets,
+        classify_remote_bootstrap_failure, classify_remote_preflight_failure,
         forwarded_control_path, forwarded_control_socket_healthy, forwarded_socket_path,
-        forwarded_stream_socket_healthy, merge_family_lists, parse_boo_version_output, parse_remote_path_parts,
-        remote_binary_looks_like_path, sanitize_for_path, RemotePathPart, RemotePathSpec,
+        forwarded_stream_socket_healthy, format_remote_version_mismatch, merge_family_lists,
+        parse_boo_version_output, parse_remote_path_parts,
+        remote_binary_looks_like_path, remote_tunnel_healthy, sanitize_for_path, RemotePathPart, RemotePathSpec,
         StartupOverrides,
         REMOTE_BOOTSTRAP_MARKER, REMOTE_PREFLIGHT_MARKER,
     };
     use crate::launch::{load_startup_config, parse_startup_args};
     use clap::Parser;
     use std::os::unix::process::ExitStatusExt;
+    use std::path::Path;
 
     #[test]
     fn merge_family_lists_preserves_preferred_order_and_dedups() {
@@ -1064,6 +1131,32 @@ mod tests {
     }
 
     #[test]
+    fn remote_version_mismatch_message_is_actionable() {
+        let message = format_remote_version_mismatch(
+            "example-mbp.local",
+            "/Users/example/dev/boo/target/debug/boo",
+            "0.2.0",
+        );
+        assert!(message.contains("version mismatch: local boo"));
+        assert!(message.contains("example-mbp.local"));
+        assert!(message.contains("/Users/example/dev/boo/target/debug/boo"));
+        assert!(message.contains("rebuild the remote binary"));
+    }
+
+    #[test]
+    fn remote_control_version_negotiation_error_is_actionable() {
+        let message = format!(
+            "remote boo server on {} does not support control version negotiation; rebuild the remote binary at {} so both sides match",
+            "example-mbp.local",
+            "/Users/example/dev/boo/target/debug/boo"
+        );
+        assert!(message.contains("does not support control version negotiation"));
+        assert!(message.contains("example-mbp.local"));
+        assert!(message.contains("/Users/example/dev/boo/target/debug/boo"));
+        assert!(message.contains("rebuild the remote binary"));
+    }
+
+    #[test]
     fn classify_remote_preflight_failure_reports_missing_workdir() {
         let output = std::process::Output {
             status: std::process::ExitStatus::from_raw(41 << 8),
@@ -1153,6 +1246,20 @@ mod tests {
     }
 
     #[test]
+    fn classify_remote_preflight_failure_reports_ssh_error_text() {
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(255 << 8),
+            stdout: Vec::new(),
+            stderr: b"ssh: Could not resolve hostname missing-host: Name or service not known\n"
+                .to_vec(),
+        };
+        assert_eq!(
+            classify_remote_preflight_failure(&output),
+            "remote bootstrap preflight exited with status exit status: 255: ssh: Could not resolve hostname missing-host: Name or service not known"
+        );
+    }
+
+    #[test]
     fn classify_remote_bootstrap_failure_reports_start_failure() {
         let output = std::process::Output {
             status: std::process::ExitStatus::from_raw(51 << 8),
@@ -1169,6 +1276,19 @@ mod tests {
     }
 
     #[test]
+    fn classify_remote_bootstrap_failure_reports_ssh_error_text() {
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(255 << 8),
+            stdout: Vec::new(),
+            stderr: b"ssh: connect to host missing-host port 22: Connection refused\n".to_vec(),
+        };
+        assert_eq!(
+            classify_remote_bootstrap_failure(&output),
+            "ssh bootstrap exited with status exit status: 255: ssh: connect to host missing-host port 22: Connection refused"
+        );
+    }
+
+    #[test]
     fn forwarded_control_socket_health_is_false_for_missing_socket() {
         assert!(!forwarded_control_socket_healthy(
             "/tmp/boo-missing-control-health.sock"
@@ -1180,6 +1300,39 @@ mod tests {
         assert!(!forwarded_stream_socket_healthy(
             "/tmp/boo-missing-stream-health.sock"
         ));
+    }
+
+    #[test]
+    fn remote_tunnel_is_healthy_only_when_all_parts_are_healthy() {
+        assert!(remote_tunnel_healthy(true, true, true));
+        assert!(!remote_tunnel_healthy(false, true, true));
+        assert!(!remote_tunnel_healthy(true, false, true));
+        assert!(!remote_tunnel_healthy(true, true, false));
+        assert!(!remote_tunnel_healthy(false, false, false));
+    }
+
+    #[test]
+    fn cleanup_local_forwarded_sockets_removes_stale_files() {
+        let unique = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after unix epoch")
+                .as_nanos()
+        );
+        let control_path = format!("/tmp/boo-stale-control-{unique}.sock");
+        let stream_path = format!("/tmp/boo-stale-control-{unique}.sock.stream");
+
+        std::fs::write(&control_path, b"stale control").expect("write stale control file");
+        std::fs::write(&stream_path, b"stale stream").expect("write stale stream file");
+        assert!(Path::new(&control_path).exists());
+        assert!(Path::new(&stream_path).exists());
+
+        cleanup_local_forwarded_sockets(&control_path, &stream_path);
+
+        assert!(!Path::new(&control_path).exists());
+        assert!(!Path::new(&stream_path).exists());
     }
 
     #[test]

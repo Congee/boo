@@ -6,6 +6,7 @@ use clap_complete::{Generator, Shell, generate};
 #[derive(Debug, Clone, Parser)]
 #[command(
     name = "boo",
+    version = env!("CARGO_PKG_VERSION"),
     about = "Terminal multiplexer and GUI client for Boo sessions",
     disable_help_flag = true,
     long_about = "Terminal multiplexer and GUI client for Boo sessions.\n\nRunning `boo` with no subcommand opens the GUI client.",
@@ -21,49 +22,73 @@ pub struct Cli {
 
 #[derive(Debug, Clone, clap::Args, Default)]
 pub struct GlobalArgs {
-    #[arg(short = 'h', action = clap::ArgAction::HelpShort, global = true, help = "Print help")]
-    pub help_short: bool,
+    #[arg(
+        short = 'h',
+        action = clap::ArgAction::HelpShort,
+        global = true,
+        required = false,
+        help = "Print help"
+    )]
+    pub help_short: Option<bool>,
 
-    #[arg(long = "help", action = clap::ArgAction::HelpLong, global = true, help = "Print long help")]
-    pub help_long: bool,
+    #[arg(
+        long = "help",
+        action = clap::ArgAction::HelpLong,
+        global = true,
+        required = false,
+        help = "Print long help"
+    )]
+    pub help_long: Option<bool>,
 
     #[arg(long, global = true, help = "Run without opening the GUI window")]
     pub headless: bool,
 
-    #[arg(long, global = true, help = "Connect through SSH to a remote Boo host")]
+    #[arg(
+        long,
+        global = true,
+        help = "Connect through SSH to a remote Boo host using forwarded Boo control/stream sockets"
+    )]
     pub host: Option<String>,
 
-    #[arg(long, global = true, help = "Override the local control socket path")]
+    #[arg(
+        long,
+        global = true,
+        help = "Override the local control socket path; in SSH mode this is the local forwarded socket"
+    )]
     pub socket: Option<String>,
 
     #[arg(
         long = "remote-workdir",
         global = true,
-        help = "Remote workdir used before starting Boo over SSH"
+        help = "Remote working directory used before starting Boo over SSH"
     )]
     pub remote_workdir: Option<String>,
 
     #[arg(
         long = "remote-socket",
         global = true,
-        help = "Remote control socket path used on the SSH host"
+        help = "Remote Boo control socket path on the SSH host"
     )]
     pub remote_socket: Option<String>,
 
     #[arg(
         long = "remote-binary",
         global = true,
-        help = "Remote Boo binary path used on the SSH host"
+        help = "Remote Boo binary path on the SSH host"
     )]
     pub remote_binary: Option<String>,
 
-    #[arg(long = "remote-port", global = true, help = "Start the TCP remote daemon on this port")]
+    #[arg(
+        long = "remote-port",
+        global = true,
+        help = "Start the Boo-native TCP remote daemon on this port"
+    )]
     pub remote_port: Option<u16>,
 
     #[arg(
         long = "remote-auth-key",
         global = true,
-        help = "Shared secret for the TCP remote daemon"
+        help = "Shared secret for the Boo-native TCP remote daemon"
     )]
     pub remote_auth_key: Option<String>,
 
@@ -86,6 +111,8 @@ pub enum Command {
     Ls,
     /// Create a new live session
     NewSession,
+    #[command(hide = true)]
+    Ping,
     /// Stop the Boo server
     QuitServer,
     /// Run the Boo session server without a GUI
@@ -183,6 +210,16 @@ where
             }
             Outcome::Exit(0)
         }
+        Command::Ping => {
+            let client = control::Client::connect(socket_path);
+            match client.ping() {
+                Ok(()) => Outcome::Exit(0),
+                Err(error) => {
+                    eprintln!("{error}");
+                    Outcome::Exit(1)
+                }
+            }
+        }
         Command::NewSession => {
             ensure_server_running(&socket_path, boo_config);
             let client = control::Client::connect(socket_path);
@@ -267,5 +304,23 @@ mod tests {
         assert!(!short_text.contains("Running `boo` with no subcommand opens the GUI client."));
         assert!(long_text.contains("Running `boo` with no subcommand opens the GUI client."));
         assert!(long_text.contains("Remote flags apply both before and after subcommands"));
+    }
+
+    #[test]
+    fn version_flag_is_supported() {
+        let version = Cli::try_parse_from(["boo", "--version"]).unwrap_err();
+        assert_eq!(version.kind(), ErrorKind::DisplayVersion);
+        assert!(version.to_string().contains(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn long_help_describes_remote_ssh_flags() {
+        let mut command = Cli::command();
+        let long = command.render_long_help().to_string();
+
+        assert!(long.contains("Connect through SSH to a remote Boo host"));
+        assert!(long.contains("local forwarded socket"));
+        assert!(long.contains("Remote Boo control socket path on the SSH host"));
+        assert!(long.contains("Boo-native TCP remote daemon"));
     }
 }

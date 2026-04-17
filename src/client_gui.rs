@@ -348,6 +348,9 @@ impl ClientApp {
             Message::Frame => self.on_tick(),
             Message::StreamReady(tx) => {
                 self.stream_tx = Some(tx);
+                if matches!(self.mode, ClientMode::Recovering) {
+                    self.send_stream_command(StreamCommand::ListSessions);
+                }
             }
             Message::StreamEvent(event) => {
                 if let Some(task) = self.handle_stream_delivery(event) {
@@ -407,7 +410,7 @@ impl ClientApp {
         }
 
         let right = if self.ui_state.status_bar.right.is_empty() {
-            build_status_right(&self.ui_state)
+            build_status_right(&self.ui_state, self.mode, self.last_error.as_deref())
         } else {
             String::new()
         };
@@ -986,17 +989,10 @@ impl ClientApp {
             }
             LocalStreamEvent::Disconnected => {
                 self.stream_tx = None;
-                let had_paintable_terminal = self.has_paintable_terminal();
-                let lost_active_session = self.active_session_id.take();
                 self.mode = ClientMode::Recovering;
                 self.pending_input_latencies.clear();
-                if should_exit_after_stream_disconnect(lost_active_session, had_paintable_terminal)
-                {
-                    self.should_exit = true;
-                    self.last_error = None;
-                } else {
-                    self.last_error = Some("boo server stream disconnected".to_string());
-                }
+                self.should_exit = false;
+                self.last_error = Some("boo server stream disconnected".to_string());
             }
             LocalStreamEvent::FullState {
                 ack_input_seq,
@@ -1389,13 +1385,6 @@ fn note_gui_test_keyboard_event() {
 
 fn note_gui_test_input_method_commit() {
     gui_test_input_method_commit_seq().fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-}
-
-fn should_exit_after_stream_disconnect(
-    lost_active_session: Option<u32>,
-    had_paintable_terminal: bool,
-) -> bool {
-    lost_active_session.is_some() || had_paintable_terminal
 }
 
 fn session_list_attach_target(
@@ -2929,8 +2918,21 @@ fn remote_cell_to_snapshot_default(cell: &remote::RemoteCell) -> vt_backend_core
     )
 }
 
-fn build_status_right(ui_state: &ClientUiState) -> String {
+fn build_status_right(
+    ui_state: &ClientUiState,
+    mode: ClientMode,
+    last_error: Option<&str>,
+) -> String {
     let mut right_parts = Vec::new();
+    if let Some(error) = last_error.filter(|value| !value.is_empty()) {
+        right_parts.push(format!("remote: error {error}"));
+    } else {
+        match mode {
+            ClientMode::Bootstrapping => right_parts.push("remote: bootstrapping".to_string()),
+            ClientMode::Recovering => right_parts.push("remote: recovering".to_string()),
+            ClientMode::Attached => right_parts.push("remote: connected".to_string()),
+        }
+    }
     if ui_state.pane_count > 1 {
         right_parts.push(format!("{} panes", ui_state.pane_count));
     }
@@ -3821,14 +3823,6 @@ mod tests {
     }
 
     #[test]
-    fn disconnect_exits_when_active_session_is_gone() {
-        assert!(should_exit_after_stream_disconnect(Some(7), false));
-        assert!(should_exit_after_stream_disconnect(Some(7), true));
-        assert!(should_exit_after_stream_disconnect(None, true));
-        assert!(!should_exit_after_stream_disconnect(None, false));
-    }
-
-    #[test]
     fn attached_mode_session_list_does_not_force_reattach_to_existing_active_session() {
         let sessions = vec![
             remote::RemoteSessionInfo {
@@ -3898,6 +3892,90 @@ mod tests {
         assert_eq!(app.active_session_id, None);
         assert!(!app.should_exit);
         assert_eq!(app.last_error, None);
+    }
+
+    #[test]
+    fn disconnect_enters_recovering_without_dropping_active_session() {
+        let (mut app, _) = ClientApp::new("/tmp/test.sock".to_string());
+        app.mode = ClientMode::Attached;
+        app.active_session_id = Some(7);
+        app.should_exit = true;
+
+        app.handle_stream_event(LocalStreamEvent::Disconnected);
+
+        assert!(matches!(app.mode, ClientMode::Recovering));
+        assert_eq!(app.active_session_id, Some(7));
+        assert!(!app.should_exit);
+        assert_eq!(
+            app.last_error.as_deref(),
+            Some("boo server stream disconnected")
+        );
+    }
+
+    #[test]
+    fn stream_ready_relists_sessions_while_recovering() {
+        let (mut app, _) = ClientApp::new("/tmp/test.sock".to_string());
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.mode = ClientMode::Recovering;
+
+        let task = app.update(Message::StreamReady(tx));
+        drop(task);
+
+        match rx.recv().unwrap() {
+            StreamCommand::ListSessions => {}
+            other => panic!("unexpected stream command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fallback_status_right_shows_bootstrap_state() {
+        let ui_state = ClientUiState::default();
+        assert_eq!(
+            build_status_right(&ui_state, ClientMode::Bootstrapping, None),
+            "remote: bootstrapping"
+        );
+    }
+
+    #[test]
+    fn fallback_status_right_shows_recovering_state_and_context() {
+        let ui_state = ClientUiState {
+            pwd: "/tmp".to_string(),
+            pane_count: 2,
+            ..ClientUiState::default()
+        };
+        assert_eq!(
+            build_status_right(&ui_state, ClientMode::Recovering, None),
+            "remote: recovering  2 panes  /tmp"
+        );
+    }
+
+    #[test]
+    fn fallback_status_right_prefers_error_text() {
+        let ui_state = ClientUiState {
+            pwd: "/work".to_string(),
+            ..ClientUiState::default()
+        };
+        assert_eq!(
+            build_status_right(
+                &ui_state,
+                ClientMode::Recovering,
+                Some("boo server stream disconnected")
+            ),
+            "remote: error boo server stream disconnected  /work"
+        );
+    }
+
+    #[test]
+    fn fallback_status_right_shows_attached_state_and_context() {
+        let ui_state = ClientUiState {
+            pane_count: 2,
+            pwd: "/repo".to_string(),
+            ..ClientUiState::default()
+        };
+        assert_eq!(
+            build_status_right(&ui_state, ClientMode::Attached, None),
+            "remote: connected  2 panes  /repo"
+        );
     }
 }
 

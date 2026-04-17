@@ -87,60 +87,60 @@ Goal:
 - [x] Normalize remote host config precedence:
   - CLI flag beats config file
   - explicit `--socket` beats generated host-specific socket
-- [ ] Improve `--help` text for remote flags to describe current SSH behavior clearly
+- [x] Improve `--help` text for remote flags to describe current SSH behavior clearly
 - [x] Overhaul remote path expansion so `~` and `$HOME` handling is implemented as a deliberate remote-path resolution layer instead of ad hoc string rewriting during SSH bootstrap
 
 ### 2. Remote Bootstrap
 
 - [x] Verify remote Boo binary existence before trying to start the server
-- [ ] Detect and report startup failures clearly:
-  - SSH failure
+- [x] Detect and report startup failures clearly:
+  - [x] SSH failure
   - [x] missing binary
   - [x] missing workdir
   - [x] permission failure
   - [x] socket bind/start failure
-- [ ] Make remote bootstrap idempotent:
+- [x] Make remote bootstrap idempotent:
   - do not spawn duplicate remote servers unnecessarily
-- [ ] Record or expose the effective remote socket path in logs/status
+- [x] Record or expose the effective remote socket path in logs/status
 
 ### 3. SSH Tunnel Lifecycle
 
-- [ ] Reuse an existing SSH master connection when healthy
-- [ ] Detect stale local forwarded sockets and clean them safely
-- [ ] Detect broken master/tunnel state and rebuild it
-- [ ] Define desktop reconnect behavior for:
+- [x] Reuse an existing SSH master connection when healthy
+- [x] Detect stale local forwarded sockets and clean them safely
+- [x] Detect broken master/tunnel state and rebuild it
+- [x] Define desktop reconnect behavior for:
   - tunnel drop
   - remote server restart
   - client laptop sleep/resume
-- [ ] Surface remote connection state in the GUI or status output
+- [x] Surface remote connection state in the GUI or status output
 
 ### 4. Version and Compatibility
 
-- [ ] Add client/server version handshake for remote desktop mode
-- [ ] Detect incompatible local vs remote Boo versions before attach
-- [ ] Produce a clear actionable error for version mismatch
+- [x] Add client/server version handshake for remote desktop mode
+- [x] Detect incompatible local vs remote Boo versions before attach
+- [x] Produce a clear actionable error for version mismatch
 
 ### 5. Verification
 
 #### Protocol-Level
 
-- [ ] Add direct checks for:
+- [x] Add direct checks for:
   - version mismatch handling
   - [x] remote bootstrap error classification where protocol-visible
 
 #### End-to-End
 
-- [ ] Keep the current direct checks green:
+- [x] Keep the current direct checks green:
   - control snapshot through forwarded socket
   - `.stream` session listing through forwarded socket
   - remote `new-session`
 - [x] Keep the direct Mac sidecar flow green by syncing the repo before build:
   - [scripts/sync-remote-mac.sh](./scripts/sync-remote-mac.sh)
   - [scripts/verify-remote-mac.sh](./scripts/verify-remote-mac.sh)
-- [ ] Add dedicated automated checks for:
+- [x] Add dedicated automated checks for:
   - remote path expansion
   - stale tunnel recovery
-- [ ] Keep `scripts/verify-remote-mac.sh` working as the sidecar verifier
+- [x] Keep `scripts/verify-remote-mac.sh` working as the sidecar verifier
 
 #### Manual UX
 

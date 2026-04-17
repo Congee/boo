@@ -25,6 +25,7 @@ use std::time::Duration;
 #[serde(tag = "cmd", rename_all = "kebab-case")]
 pub enum Request {
     Ping,
+    GetVersion,
     ListSurfaces,
     ListTabs,
     GetClipboard,
@@ -69,6 +70,7 @@ pub enum Request {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Response {
+    Version { version: String },
     Surfaces { surfaces: Vec<SurfaceInfo> },
     Tabs { tabs: Vec<crate::tabs::TabInfo> },
     Clipboard { text: String },
@@ -358,6 +360,14 @@ impl Client {
         }
     }
 
+    pub fn get_version(&self) -> Result<String, String> {
+        match self.request(&Request::GetVersion)? {
+            Response::Version { version } => Ok(version),
+            Response::Error { error } => Err(error),
+            other => Err(format!("unexpected response: {other:?}")),
+        }
+    }
+
     pub fn send(&self, request: &Request) -> Result<(), String> {
         match self.request(request)? {
             Response::Ok { ok: true } => Ok(()),
@@ -503,6 +513,9 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
             notify();
             Response::Ok { ok: true }
         }
+        Request::GetVersion => Response::Version {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        },
         Request::Quit => {
             let _ = tx.send(ControlCmd::Quit);
             notify();
@@ -983,6 +996,18 @@ mod tests {
         worker.join().unwrap();
 
         assert!(matches!(response, Response::Ok { ok: true }));
+    }
+
+    #[test]
+    fn get_version_returns_local_package_version() {
+        let (tx, _rx) = mpsc::channel();
+
+        let response = dispatch_request(Request::GetVersion, &tx);
+
+        assert!(matches!(
+            response,
+            Response::Version { version } if version == env!("CARGO_PKG_VERSION")
+        ));
     }
 
     #[test]

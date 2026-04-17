@@ -20,6 +20,12 @@ ssh "$host" "cd '$remote_repo' && cargo build && cargo test short_and_long_help_
 echo "==> local SSH forwarding verification through ${host}"
 bash scripts/verify-remote-host.sh "$host" "$remote_binary" "$local_socket"
 
+echo "==> remote path expansion verification through ${host}"
+bash scripts/test-remote-path-expansion.sh "$host" "${local_socket%.sock}-paths.sock"
+
+echo "==> stale tunnel recovery verification through ${host}"
+bash scripts/test-remote-tunnel-recovery.sh "$host" "$remote_binary" "${local_socket%.sock}-recovery.sock"
+
 echo "==> verification complete"
 echo "remote host: ${host}"
 echo "remote repo: ${remote_repo}"
