@@ -17,6 +17,122 @@ static STARTUP_REMOTE_BINARY: std::sync::OnceLock<String> = std::sync::OnceLock:
 static STARTUP_REMOTE_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_AUTH_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct StartupOverrides {
+    session: Option<String>,
+    control_socket: Option<String>,
+    remote_host: Option<String>,
+    remote_workdir: Option<String>,
+    remote_socket: Option<String>,
+    remote_binary: Option<String>,
+    remote_port: Option<u16>,
+    remote_auth_key: Option<String>,
+}
+
+struct ResolvedRemotePaths {
+    socket_path: String,
+    binary_path: String,
+    workdir: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RemotePathPart {
+    Literal(String),
+    Home,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RemotePathSpec {
+    raw: String,
+    parts: Vec<RemotePathPart>,
+}
+
+impl RemotePathSpec {
+    fn new(raw: impl Into<String>) -> Self {
+        let raw = raw.into();
+        Self {
+            parts: parse_remote_path_parts(&raw),
+            raw,
+        }
+    }
+
+    fn needs_remote_home(&self) -> bool {
+        self.parts.iter().any(|part| matches!(part, RemotePathPart::Home))
+    }
+
+    fn resolve(&self, remote_home: Option<&str>) -> Result<String, String> {
+        if self.needs_remote_home() && remote_home.is_none() {
+            return Err(format!(
+                "remote path {:?} requires HOME resolution",
+                self.raw
+            ));
+        }
+
+        let mut resolved = String::new();
+        for part in &self.parts {
+            match part {
+                RemotePathPart::Literal(value) => resolved.push_str(value),
+                RemotePathPart::Home => resolved.push_str(
+                    remote_home.expect("validated remote HOME presence before resolving"),
+                ),
+            }
+        }
+        Ok(resolved)
+    }
+}
+
+fn parse_remote_path_parts(raw: &str) -> Vec<RemotePathPart> {
+    let mut parts = Vec::new();
+    let mut literal = String::new();
+    let mut index = 0;
+
+    while index < raw.len() {
+        let tail = &raw[index..];
+        let home_match = if index == 0 && tail == "~" {
+            Some(1)
+        } else if index == 0 && tail.starts_with("~/") {
+            Some(1)
+        } else if tail.starts_with("${HOME}") {
+            Some("${HOME}".len())
+        } else if tail.starts_with("$HOME")
+            && tail
+                .chars()
+                .nth("$HOME".len())
+                .is_none_or(|ch| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        {
+            Some("$HOME".len())
+        } else {
+            None
+        };
+
+        if let Some(length) = home_match {
+            if !literal.is_empty() {
+                parts.push(RemotePathPart::Literal(std::mem::take(&mut literal)));
+            }
+            parts.push(RemotePathPart::Home);
+            index += length;
+            continue;
+        }
+
+        let mut chars = tail.chars();
+        let ch = chars.next().expect("tail is non-empty while parsing path");
+        literal.push(ch);
+        index += ch.len_utf8();
+    }
+
+    if !literal.is_empty() {
+        parts.push(RemotePathPart::Literal(literal));
+    }
+
+    if parts.is_empty() {
+        parts.push(RemotePathPart::Literal(String::new()));
+    }
+
+    parts
+}
+
+const LOCAL_BOO_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub fn parse_startup_args(cli: &crate::cli::Cli) -> bool {
     if let Some(name) = cli.global.session.as_ref() {
         STARTUP_SESSION.set(name.clone()).ok();
@@ -45,36 +161,43 @@ pub fn parse_startup_args(cli: &crate::cli::Cli) -> bool {
     matches!(cli.command, Some(crate::cli::Command::Server))
 }
 
-pub fn startup_session() -> Option<&'static str> {
-    STARTUP_SESSION.get().map(String::as_str)
+fn startup_overrides() -> StartupOverrides {
+    StartupOverrides {
+        session: STARTUP_SESSION.get().cloned(),
+        control_socket: STARTUP_CONTROL_SOCKET.get().cloned(),
+        remote_host: STARTUP_REMOTE_HOST.get().cloned(),
+        remote_workdir: STARTUP_REMOTE_WORKDIR.get().cloned(),
+        remote_socket: STARTUP_REMOTE_SOCKET.get().cloned(),
+        remote_binary: STARTUP_REMOTE_BINARY.get().cloned(),
+        remote_port: STARTUP_REMOTE_PORT.get().copied(),
+        remote_auth_key: STARTUP_REMOTE_AUTH_KEY.get().cloned(),
+    }
 }
 
-pub fn startup_control_socket() -> Option<&'static str> {
-    STARTUP_CONTROL_SOCKET.get().map(String::as_str)
-}
-
-pub fn load_startup_config() -> config::Config {
-    let mut boo_config = config::Config::load();
-    let explicit_socket = STARTUP_CONTROL_SOCKET.get().cloned();
+fn apply_startup_overrides(
+    mut boo_config: config::Config,
+    overrides: &StartupOverrides,
+) -> config::Config {
+    let explicit_socket = overrides.control_socket.clone();
     if let Some(socket_path) = explicit_socket.as_ref() {
         boo_config.control_socket = Some(socket_path.clone());
     }
-    if let Some(host) = STARTUP_REMOTE_HOST.get() {
+    if let Some(host) = overrides.remote_host.as_ref() {
         boo_config.remote_host = Some(host.clone());
     }
-    if let Some(path) = STARTUP_REMOTE_WORKDIR.get() {
+    if let Some(path) = overrides.remote_workdir.as_ref() {
         boo_config.remote_workdir = Some(path.clone());
     }
-    if let Some(path) = STARTUP_REMOTE_SOCKET.get() {
+    if let Some(path) = overrides.remote_socket.as_ref() {
         boo_config.remote_socket = Some(path.clone());
     }
-    if let Some(path) = STARTUP_REMOTE_BINARY.get() {
+    if let Some(path) = overrides.remote_binary.as_ref() {
         boo_config.remote_binary = Some(path.clone());
     }
-    if let Some(port) = STARTUP_REMOTE_PORT.get() {
-        boo_config.remote_port = Some(*port);
+    if let Some(port) = overrides.remote_port {
+        boo_config.remote_port = Some(port);
     }
-    if let Some(key) = STARTUP_REMOTE_AUTH_KEY.get() {
+    if let Some(key) = overrides.remote_auth_key.as_ref() {
         boo_config.remote_auth_key = Some(key.clone());
     }
     if boo_config.remote_host.is_some() && explicit_socket.is_none() {
@@ -86,6 +209,19 @@ pub fn load_startup_config() -> config::Config {
     } else if boo_config.control_socket.is_none() {
         boo_config.control_socket = Some(control::default_socket_path());
     }
+    boo_config
+}
+
+pub fn startup_session() -> Option<&'static str> {
+    STARTUP_SESSION.get().map(String::as_str)
+}
+
+pub fn startup_control_socket() -> Option<&'static str> {
+    STARTUP_CONTROL_SOCKET.get().map(String::as_str)
+}
+
+pub fn load_startup_config() -> config::Config {
+    let boo_config = apply_startup_overrides(config::Config::load(), &startup_overrides());
     if let Some(socket_path) = boo_config.control_socket.as_ref() {
         STARTUP_CONTROL_SOCKET.set(socket_path.clone()).ok();
     }
@@ -313,15 +449,33 @@ fn ensure_remote_server_running(host: &str, local_socket_path: &str, boo_config:
         return;
     }
 
-    let remote_socket_path = boo_config
-        .remote_socket
-        .clone()
-        .unwrap_or_else(control::default_socket_path);
-    if let Err(error) = bootstrap_remote_server(host, &remote_socket_path, boo_config) {
+    let resolved_paths = match resolve_remote_paths(host, boo_config) {
+        Ok(paths) => paths,
+        Err(error) => {
+            log::error!("failed to resolve remote paths for {host}: {error}");
+            return;
+        }
+    };
+    log::info!(
+        "remote boo target host={} socket={} binary={} workdir={}",
+        host,
+        resolved_paths.socket_path,
+        resolved_paths.binary_path,
+        resolved_paths.workdir.as_deref().unwrap_or("<default>")
+    );
+    if let Err(error) = ensure_remote_bootstrap_ready(host, &resolved_paths) {
+        log::error!("failed remote bootstrap preflight on {host}: {error}");
+        return;
+    }
+    if let Err(error) = ensure_remote_version_compatible(host, &resolved_paths) {
+        log::error!("failed to verify remote boo version on {host}: {error}");
+        return;
+    }
+    if let Err(error) = bootstrap_remote_server(host, &resolved_paths) {
         log::error!("failed to bootstrap remote boo on {host}: {error}");
         return;
     }
-    if let Err(error) = ensure_remote_tunnel(host, local_socket_path, &remote_socket_path) {
+    if let Err(error) = ensure_remote_tunnel(host, local_socket_path, &resolved_paths.socket_path) {
         log::error!("failed to establish SSH tunnel to {host}: {error}");
         return;
     }
@@ -338,41 +492,339 @@ fn ensure_remote_server_running(host: &str, local_socket_path: &str, boo_config:
 
 fn bootstrap_remote_server(
     host: &str,
-    remote_socket_path: &str,
-    boo_config: &config::Config,
+    resolved_paths: &ResolvedRemotePaths,
 ) -> Result<(), String> {
-    let remote_binary = boo_config
-        .remote_binary
-        .as_deref()
-        .filter(|value| !value.is_empty())
-        .unwrap_or("boo");
     let remote_log = format!("/tmp/boo-{}.log", sanitize_for_path(host));
     let mut script_parts = vec!["set -e".to_string()];
-    if let Some(workdir) = boo_config
-        .remote_workdir
-        .as_deref()
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(workdir) = resolved_paths.workdir.as_deref() {
         script_parts.push(format!("cd {}", shell_single_quote(workdir)));
     }
     script_parts.push(format!(
-        "if [ ! -S {socket} ]; then nohup {binary} server --socket {socket} >{log} 2>&1 </dev/null & fi",
-        socket = shell_single_quote(remote_socket_path),
-        binary = shell_single_quote(remote_binary),
+        "if [ ! -S {socket} ]; then \
+            nohup {binary} server --socket {socket} >{log} 2>&1 </dev/null & \
+            pid=$!; \
+            i=0; \
+            while [ \"$i\" -lt 40 ]; do \
+                if [ -S {socket} ]; then break; fi; \
+                if ! kill -0 \"$pid\" 2>/dev/null; then break; fi; \
+                i=$((i + 1)); \
+                sleep 0.1; \
+            done; \
+            if [ ! -S {socket} ]; then \
+                tail_line=$(tail -n 20 {log} 2>/dev/null | tr '\\n' ' ' | sed 's/[[:space:]]\\+/ /g' | sed 's/^ //; s/ $//'); \
+                if [ -n \"$tail_line\" ]; then \
+                    printf '%s\\n' {failed_prefix}\"$tail_line\"; \
+                else \
+                    printf '%s\\n' {failed_log}; \
+                fi; \
+                exit 51; \
+            fi; \
+        fi",
+        socket = shell_single_quote(&resolved_paths.socket_path),
+        binary = shell_single_quote(&resolved_paths.binary_path),
         log = shell_single_quote(&remote_log),
+        failed_prefix = shell_single_quote(&format!(
+            "{}start-failed:",
+            REMOTE_BOOTSTRAP_MARKER
+        )),
+        failed_log = shell_single_quote(&format!(
+            "{}start-failed:{}",
+            REMOTE_BOOTSTRAP_MARKER, remote_log
+        )),
     ));
     let script = script_parts.join("; ");
-    let remote_command = format!("sh -c {}", shell_single_quote(&script));
-    let status = std::process::Command::new("ssh")
-        .arg(host)
-        .arg(remote_command)
-        .status()
+    let output = run_remote_shell_output(host, &script, false)
         .map_err(|error| format!("ssh bootstrap: {error}"))?;
-    if status.success() {
+    if output.status.success() {
         Ok(())
     } else {
-        Err(format!("ssh bootstrap exited with status {status}"))
+        Err(classify_remote_bootstrap_failure(&output))
     }
+}
+
+fn resolve_remote_paths(
+    host: &str,
+    boo_config: &config::Config,
+) -> Result<ResolvedRemotePaths, String> {
+    let socket_spec = RemotePathSpec::new(
+        boo_config
+        .remote_socket
+        .clone()
+        .unwrap_or_else(control::default_socket_path),
+    );
+    let binary_spec = RemotePathSpec::new(
+        boo_config
+        .remote_binary
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("boo")
+        .to_string(),
+    );
+    let workdir_spec = boo_config
+        .remote_workdir
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(RemotePathSpec::new);
+
+    let need_remote_home = socket_spec.needs_remote_home()
+        || binary_spec.needs_remote_home()
+        || workdir_spec
+            .as_ref()
+            .is_some_and(RemotePathSpec::needs_remote_home);
+    let remote_home = if need_remote_home {
+        Some(fetch_remote_home(host)?)
+    } else {
+        None
+    };
+
+    Ok(ResolvedRemotePaths {
+        socket_path: socket_spec.resolve(remote_home.as_deref())?,
+        binary_path: binary_spec.resolve(remote_home.as_deref())?,
+        workdir: workdir_spec
+            .as_ref()
+            .map(|path| path.resolve(remote_home.as_deref()))
+            .transpose()?,
+    })
+}
+
+fn fetch_remote_home(host: &str) -> Result<String, String> {
+    let output = run_remote_shell_output(host, "printf %s \"$HOME\"", true)
+        .map_err(|error| format!("ssh remote home lookup: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "ssh remote home lookup exited with status {}",
+            output.status
+        ));
+    }
+    let remote_home = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if remote_home.is_empty() {
+        return Err("ssh remote home lookup returned empty HOME".to_string());
+    }
+    Ok(remote_home)
+}
+
+fn ensure_remote_bootstrap_ready(
+    host: &str,
+    resolved_paths: &ResolvedRemotePaths,
+) -> Result<(), String> {
+    let mut script_parts = vec!["set -e".to_string()];
+    if let Some(workdir) = resolved_paths.workdir.as_deref() {
+        script_parts.push(format!(
+            "if [ ! -d {workdir} ]; then printf '%s\\n' {marker}; exit 41; fi",
+            workdir = shell_single_quote(workdir),
+            marker = shell_single_quote(&format!(
+                "{}missing-workdir:{}",
+                REMOTE_PREFLIGHT_MARKER, workdir
+            )),
+        ));
+        script_parts.push(format!("cd {}", shell_single_quote(workdir)));
+    }
+    let socket_dir = Path::new(&resolved_paths.socket_path)
+        .parent()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| ".".to_string());
+    script_parts.push(format!(
+        "if [ ! -d {socket_dir} ]; then printf '%s\\n' {missing_dir}; exit 45; fi",
+        socket_dir = shell_single_quote(&socket_dir),
+        missing_dir = shell_single_quote(&format!(
+            "{}missing-socket-dir:{}",
+            REMOTE_PREFLIGHT_MARKER, socket_dir
+        )),
+    ));
+    script_parts.push(format!(
+        "if [ ! -w {socket_dir} ]; then printf '%s\\n' {non_writable_dir}; exit 46; fi",
+        socket_dir = shell_single_quote(&socket_dir),
+        non_writable_dir = shell_single_quote(&format!(
+            "{}non-writable-socket-dir:{}",
+            REMOTE_PREFLIGHT_MARKER, socket_dir
+        )),
+    ));
+    script_parts.push(format!(
+        "if [ -e {socket} ] && [ ! -S {socket} ]; then printf '%s\\n' {conflict}; exit 47; fi",
+        socket = shell_single_quote(&resolved_paths.socket_path),
+        conflict = shell_single_quote(&format!(
+            "{}conflicting-socket-path:{}",
+            REMOTE_PREFLIGHT_MARKER, resolved_paths.socket_path
+        )),
+    ));
+    if remote_binary_looks_like_path(&resolved_paths.binary_path) {
+        script_parts.push(format!(
+            "if [ ! -e {binary} ]; then printf '%s\\n' {missing}; exit 42; fi",
+            binary = shell_single_quote(&resolved_paths.binary_path),
+            missing = shell_single_quote(&format!(
+                "{}missing-binary:{}",
+                REMOTE_PREFLIGHT_MARKER, resolved_paths.binary_path
+            )),
+        ));
+        script_parts.push(format!(
+            "if [ ! -x {binary} ]; then printf '%s\\n' {not_exec}; exit 43; fi",
+            binary = shell_single_quote(&resolved_paths.binary_path),
+            not_exec = shell_single_quote(&format!(
+                "{}non-executable-binary:{}",
+                REMOTE_PREFLIGHT_MARKER, resolved_paths.binary_path
+            )),
+        ));
+    } else {
+        script_parts.push(format!(
+            "if ! command -v {binary} >/dev/null 2>&1; then printf '%s\\n' {missing}; exit 44; fi",
+            binary = shell_single_quote(&resolved_paths.binary_path),
+            missing = shell_single_quote(&format!(
+                "{}missing-binary:{}",
+                REMOTE_PREFLIGHT_MARKER, resolved_paths.binary_path
+            )),
+        ));
+    }
+    script_parts.push(format!(
+        "printf '%s\\n' {}",
+        shell_single_quote(REMOTE_PREFLIGHT_OK)
+    ));
+    let output = run_remote_shell_output(host, &script_parts.join("; "), true)
+        .map_err(|error| format!("ssh bootstrap preflight: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(classify_remote_preflight_failure(&output))
+}
+
+fn ensure_remote_version_compatible(
+    host: &str,
+    resolved_paths: &ResolvedRemotePaths,
+) -> Result<(), String> {
+    let remote_version = fetch_remote_boo_version(host, resolved_paths)?;
+    if remote_version == LOCAL_BOO_VERSION {
+        return Ok(());
+    }
+    Err(format!(
+        "version mismatch: local boo {LOCAL_BOO_VERSION} vs remote boo {remote_version}"
+    ))
+}
+
+fn fetch_remote_boo_version(host: &str, resolved_paths: &ResolvedRemotePaths) -> Result<String, String> {
+    let mut script_parts = vec!["set -e".to_string()];
+    if let Some(workdir) = resolved_paths.workdir.as_deref() {
+        script_parts.push(format!("cd {}", shell_single_quote(workdir)));
+    }
+    script_parts.push(format!(
+        "{} --version",
+        shell_single_quote(&resolved_paths.binary_path)
+    ));
+    let output = run_remote_shell_output(host, &script_parts.join("; "), true)
+        .map_err(|error| format!("ssh remote version lookup: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("--version") {
+            return Err(
+                "remote boo binary does not support --version; the remote install is too old for version negotiation"
+                    .to_string(),
+            );
+        }
+        return Err(format!(
+            "ssh remote version lookup exited with status {}: {}",
+            output.status,
+            stderr.trim()
+        ));
+    }
+    parse_boo_version_output(&String::from_utf8_lossy(&output.stdout))
+}
+
+const REMOTE_PREFLIGHT_MARKER: &str = "__boo_remote_preflight__:";
+const REMOTE_PREFLIGHT_OK: &str = "__boo_remote_preflight__:ok";
+const REMOTE_BOOTSTRAP_MARKER: &str = "__boo_remote_bootstrap__:";
+
+fn remote_binary_looks_like_path(binary: &str) -> bool {
+    binary.contains('/')
+}
+
+fn classify_remote_preflight_failure(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        if let Some(rest) = line.strip_prefix(REMOTE_PREFLIGHT_MARKER) {
+            if rest == "ok" {
+                continue;
+            }
+            if let Some((kind, value)) = rest.split_once(':') {
+                return match kind {
+                    "missing-workdir" => format!("remote workdir does not exist: {value}"),
+                    "missing-socket-dir" => {
+                        format!("remote socket directory does not exist: {value}")
+                    }
+                    "non-writable-socket-dir" => {
+                        format!("remote socket directory is not writable: {value}")
+                    }
+                    "conflicting-socket-path" => {
+                        format!("remote socket path already exists and is not a socket: {value}")
+                    }
+                    "missing-binary" => format!("remote boo binary was not found: {value}"),
+                    "non-executable-binary" => {
+                        format!("remote boo binary is not executable: {value}")
+                    }
+                    _ => format!("remote bootstrap preflight failed: {rest}"),
+                };
+            }
+            return format!("remote bootstrap preflight failed: {rest}");
+        }
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if stderr.is_empty() {
+        format!(
+            "remote bootstrap preflight exited with status {}",
+            output.status
+        )
+    } else {
+        format!(
+            "remote bootstrap preflight exited with status {}: {}",
+            output.status, stderr
+        )
+    }
+}
+
+fn classify_remote_bootstrap_failure(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        if let Some(rest) = line.strip_prefix(REMOTE_BOOTSTRAP_MARKER) {
+            if let Some((kind, value)) = rest.split_once(':') {
+                return match kind {
+                    "start-failed" => format!("remote boo server failed to start: {value}"),
+                    _ => format!("remote bootstrap failed: {rest}"),
+                };
+            }
+            return format!("remote bootstrap failed: {rest}");
+        }
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if stderr.is_empty() {
+        format!("ssh bootstrap exited with status {}", output.status)
+    } else {
+        format!(
+            "ssh bootstrap exited with status {}: {}",
+            output.status, stderr
+        )
+    }
+}
+
+fn run_remote_shell_output(
+    host: &str,
+    script: &str,
+    login_shell: bool,
+) -> Result<std::process::Output, std::io::Error> {
+    let shell_flag = if login_shell { "-lc" } else { "-c" };
+    let remote_command = format!("sh {shell_flag} {}", shell_single_quote(script));
+    std::process::Command::new("ssh")
+        .arg(host)
+        .arg(remote_command)
+        .output()
+}
+
+fn parse_boo_version_output(output: &str) -> Result<String, String> {
+    let trimmed = output.trim();
+    let version = trimmed
+        .split_whitespace()
+        .last()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "empty version output".to_string())?;
+    Ok(version.to_string())
 }
 
 fn ensure_remote_tunnel(
@@ -384,7 +836,10 @@ fn ensure_remote_tunnel(
     let local_stream_path = format!("{local_socket_path}.stream");
     let remote_stream_path = format!("{remote_socket_path}.stream");
 
-    if ssh_master_healthy(host, &control_path) && Path::new(local_socket_path).exists() {
+    if ssh_master_healthy(host, &control_path)
+        && forwarded_control_socket_healthy(local_socket_path)
+        && forwarded_stream_socket_healthy(&local_stream_path)
+    {
         return Ok(());
     }
 
@@ -423,6 +878,20 @@ fn ensure_remote_tunnel(
     } else {
         Err(format!("ssh forward exited with status {status}"))
     }
+}
+
+fn forwarded_control_socket_healthy(local_socket_path: &str) -> bool {
+    if !Path::new(local_socket_path).exists() {
+        return false;
+    }
+    control::Client::connect(local_socket_path).ping().is_ok()
+}
+
+fn forwarded_stream_socket_healthy(local_stream_path: &str) -> bool {
+    if !Path::new(local_stream_path).exists() {
+        return false;
+    }
+    std::os::unix::net::UnixStream::connect(local_stream_path).is_ok()
 }
 
 fn ssh_master_healthy(host: &str, control_path: &str) -> bool {
@@ -478,9 +947,17 @@ fn server_ui_ready(client: &control::Client) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{forwarded_control_path, forwarded_socket_path, merge_family_lists, sanitize_for_path};
+    use super::{
+        apply_startup_overrides, classify_remote_bootstrap_failure, classify_remote_preflight_failure,
+        forwarded_control_path, forwarded_control_socket_healthy, forwarded_socket_path,
+        forwarded_stream_socket_healthy, merge_family_lists, parse_boo_version_output, parse_remote_path_parts,
+        remote_binary_looks_like_path, sanitize_for_path, RemotePathPart, RemotePathSpec,
+        StartupOverrides,
+        REMOTE_BOOTSTRAP_MARKER, REMOTE_PREFLIGHT_MARKER,
+    };
     use crate::launch::{load_startup_config, parse_startup_args};
     use clap::Parser;
+    use std::os::unix::process::ExitStatusExt;
 
     #[test]
     fn merge_family_lists_preserves_preferred_order_and_dedups() {
@@ -506,6 +983,203 @@ mod tests {
     #[test]
     fn sanitize_for_path_rewrites_unsafe_chars() {
         assert_eq!(sanitize_for_path("user@host:/tmp"), "user_host__tmp");
+    }
+
+    #[test]
+    fn remote_path_parts_parse_home_shorthand() {
+        assert_eq!(parse_remote_path_parts("~"), vec![RemotePathPart::Home]);
+        assert_eq!(
+            parse_remote_path_parts("~/bin/boo"),
+            vec![
+                RemotePathPart::Home,
+                RemotePathPart::Literal("/bin/boo".to_string()),
+            ]
+        );
+        assert_eq!(
+            parse_remote_path_parts("$HOME/bin/boo"),
+            vec![
+                RemotePathPart::Home,
+                RemotePathPart::Literal("/bin/boo".to_string()),
+            ]
+        );
+        assert_eq!(
+            parse_remote_path_parts("${HOME}/run/boo.sock"),
+            vec![
+                RemotePathPart::Home,
+                RemotePathPart::Literal("/run/boo.sock".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn remote_path_spec_resolves_home_shorthand() {
+        assert_eq!(
+            RemotePathSpec::new("~").resolve(Some("/Users/example")).unwrap(),
+            "/Users/example"
+        );
+        assert_eq!(
+            RemotePathSpec::new("~/bin/boo")
+                .resolve(Some("/Users/example"))
+                .unwrap(),
+            "/Users/example/bin/boo"
+        );
+        assert_eq!(
+            RemotePathSpec::new("$HOME/bin/boo")
+                .resolve(Some("/Users/example"))
+                .unwrap(),
+            "/Users/example/bin/boo"
+        );
+        assert_eq!(
+            RemotePathSpec::new("${HOME}/run/boo.sock")
+                .resolve(Some("/Users/example"))
+                .unwrap(),
+            "/Users/example/run/boo.sock"
+        );
+    }
+
+    #[test]
+    fn remote_path_spec_leaves_non_home_literals_unchanged() {
+        let spec = RemotePathSpec::new("/tmp/~boo/$HOMER/run.sock");
+        assert!(!spec.needs_remote_home());
+        assert_eq!(
+            spec.resolve(None).unwrap(),
+            "/tmp/~boo/$HOMER/run.sock"
+        );
+    }
+
+    #[test]
+    fn remote_binary_path_detection_requires_slash() {
+        assert!(!remote_binary_looks_like_path("boo"));
+        assert!(!remote_binary_looks_like_path("boo-debug"));
+        assert!(remote_binary_looks_like_path("./target/debug/boo"));
+        assert!(remote_binary_looks_like_path("/Users/example/dev/boo/target/debug/boo"));
+    }
+
+    #[test]
+    fn parse_boo_version_output_extracts_version() {
+        assert_eq!(
+            parse_boo_version_output("boo 0.1.0\n").unwrap(),
+            "0.1.0"
+        );
+    }
+
+    #[test]
+    fn classify_remote_preflight_failure_reports_missing_workdir() {
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(41 << 8),
+            stdout: format!("{REMOTE_PREFLIGHT_MARKER}missing-workdir:/Users/example/dev/boo\n")
+                .into_bytes(),
+            stderr: Vec::new(),
+        };
+        assert_eq!(
+            classify_remote_preflight_failure(&output),
+            "remote workdir does not exist: /Users/example/dev/boo"
+        );
+    }
+
+    #[test]
+    fn classify_remote_preflight_failure_reports_missing_binary() {
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(44 << 8),
+            stdout: format!("{REMOTE_PREFLIGHT_MARKER}missing-binary:boo\n").into_bytes(),
+            stderr: Vec::new(),
+        };
+        assert_eq!(
+            classify_remote_preflight_failure(&output),
+            "remote boo binary was not found: boo"
+        );
+    }
+
+    #[test]
+    fn classify_remote_preflight_failure_reports_non_executable_binary() {
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(43 << 8),
+            stdout: format!(
+                "{REMOTE_PREFLIGHT_MARKER}non-executable-binary:/Users/example/dev/boo/target/debug/boo\n"
+            )
+            .into_bytes(),
+            stderr: Vec::new(),
+        };
+        assert_eq!(
+            classify_remote_preflight_failure(&output),
+            "remote boo binary is not executable: /Users/example/dev/boo/target/debug/boo"
+        );
+    }
+
+    #[test]
+    fn classify_remote_preflight_failure_reports_missing_socket_dir() {
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(45 << 8),
+            stdout: format!("{REMOTE_PREFLIGHT_MARKER}missing-socket-dir:/missing/run\n")
+                .into_bytes(),
+            stderr: Vec::new(),
+        };
+        assert_eq!(
+            classify_remote_preflight_failure(&output),
+            "remote socket directory does not exist: /missing/run"
+        );
+    }
+
+    #[test]
+    fn classify_remote_preflight_failure_reports_non_writable_socket_dir() {
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(46 << 8),
+            stdout: format!(
+                "{REMOTE_PREFLIGHT_MARKER}non-writable-socket-dir:/private/tmp/boo\n"
+            )
+            .into_bytes(),
+            stderr: Vec::new(),
+        };
+        assert_eq!(
+            classify_remote_preflight_failure(&output),
+            "remote socket directory is not writable: /private/tmp/boo"
+        );
+    }
+
+    #[test]
+    fn classify_remote_preflight_failure_reports_conflicting_socket_path() {
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(47 << 8),
+            stdout: format!(
+                "{REMOTE_PREFLIGHT_MARKER}conflicting-socket-path:/tmp/boo.sock\n"
+            )
+            .into_bytes(),
+            stderr: Vec::new(),
+        };
+        assert_eq!(
+            classify_remote_preflight_failure(&output),
+            "remote socket path already exists and is not a socket: /tmp/boo.sock"
+        );
+    }
+
+    #[test]
+    fn classify_remote_bootstrap_failure_reports_start_failure() {
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(51 << 8),
+            stdout: format!(
+                "{REMOTE_BOOTSTRAP_MARKER}start-failed:Permission denied while binding /tmp/boo.sock\n"
+            )
+            .into_bytes(),
+            stderr: Vec::new(),
+        };
+        assert_eq!(
+            classify_remote_bootstrap_failure(&output),
+            "remote boo server failed to start: Permission denied while binding /tmp/boo.sock"
+        );
+    }
+
+    #[test]
+    fn forwarded_control_socket_health_is_false_for_missing_socket() {
+        assert!(!forwarded_control_socket_healthy(
+            "/tmp/boo-missing-control-health.sock"
+        ));
+    }
+
+    #[test]
+    fn forwarded_stream_socket_health_is_false_for_missing_socket() {
+        assert!(!forwarded_stream_socket_healthy(
+            "/tmp/boo-missing-stream-health.sock"
+        ));
     }
 
     #[test]
@@ -535,5 +1209,46 @@ mod tests {
             Some("/tmp/boo-example-mbp.local.sock")
         );
         assert_eq!(config.remote_host.as_deref(), Some("example-mbp.local"));
+    }
+
+    #[test]
+    fn startup_overrides_cli_host_beats_config_host() {
+        let mut config = crate::config::Config::default();
+        config.remote_host = Some("config-host.local".to_string());
+
+        let config = apply_startup_overrides(
+            config,
+            &StartupOverrides {
+                remote_host: Some("cli-host.local".to_string()),
+                ..StartupOverrides::default()
+            },
+        );
+
+        assert_eq!(config.remote_host.as_deref(), Some("cli-host.local"));
+        assert_eq!(
+            config.control_socket.as_deref(),
+            Some("/tmp/boo-cli-host.local.sock")
+        );
+    }
+
+    #[test]
+    fn startup_overrides_explicit_socket_beats_generated_remote_socket() {
+        let mut config = crate::config::Config::default();
+        config.remote_host = Some("config-host.local".to_string());
+
+        let config = apply_startup_overrides(
+            config,
+            &StartupOverrides {
+                control_socket: Some("/tmp/boo-explicit.sock".to_string()),
+                remote_host: Some("cli-host.local".to_string()),
+                ..StartupOverrides::default()
+            },
+        );
+
+        assert_eq!(config.remote_host.as_deref(), Some("cli-host.local"));
+        assert_eq!(
+            config.control_socket.as_deref(),
+            Some("/tmp/boo-explicit.sock")
+        );
     }
 }
