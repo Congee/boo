@@ -163,6 +163,13 @@ final class GSPClient: ObservableObject {
     private nonisolated static let magic: [UInt8] = [0x47, 0x53]
     private nonisolated static let headerLen = 7
 
+    var handshakeSummary: String? {
+        guard let protocolVersion, let serverBuildId, !serverBuildId.isEmpty else {
+            return nil
+        }
+        return "proto \(protocolVersion) · caps 0x\(String(transportCapabilities, radix: 16)) · \(serverBuildId)"
+    }
+
     func connect(host: String, port: UInt16, authKey: String = "") {
         self.authKey = authKey.isEmpty ? nil : SymmetricKey(data: Data(authKey.utf8))
         let hasAuth = !authKey.isEmpty

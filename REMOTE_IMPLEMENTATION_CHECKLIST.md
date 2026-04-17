@@ -166,10 +166,12 @@ Goal:
 
 - [ ] Define and implement a protocol handshake that includes:
   - [x] protocol version
-  - [ ] server version/build identifier
+  - [x] server version/build identifier
   - [x] transport capabilities
   - [ ] reconnect/resume capabilities
 - [ ] Reject incompatible peers early and clearly
+  - [x] iOS client rejects malformed or unsupported `AuthOk` metadata before issuing protocol side effects
+  - [ ] desktop and all future direct clients enforce the same rejection rules
 - [ ] Add upgrade path from SSH bootstrap to canonical Boo transport
 
 ### 2. Connection Model
@@ -230,7 +232,7 @@ Goal:
 
 - [ ] Add end-to-end tests for:
   - SSH bootstrap then protocol upgrade
-  - direct client connect
+  - [x] direct client connect on the current native iOS path
   - version mismatch
   - resume after temporary drop
 
@@ -253,6 +255,9 @@ Goal:
 ### 1. Transport Integration
 
 - [ ] Update iOS client handshake to the canonical protocol
+  - [x] protocol version / capability / build-id handshake decoding
+  - [x] incompatible-handshake rejection in the production client
+  - [ ] resume token / reconnect metadata
 - [ ] Support direct connection to the canonical remote endpoint
 - [ ] Support reconnect/resume after:
   - app background/foreground

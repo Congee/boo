@@ -216,11 +216,18 @@ struct SessionsScreen: View {
     @ObservedObject var monitor: ConnectionMonitor
     @Binding var selectedTab: BooTab
 
+    private var subtitleText: String? {
+        let base = monitor.lastHost.map { "Connected to \($0)" }
+        guard let handshake = client.handshakeSummary else { return base }
+        guard let base else { return handshake }
+        return "\(base) · \(handshake)"
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             KineticTopBar(
                 title: "Active Sessions",
-                subtitle: monitor.lastHost.map { "Connected to \($0)" }
+                subtitle: subtitleText
             )
             ScrollView {
                 VStack(alignment: .leading, spacing: KineticSpacing.xl) {
@@ -343,7 +350,10 @@ struct TerminalSessionScreen: View {
         if case .connectionLost = monitor.status {
             return "Disconnected from daemon"
         }
-        return monitor.lastHost.map { "Attached to \($0)" }
+        let base = monitor.lastHost.map { "Attached to \($0)" }
+        guard let handshake = client.handshakeSummary else { return base }
+        guard let base else { return handshake }
+        return "\(base) · \(handshake)"
     }
 
     private func modifierButton(_ label: String, active: Bool = false, action: @escaping () -> Void) -> some View {
