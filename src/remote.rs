@@ -61,6 +61,7 @@ pub enum MessageType {
     AppKeyEvent = 0x0e,
     FocusPane = 0x0f,
     AppMouseEvent = 0x10,
+    Heartbeat = 0x11,
 
     AuthOk = 0x80,
     AuthFail = 0x81,
@@ -79,6 +80,7 @@ pub enum MessageType {
     UiAppearance = 0x8e,
     UiPaneFullState = 0x90,
     UiPaneDelta = 0x91,
+    HeartbeatAck = 0x92,
 }
 
 impl TryFrom<u8> for MessageType {
@@ -102,6 +104,7 @@ impl TryFrom<u8> for MessageType {
             0x0e => Self::AppKeyEvent,
             0x0f => Self::FocusPane,
             0x10 => Self::AppMouseEvent,
+            0x11 => Self::Heartbeat,
             0x80 => Self::AuthOk,
             0x81 => Self::AuthFail,
             0x82 => Self::SessionList,
@@ -119,6 +122,7 @@ impl TryFrom<u8> for MessageType {
             0x8e => Self::UiAppearance,
             0x90 => Self::UiPaneFullState,
             0x91 => Self::UiPaneDelta,
+            0x92 => Self::HeartbeatAck,
             _ => return Err(()),
         };
         Ok(message)
@@ -1132,6 +1136,11 @@ fn read_loop(
             continue;
         }
 
+        if matches!(ty, MessageType::Heartbeat) {
+            send_direct_frame(&state, client_id, MessageType::HeartbeatAck, payload);
+            continue;
+        }
+
         let command = match ty {
             MessageType::ListSessions => Some(RemoteCmd::ListSessions { client_id }),
             MessageType::Attach => parse_session_id(&payload).map(|session_id| RemoteCmd::Attach {
@@ -1297,12 +1306,25 @@ pub fn decode_auth_ok_payload(payload: &[u8]) -> Option<(u16, u32, Option<String
 }
 
 fn send_direct_error(state: &Arc<Mutex<State>>, client_id: u64, message: &str) {
+    send_direct_frame(
+        state,
+        client_id,
+        MessageType::ErrorMsg,
+        message.as_bytes().to_vec(),
+    );
+}
+
+fn send_direct_frame(
+    state: &Arc<Mutex<State>>,
+    client_id: u64,
+    ty: MessageType,
+    payload: Vec<u8>,
+) {
     let state = state.lock().expect("remote server state poisoned");
     if let Some(client) = state.clients.get(&client_id) {
-        let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
-            MessageType::ErrorMsg,
-            message.as_bytes(),
-        )));
+        let _ = client
+            .outbound
+            .send(OutboundMessage::Frame(encode_message(ty, &payload)));
     }
 }
 
@@ -2134,6 +2156,45 @@ mod tests {
             RemoteCmd::ListSessions { client_id } => assert_eq!(client_id, 1),
             other => panic!("unexpected remote command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn read_loop_replies_to_heartbeat_without_runtime_command() {
+        let (outbound_tx, outbound_rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: outbound_tx,
+                    authenticated: true,
+                    challenge: None,
+                    attached_session: None,
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: false,
+                },
+            )]),
+            auth_key: Some(b"test-key".to_vec()),
+        }));
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let frame = encode_message(MessageType::Heartbeat, b"ping");
+
+        read_loop(std::io::Cursor::new(frame), 1, state, cmd_tx);
+
+        match outbound_rx.recv().expect("heartbeat ack frame") {
+            OutboundMessage::Frame(frame) => {
+                let mut cursor = std::io::Cursor::new(frame);
+                let (ty, payload) = read_message(&mut cursor).expect("decoded heartbeat ack");
+                assert_eq!(ty, MessageType::HeartbeatAck);
+                assert_eq!(payload, b"ping");
+            }
+            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+        }
+        assert!(cmd_rx.try_recv().is_err());
     }
 
     #[test]

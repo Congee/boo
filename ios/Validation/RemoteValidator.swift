@@ -60,6 +60,7 @@ enum WireMessageType: UInt8 {
     case resize = 0x07
     case destroy = 0x08
     case authChallenge = 0x09
+    case heartbeat = 0x11
 
     case authOk = 0x80
     case authFail = 0x81
@@ -71,6 +72,7 @@ enum WireMessageType: UInt8 {
     case errorMsg = 0x87
     case sessionCreated = 0x88
     case sessionExited = 0x89
+    case heartbeatAck = 0x92
 }
 
 final class RemoteValidator {
@@ -86,6 +88,7 @@ final class RemoteValidator {
     private var protocolVersion: UInt16?
     private var transportCapabilities: UInt32 = 0
     private var serverBuildId: String?
+    private var heartbeatAckReceived = false
     private var sessionListReceived = false
     private var sessions: [DecodedWireSessionInfo] = []
     private var attachedSessionId: UInt32?
@@ -165,6 +168,9 @@ final class RemoteValidator {
         } else {
             authenticated = true
         }
+        heartbeatAckReceived = false
+        sendMessage(type: .heartbeat, payload: Data("ping".utf8))
+        try waitUntil("heartbeat acknowledgement") { self.heartbeatAckReceived }
     }
 
     func validateRoundTrip() throws {
@@ -311,6 +317,8 @@ final class RemoteValidator {
             authenticated = true
         case .authFail:
             lastError = "authentication failed"
+        case .heartbeatAck:
+            heartbeatAckReceived = true
         case .sessionList:
             sessionListReceived = true
             sessions = WireCodec.decodeSessionList(payload)
@@ -361,7 +369,7 @@ final class RemoteValidator {
         let screenSnippet = lastScreenText
             .replacingOccurrences(of: "\n", with: "\\n")
             .prefix(160)
-        let stateSummary = "authenticated=\(authenticated) sessionListReceived=\(sessionListReceived) sessions=\(sessions.count) createdSessionId=\(String(describing: createdSessionId)) attachedSessionId=\(String(describing: attachedSessionId)) buildId=\(serverBuildId ?? "nil") screenUpdateReceived=\(screenUpdateReceived) screen=\"\(screenSnippet)\" trace=\(messageTrace.joined(separator: ","))"
+        let stateSummary = "authenticated=\(authenticated) heartbeatAckReceived=\(heartbeatAckReceived) sessionListReceived=\(sessionListReceived) sessions=\(sessions.count) createdSessionId=\(String(describing: createdSessionId)) attachedSessionId=\(String(describing: attachedSessionId)) buildId=\(serverBuildId ?? "nil") screenUpdateReceived=\(screenUpdateReceived) screen=\"\(screenSnippet)\" trace=\(messageTrace.joined(separator: ","))"
         lock.unlock()
         throw ValidationError("timed out waiting for \(description) (\(stateSummary))")
     }

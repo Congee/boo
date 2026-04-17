@@ -14,6 +14,7 @@ enum GSPMessageType: UInt8 {
     case destroy = 0x08
     case authChallenge = 0x09
     case scroll = 0x0a
+    case heartbeat = 0x11
 
     case authOk = 0x80
     case authFail = 0x81
@@ -28,6 +29,7 @@ enum GSPMessageType: UInt8 {
     case scrollData = 0x8a
     case clipboard = 0x8b
     case image = 0x8c
+    case heartbeatAck = 0x92
 }
 
 struct WireCell {
@@ -146,11 +148,15 @@ final class BonjourBrowser: ObservableObject {
 
 @MainActor
 final class GSPClient: ObservableObject {
+    private static let heartbeatInterval: TimeInterval = 5
+    private static let heartbeatTimeout: TimeInterval = 12
+
     @Published var connected = false
     @Published var authenticated = false
     @Published var protocolVersion: UInt16?
     @Published var transportCapabilities: UInt32 = 0
     @Published var serverBuildId: String?
+    @Published var lastHeartbeatAck: Date?
     @Published var sessions: [SessionInfo] = []
     @Published var screen = ScreenState()
     @Published var attachedSessionId: UInt32?
@@ -159,6 +165,8 @@ final class GSPClient: ObservableObject {
     private var connection: NWConnection?
     private var authKey: SymmetricKey?
     private let queue = DispatchQueue(label: "boo-gsp-client", qos: .userInteractive)
+    private var heartbeatTimer: DispatchSourceTimer?
+    private var lastHeartbeatSent: Date?
 
     private nonisolated static let magic: [UInt8] = [0x47, 0x53]
     private nonisolated static let headerLen = 7
@@ -187,11 +195,12 @@ final class GSPClient: ObservableObject {
                         self?.sendAuth()
                     } else {
                         self?.authenticated = true
+                        self?.startHeartbeatLoop()
                     }
                 case .failed(let error):
-                    self?.connected = false
-                    self?.lastError = "Connection failed: \(error)"
+                    self?.protocolError("Connection failed: \(error)")
                 case .cancelled:
+                    self?.stopHeartbeatLoop()
                     self?.connected = false
                 default:
                     break
@@ -209,9 +218,12 @@ final class GSPClient: ObservableObject {
         protocolVersion = nil
         transportCapabilities = 0
         serverBuildId = nil
+        lastHeartbeatAck = nil
+        lastHeartbeatSent = nil
         attachedSessionId = nil
         sessions = []
         screen = ScreenState()
+        stopHeartbeatLoop()
     }
 
     func listSessions() { sendMessage(type: .listSessions, payload: Data()) }
@@ -253,6 +265,41 @@ final class GSPClient: ObservableObject {
             buf.storeBytes(of: rows.littleEndian, toByteOffset: 2, as: UInt16.self)
         }
         sendMessage(type: .resize, payload: payload)
+    }
+
+    func sendHeartbeat() {
+        sendMessage(type: .heartbeat, payload: Data("ping".utf8))
+    }
+
+    private func startHeartbeatLoop() {
+        stopHeartbeatLoop()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + Self.heartbeatInterval, repeating: Self.heartbeatInterval)
+        timer.setEventHandler { [weak self] in
+            Task { @MainActor in
+                self?.heartbeatTick()
+            }
+        }
+        heartbeatTimer = timer
+        timer.resume()
+    }
+
+    private func stopHeartbeatLoop() {
+        heartbeatTimer?.cancel()
+        heartbeatTimer = nil
+    }
+
+    private func heartbeatTick() {
+        guard connected, authenticated, connection != nil else { return }
+        let now = Date()
+        if let sentAt = lastHeartbeatSent,
+           lastHeartbeatAck.map({ $0 < sentAt }) ?? true,
+           now.timeIntervalSince(sentAt) > Self.heartbeatTimeout {
+            protocolError("Remote heartbeat timed out")
+            return
+        }
+        sendHeartbeat()
+        lastHeartbeatSent = now
     }
 
     private func sendAuth() {
@@ -351,6 +398,8 @@ final class GSPClient: ObservableObject {
             applyReducedMessage(.sessionExited, payload: payload)
         case .errorMsg:
             applyReducedMessage(.errorMsg, payload: payload)
+        case .heartbeatAck:
+            lastHeartbeatAck = Date()
         case .clipboard:
             handleClipboard(payload)
         default:
@@ -370,10 +419,13 @@ final class GSPClient: ObservableObject {
         protocolVersion = nil
         transportCapabilities = 0
         serverBuildId = nil
+        lastHeartbeatAck = nil
+        lastHeartbeatSent = nil
         attachedSessionId = nil
         sessions = []
         screen = ScreenState()
         lastError = message
+        stopHeartbeatLoop()
     }
 
     private func applyDecodedSessions(_ decodedSessions: [DecodedWireSessionInfo]) {
@@ -453,8 +505,12 @@ final class GSPClient: ObservableObject {
             attachedSessionId: attachedSessionId,
             lastError: lastError
         )
+        let wasAuthenticated = authenticated
         let effect = ClientWireReducer.reduce(message: message, payload: payload, state: &state)
         authenticated = state.authenticated
+        if state.authenticated && !wasAuthenticated {
+            startHeartbeatLoop()
+        }
         protocolVersion = state.protocolVersion
         transportCapabilities = state.transportCapabilities
         serverBuildId = state.serverBuildId
