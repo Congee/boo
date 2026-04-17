@@ -44,6 +44,9 @@ private func validateValidationAuthOkMetadata(_ payload: Data, authRequired: Boo
     if authRequired && (metadata.transportCapabilities & (1 << 0)) == 0 {
         return "Remote server does not advertise HMAC authentication"
     }
+    if (metadata.transportCapabilities & (1 << 4)) == 0 {
+        return "Remote server does not advertise heartbeat support"
+    }
     if metadata.serverBuildId?.isEmpty != false {
         return "Remote handshake is missing server build metadata"
     }

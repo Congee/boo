@@ -76,6 +76,16 @@ struct ProtocolCodecSelfTestMain {
             "wrong protocol version rejected"
         )
 
+        var missingHeartbeatPayload = authOkPayload
+        missingHeartbeatPayload.withUnsafeMutableBytes { bytes in
+            bytes.storeBytes(of: UInt32(0x0f).littleEndian, toByteOffset: 2, as: UInt32.self)
+        }
+        assertEqual(
+            validateAuthOkMetadata(missingHeartbeatPayload, authRequired: true),
+            "Remote server does not advertise heartbeat support",
+            "missing heartbeat capability rejected"
+        )
+
         let listEffect = ClientWireReducer.reduce(message: .sessionList, payload: makeSessionListPayload(), state: &clientState)
         assertEqual(listEffect, .none, "session list has no side effect")
         assertEqual(clientState.sessions, sessions, "session list reducer decode")
