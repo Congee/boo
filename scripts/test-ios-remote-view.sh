@@ -5,28 +5,46 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${BOO_IOS_REMOTE_PORT:-7347}"
 AUTH_KEY="${BOO_IOS_REMOTE_AUTH_KEY:-boo-ios-validation}"
 SOCKET_PATH="${BOO_IOS_REMOTE_SOCKET:-/tmp/boo-ios-remote-validation.sock}"
+AUTHLESS_PORT="${BOO_IOS_REMOTE_AUTHLESS_PORT:-7348}"
+AUTHLESS_SOCKET_PATH="${BOO_IOS_REMOTE_AUTHLESS_SOCKET:-/tmp/boo-ios-remote-authless-validation.sock}"
 XCODE_LOG="$ROOT/ios/.derived-validate/xcodebuild.log"
 SWIFT_MODULE_CACHE="$ROOT/ios/.swift-module-cache"
 VALIDATOR_BIN="$ROOT/ios/.derived-validate/remote-validator"
 SELFTEST_BIN="$ROOT/ios/.derived-validate/protocol-codec-selftest"
 
 cleanup() {
-  if [[ -n "${SERVER_PID:-}" ]]; then
-    kill "$SERVER_PID" >/dev/null 2>&1 || true
-    wait "$SERVER_PID" >/dev/null 2>&1 || true
-  fi
+  for pid_var in SERVER_PID AUTHLESS_SERVER_PID; do
+    local pid="${!pid_var:-}"
+    if [[ -n "$pid" ]]; then
+      kill "$pid" >/dev/null 2>&1 || true
+      wait "$pid" >/dev/null 2>&1 || true
+    fi
+  done
   rm -f "$SOCKET_PATH"
+  rm -f "$AUTHLESS_SOCKET_PATH"
 }
 trap cleanup EXIT
+
+start_server() {
+  local socket_path="$1"
+  local port="$2"
+  local auth_key="$3"
+  local log_path="$4"
+  rm -f "$socket_path"
+  if [[ -n "$auth_key" ]]; then
+    target/debug/boo server --socket "$socket_path" --remote-port "$port" --remote-auth-key "$auth_key" >"$log_path" 2>&1 &
+  else
+    target/debug/boo server --socket "$socket_path" --remote-port "$port" >"$log_path" 2>&1 &
+  fi
+  echo $!
+}
 
 cd "$ROOT"
 
 cargo build >/dev/null
-rm -f "$SOCKET_PATH"
 mkdir -p "$SWIFT_MODULE_CACHE"
 mkdir -p "$(dirname "$VALIDATOR_BIN")"
-target/debug/boo server --socket "$SOCKET_PATH" --remote-port "$PORT" --remote-auth-key "$AUTH_KEY" >/tmp/boo-ios-remote-server.log 2>&1 &
-SERVER_PID=$!
+SERVER_PID="$(start_server "$SOCKET_PATH" "$PORT" "$AUTH_KEY" /tmp/boo-ios-remote-server.log)"
 sleep 1
 
 swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
@@ -40,6 +58,12 @@ swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
   --port "$PORT" \
   --auth-key "$AUTH_KEY" \
   --check-discovery
+
+AUTHLESS_SERVER_PID="$(start_server "$AUTHLESS_SOCKET_PATH" "$AUTHLESS_PORT" "" /tmp/boo-ios-remote-authless-server.log)"
+sleep 1
+"$VALIDATOR_BIN" \
+  --host 127.0.0.1 \
+  --port "$AUTHLESS_PORT"
 
 swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
   ios/Sources/ClientWireState.swift \
