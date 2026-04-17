@@ -283,6 +283,11 @@ impl VtPaneWorker {
         }
     }
 
+    pub fn snapshot_arc(&self) -> Arc<TerminalSnapshot> {
+        let state = self.state.lock().unwrap();
+        Arc::clone(&state.snapshot)
+    }
+
     pub fn has_pending_pty_work(&self) -> bool {
         self.pending_work.load(Ordering::Relaxed)
     }

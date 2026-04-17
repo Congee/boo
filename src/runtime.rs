@@ -129,7 +129,8 @@ impl BooApp {
         );
         let bindings = bindings::Bindings::from_config(&boo_config);
         let appearance = Self::resolve_appearance_config(&boo_config);
-        let (cell_width, cell_height) = terminal_metrics(appearance.font_size);
+        let (cell_width, cell_height) =
+            terminal_metrics(appearance.font_size, appearance.font_families.first().copied());
         let initial_dirty_remote_sessions =
             server.tabs.active_session_id().into_iter().collect::<Vec<_>>();
 
@@ -585,7 +586,8 @@ impl BooApp {
         self.cursor_blink = appearance.cursor_blink;
         self.cursor_blink_interval = appearance.cursor_blink_interval;
         self.cursor_blink_epoch = std::time::Instant::now();
-        let (cell_width, cell_height) = terminal_metrics(self.terminal_font_size);
+        let (cell_width, cell_height) =
+            terminal_metrics(self.terminal_font_size, self.terminal_font_families.first().copied());
         self.cell_width = cell_width;
         self.cell_height = cell_height;
         self.appearance_revision = self.appearance_revision.wrapping_add(1);

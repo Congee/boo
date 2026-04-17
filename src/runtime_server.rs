@@ -40,8 +40,8 @@ struct LocalGuiTransportState {
 
 impl BooApp {
     fn remote_full_state_for_pane(&self, pane_id: u64) -> Option<Arc<remote::RemoteFullState>> {
-        if let Some(snapshot) = self.backend.render_snapshot_ref(pane_id) {
-            return Some(Arc::new(remote::full_state_from_terminal(snapshot)));
+        if let Some(snapshot) = self.backend.render_snapshot(pane_id) {
+            return Some(Arc::new(remote::full_state_from_terminal(&snapshot)));
         }
         let snapshot = self.backend.ui_terminal_snapshot(pane_id)?;
         Some(Arc::new(remote::full_state_from_ui(&snapshot)))
@@ -291,16 +291,26 @@ impl BooApp {
                 self.publish_local_gui_after_ui_action(&before);
             }
             server::Command::RemoteConnected { client_id } => {
-                if let Some(server) = self.server.local_gui_server.as_ref()
-                    && server.client_is_local(client_id)
+                let should_bootstrap_local = self
+                    .server
+                    .local_gui_server
+                    .as_ref()
+                    .is_some_and(|server| {
+                        server.client_is_local(client_id)
+                            && server.client_session(client_id).is_none()
+                            && self
+                                .server
+                                .tabs
+                                .active_session_id()
+                                .is_some_and(|session_id| self.pane_for_session(session_id).is_some())
+                    });
+                if should_bootstrap_local
+                    && let Some(session_id) = self.server.tabs.active_session_id()
                 {
-                    if server.client_session(client_id).is_none()
-                        && let Some(session_id) = self.server.tabs.active_session_id()
-                        && self.pane_for_session(session_id).is_some()
-                    {
+                    if let Some(server) = self.server.local_gui_server.as_ref() {
                         self.bootstrap_local_stream_client(server, client_id, session_id);
-                        self.publish_remote_session(session_id);
                     }
+                    self.publish_remote_session(session_id);
                 }
                 let sessions = self.current_remote_sessions();
                 if let Some(server) = self.server.local_gui_server.as_ref()
@@ -310,14 +320,26 @@ impl BooApp {
                 }
             }
             server::Command::RemoteListSessions { client_id } => {
-                if let Some(server) = self.server.local_gui_server.as_ref()
-                    && server.client_is_local(client_id)
-                    && server.client_session(client_id).is_none()
+                let should_bootstrap_local = self
+                    .server
+                    .local_gui_server
+                    .as_ref()
+                    .is_some_and(|server| {
+                        server.client_is_local(client_id)
+                            && server.client_session(client_id).is_none()
+                            && self
+                                .server
+                                .tabs
+                                .active_session_id()
+                                .is_some_and(|session_id| self.pane_for_session(session_id).is_some())
+                    });
+                if should_bootstrap_local
                     && let Some(session_id) = self.server.tabs.active_session_id()
-                    && self.pane_for_session(session_id).is_some()
                 {
-                    self.bootstrap_local_stream_client(server, client_id, session_id);
-                        self.publish_remote_session(session_id);
+                    if let Some(server) = self.server.local_gui_server.as_ref() {
+                        self.bootstrap_local_stream_client(server, client_id, session_id);
+                    }
+                    self.publish_remote_session(session_id);
                 }
                 let sessions = self.current_remote_sessions();
                 if let Some(server) = self
@@ -334,12 +356,17 @@ impl BooApp {
             } => {
                 if self.pane_for_session(session_id).is_some() {
                     self.invalidate_remote_sessions_cache();
+                    let bootstrap_local = self
+                        .remote_server_for_client(client_id)
+                        .or(self.server.local_gui_server.as_ref())
+                        .or(self.server.remote_server.as_ref())
+                        .is_some_and(|server| server.client_is_local(client_id));
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        if server.client_is_local(client_id) {
+                        if bootstrap_local {
                             self.bootstrap_local_stream_client(server, client_id, session_id);
                         } else {
                             server.send_attached(client_id, session_id);

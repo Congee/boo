@@ -323,6 +323,8 @@ impl BooApp {
     #[allow(dead_code)]
     pub(crate) fn view(&self) -> Element<'_, Message> {
         let ui_font = self.ui_font();
+        let status_bar_height = self.status_bar_height() as f32;
+        let status_text_size = self.status_bar_text_size();
         let status_bar = self.status_components.snapshot();
         let search_bar: Option<Element<'_, Message>> = if self.search_active {
             let label = if self.search_total > 0 {
@@ -341,7 +343,7 @@ impl BooApp {
                 container(
                     text(label)
                         .font(ui_font)
-                        .size(13)
+                        .size(status_text_size)
                         .color(Color::from_rgb(0.9, 0.9, 0.9)),
                 )
                 .style(|_: &Theme| container::Style {
@@ -354,8 +356,8 @@ impl BooApp {
                     ..Default::default()
                 })
                 .width(Length::Fill)
-                .height(Length::Fixed(STATUS_BAR_HEIGHT as f32))
-                .padding([2, 6])
+                .height(Length::Fixed(status_bar_height))
+                .padding(0)
                 .into(),
             )
         } else {
@@ -486,14 +488,14 @@ impl BooApp {
                         Color::from_rgba(0.1, 0.1, 0.1, 0.9)
                     };
                     suggestion_col = suggestion_col.push(
-                        container(text(label).font(ui_font).size(13).color(fg))
+                        container(text(label).font(ui_font).size(status_text_size).color(fg))
                             .style(move |_: &Theme| container::Style {
                                 background: Some(iced::Background::Color(bg)),
                                 ..Default::default()
                             })
                             .width(Length::Fill)
-                            .height(Length::Fixed(STATUS_BAR_HEIGHT as f32))
-                            .padding([2, 6]),
+                            .height(Length::Fixed(status_bar_height))
+                            .padding(0),
                     );
                 }
                 main_col = main_col.push(suggestion_col);
@@ -504,7 +506,7 @@ impl BooApp {
                 container(
                     text(prompt_label)
                         .font(ui_font)
-                        .size(13)
+                        .size(status_text_size)
                         .color(Color::from_rgb(0.9, 0.9, 0.9)),
                 )
                 .style(|_: &Theme| container::Style {
@@ -517,8 +519,8 @@ impl BooApp {
                     ..Default::default()
                 })
                 .width(Length::Fill)
-                .height(Length::Fixed(STATUS_BAR_HEIGHT as f32))
-                .padding([2, 6]),
+                .height(Length::Fixed(status_bar_height))
+                .padding(0),
             );
         } else {
             let spinner_frame = std::time::SystemTime::now()
@@ -532,7 +534,7 @@ impl BooApp {
             } else {
                 self.render_status_zone(status_bar.right.clone(), ui_font)
             };
-            let mut tabs_row = row![].spacing(4);
+            let mut tabs_row = row![].spacing(0);
             for tab in &tabs {
                 let display_idx = tab.index + 1;
                 let marker = if tab.active { "*" } else { "" };
@@ -552,8 +554,8 @@ impl BooApp {
                     Self::theme_color(self.inactive_tab_background, 0.88)
                 };
                 tabs_row = tabs_row.push(
-                    container(text(label).font(ui_font).size(13).color(fg))
-                        .padding([2, 6])
+                    container(text(label).font(ui_font).size(status_text_size).color(fg))
+                        .padding(0)
                         .style(move |_: &Theme| container::Style {
                             background: Some(iced::Background::Color(bg)),
                             ..Default::default()
@@ -581,8 +583,8 @@ impl BooApp {
                     ..Default::default()
                 })
                 .width(Length::Fill)
-                .height(Length::Fixed(STATUS_BAR_HEIGHT as f32))
-                .padding([2, 6]),
+                .height(Length::Fixed(status_bar_height))
+                .padding(0),
             );
         }
         let background = iced::widget::canvas(vt_terminal_canvas::TerminalBackgroundCanvas {
@@ -908,6 +910,7 @@ impl BooApp {
         segments: Vec<crate::status_components::UiStatusComponent>,
         font: Font,
     ) -> Element<'static, Message> {
+        let status_text_size = self.status_bar_text_size();
         let mut row = row![].spacing(0);
         for segment in segments {
             let fg = segment
@@ -922,8 +925,13 @@ impl BooApp {
                 .as_deref()
                 .and_then(crate::status_components::parse_status_color);
             row = row.push(
-                container(text(segment.text.clone()).font(font).size(13).color(fg))
-                    .padding([2, 4])
+                container(
+                    text(segment.text.clone())
+                        .font(font)
+                        .size(status_text_size)
+                        .color(fg),
+            )
+            .padding(0)
                     .style(move |_: &Theme| container::Style {
                         background: bg.map(iced::Background::Color),
                         ..Default::default()
@@ -934,9 +942,10 @@ impl BooApp {
     }
 
     fn render_status_fallback<'a>(&self, text_value: String, font: Font) -> Element<'a, Message> {
+        let status_text_size = self.status_bar_text_size();
         text(text_value)
             .font(font)
-            .size(13)
+            .size(status_text_size)
             .color(Color::from_rgb(0.6, 0.6, 0.6))
             .into()
     }

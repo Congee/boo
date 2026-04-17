@@ -67,9 +67,6 @@ use std::ffi::{CStr, CString, c_void};
 use std::process::Command;
 use std::ptr;
 
-/// Status bar height in points.
-const STATUS_BAR_HEIGHT: f64 = 20.0;
-
 static SCROLL_RX: std::sync::OnceLock<
     std::sync::Mutex<std::sync::mpsc::Receiver<platform::ScrollEvent>>,
 > = std::sync::OnceLock::new();
@@ -203,28 +200,48 @@ fn platform_default_font_fallbacks(primary_family: Option<&str>) -> Vec<&'static
 
 #[cfg(target_os = "linux")]
 fn resolve_linux_font(name: &str) -> (Option<&'static str>, Option<Vec<u8>>) {
-    let output = Command::new("fc-match")
-        .args(["-f", "%{family[0]}|%{file}\n", name])
-        .output();
+    fn query_font(pattern: &str) -> Option<(String, String, i32)> {
+        let output = Command::new("fc-match")
+            .args(["-f", "%{family[0]}|%{file}|%{spacing}\n", pattern])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let line = stdout.trim();
+        let mut parts = line.split('|');
+        let family = parts.next()?.trim().to_string();
+        let file = parts.next()?.trim().to_string();
+        let spacing = parts
+            .next()
+            .and_then(|value| value.trim().parse::<i32>().ok())
+            .unwrap_or_default();
+        Some((family, file, spacing))
+    }
 
-    let Ok(output) = output else {
+    let primary = query_font(name);
+    let mono_pattern = format!("{name}:spacing=100");
+    let monospace = query_font(&mono_pattern).or_else(|| query_font("monospace"));
+
+    let Some((resolved_family, resolved_file, resolved_spacing)) = primary else {
         log::warn!("failed to run fc-match for font family {:?}", name);
         return (Some(leak_font_family(name)), None);
     };
 
-    if !output.status.success() {
-        log::warn!("fc-match failed for font family {:?}", name);
-        return (Some(leak_font_family(name)), None);
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let line = stdout.trim();
-    let Some((resolved_family, resolved_file)) = line.split_once('|') else {
-        return (Some(leak_font_family(name)), None);
+    let (resolved_family, resolved_file, resolved_spacing) = if resolved_spacing >= 100 {
+        (resolved_family, resolved_file, resolved_spacing)
+    } else if let Some((mono_family, mono_file, mono_spacing)) = monospace {
+        log::warn!(
+            "resolved font family {:?} to proportional {:?}; using monospace fallback {:?}",
+            name,
+            resolved_family,
+            mono_family
+        );
+        (mono_family, mono_file, mono_spacing)
+    } else {
+        (resolved_family, resolved_file, resolved_spacing)
     };
-
-    let resolved_family = resolved_family.trim();
-    let resolved_file = resolved_file.trim();
 
     let family = if resolved_family.is_empty() {
         leak_font_family(name)
@@ -236,13 +253,21 @@ fn resolve_linux_font(name: &str) -> (Option<&'static str>, Option<Vec<u8>>) {
                 resolved_family
             );
         }
-        leak_font_family(resolved_family)
+        leak_font_family(&resolved_family)
     };
+
+    if resolved_spacing > 0 && resolved_spacing < 100 {
+        log::warn!(
+            "resolved font family {:?} is not monospace (spacing={})",
+            family,
+            resolved_spacing
+        );
+    }
 
     let font_bytes = if resolved_file.is_empty() {
         None
     } else {
-        match std::fs::read(resolved_file) {
+        match std::fs::read(&resolved_file) {
             Ok(bytes) => Some(bytes),
             Err(error) => {
                 log::warn!(
@@ -295,11 +320,83 @@ fn resolve_linux_font_fallbacks(name: &str) -> Vec<&'static str> {
     families
 }
 
-fn terminal_metrics(font_size: f32) -> (f64, f64) {
-    let size = font_size.max(8.0) as f64;
-    let cell_width = (size * 0.62).max(6.0).ceil();
-    let cell_height = (size * 1.35).max(12.0).ceil();
+#[cfg(target_os = "linux")]
+fn measured_linux_terminal_metrics(primary_family: Option<&str>, font_size: f32) -> Option<(f64, f64)> {
+    use std::collections::HashMap;
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<(String, u32), (f64, f64)>>> =
+        std::sync::OnceLock::new();
+    let family = primary_family.unwrap_or("monospace");
+    let size_key = font_size.to_bits();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    if let Ok(cache) = cache.lock()
+        && let Some(metrics) = cache.get(&(family.to_string(), size_key)).copied()
+    {
+        return Some(metrics);
+    }
+
+    let pattern = format!("{family}:spacing=100");
+    let output = Command::new("fc-match")
+        .args(["-f", "%{file}\n", &pattern])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let font_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if font_path.is_empty() {
+        return None;
+    }
+    let bytes = std::fs::read(&font_path).ok()?;
+    let face = ttf_parser::Face::parse(&bytes, 0).ok()?;
+    let units_per_em = f64::from(face.units_per_em());
+    if units_per_em <= 0.0 {
+        return None;
+    }
+
+    let glyph = ['M', 'W', '0']
+        .into_iter()
+        .find_map(|ch| face.glyph_index(ch).and_then(|id| face.glyph_hor_advance(id)))
+        .map(f64::from)?;
+    let height_units =
+        f64::from(face.ascender()) - f64::from(face.descender()) + f64::from(face.line_gap());
+    let size = font_size.max(1.0) as f64;
+    let metrics = (
+        (glyph * size / units_per_em).round().max(1.0),
+        (height_units * size / units_per_em).round().max(1.0),
+    );
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert((family.to_string(), size_key), metrics);
+    }
+    Some(metrics)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct StatusBarMetrics {
+    pub cell_width: f64,
+    pub height: f64,
+    pub text_size: f32,
+}
+
+pub(crate) fn terminal_metrics(font_size: f32, primary_family: Option<&str>) -> (f64, f64) {
+    #[cfg(target_os = "linux")]
+    if let Some(metrics) = measured_linux_terminal_metrics(primary_family, font_size) {
+        return metrics;
+    }
+
+    let _ = primary_family;
+    let size = font_size.max(1.0) as f64;
+    let cell_width = size.ceil().max(1.0);
+    let cell_height = size.ceil().max(1.0);
     (cell_width, cell_height)
+}
+
+pub(crate) fn status_bar_metrics(font_size: f32, primary_family: Option<&str>) -> StatusBarMetrics {
+    let (cell_width, cell_height) = terminal_metrics(font_size, primary_family);
+    StatusBarMetrics {
+        cell_width,
+        height: cell_height,
+        text_size: font_size.max(1.0),
+    }
 }
 
 #[allow(dead_code)]

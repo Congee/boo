@@ -2,12 +2,15 @@ use super::*;
 
 impl BooApp {
     fn status_bar_top(&self) -> f64 {
-        (self.last_size.height as f64 - STATUS_BAR_HEIGHT).max(0.0)
+        (self.last_size.height as f64 - self.status_bar_height()).max(0.0)
     }
 
-    fn status_segment_width(text: &str) -> f64 {
-        let (char_width, _) = terminal_metrics(13.0);
-        unicode_width::UnicodeWidthStr::width(text) as f64 * char_width + 8.0
+    fn status_segment_width(&self, text: &str) -> f64 {
+        let metrics = crate::status_bar_metrics(
+            self.terminal_font_size,
+            self.terminal_font_families.first().copied(),
+        );
+        unicode_width::UnicodeWidthStr::width(text) as f64 * metrics.cell_width
     }
 
     fn status_component_at_point(&self, point: (f64, f64)) -> Option<(String, String, f64)> {
@@ -16,9 +19,9 @@ impl BooApp {
             return None;
         }
         let snapshot = self.status_components.snapshot();
-        let mut x = 6.0;
+        let mut x = 0.0;
         for segment in snapshot.left {
-            let width = Self::status_segment_width(&segment.text);
+            let width = self.status_segment_width(&segment.text);
             if point.0 >= x
                 && point.0 < x + width
                 && let Some(click) = segment.click
@@ -31,11 +34,11 @@ impl BooApp {
         let right_width = snapshot
             .right
             .iter()
-            .map(|segment| Self::status_segment_width(&segment.text))
+            .map(|segment| self.status_segment_width(&segment.text))
             .sum::<f64>();
-        let mut x = (self.last_size.width as f64 - 6.0 - right_width).max(0.0);
+        let mut x = (self.last_size.width as f64 - right_width).max(0.0);
         for segment in snapshot.right {
-            let width = Self::status_segment_width(&segment.text);
+            let width = self.status_segment_width(&segment.text);
             if point.0 >= x
                 && point.0 < x + width
                 && let Some(click) = segment.click
@@ -1347,7 +1350,7 @@ impl BooApp {
             return;
         }
         let w = self.last_size.width as f64;
-        let h = self.last_size.height as f64 - STATUS_BAR_HEIGHT;
+        let h = self.last_size.height as f64 - self.status_bar_height();
         if h <= 0.0 || self.scrollbar.total == 0 {
             platform::update_scrollbar_layer(self.scrollbar_layer, 0.0, 0.0, 0.0, 0.0, 0.0);
             return;
@@ -1404,7 +1407,7 @@ impl BooApp {
     }
 
     pub(crate) fn scroll_to_mouse_y(&mut self, y: f64) {
-        let terminal_h = self.last_size.height as f64 - STATUS_BAR_HEIGHT;
+        let terminal_h = self.last_size.height as f64 - self.status_bar_height();
         if terminal_h <= 0.0 || self.scrollbar.total <= self.scrollbar.len {
             return;
         }
@@ -1488,7 +1491,7 @@ impl BooApp {
                         let _ = self.invoke_status_component(&source, &id);
                         return;
                     }
-                    let terminal_h = self.last_size.height as f64 - STATUS_BAR_HEIGHT;
+                    let terminal_h = self.last_size.height as f64 - self.status_bar_height();
                     if mx >= self.last_size.width as f64 - 10.0 && my < terminal_h {
                         self.scrollbar_drag = true;
                         self.scrollbar_opacity = 1.0;

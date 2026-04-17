@@ -28,7 +28,6 @@ use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-const STATUS_BAR_HEIGHT: f64 = 20.0;
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 const DEFAULT_CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(600);
 const STREAM_RECONNECT_DELAY: Duration = Duration::from_millis(250);
@@ -161,6 +160,7 @@ pub struct ClientApp {
     steady_state_snapshot_requests: u64,
     should_exit: bool,
     terminal_snapshot_generation: u64,
+    appearance_revision: u64,
     next_full_snapshot_revision: u64,
     next_snapshot_generation: u64,
     last_mouse_pos: Point,
@@ -189,6 +189,14 @@ impl SnapshotRefreshReason {
 }
 
 impl ClientApp {
+    fn status_bar_height(&self) -> f64 {
+        crate::status_bar_metrics(self.font_size, self.font_families.first().copied()).height
+    }
+
+    fn status_bar_text_size(&self) -> f32 {
+        crate::status_bar_metrics(self.font_size, self.font_families.first().copied()).text_size
+    }
+
     fn apply_ui_appearance(&mut self, appearance: &control::UiAppearanceSnapshot) {
         self.font_size = appearance.font_size.max(8.0);
         self.font_families = appearance
@@ -212,7 +220,9 @@ impl ClientApp {
         self.inactive_tab_background = appearance.inactive_tab_background;
         self.cursor_blink_interval = Duration::from_nanos(appearance.cursor_blink_interval_ns);
         self.cursor_blink_epoch = Instant::now();
-        (self.cell_width, self.cell_height) = terminal_metrics(self.font_size);
+        (self.cell_width, self.cell_height) =
+            crate::terminal_metrics(self.font_size, self.font_families.first().copied());
+        self.appearance_revision = self.appearance_revision.wrapping_add(1);
     }
 
     fn apply_ui_runtime_state(&mut self, state: control::UiRuntimeState) {
@@ -261,7 +271,7 @@ impl ClientApp {
     pub fn new(socket_path: String) -> (Self, Task<Message>) {
         let client = control::Client::connect(socket_path.clone());
         let font_size = DEFAULT_FONT_SIZE;
-        let font_families = Arc::from([]);
+        let font_families: Arc<[&'static str]> = Arc::from([]);
         let background_opacity = 1.0;
         let background_opacity_cells = false;
         let cursor_blink_interval = DEFAULT_CURSOR_BLINK_INTERVAL;
@@ -276,7 +286,8 @@ impl ClientApp {
         let active_tab_background = crate::DEFAULT_ACTIVE_TAB_BACKGROUND;
         let inactive_tab_foreground = crate::DEFAULT_INACTIVE_TAB_FOREGROUND;
         let inactive_tab_background = crate::DEFAULT_INACTIVE_TAB_BACKGROUND;
-        let (cell_width, cell_height) = terminal_metrics(font_size);
+        let (cell_width, cell_height) =
+            crate::terminal_metrics(font_size, font_families.first().copied());
         let ui_state = ClientUiState::default();
         let pane_snapshots = HashMap::new();
         let focused_pane_id = 0;
@@ -321,6 +332,7 @@ impl ClientApp {
             steady_state_snapshot_requests: 0,
             should_exit: false,
             terminal_snapshot_generation: 1,
+            appearance_revision: 1,
             next_full_snapshot_revision: 1,
             next_snapshot_generation: 2,
             last_mouse_pos: Point::ORIGIN,
@@ -399,13 +411,15 @@ impl ClientApp {
         } else {
             String::new()
         };
-        let left_segments = render_status_zone(&self.ui_state.status_bar.left);
+        let status_bar_height = self.status_bar_height() as f32;
+        let status_text_size = self.status_bar_text_size();
+        let left_segments = render_status_zone(&self.ui_state.status_bar.left, status_text_size);
         let right_segments = if self.ui_state.status_bar.right.is_empty() {
-            render_status_text(right)
+            render_status_text(right, status_text_size)
         } else {
-            render_status_zone(&self.ui_state.status_bar.right)
+            render_status_zone(&self.ui_state.status_bar.right, status_text_size)
         };
-        let mut tabs_row = row![].spacing(4);
+        let mut tabs_row = row![].spacing(0);
         for tab in &self.ui_state.tabs {
             let display_idx = tab.index + 1;
             let marker = if tab.active { "*" } else { "" };
@@ -425,8 +439,13 @@ impl ClientApp {
                 Self::theme_color(self.inactive_tab_background, 0.88)
             };
             tabs_row = tabs_row.push(
-                container(text(label).font(Font::MONOSPACE).size(13).color(fg))
-                    .padding([2, 6])
+                container(
+                    text(label)
+                        .font(Font::MONOSPACE)
+                        .size(status_text_size)
+                        .color(fg),
+                )
+                    .padding(0)
                     .style(move |_: &Theme| container::Style {
                         background: Some(iced::Background::Color(bg)),
                         ..Default::default()
@@ -451,8 +470,8 @@ impl ClientApp {
                 ..Default::default()
             })
             .width(Length::Fill)
-            .height(Length::Fixed(STATUS_BAR_HEIGHT as f32))
-            .padding([2, 6]),
+            .height(Length::Fixed(status_bar_height))
+            .padding(0),
         );
 
         container(main_col)
@@ -583,6 +602,8 @@ impl ClientApp {
                         self.cell_height as f32,
                         self.font_size,
                         self.font_families.clone(),
+                        self.terminal_snapshot_generation,
+                        self.appearance_revision,
                         cursor_blink_visible,
                         selection_rects,
                         Some(selection_foreground),
@@ -635,6 +656,7 @@ impl ClientApp {
 
     pub fn subscription(&self) -> Subscription<Message> {
         let mut subscriptions = vec![
+            window::frames().map(|_| Message::Frame),
             iced::event::listen().map(Message::IcedEvent),
             iced::Subscription::run_with(self.socket_path.clone(), local_stream_subscription),
             gui_test_subscription(),
@@ -1039,10 +1061,8 @@ impl ClientApp {
             .iter()
             .find(|pane| pane.pane_id == self.focused_pane_id)?;
         let x = pane.frame.x
-            + vt_terminal_canvas::PADDING_X as f64
             + snapshot.cursor.x as f64 * self.cell_width;
         let y = pane.frame.y
-            + vt_terminal_canvas::PADDING_Y as f64
             + snapshot.cursor.y as f64 * self.cell_height;
         Some(Rectangle::new(
             Point::new(x as f32, y as f32),
@@ -1053,7 +1073,16 @@ impl ClientApp {
     fn handle_stream_delivery(&mut self, event: LocalStreamEvent) -> Option<Task<Message>> {
         let track_stream = matches!(
             &event,
-            LocalStreamEvent::FullState { .. } | LocalStreamEvent::Delta { .. }
+            LocalStreamEvent::SessionList(_)
+                | LocalStreamEvent::Attached(_)
+                | LocalStreamEvent::UiRuntimeState(_)
+                | LocalStreamEvent::UiAppearance(_)
+                | LocalStreamEvent::FullState { .. }
+                | LocalStreamEvent::Delta { .. }
+                | LocalStreamEvent::UiPaneFullState { .. }
+                | LocalStreamEvent::UiPaneDelta { .. }
+                | LocalStreamEvent::Detached
+                | LocalStreamEvent::SessionExited(_)
         ) || matches!(
             &event,
             LocalStreamEvent::UiPaneFullState { pane_id, .. }
@@ -1063,6 +1092,7 @@ impl ClientApp {
         self.handle_stream_event(event);
         if track_stream {
             note_gui_test_stream_activity();
+            return Some(Task::done(Message::Frame));
         }
         None
     }
@@ -1484,13 +1514,6 @@ impl ClientUiState {
             tab.active = index == self.active_tab;
         }
     }
-}
-
-fn terminal_metrics(font_size: f32) -> (f64, f64) {
-    let size = font_size.max(8.0) as f64;
-    let cell_width = (size * 0.62).max(6.0).ceil();
-    let cell_height = (size * 1.35).max(12.0).ceil();
-    (cell_width, cell_height)
 }
 
 fn latency_debug_enabled() -> bool {
@@ -2917,16 +2940,17 @@ fn build_status_right(ui_state: &ClientUiState) -> String {
     right_parts.join("  ")
 }
 
-fn render_status_text<'a>(value: String) -> Element<'a, Message> {
+fn render_status_text<'a>(value: String, status_text_size: f32) -> Element<'a, Message> {
     text(value)
         .font(Font::MONOSPACE)
-        .size(13)
+        .size(status_text_size)
         .color(Color::from_rgb(0.6, 0.6, 0.6))
         .into()
 }
 
 fn render_status_zone<'a>(
     segments: &'a [crate::status_components::UiStatusComponent],
+    status_text_size: f32,
 ) -> Element<'a, Message> {
     let mut segments_row = row![].spacing(0);
     for segment in segments {
@@ -2945,10 +2969,10 @@ fn render_status_zone<'a>(
             container(
                 text(segment.text.clone())
                     .font(Font::MONOSPACE)
-                    .size(13)
+                    .size(status_text_size)
                     .color(fg),
             )
-            .padding([2, 4])
+            .padding(0)
             .style(move |_: &Theme| container::Style {
                 background: bg.map(iced::Background::Color),
                 ..Default::default()

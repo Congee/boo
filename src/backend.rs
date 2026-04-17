@@ -446,6 +446,10 @@ impl TerminalBackend for LinuxBackend {
     }
 
     fn ui_terminal_snapshot(&self, pane_id: pane::PaneId) -> Option<control::UiTerminalSnapshot> {
+        if let Some(pane) = self.panes.get(&pane_id) {
+            let snapshot = pane.snapshot_arc();
+            return Some(crate::vt_snapshot::ui_terminal_snapshot(snapshot.as_ref()));
+        }
         self.snapshots
             .get(&pane_id)
             .map(|snapshot| crate::vt_snapshot::ui_terminal_snapshot(snapshot.as_ref()))
@@ -455,6 +459,9 @@ impl TerminalBackend for LinuxBackend {
         &self,
         pane_id: pane::PaneId,
     ) -> Option<crate::vt_backend_core::TerminalSnapshot> {
+        if let Some(pane) = self.panes.get(&pane_id) {
+            return Some((*pane.snapshot_arc()).clone());
+        }
         self.snapshots
             .get(&pane_id)
             .map(|snapshot| snapshot.as_ref().clone())

@@ -744,7 +744,7 @@ impl BooApp {
         };
 
         let viewport_rows = if cell_h_pts > 0.0 {
-            ((self.last_size.height as f64 - STATUS_BAR_HEIGHT) / cell_h_pts) as u32
+            ((self.last_size.height as f64 - self.status_bar_height()) / cell_h_pts) as u32
         } else {
             24
         };

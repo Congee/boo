@@ -15,8 +15,6 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub(crate) const PADDING_X: f32 = 4.0;
-pub(crate) const PADDING_Y: f32 = 2.0;
 #[derive(Debug, Clone)]
 pub struct TerminalCanvas {
     pub snapshot: Arc<vt_backend_core::TerminalSnapshot>,
@@ -170,7 +168,7 @@ impl TerminalCanvas {
 
     fn draw_row(&self, frame: &mut Frame<Renderer>, row_index: usize, state: &TerminalCanvasState) {
         let origin = self.viewport_origin();
-        let y = origin.y + PADDING_Y + row_index as f32 * self.cell_height;
+        let y = origin.y + row_index as f32 * self.cell_height;
         let (_, viewport_size) = self.viewport_origin_and_size(frame.size());
         let viewport = Rectangle {
             x: origin.x,
@@ -183,7 +181,7 @@ impl TerminalCanvas {
         for span in &artifacts.background_spans {
             frame.fill_rectangle(
                 Point::new(
-                    origin.x + PADDING_X + span.start_col as f32 * self.cell_width,
+                    origin.x + span.start_col as f32 * self.cell_width,
                     y,
                 ),
                 Size::new(span.width_cols as f32 * self.cell_width, self.cell_height),
@@ -195,7 +193,7 @@ impl TerminalCanvas {
             if !self.paint_text {
                 continue;
             }
-            let x = origin.x + PADDING_X + run.start_col as f32 * self.cell_width;
+            let x = origin.x + run.start_col as f32 * self.cell_width;
             let draw_width = run.width_cols as f32 * self.cell_width;
             let max_width = text_run_max_width(run, draw_width, available_text_width(viewport, x));
             debug_non_ascii_draw_run(run, row_index, x, y, draw_width, max_width);
@@ -213,7 +211,7 @@ impl TerminalCanvas {
             });
 
             if run.underline {
-                let underline_y = y + self.cell_height - 2.0;
+                let underline_y = y + self.cell_height - 1.0;
                 frame.fill_rectangle(
                     Point::new(x, underline_y),
                     Size::new(draw_width, 1.5),
@@ -223,9 +221,9 @@ impl TerminalCanvas {
         }
         if !self.paint_text {
             for span in &artifacts.underline_spans {
-                let x = origin.x + PADDING_X + span.start_col as f32 * self.cell_width;
+                let x = origin.x + span.start_col as f32 * self.cell_width;
                 let draw_width = span.width_cols as f32 * self.cell_width;
-                let underline_y = y + self.cell_height - 2.0;
+                let underline_y = y + self.cell_height - 1.0;
                 frame.fill_rectangle(
                     Point::new(x, underline_y),
                     Size::new(draw_width, 1.5),
@@ -252,7 +250,7 @@ impl TerminalCanvas {
         let origin = self.viewport_origin();
         for rect in self.selection_rects.iter() {
             frame.fill_rectangle(
-                Point::new(origin.x + rect.x + PADDING_X, origin.y + rect.y + PADDING_Y),
+                Point::new(origin.x + rect.x, origin.y + rect.y),
                 Size::new(rect.width, rect.height),
                 self.selection_color,
             );
@@ -274,8 +272,8 @@ impl TerminalCanvas {
             && self.snapshot.cursor.y < self.snapshot.rows
             && self.snapshot.cursor.x < self.snapshot.cols
         {
-            let x = origin.x + PADDING_X + self.snapshot.cursor.x as f32 * self.cell_width;
-            let y = origin.y + PADDING_Y + self.snapshot.cursor.y as f32 * self.cell_height;
+            let x = origin.x + self.snapshot.cursor.x as f32 * self.cell_width;
+            let y = origin.y + self.snapshot.cursor.y as f32 * self.cell_height;
             match self.snapshot.cursor.style {
                 crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR => frame.fill_rectangle(
                     Point::new(x, y),
@@ -324,8 +322,8 @@ impl TerminalCanvas {
             .filter(|text| !text.is_empty())
             .filter(|_| self.snapshot.cursor.y < self.snapshot.rows)
         {
-            let x = origin.x + PADDING_X + self.snapshot.cursor.x as f32 * self.cell_width;
-            let y = origin.y + PADDING_Y + self.snapshot.cursor.y as f32 * self.cell_height;
+            let x = origin.x + self.snapshot.cursor.x as f32 * self.cell_width;
+            let y = origin.y + self.snapshot.cursor.y as f32 * self.cell_height;
             let width = (preedit.chars().count().max(1) as f32) * self.cell_width;
             let overlay = Color::from_rgba(0.92, 0.82, 0.32, 0.18);
             let underline = Color::from_rgba(0.98, 0.86, 0.35, 0.9);
@@ -420,8 +418,8 @@ impl TerminalCanvas {
             return;
         }
         let origin = self.viewport_origin();
-        let x = origin.x + PADDING_X + run.start_col as f32 * self.cell_width;
-        let y = origin.y + PADDING_Y + row_index as f32 * self.cell_height;
+        let x = origin.x + run.start_col as f32 * self.cell_width;
+        let y = origin.y + row_index as f32 * self.cell_height;
         let draw_width = run.width_cols as f32 * self.cell_width;
         let viewport = Rectangle {
             x: origin.x,
@@ -445,8 +443,8 @@ impl TerminalCanvas {
 
     fn hyperlink_at_position(&self, position: Point) -> Option<(usize, usize)> {
         let origin = self.viewport_origin();
-        let local_x = position.x - origin.x - PADDING_X;
-        let local_y = position.y - origin.y - PADDING_Y;
+        let local_x = position.x - origin.x;
+        let local_y = position.y - origin.y;
         if local_x < 0.0 || local_y < 0.0 {
             return None;
         }
@@ -674,8 +672,8 @@ impl TerminalTextLayer {
         }
 
         let origin = self.viewport_origin(viewport);
-        let x = origin.x + PADDING_X + col_index as f32 * self.cell_width;
-        let y = origin.y + PADDING_Y + row_index as f32 * self.cell_height;
+        let x = origin.x + col_index as f32 * self.cell_width;
+        let y = origin.y + row_index as f32 * self.cell_height;
         let draw_width = width_cols as f32 * self.cell_width;
         let bounds = Size::new(
             available_text_width(viewport, x),
@@ -1004,6 +1002,8 @@ impl TerminalBodyLayer {
         cell_height: f32,
         font_size: f32,
         font_families: Arc<[&'static str]>,
+        snapshot_generation: u64,
+        appearance_revision: u64,
         cursor_blink_visible: bool,
         selection_rects: Arc<[TerminalSelectionRect]>,
         selection_foreground: Option<Color>,
@@ -1020,6 +1020,8 @@ impl TerminalBodyLayer {
                     cell_height,
                     font_size,
                     font_families,
+                    snapshot_generation,
+                    appearance_revision,
                     cursor_blink_visible,
                     selection_rects,
                     selection_foreground,
@@ -1034,6 +1036,8 @@ impl TerminalBodyLayer {
                         cell_height,
                         font_size,
                         font_families,
+                        snapshot_generation,
+                        appearance_revision,
                         cursor_blink_visible,
                         selection_rects,
                         selection_foreground,
@@ -1049,6 +1053,8 @@ impl TerminalBodyLayer {
                         cell_height,
                         font_size,
                         font_families,
+                        snapshot_generation,
+                        appearance_revision,
                         cursor_blink_visible,
                         selection_rects,
                         selection_foreground,
@@ -1063,6 +1069,8 @@ impl TerminalBodyLayer {
                     cell_height,
                     font_size,
                     font_families,
+                    snapshot_generation,
+                    appearance_revision,
                     cursor_blink_visible,
                     selection_rects,
                     selection_foreground,
@@ -1096,6 +1104,8 @@ impl ParagraphTerminalBodyLayer {
         cell_height: f32,
         font_size: f32,
         font_families: Arc<[&'static str]>,
+        _snapshot_generation: u64,
+        _appearance_revision: u64,
         cursor_blink_visible: bool,
         selection_rects: Arc<[TerminalSelectionRect]>,
         selection_foreground: Option<Color>,
@@ -1133,6 +1143,8 @@ impl ModelParagraphTerminalBodyLayer {
         cell_height: f32,
         font_size: f32,
         font_families: Arc<[&'static str]>,
+        _snapshot_generation: u64,
+        _appearance_revision: u64,
         cursor_blink_visible: bool,
         selection_rects: Arc<[TerminalSelectionRect]>,
         selection_foreground: Option<Color>,
@@ -1194,8 +1206,8 @@ impl ModelParagraphTerminalBodyLayer {
         }
 
         let origin = self.viewport_origin(viewport);
-        let x = origin.x + PADDING_X + col_index as f32 * self.cell_width;
-        let y = origin.y + PADDING_Y + row_index as f32 * self.cell_height;
+        let x = origin.x + col_index as f32 * self.cell_width;
+        let y = origin.y + row_index as f32 * self.cell_height;
         let draw_width = width_cols as f32 * self.cell_width;
         let bounds = Size::new(
             available_text_width(viewport, x),
@@ -1371,6 +1383,8 @@ impl CanvasTextTerminalBodyLayer {
         cell_height: f32,
         font_size: f32,
         font_families: Arc<[&'static str]>,
+        snapshot_generation: u64,
+        appearance_revision: u64,
         cursor_blink_visible: bool,
         selection_rects: Arc<[TerminalSelectionRect]>,
         selection_foreground: Option<Color>,
@@ -1385,8 +1399,8 @@ impl CanvasTextTerminalBodyLayer {
                 cell_height,
                 font_size,
                 font_families,
-                0,
-                0,
+                snapshot_generation,
+                appearance_revision,
                 0.0,
                 false,
                 cursor_blink_visible,
@@ -2338,6 +2352,7 @@ fn build_text_runs(
         let font = font_for_cell(cell, font_families);
         let width_cols = usize::from(cell.display_width.max(1));
         let shaping = terminal_text_shaping();
+        let ascii_content = content.is_ascii();
 
         if let Some(previous) = runs.last_mut().filter(|previous| {
             previous.start_col + previous.width_cols == col_index
@@ -2345,6 +2360,8 @@ fn build_text_runs(
                 && previous.font == font
                 && previous.underline == underline
                 && previous.shaping == shaping
+                && previous.text.is_ascii()
+                && ascii_content
         }) {
             previous.width_cols += width_cols;
             previous.text.push_str(content);
@@ -2399,6 +2416,7 @@ where
         let font = font_for_cell(cell, font_families);
         let width_cols = usize::from(cell.display_width.max(1));
         let shaping = terminal_text_shaping();
+        let ascii_content = content.is_ascii();
 
         if let Some(previous) = runs.last_mut().filter(|previous| {
             previous.start_col + previous.width_cols == col_index
@@ -2406,6 +2424,8 @@ where
                 && previous.font == font
                 && previous.underline == underline
                 && previous.shaping == shaping
+                && previous.text.is_ascii()
+                && ascii_content
         }) {
             previous.width_cols += width_cols;
             previous.text.push_str(content);
@@ -2653,14 +2673,16 @@ fn render_debug_enabled() -> bool {
 }
 
 fn text_run_max_width(run: &TextRun, draw_width: f32, available_width: f32) -> f32 {
-    non_ascii_text_max_width(&run.text, draw_width, available_width)
+    let _ = run;
+    available_width.max(draw_width).max(1.0)
 }
 
 fn non_ascii_text_max_width(text: &str, draw_width: f32, available_width: f32) -> f32 {
     if text.is_ascii() {
         draw_width
     } else {
-        available_width.max(draw_width).max(1.0)
+        let bounded_slack = (draw_width * 2.0).min(available_width.max(draw_width));
+        bounded_slack.max(draw_width).max(1.0)
     }
 }
 
@@ -3180,6 +3202,46 @@ mod tests {
     }
 
     #[test]
+    fn non_ascii_text_runs_do_not_coalesce_across_cells() {
+        let row = vec![
+            vt_backend_core::CellSnapshot {
+                text: "仮".to_string(),
+                ..Default::default()
+            },
+            vt_backend_core::CellSnapshot {
+                text: "名".to_string(),
+                ..Default::default()
+            },
+        ];
+        let runs = build_text_runs(&row, row.len(), &[], None);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].text, "仮");
+        assert_eq!(runs[0].start_col, 0);
+        assert_eq!(runs[1].text, "名");
+        assert_eq!(runs[1].start_col, 1);
+    }
+
+    #[test]
+    fn non_ascii_selection_runs_do_not_coalesce_across_cells() {
+        let row = vec![
+            vt_backend_core::CellSnapshot {
+                text: "仮".to_string(),
+                ..Default::default()
+            },
+            vt_backend_core::CellSnapshot {
+                text: "名".to_string(),
+                ..Default::default()
+            },
+        ];
+        let runs = build_selection_text_runs(&row, row.len(), &[], Color::WHITE, |_col, _width| {
+            true
+        });
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].text, "仮");
+        assert_eq!(runs[1].text, "名");
+    }
+
+    #[test]
     fn selection_col_spans_merge_overlapping_rects() {
         let spans = selection_col_spans_for_row(
             &[
@@ -3269,8 +3331,28 @@ mod tests {
 
     #[test]
     fn non_ascii_text_is_not_clipped_to_cell_width() {
-        assert_eq!(non_ascii_text_max_width("a", 10.0, 20.0), 10.0);
+        let run = TextRun {
+            start_col: 0,
+            width_cols: 1,
+            text: "a".to_string(),
+            fg: Color::WHITE,
+            font: Font::MONOSPACE,
+            underline: false,
+            shaping: terminal_text_shaping(),
+        };
+        assert_eq!(text_run_max_width(&run, 10.0, 20.0), 20.0);
+        let run = TextRun {
+            start_col: 0,
+            width_cols: 1,
+            text: "仮".to_string(),
+            fg: Color::WHITE,
+            font: Font::MONOSPACE,
+            underline: false,
+            shaping: terminal_text_shaping(),
+        };
+        assert_eq!(text_run_max_width(&run, 10.0, 20.0), 20.0);
         assert_eq!(non_ascii_text_max_width("仮", 10.0, 20.0), 20.0);
+        assert_eq!(non_ascii_text_max_width("仮", 10.0, 15.0), 15.0);
         assert_eq!(non_ascii_text_max_width("仮", 10.0, 5.0), 10.0);
     }
 

@@ -258,7 +258,7 @@ mod tests {
 
 pub fn ensure_server_running(socket_path: &str, boo_config: &config::Config) {
     let client = control::Client::connect(socket_path.to_string());
-    if client.ping().is_ok() {
+    if server_ui_ready(&client) {
         return;
     }
 
@@ -287,10 +287,20 @@ pub fn ensure_server_running(socket_path: &str, boo_config: &config::Config) {
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     while std::time::Instant::now() < deadline {
-        if client.ping().is_ok() {
+        if server_ui_ready(&client) {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     log::warn!("boo server did not become ready at {socket_path}");
+}
+
+fn server_ui_ready(client: &control::Client) -> bool {
+    let Ok(snapshot) = client.get_ui_snapshot() else {
+        return false;
+    };
+    !snapshot.tabs.is_empty()
+        && !snapshot.visible_panes.is_empty()
+        && snapshot.focused_pane != 0
+        && (!snapshot.pane_terminals.is_empty() || snapshot.terminal.is_some())
 }

@@ -1,6 +1,22 @@
 use super::*;
 
 impl BooApp {
+    pub(crate) fn status_bar_height(&self) -> f64 {
+        crate::status_bar_metrics(
+            self.terminal_font_size,
+            self.terminal_font_families.first().copied(),
+        )
+        .height
+    }
+
+    pub(crate) fn status_bar_text_size(&self) -> f32 {
+        crate::status_bar_metrics(
+            self.terminal_font_size,
+            self.terminal_font_families.first().copied(),
+        )
+        .text_size
+    }
+
     fn append_osc_color(seq: &mut Vec<u8>, code: &str, color: crate::config::RgbColor) {
         let value = format!(
             "\x1b]{code};#{:02X}{:02X}{:02X}\x07",
@@ -83,7 +99,7 @@ impl BooApp {
 
     pub(crate) fn terminal_frame(&self) -> platform::Rect {
         let search_offset = if self.search_active {
-            STATUS_BAR_HEIGHT
+            self.status_bar_height()
         } else {
             0.0
         };
@@ -91,7 +107,7 @@ impl BooApp {
             platform::Point::new(0.0, search_offset),
             platform::Size::new(
                 self.last_size.width as f64,
-                self.last_size.height as f64 - STATUS_BAR_HEIGHT - search_offset,
+                self.last_size.height as f64 - self.status_bar_height() - search_offset,
             ),
         )
     }
@@ -120,7 +136,10 @@ impl BooApp {
 
     pub(crate) fn resize_viewport_cells(&mut self, cols: u16, rows: u16) -> bool {
         let (width, terminal_height) = self.session_size_pixels(cols, rows);
-        self.resize_viewport_points(width as f64, terminal_height as f64 + STATUS_BAR_HEIGHT)
+        self.resize_viewport_points(
+            width as f64,
+            terminal_height as f64 + self.status_bar_height(),
+        )
     }
 
     pub(crate) fn resize_viewport_points(&mut self, width: f64, height: f64) -> bool {
