@@ -1041,6 +1041,12 @@ impl RemoteServer {
                 "remote revive restored: client_id={client_id} session_id={session_id} attachment_id={attachment_id}"
             );
         } else {
+            if resume_token.is_some() {
+                log::warn!(
+                    "remote revive rejected: client_id={client_id} attachment_id={attachment_id} reason=revive-window-expired"
+                );
+                return Err("attachment resume window expired");
+            }
             let Some(client) = state.clients.get_mut(&client_id) else {
                 return Err("unknown client");
             };
@@ -5465,6 +5471,101 @@ mod tests {
                 .revivable_attachments
                 .contains_key(&0xabc)
         );
+    }
+
+    #[test]
+    fn prepare_attachment_rejects_expired_resume_attempt() {
+        let (tx, _rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: tx,
+                    authenticated: true,
+                    challenge: None,
+                    connected_at: Instant::now(),
+                    authenticated_at: Some(Instant::now()),
+                    last_heartbeat_at: None,
+                    attached_session: None,
+                    attachment_id: None,
+                    resume_token: None,
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: false,
+                },
+            )]),
+            revivable_attachments: HashMap::new(),
+            auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
+            server_instance_id: "test-instance".to_string(),
+        }));
+        let server = RemoteServer {
+            state: Arc::clone(&state),
+            _listener: std::thread::spawn(|| {}),
+            _advertiser: None,
+            local_socket_path: None,
+            bind_address: None,
+            port: None,
+        };
+
+        let error = server
+            .prepare_attachment(1, 11, Some(0xabc), Some(0xdef))
+            .expect_err("expired resume attempt should fail");
+        assert_eq!(error, "attachment resume window expired");
+
+        let guard = state.lock().expect("remote server state poisoned");
+        let client = guard.clients.get(&1).expect("client state");
+        assert!(client.attached_session.is_none());
+        assert!(client.attachment_id.is_none());
+        assert!(client.resume_token.is_none());
+    }
+
+    #[test]
+    fn prepare_attachment_allows_new_attach_without_resume_token() {
+        let (tx, _rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: tx,
+                    authenticated: true,
+                    challenge: None,
+                    connected_at: Instant::now(),
+                    authenticated_at: Some(Instant::now()),
+                    last_heartbeat_at: None,
+                    attached_session: None,
+                    attachment_id: None,
+                    resume_token: None,
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: false,
+                },
+            )]),
+            revivable_attachments: HashMap::new(),
+            auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
+            server_instance_id: "test-instance".to_string(),
+        }));
+        let server = RemoteServer {
+            state: Arc::clone(&state),
+            _listener: std::thread::spawn(|| {}),
+            _advertiser: None,
+            local_socket_path: None,
+            bind_address: None,
+            port: None,
+        };
+
+        server
+            .prepare_attachment(1, 11, Some(0xabc), None)
+            .expect("attach without resume token should succeed");
     }
 
     #[test]
