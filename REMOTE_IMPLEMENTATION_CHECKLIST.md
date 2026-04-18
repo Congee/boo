@@ -219,6 +219,7 @@ Goal:
 - [ ] Replace shared-secret-only assumptions with stronger direct-client auth
 - [ ] Add server identity verification for direct Boo transport clients
   - [x] persist and warn on daemon instance-id changes for known iOS endpoints
+  - [x] allow users to trust the current daemon instance for a known iOS endpoint
 - [ ] Ensure bootstrap credentials are replay-resistant and bounded
 - [ ] Ensure resumed connections cannot hijack unrelated sessions
 

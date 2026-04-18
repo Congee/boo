@@ -33,7 +33,7 @@ struct BooRootView: View {
                     case .history:
                         HistoryScreen(store: store)
                     case .settings:
-                        SettingsScreen(store: store, monitor: activeMonitor)
+                        SettingsScreen(client: client, store: store, monitor: activeMonitor, serverIdentityWarning: $serverIdentityWarning)
                     }
                 }
             }
@@ -576,19 +576,59 @@ struct HistoryScreen: View {
 }
 
 struct SettingsScreen: View {
+    @ObservedObject var client: GSPClient
     @ObservedObject var store: ConnectionStore
     @ObservedObject var monitor: ConnectionMonitor
+    @Binding var serverIdentityWarning: String?
 
     @State private var nodeName = ""
     @State private var nodeHost = ""
     @State private var nodePort = "7337"
     @State private var nodeAuthKey = ""
 
+    private var trustedIdentityRow: (current: String, trusted: String?)? {
+        guard let host = monitor.lastHost,
+              let port = monitor.lastPort,
+              let current = client.serverInstanceId,
+              !current.isEmpty else { return nil }
+        return (current, store.trustedServerInstance(host: host, port: port))
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             KineticTopBar(title: "Settings", subtitle: "Manage saved nodes and current connection state.")
             ScrollView {
                 VStack(alignment: .leading, spacing: KineticSpacing.xl) {
+                    if let serverIdentityWarning,
+                       let trustedIdentityRow,
+                       let host = monitor.lastHost,
+                       let port = monitor.lastPort
+                    {
+                        VStack(alignment: .leading, spacing: KineticSpacing.sm) {
+                            KineticSectionLabel(text: "Server Identity")
+                            Text(serverIdentityWarning)
+                                .font(KineticFont.caption)
+                                .foregroundStyle(KineticColor.error)
+                                .padding(KineticSpacing.md)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(KineticColor.error.opacity(0.1))
+                                .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+                            Text("Current: \(trustedIdentityRow.current)")
+                                .font(KineticFont.caption)
+                                .foregroundStyle(KineticColor.onSurfaceVariant)
+                            if let trusted = trustedIdentityRow.trusted {
+                                Text("Trusted: \(trusted)")
+                                    .font(KineticFont.caption)
+                                    .foregroundStyle(KineticColor.onSurfaceVariant)
+                            }
+                            Button("Trust Current Server Identity") {
+                                store.trustServerInstance(host: host, port: port, instanceId: trustedIdentityRow.current)
+                                self.serverIdentityWarning = nil
+                            }
+                            .buttonStyle(KineticPrimaryButtonStyle())
+                        }
+                    }
+
                     VStack(alignment: .leading, spacing: KineticSpacing.sm) {
                         KineticSectionLabel(text: "Save Node")
                         KineticInputField(placeholder: "Name", text: $nodeName)

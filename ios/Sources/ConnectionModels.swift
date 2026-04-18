@@ -111,6 +111,15 @@ final class ConnectionStore: ObservableObject {
         return nil
     }
 
+    func trustedServerInstance(host: String, port: UInt16) -> String? {
+        trustedServerInstances["\(host):\(port)"]
+    }
+
+    func trustServerInstance(host: String, port: UInt16, instanceId: String) {
+        trustedServerInstances["\(host):\(port)"] = instanceId
+        saveTrustedServerInstances()
+    }
+
     private func loadNodes() {
         guard let data = UserDefaults.standard.data(forKey: nodesKey),
               let nodes = try? JSONDecoder().decode([SavedNode].self, from: data) else { return }
