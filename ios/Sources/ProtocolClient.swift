@@ -268,7 +268,7 @@ final class GSPClient: ObservableObject {
     }
 
     func attach(sessionId: UInt32) {
-        let newAttachmentId = UInt64(Date().timeIntervalSince1970 * 1000)
+        let newAttachmentId = generateAttachmentId()
         desiredAttachedSessionId = sessionId
         desiredAttachmentId = newAttachmentId
         attachedSessionId = sessionId
@@ -290,6 +290,15 @@ final class GSPClient: ObservableObject {
         payload.withUnsafeMutableBytes { $0.storeBytes(of: sessionId.littleEndian, as: UInt32.self) }
         payload.withUnsafeMutableBytes { $0.storeBytes(of: attachmentId.littleEndian, toByteOffset: 4, as: UInt64.self) }
         sendMessage(type: .attach, payload: payload)
+    }
+
+    private func generateAttachmentId() -> UInt64 {
+        var generator = SystemRandomNumberGenerator()
+        var attachmentId = UInt64.random(in: UInt64.min...UInt64.max, using: &generator)
+        if attachmentId == 0 {
+            attachmentId = 1
+        }
+        return attachmentId
     }
 
     func detach() {
