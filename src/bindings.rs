@@ -710,6 +710,7 @@ mod tests {
             remote_port: None,
             remote_bind_address: None,
             remote_auth_key: None,
+            remote_allow_insecure_no_auth: false,
             font_families: Vec::new(),
             font_size: None,
             sync_to_monitor: true,

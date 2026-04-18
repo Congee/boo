@@ -127,6 +127,7 @@ impl BooApp {
             boo_config.remote_port,
             boo_config.remote_bind_address.clone(),
             boo_config.remote_auth_key.clone(),
+            boo_config.remote_allow_insecure_no_auth,
         );
         let bindings = bindings::Bindings::from_config(&boo_config);
         let appearance = Self::resolve_appearance_config(&boo_config);

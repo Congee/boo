@@ -161,6 +161,7 @@ impl State {
         remote_port: Option<u16>,
         remote_bind_address: Option<String>,
         remote_auth_key: Option<String>,
+        remote_allow_insecure_no_auth: bool,
     ) -> Self {
         let ctl_rx = control::start(control_socket.as_deref());
         let (remote_server, remote_rx) = if let Some(port) = remote_port {
@@ -168,6 +169,7 @@ impl State {
                 port,
                 bind_address: remote_bind_address,
                 auth_key: remote_auth_key,
+                allow_insecure_no_auth: remote_allow_insecure_no_auth,
                 service_name: "boo".to_string(),
             }) {
                 Ok((server, rx)) => {

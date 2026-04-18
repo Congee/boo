@@ -20,6 +20,7 @@ pub struct Config {
     pub remote_port: Option<u16>,
     pub remote_bind_address: Option<String>,
     pub remote_auth_key: Option<String>,
+    pub remote_allow_insecure_no_auth: bool,
     pub keybinds: HashMap<String, String>,
     pub font_families: Vec<String>,
     pub font_size: Option<f32>,
@@ -157,6 +158,9 @@ impl Config {
                         config.remote_auth_key = Some(value.to_string());
                     }
                 }
+                "remote-allow-insecure-no-auth" => {
+                    config.remote_allow_insecure_no_auth = parse_bool(value).unwrap_or(false);
+                }
                 "font-family" => {
                     if value.is_empty() {
                         config.font_families.clear();
@@ -276,6 +280,7 @@ impl Default for Config {
             remote_port: None,
             remote_bind_address: None,
             remote_auth_key: None,
+            remote_allow_insecure_no_auth: false,
             keybinds: HashMap::new(),
             font_families: Vec::new(),
             font_size: None,
@@ -487,6 +492,7 @@ control-socket = /tmp/boo.sock
 remote-port = 7337
 remote-bind-address = 0.0.0.0
 remote-auth-key = "secret"
+remote-allow-insecure-no-auth = true
 
 keybind = " = new_split:right
 keybind = % = new_split:down
@@ -498,6 +504,7 @@ keybind = super+1 = goto_tab:1
         assert_eq!(config.remote_port, Some(7337));
         assert_eq!(config.remote_bind_address.as_deref(), Some("0.0.0.0"));
         assert_eq!(config.remote_auth_key.as_deref(), Some("secret"));
+        assert!(config.remote_allow_insecure_no_auth);
         assert_eq!(
             config.font_families,
             vec![

@@ -17,6 +17,7 @@ static STARTUP_REMOTE_BINARY: std::sync::OnceLock<String> = std::sync::OnceLock:
 static STARTUP_REMOTE_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_BIND_ADDRESS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_AUTH_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static STARTUP_REMOTE_ALLOW_INSECURE_NO_AUTH: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct StartupOverrides {
@@ -29,6 +30,7 @@ struct StartupOverrides {
     remote_port: Option<u16>,
     remote_bind_address: Option<String>,
     remote_auth_key: Option<String>,
+    remote_allow_insecure_no_auth: bool,
 }
 
 struct ResolvedRemotePaths {
@@ -156,6 +158,9 @@ pub fn parse_startup_args(cli: &crate::cli::Cli) -> bool {
     if let Some(key) = cli.global.remote_auth_key.as_ref() {
         STARTUP_REMOTE_AUTH_KEY.set(key.clone()).ok();
     }
+    if cli.global.remote_allow_insecure_no_auth {
+        STARTUP_REMOTE_ALLOW_INSECURE_NO_AUTH.set(true).ok();
+    }
     if let Some(path) = cli.global.remote_workdir.as_ref() {
         STARTUP_REMOTE_WORKDIR.set(path.clone()).ok();
     }
@@ -179,6 +184,10 @@ fn startup_overrides() -> StartupOverrides {
         remote_port: STARTUP_REMOTE_PORT.get().copied(),
         remote_bind_address: STARTUP_REMOTE_BIND_ADDRESS.get().cloned(),
         remote_auth_key: STARTUP_REMOTE_AUTH_KEY.get().cloned(),
+        remote_allow_insecure_no_auth: STARTUP_REMOTE_ALLOW_INSECURE_NO_AUTH
+            .get()
+            .copied()
+            .unwrap_or(false),
     }
 }
 
@@ -210,6 +219,9 @@ fn apply_startup_overrides(
     }
     if let Some(key) = overrides.remote_auth_key.as_ref() {
         boo_config.remote_auth_key = Some(key.clone());
+    }
+    if overrides.remote_allow_insecure_no_auth {
+        boo_config.remote_allow_insecure_no_auth = true;
     }
     if boo_config.remote_host.is_some() && explicit_socket.is_none() {
         let host = boo_config

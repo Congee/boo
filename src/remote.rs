@@ -198,6 +198,7 @@ pub struct RemoteConfig {
     pub port: u16,
     pub bind_address: Option<String>,
     pub auth_key: Option<String>,
+    pub allow_insecure_no_auth: bool,
     pub service_name: String,
 }
 
@@ -214,6 +215,10 @@ impl RemoteConfig {
 
     fn should_advertise(&self) -> bool {
         !matches!(self.effective_bind_address(), "127.0.0.1" | "localhost" | "::1")
+    }
+
+    fn rejects_public_authless_bind(&self) -> bool {
+        self.auth_key.is_none() && self.should_advertise() && !self.allow_insecure_no_auth
     }
 }
 
@@ -476,6 +481,12 @@ impl RemoteServer {
     }
 
     pub fn start(config: RemoteConfig) -> io::Result<(Self, mpsc::Receiver<RemoteCmd>)> {
+        if config.rejects_public_authless_bind() {
+            return Err(io::Error::other(format!(
+                "refusing to start authless remote daemon on public bind address {}; configure --remote-auth-key or --remote-allow-insecure-no-auth",
+                config.effective_bind_address()
+            )));
+        }
         let bind_address = config.effective_bind_address().to_string();
         let listener = TcpListener::bind((bind_address.as_str(), config.port))?;
         let state = Arc::new(Mutex::new(State {
@@ -2945,6 +2956,7 @@ mod tests {
             port: 7337,
             bind_address: None,
             auth_key: None,
+            allow_insecure_no_auth: false,
             service_name: "boo".to_string(),
         };
         assert_eq!(config.effective_bind_address(), "127.0.0.1");
@@ -2957,6 +2969,7 @@ mod tests {
             port: 7337,
             bind_address: None,
             auth_key: Some("secret".to_string()),
+            allow_insecure_no_auth: false,
             service_name: "boo".to_string(),
         };
         assert_eq!(config.effective_bind_address(), "0.0.0.0");
@@ -2969,10 +2982,26 @@ mod tests {
             port: 7337,
             bind_address: Some("192.168.0.5".to_string()),
             auth_key: None,
+            allow_insecure_no_auth: false,
             service_name: "boo".to_string(),
         };
         assert_eq!(config.effective_bind_address(), "192.168.0.5");
         assert!(config.should_advertise());
+        assert!(config.rejects_public_authless_bind());
+    }
+
+    #[test]
+    fn remote_config_allows_explicit_insecure_public_bind_when_acknowledged() {
+        let config = RemoteConfig {
+            port: 7337,
+            bind_address: Some("192.168.0.5".to_string()),
+            auth_key: None,
+            allow_insecure_no_auth: true,
+            service_name: "boo".to_string(),
+        };
+        assert_eq!(config.effective_bind_address(), "192.168.0.5");
+        assert!(config.should_advertise());
+        assert!(!config.rejects_public_authless_bind());
     }
 
     #[test]

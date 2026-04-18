@@ -99,6 +99,13 @@ pub struct GlobalArgs {
     )]
     pub remote_auth_key: Option<String>,
 
+    #[arg(
+        long = "remote-allow-insecure-no-auth",
+        global = true,
+        help = "Allow a Boo-native TCP remote daemon to bind publicly without --remote-auth-key"
+    )]
+    pub remote_allow_insecure_no_auth: bool,
+
     #[arg(long, global = true, help = "Session layout to load at startup")]
     pub session: Option<String>,
 }
@@ -512,6 +519,7 @@ mod tests {
         assert!(long.contains("Remote Boo control socket path on the SSH host"));
         assert!(long.contains("Boo-native TCP remote daemon"));
         assert!(long.contains("authless daemons default to 127.0.0.1"));
+        assert!(long.contains("bind publicly without --remote-auth-key"));
     }
 
     #[test]

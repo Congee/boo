@@ -218,7 +218,9 @@ Goal:
 
 ### 6. Security
 
-- [ ] Replace shared-secret-only assumptions with stronger direct-client auth
+- [x] Replace shared-secret-only assumptions with stronger direct-client auth
+  - [x] public native TCP daemons require `--remote-auth-key` unless the operator explicitly acknowledges an insecure public bind
+  - [x] direct clients pin and verify stable daemon identities in addition to HMAC auth when configured
 - [x] Add server identity verification for direct Boo transport clients
   - [x] persist and warn on daemon instance-id changes for known iOS endpoints
   - [x] allow users to trust the current daemon instance for a known iOS endpoint
