@@ -74,13 +74,13 @@ struct BooRootView: View {
             }
             if let host = activeMonitor.lastHost,
                let port = activeMonitor.lastPort,
-               let serverInstanceId = client.serverInstanceId,
-               !serverInstanceId.isEmpty
+               let serverIdentityId = client.serverIdentityId,
+               !serverIdentityId.isEmpty
             {
-                serverIdentityWarning = store.recordTrustedServerInstance(
+                serverIdentityWarning = store.recordTrustedServerIdentity(
                     host: host,
                     port: port,
-                    instanceId: serverInstanceId
+                    identityId: serverIdentityId
                 )
                 if let sessionId = client.attachedSessionId,
                    let attachmentId = client.attachmentId
@@ -602,9 +602,9 @@ struct SettingsScreen: View {
     private var trustedIdentityRow: (current: String, trusted: String?)? {
         guard let host = monitor.lastHost,
               let port = monitor.lastPort,
-              let current = client.serverInstanceId,
+              let current = client.serverIdentityId,
               !current.isEmpty else { return nil }
-        return (current, store.trustedServerInstance(host: host, port: port))
+        return (current, store.trustedServerIdentity(host: host, port: port))
     }
 
     var body: some View {
@@ -635,7 +635,7 @@ struct SettingsScreen: View {
                                     .foregroundStyle(KineticColor.onSurfaceVariant)
                             }
                             Button("Trust Current Server Identity") {
-                                store.trustServerInstance(host: host, port: port, instanceId: trustedIdentityRow.current)
+                                store.trustServerIdentity(host: host, port: port, identityId: trustedIdentityRow.current)
                                 self.serverIdentityWarning = nil
                             }
                             .buttonStyle(KineticPrimaryButtonStyle())

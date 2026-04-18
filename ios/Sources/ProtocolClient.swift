@@ -157,6 +157,7 @@ final class GSPClient: ObservableObject {
     @Published var transportCapabilities: UInt32 = 0
     @Published var serverBuildId: String?
     @Published var serverInstanceId: String?
+    @Published var serverIdentityId: String?
     @Published var lastHeartbeatAck: Date?
     @Published var lastHeartbeatRttMs: Double?
     @Published var sessions: [SessionInfo] = []
@@ -173,7 +174,7 @@ final class GSPClient: ObservableObject {
     private var pendingHeartbeatToken: UInt64?
     private var desiredAttachedSessionId: UInt32?
     private var desiredAttachmentId: UInt64?
-    private var expectedServerInstanceId: String?
+    private var expectedServerIdentityId: String?
     private var connectionGeneration: UInt64 = 0
 
     private nonisolated static let magic: [UInt8] = [0x47, 0x53]
@@ -182,7 +183,8 @@ final class GSPClient: ObservableObject {
     var handshakeSummary: String? {
         guard let protocolVersion,
               let serverBuildId, !serverBuildId.isEmpty,
-              let serverInstanceId, !serverInstanceId.isEmpty else {
+              let serverInstanceId, !serverInstanceId.isEmpty,
+              let serverIdentityId, !serverIdentityId.isEmpty else {
             return nil
         }
         let heartbeat = lastHeartbeatRttMs.map { String(format: "hb %.0fms", $0) }
@@ -190,6 +192,7 @@ final class GSPClient: ObservableObject {
         let base = [ "proto \(protocolVersion)",
                      "caps 0x\(String(transportCapabilities, radix: 16))",
                      serverBuildId,
+                     "id \(serverIdentityId)",
                      "srv \(serverInstanceId)",
                      attachment].compactMap { $0 }.joined(separator: " · ")
         if let heartbeat {
@@ -237,6 +240,7 @@ final class GSPClient: ObservableObject {
         transportCapabilities = 0
         serverBuildId = nil
         serverInstanceId = nil
+        serverIdentityId = nil
         lastHeartbeatAck = nil
         lastHeartbeatRttMs = nil
         lastHeartbeatSent = nil
@@ -275,8 +279,8 @@ final class GSPClient: ObservableObject {
         desiredAttachmentId = attachmentId
     }
 
-    func configureTrustedServerInstance(_ instanceId: String?) {
-        expectedServerInstanceId = instanceId
+    func configureTrustedServerIdentity(_ identityId: String?) {
+        expectedServerIdentityId = identityId
     }
 
     private func sendAttach(sessionId: UInt32, attachmentId: UInt64) {
@@ -484,6 +488,7 @@ final class GSPClient: ObservableObject {
             transportCapabilities = 0
             serverBuildId = nil
             serverInstanceId = nil
+            serverIdentityId = nil
             attachedSessionId = nil
             attachmentId = nil
             sessions = []
@@ -536,6 +541,7 @@ final class GSPClient: ObservableObject {
             transportCapabilities: transportCapabilities,
             serverBuildId: serverBuildId,
             serverInstanceId: serverInstanceId,
+            serverIdentityId: serverIdentityId,
             sessions: sessions.map {
                 DecodedWireSessionInfo(
                     id: $0.id,
@@ -582,6 +588,7 @@ final class GSPClient: ObservableObject {
         transportCapabilities = state.transportCapabilities
         serverBuildId = state.serverBuildId
         serverInstanceId = state.serverInstanceId
+        serverIdentityId = state.serverIdentityId
         lastError = state.lastError
         attachedSessionId = state.attachedSessionId
         attachmentId = state.attachmentId
@@ -604,9 +611,9 @@ final class GSPClient: ObservableObject {
            let desiredAttachmentId,
            attachedSessionId == nil,
            sessions.contains(where: { $0.id == desiredSessionId }) {
-            if let expectedServerInstanceId,
-               let serverInstanceId,
-               expectedServerInstanceId != serverInstanceId {
+            if let expectedServerIdentityId,
+               let serverIdentityId,
+               expectedServerIdentityId != serverIdentityId {
                 lastError = "Server identity changed; refusing automatic resume"
                 return
             }

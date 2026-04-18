@@ -24,6 +24,7 @@ struct AuthOkMetadata: Equatable {
     let transportCapabilities: UInt32
     let serverBuildId: String?
     let serverInstanceId: String?
+    let serverIdentityId: String?
 }
 
 private let expectedRemoteProtocolVersion: UInt16 = 1
@@ -37,6 +38,7 @@ struct ClientWireState: Equatable {
     var transportCapabilities: UInt32 = 0
     var serverBuildId: String?
     var serverInstanceId: String?
+    var serverIdentityId: String?
     var sessions: [DecodedWireSessionInfo] = []
     var screen: DecodedWireScreenState?
     var attachedSessionId: UInt32?
@@ -57,7 +59,8 @@ func decodeAuthOkMetadata(_ payload: Data) -> AuthOkMetadata? {
             protocolVersion: protocolVersion,
             transportCapabilities: transportCapabilities,
             serverBuildId: nil,
-            serverInstanceId: nil
+            serverInstanceId: nil,
+            serverIdentityId: nil
         )
     }
     let buildLength = payload.withUnsafeBytes {
@@ -71,19 +74,39 @@ func decodeAuthOkMetadata(_ payload: Data) -> AuthOkMetadata? {
             protocolVersion: protocolVersion,
             transportCapabilities: transportCapabilities,
             serverBuildId: serverBuildId,
-            serverInstanceId: nil
+            serverInstanceId: nil,
+            serverIdentityId: nil
         )
     }
     let instanceLength = payload.withUnsafeBytes {
         Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: instanceLengthOffset, as: UInt16.self)))
     }
     guard payload.count >= instanceLengthOffset + 2 + instanceLength else { return nil }
+    let identityLengthOffset = instanceLengthOffset + 2 + instanceLength
+    let serverInstanceId = String(
+        data: payload[(instanceLengthOffset + 2)..<(instanceLengthOffset + 2 + instanceLength)],
+        encoding: .utf8
+    )
+    guard payload.count >= identityLengthOffset + 2 else {
+        return AuthOkMetadata(
+            protocolVersion: protocolVersion,
+            transportCapabilities: transportCapabilities,
+            serverBuildId: serverBuildId,
+            serverInstanceId: serverInstanceId,
+            serverIdentityId: nil
+        )
+    }
+    let identityLength = payload.withUnsafeBytes {
+        Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: identityLengthOffset, as: UInt16.self)))
+    }
+    guard payload.count >= identityLengthOffset + 2 + identityLength else { return nil }
     return AuthOkMetadata(
         protocolVersion: protocolVersion,
         transportCapabilities: transportCapabilities,
         serverBuildId: serverBuildId,
-        serverInstanceId: String(
-            data: payload[(instanceLengthOffset + 2)..<(instanceLengthOffset + 2 + instanceLength)],
+        serverInstanceId: serverInstanceId,
+        serverIdentityId: String(
+            data: payload[(identityLengthOffset + 2)..<(identityLengthOffset + 2 + identityLength)],
             encoding: .utf8
         )
     )
@@ -111,6 +134,9 @@ func validateAuthOkMetadata(_ payload: Data, authRequired: Bool) -> String? {
     if metadata.serverInstanceId?.isEmpty != false {
         return "Remote handshake is missing server instance metadata"
     }
+    if metadata.serverIdentityId?.isEmpty != false {
+        return "Remote handshake is missing server identity metadata"
+    }
     return nil
 }
 
@@ -124,6 +150,7 @@ enum ClientWireReducer {
                 state.transportCapabilities = metadata.transportCapabilities
                 state.serverBuildId = metadata.serverBuildId
                 state.serverInstanceId = metadata.serverInstanceId
+                state.serverIdentityId = metadata.serverIdentityId
             }
             state.lastError = nil
             return .listSessions

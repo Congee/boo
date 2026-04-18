@@ -57,17 +57,17 @@ final class ConnectionStore: ObservableObject {
 
     private let nodesKey = "boo.remote.savedNodes"
     private let historyKey = "boo.remote.connectionHistory"
-    private let trustedInstancesKey = "boo.remote.trustedServerInstances"
+    private let trustedIdentitiesKey = "boo.remote.trustedServerIdentities"
     private let resumeAttachmentsKey = "boo.remote.resumeAttachments"
     private let maxHistory = 50
     private let resumeWindow: TimeInterval = 30
-    private var trustedServerInstances: [String: String] = [:]
+    private var trustedServerIdentities: [String: String] = [:]
     private var resumeAttachments: [String: ResumeAttachmentMetadata] = [:]
 
     init() {
         loadNodes()
         loadHistory()
-        loadTrustedServerInstances()
+        loadTrustedServerIdentities()
         loadResumeAttachments()
     }
 
@@ -108,26 +108,26 @@ final class ConnectionStore: ObservableObject {
         saveHistory()
     }
 
-    func recordTrustedServerInstance(host: String, port: UInt16, instanceId: String) -> String? {
+    func recordTrustedServerIdentity(host: String, port: UInt16, identityId: String) -> String? {
         let key = "\(host):\(port)"
-        if let existing = trustedServerInstances[key] {
-            guard existing == instanceId else {
-                return "Server identity changed for \(key). Expected \(existing), got \(instanceId)."
+        if let existing = trustedServerIdentities[key] {
+            guard existing == identityId else {
+                return "Server identity changed for \(key). Expected \(existing), got \(identityId)."
             }
             return nil
         }
-        trustedServerInstances[key] = instanceId
-        saveTrustedServerInstances()
+        trustedServerIdentities[key] = identityId
+        saveTrustedServerIdentities()
         return nil
     }
 
-    func trustedServerInstance(host: String, port: UInt16) -> String? {
-        trustedServerInstances["\(host):\(port)"]
+    func trustedServerIdentity(host: String, port: UInt16) -> String? {
+        trustedServerIdentities["\(host):\(port)"]
     }
 
-    func trustServerInstance(host: String, port: UInt16, instanceId: String) {
-        trustedServerInstances["\(host):\(port)"] = instanceId
-        saveTrustedServerInstances()
+    func trustServerIdentity(host: String, port: UInt16, identityId: String) {
+        trustedServerIdentities["\(host):\(port)"] = identityId
+        saveTrustedServerIdentities()
     }
 
     func recordResumeAttachment(host: String, port: UInt16, sessionId: UInt32, attachmentId: UInt64) {
@@ -177,15 +177,15 @@ final class ConnectionStore: ObservableObject {
         UserDefaults.standard.set(data, forKey: historyKey)
     }
 
-    private func loadTrustedServerInstances() {
-        guard let data = UserDefaults.standard.data(forKey: trustedInstancesKey),
+    private func loadTrustedServerIdentities() {
+        guard let data = UserDefaults.standard.data(forKey: trustedIdentitiesKey),
               let instances = try? JSONDecoder().decode([String: String].self, from: data) else { return }
-        trustedServerInstances = instances
+        trustedServerIdentities = instances
     }
 
-    private func saveTrustedServerInstances() {
-        guard let data = try? JSONEncoder().encode(trustedServerInstances) else { return }
-        UserDefaults.standard.set(data, forKey: trustedInstancesKey)
+    private func saveTrustedServerIdentities() {
+        guard let data = try? JSONEncoder().encode(trustedServerIdentities) else { return }
+        UserDefaults.standard.set(data, forKey: trustedIdentitiesKey)
     }
 
     private func loadResumeAttachments() {
@@ -322,7 +322,7 @@ final class ConnectionMonitor: ObservableObject {
         transportHealth = .idle
         reconnectAllowed = true
         cancelReconnect()
-        client.configureTrustedServerInstance(store.trustedServerInstance(host: host, port: port))
+        client.configureTrustedServerIdentity(store.trustedServerIdentity(host: host, port: port))
         if let resume = store.resumeAttachment(host: host, port: port) {
             client.configureResumeAttachment(sessionId: resume.sessionId, attachmentId: resume.attachmentId)
         }

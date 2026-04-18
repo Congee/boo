@@ -7,6 +7,7 @@ private struct ValidationAuthOkMetadata {
     let transportCapabilities: UInt32
     let serverBuildId: String?
     let serverInstanceId: String?
+    let serverIdentityId: String?
 }
 
 private let validationCapabilityHmacAuth: UInt32 = 1 << 0
@@ -26,7 +27,8 @@ private func decodeValidationAuthOkMetadata(_ payload: Data) -> ValidationAuthOk
             protocolVersion: protocolVersion,
             transportCapabilities: transportCapabilities,
             serverBuildId: nil,
-            serverInstanceId: nil
+            serverInstanceId: nil,
+            serverIdentityId: nil
         )
     }
     let buildLength = payload.withUnsafeBytes {
@@ -40,19 +42,39 @@ private func decodeValidationAuthOkMetadata(_ payload: Data) -> ValidationAuthOk
             protocolVersion: protocolVersion,
             transportCapabilities: transportCapabilities,
             serverBuildId: serverBuildId,
-            serverInstanceId: nil
+            serverInstanceId: nil,
+            serverIdentityId: nil
         )
     }
     let instanceLength = payload.withUnsafeBytes {
         Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: instanceLengthOffset, as: UInt16.self)))
     }
     guard payload.count >= instanceLengthOffset + 2 + instanceLength else { return nil }
+    let identityLengthOffset = instanceLengthOffset + 2 + instanceLength
+    let serverInstanceId = String(
+        data: payload[(instanceLengthOffset + 2)..<(instanceLengthOffset + 2 + instanceLength)],
+        encoding: .utf8
+    )
+    guard payload.count >= identityLengthOffset + 2 else {
+        return ValidationAuthOkMetadata(
+            protocolVersion: protocolVersion,
+            transportCapabilities: transportCapabilities,
+            serverBuildId: serverBuildId,
+            serverInstanceId: serverInstanceId,
+            serverIdentityId: nil
+        )
+    }
+    let identityLength = payload.withUnsafeBytes {
+        Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: identityLengthOffset, as: UInt16.self)))
+    }
+    guard payload.count >= identityLengthOffset + 2 + identityLength else { return nil }
     return ValidationAuthOkMetadata(
         protocolVersion: protocolVersion,
         transportCapabilities: transportCapabilities,
         serverBuildId: serverBuildId,
-        serverInstanceId: String(
-            data: payload[(instanceLengthOffset + 2)..<(instanceLengthOffset + 2 + instanceLength)],
+        serverInstanceId: serverInstanceId,
+        serverIdentityId: String(
+            data: payload[(identityLengthOffset + 2)..<(identityLengthOffset + 2 + identityLength)],
             encoding: .utf8
         )
     )
@@ -79,6 +101,9 @@ private func validateValidationAuthOkMetadata(_ payload: Data, authRequired: Boo
     }
     if metadata.serverInstanceId?.isEmpty != false {
         return "Remote handshake is missing server instance metadata"
+    }
+    if metadata.serverIdentityId?.isEmpty != false {
+        return "Remote handshake is missing server identity metadata"
     }
     return nil
 }
@@ -122,6 +147,7 @@ final class RemoteValidator {
     private var transportCapabilities: UInt32 = 0
     private var serverBuildId: String?
     private var serverInstanceId: String?
+    private var serverIdentityId: String?
     private var heartbeatAckReceived = false
     private var expectedHeartbeatPayload = Data()
     private var sessionListReceived = false
@@ -292,6 +318,7 @@ final class RemoteValidator {
         transportCapabilities = 0
         serverBuildId = nil
         serverInstanceId = nil
+        serverIdentityId = nil
         heartbeatAckReceived = false
         sessionListReceived = false
         attachedSessionId = nil
@@ -396,6 +423,7 @@ final class RemoteValidator {
                 transportCapabilities = metadata.transportCapabilities
                 serverBuildId = metadata.serverBuildId
                 serverInstanceId = metadata.serverInstanceId
+                serverIdentityId = metadata.serverIdentityId
             }
             if let error = validateValidationAuthOkMetadata(payload, authRequired: authKey != nil) {
                 lastError = error
@@ -464,7 +492,7 @@ final class RemoteValidator {
         let screenSnippet = lastScreenText
             .replacingOccurrences(of: "\n", with: "\\n")
             .prefix(160)
-        let stateSummary = "authenticated=\(authenticated) heartbeatAckReceived=\(heartbeatAckReceived) sessionListReceived=\(sessionListReceived) sessions=\(sessions.count) createdSessionId=\(String(describing: createdSessionId)) attachedSessionId=\(String(describing: attachedSessionId)) attachmentId=\(String(describing: attachmentId)) buildId=\(serverBuildId ?? "nil") serverInstanceId=\(serverInstanceId ?? "nil") screenUpdateReceived=\(screenUpdateReceived) screen=\"\(screenSnippet)\" trace=\(messageTrace.joined(separator: ","))"
+        let stateSummary = "authenticated=\(authenticated) heartbeatAckReceived=\(heartbeatAckReceived) sessionListReceived=\(sessionListReceived) sessions=\(sessions.count) createdSessionId=\(String(describing: createdSessionId)) attachedSessionId=\(String(describing: attachedSessionId)) attachmentId=\(String(describing: attachmentId)) buildId=\(serverBuildId ?? "nil") serverIdentityId=\(serverIdentityId ?? "nil") serverInstanceId=\(serverInstanceId ?? "nil") screenUpdateReceived=\(screenUpdateReceived) screen=\"\(screenSnippet)\" trace=\(messageTrace.joined(separator: ","))"
         lock.unlock()
         throw ValidationError("timed out waiting for \(description) (\(stateSummary))")
     }

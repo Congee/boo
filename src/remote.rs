@@ -261,6 +261,7 @@ struct State {
     clients: HashMap<u64, ClientState>,
     revivable_attachments: HashMap<u64, RevivableAttachment>,
     auth_key: Option<Vec<u8>>,
+    server_identity_id: String,
     server_instance_id: String,
 }
 
@@ -296,6 +297,7 @@ impl RemoteServer {
             clients: HashMap::new(),
             revivable_attachments: HashMap::new(),
             auth_key: config.auth_key.map(|key| key.into_bytes()),
+            server_identity_id: load_or_create_daemon_identity(),
             server_instance_id: random_instance_id(),
         }));
         let state_for_listener = Arc::clone(&state);
@@ -373,6 +375,7 @@ impl RemoteServer {
             clients: HashMap::new(),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_identity_id: load_or_create_daemon_identity(),
             server_instance_id: random_instance_id(),
         }));
         let state_for_listener = Arc::clone(&state);
@@ -1310,6 +1313,7 @@ fn read_loop(
 fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>) -> bool {
     let mut state = state.lock().expect("remote server state poisoned");
     let auth_key = state.auth_key.clone();
+    let server_identity_id = state.server_identity_id.clone();
     let server_instance_id = state.server_instance_id.clone();
     let Some(client) = state.clients.get_mut(&client_id) else {
         return false;
@@ -1319,7 +1323,7 @@ fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>
         client.authenticated = true;
         let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
             MessageType::AuthOk,
-            &encode_auth_ok_payload(&server_instance_id),
+            &encode_auth_ok_payload(&server_identity_id, &server_instance_id),
         )));
         return true;
     }
@@ -1356,7 +1360,7 @@ fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>
             client.authenticated = true;
             let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
                 MessageType::AuthOk,
-                &encode_auth_ok_payload(&server_instance_id),
+                &encode_auth_ok_payload(&server_identity_id, &server_instance_id),
             )));
             true
         }
@@ -1370,21 +1374,28 @@ fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>
     }
 }
 
-fn encode_auth_ok_payload(server_instance_id: &str) -> Vec<u8> {
+fn encode_auth_ok_payload(server_identity_id: &str, server_instance_id: &str) -> Vec<u8> {
     let build_id = env!("CARGO_PKG_VERSION").as_bytes();
+    let server_identity_id = server_identity_id.as_bytes();
     let server_instance_id = server_instance_id.as_bytes();
-    let mut payload = Vec::with_capacity(10 + build_id.len() + server_instance_id.len());
+    let mut payload = Vec::with_capacity(
+        12 + build_id.len() + server_identity_id.len() + server_instance_id.len(),
+    );
     payload.extend_from_slice(&REMOTE_PROTOCOL_VERSION.to_le_bytes());
     payload.extend_from_slice(&REMOTE_CAPABILITIES.to_le_bytes());
     payload.extend_from_slice(&(build_id.len() as u16).to_le_bytes());
     payload.extend_from_slice(build_id);
     payload.extend_from_slice(&(server_instance_id.len() as u16).to_le_bytes());
     payload.extend_from_slice(server_instance_id);
+    payload.extend_from_slice(&(server_identity_id.len() as u16).to_le_bytes());
+    payload.extend_from_slice(server_identity_id);
     payload
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-pub fn decode_auth_ok_payload(payload: &[u8]) -> Option<(u16, u32, Option<String>, Option<String>)> {
+pub fn decode_auth_ok_payload(
+    payload: &[u8],
+) -> Option<(u16, u32, Option<String>, Option<String>, Option<String>)> {
     if payload.is_empty() {
         return None;
     }
@@ -1394,7 +1405,7 @@ pub fn decode_auth_ok_payload(payload: &[u8]) -> Option<(u16, u32, Option<String
     let version = u16::from_le_bytes([payload[0], payload[1]]);
     let capabilities = u32::from_le_bytes([payload[2], payload[3], payload[4], payload[5]]);
     if payload.len() < 8 {
-        return Some((version, capabilities, None, None));
+        return Some((version, capabilities, None, None, None));
     }
     let build_len = u16::from_le_bytes([payload[6], payload[7]]) as usize;
     if payload.len() < 8 + build_len {
@@ -1402,7 +1413,7 @@ pub fn decode_auth_ok_payload(payload: &[u8]) -> Option<(u16, u32, Option<String
     }
     let build_id = String::from_utf8(payload[8..8 + build_len].to_vec()).ok();
     if payload.len() < 10 + build_len {
-        return Some((version, capabilities, build_id, None));
+        return Some((version, capabilities, build_id, None, None));
     }
     let instance_offset = 8 + build_len;
     let instance_len =
@@ -1414,7 +1425,26 @@ pub fn decode_auth_ok_payload(payload: &[u8]) -> Option<(u16, u32, Option<String
         payload[instance_offset + 2..instance_offset + 2 + instance_len].to_vec(),
     )
     .ok();
-    Some((version, capabilities, build_id, server_instance_id))
+    let identity_offset = instance_offset + 2 + instance_len;
+    if payload.len() < identity_offset + 2 {
+        return Some((version, capabilities, build_id, server_instance_id, None));
+    }
+    let identity_len =
+        u16::from_le_bytes([payload[identity_offset], payload[identity_offset + 1]]) as usize;
+    if payload.len() < identity_offset + 2 + identity_len {
+        return None;
+    }
+    let server_identity_id = String::from_utf8(
+        payload[identity_offset + 2..identity_offset + 2 + identity_len].to_vec(),
+    )
+    .ok();
+    Some((
+        version,
+        capabilities,
+        build_id,
+        server_instance_id,
+        server_identity_id,
+    ))
 }
 
 fn send_direct_error(state: &Arc<Mutex<State>>, client_id: u64, message: &str) {
@@ -1862,6 +1892,22 @@ fn random_instance_id() -> String {
     output
 }
 
+fn load_or_create_daemon_identity() -> String {
+    let path = crate::config::config_dir().join("remote-daemon-id");
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let trimmed = existing.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    let identity = random_instance_id();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, format!("{identity}\n"));
+    identity
+}
+
 impl ServiceAdvertiser {
     fn spawn(service_name: &str, port: u16) -> Option<Self> {
         #[cfg(target_os = "macos")]
@@ -2243,7 +2289,10 @@ mod tests {
 
     #[test]
     fn auth_ok_payload_round_trips_protocol_version_and_capabilities() {
-        let frame = encode_message(MessageType::AuthOk, &encode_auth_ok_payload("deadbeefcafebabe"));
+        let frame = encode_message(
+            MessageType::AuthOk,
+            &encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe"),
+        );
         let mut cursor = std::io::Cursor::new(frame);
         let (ty, payload) = read_message(&mut cursor).expect("auth ok frame");
         assert_eq!(ty, MessageType::AuthOk);
@@ -2254,6 +2303,7 @@ mod tests {
                 REMOTE_CAPABILITIES,
                 Some(env!("CARGO_PKG_VERSION").to_string()),
                 Some("deadbeefcafebabe".to_string()),
+                Some("daemon-identity-01".to_string()),
             ))
         );
     }
@@ -2281,6 +2331,7 @@ mod tests {
             )]),
             revivable_attachments: HashMap::new(),
             auth_key: Some(b"test-key".to_vec()),
+            server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -2318,6 +2369,7 @@ mod tests {
             )]),
             revivable_attachments: HashMap::new(),
             auth_key: Some(b"test-key".to_vec()),
+            server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -2555,6 +2607,7 @@ mod tests {
             )]),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
@@ -2630,6 +2683,7 @@ mod tests {
                 },
             )]),
             auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
@@ -2693,6 +2747,7 @@ mod tests {
             ]),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
@@ -2751,6 +2806,7 @@ mod tests {
             ]),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
@@ -2804,6 +2860,7 @@ mod tests {
             )]),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
@@ -2858,6 +2915,7 @@ mod tests {
             )]),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
@@ -2911,6 +2969,7 @@ mod tests {
             )]),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
@@ -2966,6 +3025,7 @@ mod tests {
             )]),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
@@ -3058,6 +3118,7 @@ mod tests {
             ]),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
@@ -3143,6 +3204,7 @@ mod tests {
             )]),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
