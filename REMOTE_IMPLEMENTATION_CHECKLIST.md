@@ -165,7 +165,7 @@ Goal:
 
 ### 1. Handshake and Versioning
 
-- [ ] Define and implement a protocol handshake that includes:
+- [x] Define and implement a protocol handshake that includes:
   - [x] protocol version
   - [x] server version/build identifier
   - [x] transport capabilities
@@ -192,7 +192,7 @@ Goal:
 - [ ] Implement preferred live transport with connection-migration support
 - [ ] Implement TCP/TLS fallback when UDP is unavailable or blocked
 - [ ] Make both transports speak the same application protocol
-- [ ] Expose negotiated transport details for debugging
+- [x] Expose negotiated transport details for debugging
   - [x] iOS client surfaces negotiated protocol/capability/build/instance metadata
   - [x] iOS client surfaces heartbeat RTT in the debug summary
   - [x] iOS client surfaces degraded/lost transport state in the UI
@@ -207,7 +207,7 @@ Goal:
 
 ### 5. Heartbeats and Timeouts
 
-- [ ] Implement active heartbeat traffic
+- [x] Implement active heartbeat traffic
   - [x] direct iOS client sends periodic heartbeat frames
   - [x] server replies with heartbeat acknowledgements
 - [x] Implement heartbeat failure detection
@@ -222,7 +222,7 @@ Goal:
 - [ ] Add server identity verification for direct Boo transport clients
   - [x] persist and warn on daemon instance-id changes for known iOS endpoints
   - [x] allow users to trust the current daemon instance for a known iOS endpoint
-- [ ] Ensure bootstrap credentials are replay-resistant and bounded
+- [x] Ensure bootstrap credentials are replay-resistant and bounded
   - [x] expire outstanding HMAC auth challenges on the server
   - [x] close unauthenticated direct-client connections after a failed HMAC response
   - [x] close idle or challenge-expired unauthenticated direct-client connections after bounded timeout
