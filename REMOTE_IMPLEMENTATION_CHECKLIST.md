@@ -67,7 +67,7 @@ Goal:
 
 - [ ] Prefer a Nix-built remote Boo binary over mutable `target/debug/boo` when configured
 - [ ] Verify SSH bootstrap works against the Nix-produced remote binary
-- [ ] Keep the SSH transport logic independent from the Nix build/deploy mechanism
+- [x] Keep the SSH transport logic independent from the Nix build/deploy mechanism
 
 ## Phase 1: Finish Desktop SSH Mode
 
