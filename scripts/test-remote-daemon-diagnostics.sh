@@ -136,7 +136,18 @@ if server_info.get("heartbeat_window_ms") != 20_000:
     raise SystemExit(f"unexpected heartbeat_window_ms: {server_info.get('heartbeat_window_ms')!r}")
 if server_info.get("revive_window_ms") != 30_000:
     raise SystemExit(f"unexpected revive_window_ms: {server_info.get('revive_window_ms')!r}")
-clients = snapshot.get("clients")
+if server_info.get("connected_clients") != len(clients := snapshot.get("clients", [])):
+    raise SystemExit(
+        f"unexpected connected_clients count: {server_info.get('connected_clients')!r} vs {len(clients)}"
+    )
+if server_info.get("pending_auth_clients") != 1:
+    raise SystemExit(f"unexpected pending_auth_clients: {server_info.get('pending_auth_clients')!r}")
+if server_info.get("attached_clients") != 0:
+    raise SystemExit(f"unexpected attached_clients: {server_info.get('attached_clients')!r}")
+if server_info.get("revivable_attachments") != 0:
+    raise SystemExit(
+        f"unexpected revivable_attachments count: {server_info.get('revivable_attachments')!r}"
+    )
 if not isinstance(clients, list):
     raise SystemExit("expected clients list in remote-clients output")
 if len(clients) < 2:
@@ -255,6 +266,14 @@ if server_info.get("local_socket_path") is not None:
 if server_info.get("heartbeat_window_ms") != 20_000:
     raise SystemExit(
         f"unexpected authless heartbeat_window_ms: {server_info.get('heartbeat_window_ms')!r}"
+    )
+if server_info.get("connected_clients") != 0:
+    raise SystemExit(
+        f"expected authless connected_clients 0, got {server_info.get('connected_clients')!r}"
+    )
+if server_info.get("attached_clients") != 0:
+    raise SystemExit(
+        f"expected authless attached_clients 0, got {server_info.get('attached_clients')!r}"
     )
 PY
 

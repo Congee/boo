@@ -207,6 +207,10 @@ pub struct RemoteServerInfo {
     pub auth_challenge_window_ms: u64,
     pub heartbeat_window_ms: u64,
     pub revive_window_ms: u64,
+    pub connected_clients: usize,
+    pub attached_clients: usize,
+    pub pending_auth_clients: usize,
+    pub revivable_attachments: usize,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -615,6 +619,18 @@ impl RemoteServer {
     pub fn clients_snapshot(&self) -> RemoteClientsSnapshot {
         let state = self.state.lock().expect("remote server state poisoned");
         let now = Instant::now();
+        let connected_clients = state.clients.len();
+        let attached_clients = state
+            .clients
+            .values()
+            .filter(|client| client.attached_session.is_some())
+            .count();
+        let pending_auth_clients = state
+            .clients
+            .values()
+            .filter(|client| client.challenge.is_some())
+            .count();
+        let revivable_attachments = state.revivable_attachments.len();
         let servers = vec![RemoteServerInfo {
             local_socket_path: self
                 .local_socket_path
@@ -629,6 +645,10 @@ impl RemoteServer {
             auth_challenge_window_ms: AUTH_CHALLENGE_WINDOW.as_millis() as u64,
             heartbeat_window_ms: DIRECT_CLIENT_HEARTBEAT_WINDOW.as_millis() as u64,
             revive_window_ms: REVIVABLE_ATTACHMENT_WINDOW.as_millis() as u64,
+            connected_clients,
+            attached_clients,
+            pending_auth_clients,
+            revivable_attachments,
         }];
         let mut clients = state
             .clients
@@ -4185,6 +4205,10 @@ mod tests {
             server_info.heartbeat_window_ms,
             DIRECT_CLIENT_HEARTBEAT_WINDOW.as_millis() as u64
         );
+        assert_eq!(server_info.connected_clients, 1);
+        assert_eq!(server_info.attached_clients, 1);
+        assert_eq!(server_info.pending_auth_clients, 0);
+        assert_eq!(server_info.revivable_attachments, 0);
         assert!(snapshot.revivable_attachments.is_empty());
         assert_eq!(snapshot.clients.len(), 1);
         let client = &snapshot.clients[0];
@@ -4259,6 +4283,10 @@ mod tests {
 
         let snapshot = server.clients_snapshot();
         assert_eq!(snapshot.servers.len(), 1);
+        assert_eq!(snapshot.servers[0].connected_clients, 0);
+        assert_eq!(snapshot.servers[0].attached_clients, 0);
+        assert_eq!(snapshot.servers[0].pending_auth_clients, 0);
+        assert_eq!(snapshot.servers[0].revivable_attachments, 1);
         assert!(snapshot.clients.is_empty());
         assert_eq!(snapshot.revivable_attachments.len(), 1);
         let attachment = &snapshot.revivable_attachments[0];
@@ -4319,6 +4347,10 @@ mod tests {
             snapshot.servers[0].auth_challenge_window_ms,
             AUTH_CHALLENGE_WINDOW.as_millis() as u64
         );
+        assert_eq!(snapshot.servers[0].connected_clients, 1);
+        assert_eq!(snapshot.servers[0].attached_clients, 0);
+        assert_eq!(snapshot.servers[0].pending_auth_clients, 1);
+        assert_eq!(snapshot.servers[0].revivable_attachments, 0);
         assert_eq!(snapshot.clients.len(), 1);
         let client = &snapshot.clients[0];
         assert!(!client.authenticated);
@@ -4376,6 +4408,10 @@ mod tests {
 
         let snapshot = server.clients_snapshot();
         assert_eq!(snapshot.servers.len(), 1);
+        assert_eq!(snapshot.servers[0].connected_clients, 1);
+        assert_eq!(snapshot.servers[0].attached_clients, 0);
+        assert_eq!(snapshot.servers[0].pending_auth_clients, 0);
+        assert_eq!(snapshot.servers[0].revivable_attachments, 0);
         assert_eq!(snapshot.clients.len(), 1);
         let client = &snapshot.clients[0];
         assert_eq!(client.transport_kind, "tcp");

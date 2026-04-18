@@ -1051,6 +1051,10 @@ mod tests {
                                 auth_challenge_window_ms: 10_000,
                                 heartbeat_window_ms: 20_000,
                                 revive_window_ms: 30_000,
+                                connected_clients: 1,
+                                attached_clients: 1,
+                                pending_auth_clients: 0,
+                                revivable_attachments: 0,
                             }],
                             clients: vec![crate::remote::RemoteClientInfo {
                                 client_id: 7,
