@@ -8,6 +8,7 @@ struct BooRootView: View {
     @StateObject private var store = ConnectionStore()
     @State private var selectedTab: BooTab = .sessions
     @State private var monitor: ConnectionMonitor?
+    @State private var serverIdentityWarning: String?
 
     private var activeMonitor: ConnectionMonitor {
         if let monitor { return monitor }
@@ -20,14 +21,14 @@ struct BooRootView: View {
         ZStack(alignment: .bottom) {
             Group {
                 if client.attachedSessionId != nil {
-                    TerminalSessionScreen(client: client, monitor: activeMonitor, selectedTab: $selectedTab)
+                    TerminalSessionScreen(client: client, monitor: activeMonitor, selectedTab: $selectedTab, serverIdentityWarning: serverIdentityWarning)
                 } else {
                     switch selectedTab {
                     case .sessions:
                         if client.connected && client.authenticated {
-                            SessionsScreen(client: client, monitor: activeMonitor, selectedTab: $selectedTab)
+                            SessionsScreen(client: client, monitor: activeMonitor, selectedTab: $selectedTab, serverIdentityWarning: serverIdentityWarning)
                         } else {
-                            ConnectScreen(client: client, browser: browser, store: store, monitor: activeMonitor, selectedTab: $selectedTab)
+                            ConnectScreen(client: client, browser: browser, store: store, monitor: activeMonitor, selectedTab: $selectedTab, serverIdentityWarning: serverIdentityWarning)
                         }
                     case .history:
                         HistoryScreen(store: store)
@@ -71,6 +72,17 @@ struct BooRootView: View {
             if let nodeId = activeMonitor.currentNodeId {
                 store.updateNodeLastConnected(nodeId)
             }
+            if let host = activeMonitor.lastHost,
+               let port = activeMonitor.lastPort,
+               let serverInstanceId = client.serverInstanceId,
+               !serverInstanceId.isEmpty
+            {
+                serverIdentityWarning = store.recordTrustedServerInstance(
+                    host: host,
+                    port: port,
+                    instanceId: serverInstanceId
+                )
+            }
         case .connectionLost:
             if let historyId = activeMonitor.currentHistoryId {
                 store.endConnection(id: historyId, status: .timedOut)
@@ -93,6 +105,7 @@ struct ConnectScreen: View {
     @ObservedObject var store: ConnectionStore
     @ObservedObject var monitor: ConnectionMonitor
     @Binding var selectedTab: BooTab
+    let serverIdentityWarning: String?
 
     @State private var host = ""
     @State private var authKey = ""
@@ -139,6 +152,15 @@ struct ConnectScreen: View {
                             .padding(KineticSpacing.md)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(statusBanner.color.opacity(0.1))
+                            .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+                    }
+                    if let serverIdentityWarning {
+                        Text(serverIdentityWarning)
+                            .font(KineticFont.caption)
+                            .foregroundStyle(KineticColor.error)
+                            .padding(KineticSpacing.md)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(KineticColor.error.opacity(0.1))
                             .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
                     }
 
@@ -258,6 +280,7 @@ struct SessionsScreen: View {
     @ObservedObject var client: GSPClient
     @ObservedObject var monitor: ConnectionMonitor
     @Binding var selectedTab: BooTab
+    let serverIdentityWarning: String?
 
     private var subtitleText: String? {
         let base = monitor.lastHost.map { "Connected to \($0)" }
@@ -273,6 +296,9 @@ struct SessionsScreen: View {
                 title: "Active Sessions",
                 subtitle: subtitleText
             )
+            if let serverIdentityWarning {
+                transportBanner(reason: serverIdentityWarning, color: KineticColor.error)
+            }
             if case .degraded(let reason) = monitor.transportHealth {
                 transportBanner(reason: reason, color: KineticColor.tertiary)
             } else if case .waiting(let attempt, _) = monitor.reconnectState {
@@ -356,6 +382,7 @@ struct TerminalSessionScreen: View {
     @ObservedObject var client: GSPClient
     @ObservedObject var monitor: ConnectionMonitor
     @Binding var selectedTab: BooTab
+    let serverIdentityWarning: String?
 
     @State private var inputText = ""
     @State private var ctrlActive = false
@@ -377,7 +404,9 @@ struct TerminalSessionScreen: View {
                 subtitle: statusSubtitle
             )
 
-            if let disconnectReason {
+            if let serverIdentityWarning {
+                transportBanner(reason: serverIdentityWarning, color: KineticColor.error)
+            } else if let disconnectReason {
                 transportBanner(reason: disconnectReason, color: KineticColor.error)
             } else if case .degraded(let reason) = monitor.transportHealth {
                 transportBanner(reason: reason, color: KineticColor.tertiary)

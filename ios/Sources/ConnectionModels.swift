@@ -51,11 +51,14 @@ final class ConnectionStore: ObservableObject {
 
     private let nodesKey = "boo.remote.savedNodes"
     private let historyKey = "boo.remote.connectionHistory"
+    private let trustedInstancesKey = "boo.remote.trustedServerInstances"
     private let maxHistory = 50
+    private var trustedServerInstances: [String: String] = [:]
 
     init() {
         loadNodes()
         loadHistory()
+        loadTrustedServerInstances()
     }
 
     func addNode(_ node: SavedNode) {
@@ -95,6 +98,19 @@ final class ConnectionStore: ObservableObject {
         saveHistory()
     }
 
+    func recordTrustedServerInstance(host: String, port: UInt16, instanceId: String) -> String? {
+        let key = "\(host):\(port)"
+        if let existing = trustedServerInstances[key] {
+            guard existing == instanceId else {
+                return "Server identity changed for \(key). Expected \(existing), got \(instanceId)."
+            }
+            return nil
+        }
+        trustedServerInstances[key] = instanceId
+        saveTrustedServerInstances()
+        return nil
+    }
+
     private func loadNodes() {
         guard let data = UserDefaults.standard.data(forKey: nodesKey),
               let nodes = try? JSONDecoder().decode([SavedNode].self, from: data) else { return }
@@ -115,6 +131,17 @@ final class ConnectionStore: ObservableObject {
     private func saveHistory() {
         guard let data = try? JSONEncoder().encode(history) else { return }
         UserDefaults.standard.set(data, forKey: historyKey)
+    }
+
+    private func loadTrustedServerInstances() {
+        guard let data = UserDefaults.standard.data(forKey: trustedInstancesKey),
+              let instances = try? JSONDecoder().decode([String: String].self, from: data) else { return }
+        trustedServerInstances = instances
+    }
+
+    private func saveTrustedServerInstances() {
+        guard let data = try? JSONEncoder().encode(trustedServerInstances) else { return }
+        UserDefaults.standard.set(data, forKey: trustedInstancesKey)
     }
 }
 
