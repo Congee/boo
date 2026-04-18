@@ -301,6 +301,16 @@ final class RemoteValidator {
         sessionListReceived = false
         sendMessage(type: .listSessions, payload: Data())
         try waitUntil("session list after reconnect") { self.sessionListReceived }
+        var wrongResumeAttachPayload = Data(count: 20)
+        wrongResumeAttachPayload.withUnsafeMutableBytes { bytes in
+            bytes.storeBytes(of: sessionId.littleEndian, as: UInt32.self)
+            bytes.storeBytes(of: expectedAttachmentId.littleEndian, toByteOffset: 4, as: UInt64.self)
+            bytes.storeBytes(of: (resumeToken ^ 0xffff).littleEndian, toByteOffset: 12, as: UInt64.self)
+        }
+        sendMessage(type: .attach, payload: wrongResumeAttachPayload)
+        try waitUntilError("attachment resume token mismatch")
+        clearLastError()
+
         var resumeAttachPayload = Data(count: 20)
         resumeAttachPayload.withUnsafeMutableBytes { bytes in
             bytes.storeBytes(of: sessionId.littleEndian, as: UInt32.self)
@@ -526,6 +536,26 @@ final class RemoteValidator {
         if let error {
             throw ValidationError(error)
         }
+    }
+
+    private func waitUntilError(_ expected: String, timeout: TimeInterval = 5) throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            lock.lock()
+            let error = lastError
+            lock.unlock()
+            if error == expected {
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        throw ValidationError("timed out waiting for expected remote error: \(expected)")
+    }
+
+    private func clearLastError() {
+        lock.lock()
+        lastError = nil
+        lock.unlock()
     }
 
     private func setError(_ message: String) {
