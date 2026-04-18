@@ -250,8 +250,8 @@ Goal:
 
 #### End-to-End
 
-- [ ] Add end-to-end tests for:
-  - SSH bootstrap then protocol upgrade
+- [x] Add end-to-end tests for:
+  - [x] forwarded-control bootstrap then protocol upgrade via [scripts/test-remote-upgrade-flow.sh](./scripts/test-remote-upgrade-flow.sh)
   - [x] direct client connect on the current native iOS path
   - [x] version mismatch
   - [x] resume after temporary drop within the revive window
