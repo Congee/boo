@@ -543,6 +543,11 @@ struct State {
     auth_key: Option<Vec<u8>>,
     server_identity_id: String,
     server_instance_id: String,
+    /// client_ids whose underlying transport is TLS-wrapped TCP. Plain TCP and local
+    /// Unix-socket clients are absent. Populated at client registration and scrubbed on
+    /// removal; diagnostics look up membership here to distinguish plain-TCP from
+    /// TCP-TLS in `transport_kind`.
+    tls_clients: std::collections::HashSet<u64>,
 }
 
 pub struct RemoteServer {
@@ -591,6 +596,7 @@ impl RemoteServer {
             auth_key: config.auth_key.clone().map(|key| key.into_bytes()),
             server_identity_id: identity_material.identity_id,
             server_instance_id: random_instance_id(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let state_for_listener = Arc::clone(&state);
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -653,6 +659,7 @@ impl RemoteServer {
             auth_key: None,
             server_identity_id: load_or_create_daemon_identity(),
             server_instance_id: random_instance_id(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let state_for_listener = Arc::clone(&state);
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -832,6 +839,8 @@ impl RemoteServer {
                     is_local: client.is_local,
                     transport_kind: if client.is_local {
                         "local".to_string()
+                    } else if state.tls_clients.contains(client_id) {
+                        "tcp-tls".to_string()
                     } else {
                         "tcp".to_string()
                     },
@@ -3413,13 +3422,25 @@ fn serve_incoming_tcp_client(
             tls_stream.conn.protocol_version()
         );
         let shared = SharedStream::new(tls_stream);
-        run_remote_client_session(shared.clone(), shared, state, cmd_tx, "tls");
+        run_remote_client_session(
+            shared.clone(),
+            shared,
+            state,
+            cmd_tx,
+            TRANSPORT_LABEL_TLS,
+        );
     } else {
         let Ok(writer_stream) = stream.try_clone() else {
             log::warn!("remote tcp client dropped: failed to clone stream for writer");
             return;
         };
-        run_remote_client_session(stream, writer_stream, state, cmd_tx, "plain");
+        run_remote_client_session(
+            stream,
+            writer_stream,
+            state,
+            cmd_tx,
+            TRANSPORT_LABEL_PLAIN,
+        );
     }
 }
 
@@ -3433,6 +3454,7 @@ fn run_remote_client_session<R, W>(
     R: Read + Send + 'static,
     W: Write + Send + 'static,
 {
+    let is_tls_transport = transport_label == TRANSPORT_LABEL_TLS;
     let (client_id, outbound_rx, authenticated) = {
         let mut state = state.lock().expect("remote server state poisoned");
         let client_id = NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
@@ -3459,6 +3481,9 @@ fn run_remote_client_session<R, W>(
                 is_local: false,
             },
         );
+        if is_tls_transport {
+            state.tls_clients.insert(client_id);
+        }
         (client_id, outbound_rx, authenticated)
     };
     log::info!(
@@ -3471,8 +3496,17 @@ fn run_remote_client_session<R, W>(
         let _ = cmd_tx.send(RemoteCmd::Connected { client_id });
         crate::notify_headless_wakeup();
     }
-    read_loop(reader, client_id, state, cmd_tx);
+    read_loop(reader, client_id, Arc::clone(&state), cmd_tx);
+    // Reader loop exited -> client disconnected. Scrub the TLS membership so the
+    // HashSet does not leak entries for dead client ids.
+    if is_tls_transport {
+        let mut state = state.lock().expect("remote server state poisoned");
+        state.tls_clients.remove(&client_id);
+    }
 }
+
+const TRANSPORT_LABEL_TLS: &str = "tls";
+const TRANSPORT_LABEL_PLAIN: &str = "plain";
 
 /// DNS-like name presented by the server's self-signed cert. Used as the `ServerName`
 /// input to rustls on the client side. The pinning verifier ignores CA chain and hostname
@@ -4240,6 +4274,7 @@ mod tests {
             auth_key: Some(b"test-key".to_vec()),
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
 
         assert!(matches!(
@@ -4313,6 +4348,7 @@ mod tests {
             auth_key: Some(b"test-key".to_vec()),
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
 
         assert!(matches!(
@@ -4467,6 +4503,7 @@ mod tests {
             auth_key: Some(b"test-key".to_vec()),
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let mut frames = Vec::new();
@@ -4509,6 +4546,7 @@ mod tests {
             auth_key: Some(b"test-key".to_vec()),
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let frame = encode_message(MessageType::Heartbeat, b"ping");
@@ -5074,6 +5112,7 @@ mod tests {
             auth_key: Some(b"test-key".to_vec()),
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let mut frames = Vec::new();
@@ -5135,6 +5174,7 @@ mod tests {
             auth_key: Some(b"test-key".to_vec()),
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let reader = TimeoutScriptedReader::new([Err(io::ErrorKind::TimedOut)]);
@@ -5187,6 +5227,7 @@ mod tests {
             auth_key: Some(b"test-key".to_vec()),
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let reader = TimeoutScriptedReader::new([Err(io::ErrorKind::TimedOut)]);
@@ -5242,6 +5283,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let reader = TimeoutScriptedReader::new([Err(io::ErrorKind::TimedOut)]);
@@ -5297,6 +5339,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let reader = TimeoutScriptedReader::new([
@@ -5363,6 +5406,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let reader = TimeoutScriptedReader::new([Err(io::ErrorKind::TimedOut)]);
@@ -5527,6 +5571,7 @@ mod tests {
             auth_key: None,
             server_identity_id: material.identity_id.clone(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let (cmd_tx, _cmd_rx) = mpsc::channel();
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
@@ -5644,6 +5689,7 @@ mod tests {
             auth_key: None,
             server_identity_id: expected_identity.clone(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let (cmd_tx, _cmd_rx) = mpsc::channel();
 
@@ -5688,6 +5734,18 @@ mod tests {
             0,
             "server should advertise TLS transport capability"
         );
+
+        // The TLS-wrapped client must be tracked in State::tls_clients so the
+        // diagnostic snapshot can report transport_kind="tcp-tls".
+        {
+            let state_guard = state.lock().expect("state lock");
+            assert_eq!(
+                state_guard.tls_clients.len(),
+                1,
+                "expected one TLS-tracked client, got {}",
+                state_guard.tls_clients.len()
+            );
+        }
 
         drop(tls_stream);
         let _ = server_handle.join();
@@ -5937,6 +5995,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let server = RemoteServer {
             state: Arc::clone(&state),
@@ -5994,6 +6053,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let server = RemoteServer {
             state: Arc::clone(&state),
@@ -6081,6 +6141,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let server = RemoteServer {
             state: Arc::clone(&state),
@@ -6158,6 +6219,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let server = RemoteServer {
             state,
@@ -6213,6 +6275,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let server = RemoteServer {
             state: Arc::clone(&state),
@@ -6265,6 +6328,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let server = RemoteServer {
             state: Arc::clone(&state),
@@ -6316,6 +6380,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let server = RemoteServer {
             state: Arc::clone(&state),
@@ -6387,6 +6452,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let server = RemoteServer {
             state,
@@ -6478,6 +6544,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let server = RemoteServer {
             state,
@@ -6539,6 +6606,7 @@ mod tests {
             auth_key: Some(b"test-key".to_vec()),
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let server = RemoteServer {
             state,
@@ -6607,6 +6675,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let server = RemoteServer {
             state,
@@ -6664,6 +6733,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let server = RemoteServer {
             state: Arc::clone(&state),
@@ -6746,6 +6816,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let server = RemoteServer {
             state,
@@ -6806,6 +6877,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let server = RemoteServer {
             state,
@@ -6867,6 +6939,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let server = RemoteServer {
             state,
@@ -6927,6 +7000,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let server = RemoteServer {
             state,
@@ -6989,6 +7063,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let server = RemoteServer {
             state,
@@ -7100,6 +7175,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let server = RemoteServer {
             state,
@@ -7192,6 +7268,7 @@ mod tests {
             auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
         }));
         let server = RemoteServer {
             state: Arc::clone(&state),
