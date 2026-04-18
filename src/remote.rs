@@ -2042,13 +2042,10 @@ pub fn select_direct_transport(
     Err("direct remote endpoint does not advertise a supported transport".to_string())
 }
 
-pub fn probe_remote_endpoint(
-    host: &str,
+fn probe_summary_from_session<S: DirectReadWrite>(
+    client: &mut DirectTransportSession<S>,
     port: u16,
-    auth_key: Option<&str>,
-    expected_server_identity: Option<&str>,
 ) -> Result<RemoteProbeSummary, String> {
-    let mut client = DirectRemoteClient::connect(host, port, auth_key, expected_server_identity)?;
     let heartbeat_rtt_ms = client.heartbeat_round_trip(b"boo-remote-probe")?;
     Ok(RemoteProbeSummary {
         host: client.host.clone(),
@@ -2061,6 +2058,17 @@ pub fn probe_remote_endpoint(
         server_identity_id: client.server_identity_id.clone(),
         heartbeat_rtt_ms,
     })
+}
+
+pub fn probe_remote_endpoint(
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+    expected_server_identity: Option<&str>,
+) -> Result<RemoteProbeSummary, String> {
+    let mut client =
+        DirectRemoteClient::connect(host, port, auth_key, expected_server_identity)?;
+    probe_summary_from_session(&mut client, port)
 }
 
 pub fn probe_selected_direct_transport(
@@ -2082,13 +2090,10 @@ pub fn probe_selected_direct_transport(
     }
 }
 
-pub fn list_remote_daemon_sessions(
-    host: &str,
+fn list_summary_from_session<S: DirectReadWrite>(
+    client: &mut DirectTransportSession<S>,
     port: u16,
-    auth_key: Option<&str>,
-    expected_server_identity: Option<&str>,
 ) -> Result<RemoteSessionListSummary, String> {
-    let mut client = DirectRemoteClient::connect(host, port, auth_key, expected_server_identity)?;
     let heartbeat_rtt_ms = client.heartbeat_round_trip(b"boo-remote-list")?;
     let sessions = client.list_sessions()?;
     Ok(RemoteSessionListSummary {
@@ -2105,16 +2110,24 @@ pub fn list_remote_daemon_sessions(
     })
 }
 
-pub fn attach_remote_daemon_session(
+pub fn list_remote_daemon_sessions(
     host: &str,
     port: u16,
     auth_key: Option<&str>,
     expected_server_identity: Option<&str>,
+) -> Result<RemoteSessionListSummary, String> {
+    let mut client =
+        DirectRemoteClient::connect(host, port, auth_key, expected_server_identity)?;
+    list_summary_from_session(&mut client, port)
+}
+
+fn attach_summary_from_session<S: DirectReadWrite>(
+    client: &mut DirectTransportSession<S>,
+    port: u16,
     session_id: u32,
     attachment_id: Option<u64>,
     resume_token: Option<u64>,
 ) -> Result<RemoteAttachSummary, String> {
-    let mut client = DirectRemoteClient::connect(host, port, auth_key, expected_server_identity)?;
     let heartbeat_rtt_ms = client.heartbeat_round_trip(b"boo-remote-attach")?;
     let (attached, full_state) = client.attach(session_id, attachment_id, resume_token)?;
     Ok(RemoteAttachSummary {
@@ -2138,15 +2151,26 @@ pub fn attach_remote_daemon_session(
     })
 }
 
-pub fn create_remote_daemon_session(
+pub fn attach_remote_daemon_session(
     host: &str,
     port: u16,
     auth_key: Option<&str>,
     expected_server_identity: Option<&str>,
+    session_id: u32,
+    attachment_id: Option<u64>,
+    resume_token: Option<u64>,
+) -> Result<RemoteAttachSummary, String> {
+    let mut client =
+        DirectRemoteClient::connect(host, port, auth_key, expected_server_identity)?;
+    attach_summary_from_session(&mut client, port, session_id, attachment_id, resume_token)
+}
+
+fn create_summary_from_session<S: DirectReadWrite>(
+    client: &mut DirectTransportSession<S>,
+    port: u16,
     cols: u16,
     rows: u16,
 ) -> Result<RemoteCreateSummary, String> {
-    let mut client = DirectRemoteClient::connect(host, port, auth_key, expected_server_identity)?;
     let heartbeat_rtt_ms = client.heartbeat_round_trip(b"boo-remote-create")?;
     let session_id = client.create_session(cols, rows)?;
     Ok(RemoteCreateSummary {
@@ -2161,6 +2185,19 @@ pub fn create_remote_daemon_session(
         heartbeat_rtt_ms,
         session_id,
     })
+}
+
+pub fn create_remote_daemon_session(
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+    expected_server_identity: Option<&str>,
+    cols: u16,
+    rows: u16,
+) -> Result<RemoteCreateSummary, String> {
+    let mut client =
+        DirectRemoteClient::connect(host, port, auth_key, expected_server_identity)?;
+    create_summary_from_session(&mut client, port, cols, rows)
 }
 
 /// Default socket timeout for direct-client probes and RPCs.
