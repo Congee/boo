@@ -327,6 +327,34 @@ pub struct RemoteSessionListSummary {
     pub sessions: Vec<RemoteDirectSessionInfo>,
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct RemoteAttachedSummary {
+    pub session_id: u32,
+    pub attachment_id: Option<u64>,
+    pub resume_token: Option<u64>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct RemoteAttachSummary {
+    pub host: String,
+    pub port: u16,
+    pub auth_required: bool,
+    pub protocol_version: u16,
+    pub capabilities: u32,
+    pub build_id: Option<String>,
+    pub server_instance_id: Option<String>,
+    pub server_identity_id: Option<String>,
+    pub heartbeat_rtt_ms: u64,
+    pub attached: RemoteAttachedSummary,
+    pub rows: u16,
+    pub cols: u16,
+    pub cursor_x: u16,
+    pub cursor_y: u16,
+    pub cursor_visible: bool,
+    pub cursor_blinking: bool,
+    pub cursor_style: i32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteCell {
     pub codepoint: u32,
@@ -2154,6 +2182,127 @@ pub fn list_remote_daemon_sessions(
     })
 }
 
+pub fn attach_remote_daemon_session(
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+    expected_server_identity: Option<&str>,
+    session_id: u32,
+    attachment_id: Option<u64>,
+    resume_token: Option<u64>,
+) -> Result<RemoteAttachSummary, String> {
+    use std::net::TcpStream;
+
+    let mut stream = TcpStream::connect((host, port))
+        .map_err(|error| format!("failed to connect to {host}:{port}: {error}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .map_err(|error| format!("failed to configure read timeout for {host}:{port}: {error}"))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(3)))
+        .map_err(|error| format!("failed to configure write timeout for {host}:{port}: {error}"))?;
+
+    stream
+        .write_all(&encode_message(MessageType::Auth, &[]))
+        .map_err(|error| format!("failed to send auth request to {host}:{port}: {error}"))?;
+    let (ty, auth_payload) = read_probe_auth_reply(&mut stream, host, port)?;
+
+    let (auth_required, auth_ok_payload) = match ty {
+        MessageType::AuthOk => (false, auth_payload),
+        MessageType::AuthChallenge => {
+            let key = auth_key.ok_or_else(|| {
+                format!("remote endpoint {host}:{port} requires --auth-key for attach")
+            })?;
+            let mut mac = HmacSha256::new_from_slice(key.as_bytes()).expect("valid HMAC key");
+            mac.update(&auth_payload);
+            let response = mac.finalize().into_bytes().to_vec();
+            stream
+                .write_all(&encode_message(MessageType::Auth, &response))
+                .map_err(|error| format!("failed to send auth response to {host}:{port}: {error}"))?;
+            let (reply_ty, reply_payload) = read_message(&mut stream).map_err(|error| {
+                format!("failed to read authenticated reply from {host}:{port}: {error}")
+            })?;
+            if reply_ty != MessageType::AuthOk {
+                return Err(format!(
+                    "expected auth ok from {host}:{port}, got {reply_ty:?}"
+                ));
+            }
+            (true, reply_payload)
+        }
+        MessageType::AuthFail => {
+            return Err(format!("authentication failed for remote endpoint {host}:{port}"));
+        }
+        other => {
+            return Err(format!(
+                "unexpected auth reply from {host}:{port}: {other:?}"
+            ));
+        }
+    };
+
+    validate_auth_ok_payload(&auth_ok_payload, auth_required)?;
+    let (protocol_version, capabilities, build_id, server_instance_id, server_identity_id) =
+        decode_auth_ok_payload(&auth_ok_payload).ok_or_else(|| {
+            format!("remote endpoint {host}:{port} returned malformed handshake metadata")
+        })?;
+    if let Some(expected_server_identity) = expected_server_identity {
+        if server_identity_id.as_deref() != Some(expected_server_identity) {
+            return Err(format!(
+                "remote endpoint {host}:{port} reported daemon identity {:?}, expected {:?}",
+                server_identity_id,
+                expected_server_identity
+            ));
+        }
+    }
+
+    let heartbeat_payload = b"boo-remote-attach";
+    let heartbeat_start = Instant::now();
+    stream
+        .write_all(&encode_message(MessageType::Heartbeat, heartbeat_payload))
+        .map_err(|error| format!("failed to send heartbeat to {host}:{port}: {error}"))?;
+    let (_heartbeat_ty, heartbeat_reply) =
+        read_probe_reply(&mut stream, host, port, MessageType::HeartbeatAck)?;
+    if heartbeat_reply != heartbeat_payload {
+        return Err(format!(
+            "heartbeat payload mismatch from remote endpoint {host}:{port}"
+        ));
+    }
+
+    let mut attach_payload = session_id.to_le_bytes().to_vec();
+    if let Some(attachment_id) = attachment_id {
+        attach_payload.extend_from_slice(&attachment_id.to_le_bytes());
+    }
+    if let Some(resume_token) = resume_token {
+        if attachment_id.is_none() {
+            return Err("resume token requires attachment id".to_string());
+        }
+        attach_payload.extend_from_slice(&resume_token.to_le_bytes());
+    }
+    stream
+        .write_all(&encode_message(MessageType::Attach, &attach_payload))
+        .map_err(|error| format!("failed to send attach request to {host}:{port}: {error}"))?;
+
+    let (attached, full_state) = read_attach_bootstrap(&mut stream, host, port)?;
+    Ok(RemoteAttachSummary {
+        host: host.to_string(),
+        port,
+        auth_required,
+        protocol_version,
+        capabilities,
+        build_id,
+        server_instance_id,
+        server_identity_id,
+        heartbeat_rtt_ms: heartbeat_start.elapsed().as_millis() as u64,
+        attached,
+        rows: full_state.rows,
+        cols: full_state.cols,
+        cursor_x: full_state.cursor_x,
+        cursor_y: full_state.cursor_y,
+        cursor_visible: full_state.cursor_visible,
+        cursor_blinking: full_state.cursor_blinking,
+        cursor_style: full_state.cursor_style,
+    })
+}
+
 fn read_probe_reply(
     stream: &mut impl Read,
     host: &str,
@@ -2194,6 +2343,59 @@ fn read_probe_reply(
     }
     Err(format!(
         "timed out waiting for {expected:?} from remote endpoint {host}:{port}"
+    ))
+}
+
+fn read_attach_bootstrap(
+    stream: &mut impl Read,
+    host: &str,
+    port: u16,
+) -> Result<(RemoteAttachedSummary, RemoteFullState), String> {
+    let mut attached = None;
+    let mut full_state = None;
+    for _ in 0..12 {
+        let (ty, payload) = read_message(stream)
+            .map_err(|error| format!("failed to read attach reply from {host}:{port}: {error}"))?;
+        match ty {
+            MessageType::Attached => {
+                attached = Some(
+                    decode_attached_payload(&payload)
+                        .map_err(|error| format!("invalid attached payload from {host}:{port}: {error}"))?,
+                );
+            }
+            MessageType::FullState => {
+                full_state = Some(
+                    decode_remote_full_state_payload(&payload)
+                        .map_err(|error| format!("invalid full state payload from {host}:{port}: {error}"))?,
+                );
+            }
+            MessageType::Delta => continue,
+            MessageType::AuthFail => {
+                return Err(format!("authentication failed for remote endpoint {host}:{port}"));
+            }
+            MessageType::ErrorMsg => {
+                let message = String::from_utf8_lossy(&payload);
+                return Err(format!(
+                    "remote endpoint {host}:{port} reported attach error: {message}"
+                ));
+            }
+            MessageType::Detached => {
+                return Err(format!(
+                    "remote endpoint {host}:{port} detached immediately after attach"
+                ));
+            }
+            other => {
+                return Err(format!(
+                    "unexpected attach reply from {host}:{port}: {other:?}"
+                ));
+            }
+        }
+        if let (Some(attached), Some(full_state)) = (attached.clone(), full_state.clone()) {
+            return Ok((attached, full_state));
+        }
+    }
+    Err(format!(
+        "timed out waiting for attach bootstrap from remote endpoint {host}:{port}"
     ))
 }
 
@@ -2303,6 +2505,112 @@ fn decode_session_list_payload(payload: &[u8]) -> Result<Vec<RemoteDirectSession
         return Err("payload has trailing bytes".to_string());
     }
     Ok(sessions)
+}
+
+fn decode_attached_payload(payload: &[u8]) -> Result<RemoteAttachedSummary, String> {
+    if payload.len() < 4 {
+        return Err("payload too short".to_string());
+    }
+    let session_id = u32::from_le_bytes(
+        payload[..4]
+            .try_into()
+            .map_err(|_| "invalid session id".to_string())?,
+    );
+    let attachment_id = if payload.len() >= 12 {
+        Some(u64::from_le_bytes(
+            payload[4..12]
+                .try_into()
+                .map_err(|_| "invalid attachment id".to_string())?,
+        ))
+    } else {
+        None
+    };
+    let resume_token = if payload.len() >= 20 {
+        Some(u64::from_le_bytes(
+            payload[12..20]
+                .try_into()
+                .map_err(|_| "invalid resume token".to_string())?,
+        ))
+    } else {
+        None
+    };
+    if payload.len() != 4 && payload.len() != 12 && payload.len() != 20 {
+        return Err("payload has unexpected length".to_string());
+    }
+    Ok(RemoteAttachedSummary {
+        session_id,
+        attachment_id,
+        resume_token,
+    })
+}
+
+fn decode_remote_full_state_payload(payload: &[u8]) -> Result<RemoteFullState, String> {
+    if payload.len() < REMOTE_FULL_STATE_HEADER_LEN {
+        return Err("payload too short".to_string());
+    }
+    let rows = u16::from_le_bytes(
+        payload[0..2]
+            .try_into()
+            .map_err(|_| "invalid rows".to_string())?,
+    );
+    let cols = u16::from_le_bytes(
+        payload[2..4]
+            .try_into()
+            .map_err(|_| "invalid cols".to_string())?,
+    );
+    let cursor_x = u16::from_le_bytes(
+        payload[4..6]
+            .try_into()
+            .map_err(|_| "invalid cursor_x".to_string())?,
+    );
+    let cursor_y = u16::from_le_bytes(
+        payload[6..8]
+            .try_into()
+            .map_err(|_| "invalid cursor_y".to_string())?,
+    );
+    let cursor_visible = payload[8] != 0;
+    let cursor_blinking = payload[9] != 0;
+    let cursor_style = i32::from_le_bytes(
+        payload[10..14]
+            .try_into()
+            .map_err(|_| "invalid cursor_style".to_string())?,
+    );
+    let cell_count = rows as usize * cols as usize;
+    let expected_len = REMOTE_FULL_STATE_HEADER_LEN + cell_count * REMOTE_CELL_ENCODED_LEN;
+    if payload.len() != expected_len {
+        return Err("payload length does not match grid size".to_string());
+    }
+    let mut cells = Vec::with_capacity(cell_count);
+    let mut offset = REMOTE_FULL_STATE_HEADER_LEN;
+    for _ in 0..cell_count {
+        let codepoint = u32::from_le_bytes(
+            payload[offset..offset + 4]
+                .try_into()
+                .map_err(|_| "invalid codepoint".to_string())?,
+        );
+        let fg = [payload[offset + 4], payload[offset + 5], payload[offset + 6]];
+        let bg = [payload[offset + 7], payload[offset + 8], payload[offset + 9]];
+        let style_flags = payload[offset + 10];
+        let wide = payload[offset + 11] != 0;
+        cells.push(RemoteCell {
+            codepoint,
+            fg,
+            bg,
+            style_flags,
+            wide,
+        });
+        offset += REMOTE_CELL_ENCODED_LEN;
+    }
+    Ok(RemoteFullState {
+        rows,
+        cols,
+        cursor_x,
+        cursor_y,
+        cursor_visible,
+        cursor_blinking,
+        cursor_style,
+        cells,
+    })
 }
 
 fn send_direct_error(state: &Arc<Mutex<State>>, client_id: u64, message: &str) {
@@ -3766,6 +4074,141 @@ mod tests {
         );
 
         server.join().expect("list server thread");
+    }
+
+    #[test]
+    fn decode_attached_payload_accepts_legacy_and_resume_forms() {
+        let legacy = decode_attached_payload(&7_u32.to_le_bytes()).expect("legacy attached");
+        assert_eq!(legacy.session_id, 7);
+        assert_eq!(legacy.attachment_id, None);
+        assert_eq!(legacy.resume_token, None);
+
+        let mut resumed = 7_u32.to_le_bytes().to_vec();
+        resumed.extend_from_slice(&99_u64.to_le_bytes());
+        resumed.extend_from_slice(&1234_u64.to_le_bytes());
+        let resumed = decode_attached_payload(&resumed).expect("resumed attached");
+        assert_eq!(resumed.session_id, 7);
+        assert_eq!(resumed.attachment_id, Some(99));
+        assert_eq!(resumed.resume_token, Some(1234));
+    }
+
+    #[test]
+    fn decode_remote_full_state_payload_round_trips_encoded_state() {
+        let state = RemoteFullState {
+            rows: 1,
+            cols: 2,
+            cursor_x: 1,
+            cursor_y: 0,
+            cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 2,
+            cells: vec![
+                RemoteCell {
+                    codepoint: u32::from('A'),
+                    fg: [1, 2, 3],
+                    bg: [4, 5, 6],
+                    style_flags: STYLE_FLAG_BOLD,
+                    wide: false,
+                },
+                RemoteCell {
+                    codepoint: u32::from('B'),
+                    fg: [7, 8, 9],
+                    bg: [10, 11, 12],
+                    style_flags: STYLE_FLAG_ITALIC,
+                    wide: true,
+                },
+            ],
+        };
+        let payload = encode_full_state(&state, None, false);
+        let decoded = decode_remote_full_state_payload(&payload).expect("decode full state");
+        assert_eq!(decoded, state);
+    }
+
+    #[test]
+    fn attach_remote_daemon_session_reads_attached_and_initial_state_over_socket() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
+        let port = listener.local_addr().expect("listener addr").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept attach client");
+            let (ty, payload) = read_message(&mut stream).expect("read auth request");
+            assert_eq!(ty, MessageType::Auth);
+            assert!(payload.is_empty());
+
+            stream
+                .write_all(&encode_message(
+                    MessageType::AuthOk,
+                    &encode_auth_ok_payload("test-daemon", "test-instance"),
+                ))
+                .expect("write auth ok");
+
+            let (ty, payload) = read_message(&mut stream).expect("read heartbeat");
+            assert_eq!(ty, MessageType::Heartbeat);
+            stream
+                .write_all(&encode_message(MessageType::HeartbeatAck, &payload))
+                .expect("write heartbeat ack");
+
+            let (ty, payload) = read_message(&mut stream).expect("read attach");
+            assert_eq!(ty, MessageType::Attach);
+            let (session_id, attachment_id, resume_token) =
+                parse_attach_request(&payload).expect("decoded attach");
+            assert_eq!(session_id, 7);
+            assert_eq!(attachment_id, Some(99));
+            assert_eq!(resume_token, Some(1234));
+
+            let mut attached = 7_u32.to_le_bytes().to_vec();
+            attached.extend_from_slice(&99_u64.to_le_bytes());
+            attached.extend_from_slice(&1234_u64.to_le_bytes());
+            stream
+                .write_all(&encode_message(MessageType::Attached, &attached))
+                .expect("write attached");
+
+            let state = RemoteFullState {
+                rows: 1,
+                cols: 1,
+                cursor_x: 0,
+                cursor_y: 0,
+                cursor_visible: true,
+                cursor_blinking: true,
+                cursor_style: 1,
+                cells: vec![RemoteCell {
+                    codepoint: u32::from('Z'),
+                    fg: [1, 2, 3],
+                    bg: [4, 5, 6],
+                    style_flags: 0,
+                    wide: false,
+                }],
+            };
+            stream
+                .write_all(&encode_message(
+                    MessageType::FullState,
+                    &encode_full_state(&state, None, false),
+                ))
+                .expect("write full state");
+        });
+
+        let summary = attach_remote_daemon_session(
+            "127.0.0.1",
+            port,
+            None,
+            Some("test-daemon"),
+            7,
+            Some(99),
+            Some(1234),
+        )
+        .expect("attach summary");
+        assert_eq!(summary.protocol_version, REMOTE_PROTOCOL_VERSION);
+        assert_eq!(summary.server_identity_id.as_deref(), Some("test-daemon"));
+        assert_eq!(summary.server_instance_id.as_deref(), Some("test-instance"));
+        assert_eq!(summary.attached.session_id, 7);
+        assert_eq!(summary.attached.attachment_id, Some(99));
+        assert_eq!(summary.attached.resume_token, Some(1234));
+        assert_eq!(summary.rows, 1);
+        assert_eq!(summary.cols, 1);
+        assert_eq!(summary.cursor_style, 1);
+
+        server.join().expect("attach server thread");
     }
 
     #[test]

@@ -145,6 +145,23 @@ pub enum Command {
         #[arg(long = "expect-server-identity")]
         expect_server_identity: Option<String>,
     },
+    /// Attach to a session on a Boo-native TCP remote daemon directly
+    RemoteDaemonAttach {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long)]
+        port: u16,
+        #[arg(long = "session-id")]
+        session_id: u32,
+        #[arg(long = "auth-key")]
+        auth_key: Option<String>,
+        #[arg(long = "expect-server-identity")]
+        expect_server_identity: Option<String>,
+        #[arg(long = "attachment-id")]
+        attachment_id: Option<u64>,
+        #[arg(long = "resume-token")]
+        resume_token: Option<u64>,
+    },
     /// Show connected remote and local-stream client diagnostics
     RemoteClients,
     /// Create a new live session
@@ -304,6 +321,39 @@ where
                 use std::io::Write;
                 if serde_json::to_writer_pretty(&mut stdout, &summary).is_err() {
                     eprintln!("failed to serialize remote daemon session summary");
+                    return Outcome::Exit(1);
+                }
+                let _ = writeln!(stdout);
+                let _ = stdout.flush();
+                Outcome::Exit(0)
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                Outcome::Exit(1)
+            }
+        },
+        Command::RemoteDaemonAttach {
+            host,
+            port,
+            session_id,
+            auth_key,
+            expect_server_identity,
+            attachment_id,
+            resume_token,
+        } => match crate::remote::attach_remote_daemon_session(
+            host,
+            *port,
+            auth_key.as_deref(),
+            expect_server_identity.as_deref(),
+            *session_id,
+            *attachment_id,
+            *resume_token,
+        ) {
+            Ok(summary) => {
+                let mut stdout = std::io::stdout().lock();
+                use std::io::Write;
+                if serde_json::to_writer_pretty(&mut stdout, &summary).is_err() {
+                    eprintln!("failed to serialize remote daemon attach summary");
                     return Outcome::Exit(1);
                 }
                 let _ = writeln!(stdout);
@@ -476,6 +526,48 @@ mod tests {
                 assert_eq!(port, 7337);
                 assert_eq!(auth_key.as_deref(), Some("secret"));
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_remote_daemon_attach_subcommand() {
+        let cli = Cli::parse_from([
+            "boo",
+            "remote-daemon-attach",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "7337",
+            "--session-id",
+            "42",
+            "--auth-key",
+            "secret",
+            "--expect-server-identity",
+            "daemon-01",
+            "--attachment-id",
+            "99",
+            "--resume-token",
+            "1234",
+        ]);
+        match cli.command {
+            Some(super::Command::RemoteDaemonAttach {
+                host,
+                port,
+                session_id,
+                auth_key,
+                expect_server_identity,
+                attachment_id,
+                resume_token,
+            }) => {
+                assert_eq!(host, "127.0.0.1");
+                assert_eq!(port, 7337);
+                assert_eq!(session_id, 42);
+                assert_eq!(auth_key.as_deref(), Some("secret"));
+                assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
+                assert_eq!(attachment_id, Some(99));
+                assert_eq!(resume_token, Some(1234));
             }
             other => panic!("unexpected command: {other:?}"),
         }
