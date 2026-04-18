@@ -763,7 +763,7 @@ impl ClientApp {
                 let stale_heartbeats = snapshot
                     .clients
                     .iter()
-                    .filter(|client| client.last_heartbeat_age_ms.is_some_and(|age| age > 5_000))
+                    .filter(|client| client.heartbeat_overdue)
                     .count();
                 Some(format!(
                     "diag c={} a={} p={} h={} r={}",

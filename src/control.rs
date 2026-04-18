@@ -1054,6 +1054,8 @@ mod tests {
                                 connection_age_ms: 0,
                                 authenticated_age_ms: Some(0),
                                 last_heartbeat_age_ms: Some(0),
+                                heartbeat_expires_in_ms: Some(20_000),
+                                heartbeat_overdue: false,
                                 challenge_expires_in_ms: None,
                             }],
                             revivable_attachments: Vec::new(),

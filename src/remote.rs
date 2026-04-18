@@ -177,6 +177,8 @@ pub struct RemoteClientInfo {
     pub connection_age_ms: u64,
     pub authenticated_age_ms: Option<u64>,
     pub last_heartbeat_age_ms: Option<u64>,
+    pub heartbeat_expires_in_ms: Option<u64>,
+    pub heartbeat_overdue: bool,
     pub challenge_expires_in_ms: Option<u64>,
 }
 
@@ -574,27 +576,41 @@ impl RemoteServer {
         let mut clients = state
             .clients
             .iter()
-            .map(|(client_id, client)| RemoteClientInfo {
-                client_id: *client_id,
-                authenticated: client.authenticated,
-                is_local: client.is_local,
-                challenge_pending: client.challenge.is_some(),
-                attached_session: client.attached_session,
-                attachment_id: client.attachment_id,
-                resume_token_present: client.resume_token.is_some(),
-                has_cached_state: client.last_state.is_some(),
-                pane_state_count: client.pane_states.len(),
-                latest_input_seq: client.latest_input_seq,
-                connection_age_ms: elapsed_ms(now, client.connected_at),
-                authenticated_age_ms: client
-                    .authenticated_at
-                    .map(|authenticated_at| elapsed_ms(now, authenticated_at)),
-                last_heartbeat_age_ms: client
-                    .last_heartbeat_at
-                    .map(|last_heartbeat_at| elapsed_ms(now, last_heartbeat_at)),
-                challenge_expires_in_ms: client
-                    .challenge
-                    .map(|challenge| remaining_ms(now, challenge.expires_at)),
+            .map(|(client_id, client)| {
+                let heartbeat_deadline = if client.authenticated && !client.is_local {
+                    client
+                        .last_heartbeat_at
+                        .or(client.authenticated_at)
+                        .map(|last_liveness| last_liveness + DIRECT_CLIENT_HEARTBEAT_WINDOW)
+                } else {
+                    None
+                };
+                RemoteClientInfo {
+                    client_id: *client_id,
+                    authenticated: client.authenticated,
+                    is_local: client.is_local,
+                    challenge_pending: client.challenge.is_some(),
+                    attached_session: client.attached_session,
+                    attachment_id: client.attachment_id,
+                    resume_token_present: client.resume_token.is_some(),
+                    has_cached_state: client.last_state.is_some(),
+                    pane_state_count: client.pane_states.len(),
+                    latest_input_seq: client.latest_input_seq,
+                    connection_age_ms: elapsed_ms(now, client.connected_at),
+                    authenticated_age_ms: client
+                        .authenticated_at
+                        .map(|authenticated_at| elapsed_ms(now, authenticated_at)),
+                    last_heartbeat_age_ms: client
+                        .last_heartbeat_at
+                        .map(|last_heartbeat_at| elapsed_ms(now, last_heartbeat_at)),
+                    heartbeat_expires_in_ms: heartbeat_deadline
+                        .map(|deadline| remaining_ms(now, deadline)),
+                    heartbeat_overdue: heartbeat_deadline
+                        .is_some_and(|deadline| now >= deadline),
+                    challenge_expires_in_ms: client
+                        .challenge
+                        .map(|challenge| remaining_ms(now, challenge.expires_at)),
+                }
             })
             .collect::<Vec<_>>();
         clients.sort_by_key(|client| client.client_id);
@@ -4027,6 +4043,10 @@ mod tests {
         assert!(client.connection_age_ms <= 250);
         assert!(client.authenticated_age_ms.is_some_and(|age| age <= 250));
         assert!(client.last_heartbeat_age_ms.is_some_and(|age| age <= 250));
+        assert!(client.heartbeat_expires_in_ms.is_some_and(
+            |ms| ms <= DIRECT_CLIENT_HEARTBEAT_WINDOW.as_millis() as u64
+        ));
+        assert!(!client.heartbeat_overdue);
         assert_eq!(client.challenge_expires_in_ms, None);
     }
 
@@ -4139,7 +4159,57 @@ mod tests {
         assert!(client.connection_age_ms >= 2_000);
         assert_eq!(client.authenticated_age_ms, None);
         assert!(client.last_heartbeat_age_ms.is_some_and(|age| age >= 750));
+        assert_eq!(client.heartbeat_expires_in_ms, None);
+        assert!(!client.heartbeat_overdue);
         assert!(client.challenge_expires_in_ms.is_some_and(|age| age > 0));
+    }
+
+    #[test]
+    fn clients_snapshot_reports_overdue_direct_heartbeat() {
+        let (tx, _rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: tx,
+                    authenticated: true,
+                    challenge: None,
+                    connected_at: Instant::now() - Duration::from_secs(30),
+                    authenticated_at: Some(
+                        Instant::now() - DIRECT_CLIENT_HEARTBEAT_WINDOW - Duration::from_secs(1),
+                    ),
+                    last_heartbeat_at: Some(
+                        Instant::now() - DIRECT_CLIENT_HEARTBEAT_WINDOW - Duration::from_secs(1),
+                    ),
+                    attached_session: None,
+                    attachment_id: None,
+                    resume_token: None,
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: false,
+                },
+            )]),
+            revivable_attachments: HashMap::new(),
+            auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
+            server_instance_id: "test-instance".to_string(),
+        }));
+        let server = RemoteServer {
+            state,
+            _listener: std::thread::spawn(|| {}),
+            _advertiser: None,
+            local_socket_path: None,
+        };
+
+        let snapshot = server.clients_snapshot();
+        assert_eq!(snapshot.clients.len(), 1);
+        let client = &snapshot.clients[0];
+        assert!(client.heartbeat_overdue);
+        assert_eq!(client.heartbeat_expires_in_ms, Some(0));
     }
 
     #[test]
