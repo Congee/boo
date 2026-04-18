@@ -148,7 +148,7 @@ fn print_completions<G: Generator>(generator: G) -> Result<(), String> {
 
 pub fn handle_command<F>(cli: &Cli, boo_config: &config::Config, mut ensure_server_running: F) -> Outcome
 where
-    F: FnMut(&str, &config::Config),
+    F: FnMut(&str, &config::Config) -> bool,
 {
     let Some(command) = cli.command.as_ref() else {
         return Outcome::Continue;
@@ -162,9 +162,20 @@ where
         .clone()
         .unwrap_or_else(control::default_socket_path);
 
+    let mut require_server = || {
+        if ensure_server_running(&socket_path, boo_config) {
+            true
+        } else {
+            eprintln!("failed to ensure boo server is running at {socket_path}");
+            false
+        }
+    };
+
     match command {
         Command::Ls => {
-            ensure_server_running(&socket_path, boo_config);
+            if !require_server() {
+                return Outcome::Exit(1);
+            }
             let client = control::Client::connect(socket_path);
             match client.request(&control::Request::ListTabs) {
                 Ok(control::Response::Tabs { tabs }) => {
@@ -192,7 +203,9 @@ where
             }
         }
         Command::RemoteClients => {
-            ensure_server_running(&socket_path, boo_config);
+            if !require_server() {
+                return Outcome::Exit(1);
+            }
             let client = control::Client::connect(socket_path);
             match client.get_remote_clients() {
                 Ok(snapshot) => {
@@ -225,7 +238,9 @@ where
             Outcome::Exit(0)
         }
         Command::KillServer | Command::QuitServer => {
-            ensure_server_running(&socket_path, boo_config);
+            if !require_server() {
+                return Outcome::Exit(1);
+            }
             let client = control::Client::connect(socket_path);
             if let Err(error) = client.send(&control::Request::Quit) {
                 eprintln!("{error}");
@@ -244,7 +259,9 @@ where
             }
         }
         Command::NewSession => {
-            ensure_server_running(&socket_path, boo_config);
+            if !require_server() {
+                return Outcome::Exit(1);
+            }
             let client = control::Client::connect(socket_path);
             if let Err(error) = client.send(&control::Request::NewTab) {
                 eprintln!("{error}");
@@ -351,5 +368,18 @@ mod tests {
         assert!(long.contains("local forwarded socket"));
         assert!(long.contains("Remote Boo control socket path on the SSH host"));
         assert!(long.contains("Boo-native TCP remote daemon"));
+    }
+
+    #[test]
+    fn command_exits_when_server_bootstrap_fails() {
+        let cli = Cli::parse_from(["boo", "remote-clients"]);
+        let config = crate::config::Config::default();
+        let mut ensured = 0;
+        let outcome = super::handle_command(&cli, &config, |_, _| {
+            ensured += 1;
+            false
+        });
+        assert_eq!(ensured, 1);
+        assert!(matches!(outcome, super::Outcome::Exit(1)));
     }
 }

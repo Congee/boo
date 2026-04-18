@@ -235,7 +235,9 @@ pub fn run_gui_client() {
         .clone()
         .unwrap_or_else(control::default_socket_path);
 
-    ensure_server_running(&socket_path, &boo_config);
+    if !ensure_server_running(&socket_path, &boo_config) {
+        return;
+    }
     crate::platform::install_command_drag_monitor();
     install_ordered_font_fallbacks(&boo_config);
     let remote_host = boo_config.remote_host.clone();
@@ -405,20 +407,19 @@ fn system_text_fallback_fonts() -> Vec<Cow<'static, [u8]>> {
     }
 }
 
-pub fn ensure_server_running(socket_path: &str, boo_config: &config::Config) {
+pub fn ensure_server_running(socket_path: &str, boo_config: &config::Config) -> bool {
     if let Some(host) = boo_config.remote_host.as_deref() {
-        ensure_remote_server_running(host, socket_path, boo_config);
-        return;
+        return ensure_remote_server_running(host, socket_path, boo_config);
     }
 
     let client = control::Client::connect(socket_path.to_string());
     if server_ui_ready(&client) {
-        return;
+        return true;
     }
 
     let Ok(exe) = std::env::current_exe() else {
         log::error!("failed to locate current executable for server autostart");
-        return;
+        return false;
     };
     let mut command = std::process::Command::new(exe);
     command.arg("server").arg("--socket").arg(socket_path);
@@ -436,30 +437,35 @@ pub fn ensure_server_running(socket_path: &str, boo_config: &config::Config) {
         .stderr(std::process::Stdio::null());
     if let Err(error) = command.spawn() {
         log::error!("failed to spawn boo server: {error}");
-        return;
+        return false;
     }
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     while std::time::Instant::now() < deadline {
         if server_ui_ready(&client) {
-            return;
+            return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     log::warn!("boo server did not become ready at {socket_path}");
+    false
 }
 
-fn ensure_remote_server_running(host: &str, local_socket_path: &str, boo_config: &config::Config) {
+fn ensure_remote_server_running(
+    host: &str,
+    local_socket_path: &str,
+    boo_config: &config::Config,
+) -> bool {
     let client = control::Client::connect(local_socket_path.to_string());
     if server_ui_ready(&client) {
-        return;
+        return true;
     }
 
     let resolved_paths = match resolve_remote_paths(host, boo_config) {
         Ok(paths) => paths,
         Err(error) => {
             log::error!("failed to resolve remote paths for {host}: {error}");
-            return;
+            return false;
         }
     };
     log::info!(
@@ -472,19 +478,19 @@ fn ensure_remote_server_running(host: &str, local_socket_path: &str, boo_config:
     );
     if let Err(error) = ensure_remote_bootstrap_ready(host, &resolved_paths) {
         log::error!("failed remote bootstrap preflight on {host}: {error}");
-        return;
+        return false;
     }
     if let Err(error) = ensure_remote_version_compatible(host, &resolved_paths) {
         log::error!("failed to verify remote boo version on {host}: {error}");
-        return;
+        return false;
     }
     if let Err(error) = bootstrap_remote_server(host, &resolved_paths) {
         log::error!("failed to bootstrap remote boo on {host}: {error}");
-        return;
+        return false;
     }
     if let Err(error) = ensure_remote_tunnel(host, local_socket_path, &resolved_paths.socket_path) {
         log::error!("failed to establish SSH tunnel to {host}: {error}");
-        return;
+        return false;
     }
     if let Err(error) =
         ensure_remote_control_version_compatible(host, local_socket_path, &resolved_paths)
@@ -498,7 +504,7 @@ fn ensure_remote_server_running(host: &str, local_socket_path: &str, boo_config:
                 log::error!(
                     "failed to restart remote boo on {host} after version negotiation error: {restart_error}"
                 );
-                return;
+                return false;
             }
             if let Err(retry_error) =
                 ensure_remote_control_version_compatible(host, local_socket_path, &resolved_paths)
@@ -506,22 +512,23 @@ fn ensure_remote_server_running(host: &str, local_socket_path: &str, boo_config:
                 log::error!(
                     "failed remote control version check on {host} after restart: {retry_error}"
                 );
-                return;
+                return false;
             }
         } else {
             log::error!("failed remote control version check on {host}: {error}");
-            return;
+            return false;
         }
     }
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
     while std::time::Instant::now() < deadline {
         if server_ui_ready(&client) {
-            return;
+            return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     log::warn!("remote boo server did not become ready through {local_socket_path}");
+    false
 }
 
 fn bootstrap_remote_server(
