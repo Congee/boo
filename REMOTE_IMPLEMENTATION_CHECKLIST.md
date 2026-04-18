@@ -384,7 +384,7 @@ These are implementation questions, not product-direction questions:
 - [ ] exact wire format for the new unified handshake
 - [ ] exact channel framing for multiplexing
 - [ ] whether the preferred live transport should be QUIC directly or a comparable migration-capable design
-- [ ] exact timeout values for:
+- [x] exact timeout values for:
   - heartbeat
   - reconnect notification
   - reconnect deadline

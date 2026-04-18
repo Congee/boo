@@ -379,14 +379,19 @@ These requirements matter for both iOS and desktop laptops that roam across netw
 
 The remote transport shall define explicit time windows:
 
-- heartbeat timeout:
-  - on the order of a few seconds, used to detect a broken path promptly
+- auth challenge window:
+  - 10 seconds on the native daemon before an unanswered HMAC challenge expires
+- direct-client heartbeat window on the native daemon:
+  - 20 seconds before a direct authenticated client is expired for missing heartbeats
+- iOS heartbeat cadence:
+  - send heartbeat every 5 seconds
 - reconnect notification threshold:
-  - after the transport has been reconnecting long enough that the UI should surface it
+  - surface degraded state after 8 seconds without a heartbeat acknowledgement
 - reconnect deadline:
-  - after this deadline, the client stops trying to silently recover and reports failure
+  - treat the connection as lost after 15 seconds without a heartbeat acknowledgement
+  - after loss, iOS retries every 2 seconds for up to 5 attempts before declaring reconnect failure
 - session revival window:
-  - the server may keep resumable session state for a longer bounded period after client disconnect
+  - the server keeps resumable attachment state for 30 seconds after disconnect
 
 The exact numbers may be tuned in implementation, but the product requirement is that all four windows exist and are explicit in the transport design.
 
