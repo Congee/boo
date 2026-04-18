@@ -445,6 +445,37 @@ If Boo moves toward one canonical remote transport, the protocol should support 
 
 This keeps the current Boo split between control and stream semantics while allowing a single network endpoint for both desktop and iOS.
 
+### Current Native Handshake Wire Format
+
+Until the unified transport introduces channel multiplexing, the native Boo daemon handshake shall
+be documented as follows:
+
+- every frame starts with:
+  - 2-byte magic: `GS`
+  - 1-byte message type
+  - 4-byte little-endian payload length
+- client auth bootstrap:
+  - client sends `Auth` with an empty payload
+  - auth-required server replies with `AuthChallenge` carrying 32 random bytes
+  - authless server replies with `AuthOk`
+  - auth-required client replies with `Auth` carrying `HMAC-SHA256(challenge, auth_key)`
+- `AuthOk` payload layout:
+  - `u16` protocol version
+  - `u32` capability bits
+  - `u16` build-id byte length followed by UTF-8 build-id bytes
+  - `u16` server-instance-id byte length followed by UTF-8 bytes
+  - `u16` server-identity-id byte length followed by UTF-8 bytes
+- `Attach` payload layout:
+  - `u32` session id
+  - optional `u64` attachment id
+  - optional `u64` resume token
+- `Attached` payload layout:
+  - `u32` session id
+  - optional `u64` attachment id
+  - optional `u64` resume token
+- `Heartbeat` / `HeartbeatAck` payload:
+  - opaque client token bytes echoed unchanged by the server
+
 ### Security Model
 
 The canonical Boo-native remote protocol shall require:

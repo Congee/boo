@@ -381,7 +381,7 @@ Goal:
 
 These are implementation questions, not product-direction questions:
 
-- [ ] exact wire format for the new unified handshake
+- [x] exact wire format for the new unified handshake
 - [ ] exact channel framing for multiplexing
 - [ ] whether the preferred live transport should be QUIC directly or a comparable migration-capable design
 - [x] exact timeout values for:
