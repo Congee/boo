@@ -1056,6 +1056,8 @@ mod tests {
                                 client_id: 7,
                                 authenticated: true,
                                 is_local: false,
+                                transport_kind: "tcp".to_string(),
+                                server_socket_path: Some("/tmp/boo.sock".to_string()),
                                 challenge_pending: false,
                                 attached_session: Some(11),
                                 attachment_id: Some(0xabc),

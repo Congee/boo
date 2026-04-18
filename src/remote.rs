@@ -167,6 +167,8 @@ pub struct RemoteClientInfo {
     pub client_id: u64,
     pub authenticated: bool,
     pub is_local: bool,
+    pub transport_kind: String,
+    pub server_socket_path: Option<String>,
     pub challenge_pending: bool,
     pub attached_session: Option<u32>,
     pub attachment_id: Option<u64>,
@@ -619,6 +621,15 @@ impl RemoteServer {
                     client_id: *client_id,
                     authenticated: client.authenticated,
                     is_local: client.is_local,
+                    transport_kind: if client.is_local {
+                        "local".to_string()
+                    } else {
+                        "tcp".to_string()
+                    },
+                    server_socket_path: self
+                        .local_socket_path
+                        .as_ref()
+                        .map(|path| path.display().to_string()),
                     challenge_pending: client.challenge.is_some(),
                     attached_session: client.attached_session,
                     attachment_id: client.attachment_id,
@@ -4155,6 +4166,8 @@ mod tests {
         assert_eq!(client.client_id, 7);
         assert!(client.authenticated);
         assert!(!client.is_local);
+        assert_eq!(client.transport_kind, "tcp");
+        assert_eq!(client.server_socket_path, None);
         assert!(!client.challenge_pending);
         assert_eq!(client.attached_session, Some(11));
         assert_eq!(client.attachment_id, Some(0xabc));
@@ -4284,6 +4297,8 @@ mod tests {
         assert_eq!(snapshot.clients.len(), 1);
         let client = &snapshot.clients[0];
         assert!(!client.authenticated);
+        assert_eq!(client.transport_kind, "tcp");
+        assert_eq!(client.server_socket_path, None);
         assert!(client.challenge_pending);
         assert!(client.connection_age_ms >= 2_000);
         assert_eq!(client.authenticated_age_ms, None);
@@ -4338,6 +4353,8 @@ mod tests {
         assert_eq!(snapshot.servers.len(), 1);
         assert_eq!(snapshot.clients.len(), 1);
         let client = &snapshot.clients[0];
+        assert_eq!(client.transport_kind, "tcp");
+        assert_eq!(client.server_socket_path, None);
         assert!(client.heartbeat_overdue);
         assert_eq!(client.heartbeat_expires_in_ms, Some(0));
     }

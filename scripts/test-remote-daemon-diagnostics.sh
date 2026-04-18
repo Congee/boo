@@ -147,6 +147,12 @@ if pending_client is None:
     raise SystemExit("expected a pending-challenge client in diagnostics snapshot")
 if pending_client.get("authenticated"):
     raise SystemExit("pending-challenge client unexpectedly marked authenticated")
+if pending_client.get("transport_kind") != "tcp":
+    raise SystemExit(f"unexpected pending client transport_kind: {pending_client.get('transport_kind')!r}")
+if pending_client.get("server_socket_path") is not None:
+    raise SystemExit(
+        f"expected no local server_socket_path for tcp client, got {pending_client.get('server_socket_path')!r}"
+    )
 expires_in = pending_client.get("challenge_expires_in_ms")
 if not isinstance(expires_in, int) or expires_in <= 0:
     raise SystemExit(f"expected positive challenge_expires_in_ms, got {expires_in!r}")
@@ -161,6 +167,12 @@ heartbeat_client = next(
 )
 if heartbeat_client is None:
     raise SystemExit("expected an authenticated heartbeat client in diagnostics snapshot")
+if heartbeat_client.get("transport_kind") != "tcp":
+    raise SystemExit(f"unexpected heartbeat client transport_kind: {heartbeat_client.get('transport_kind')!r}")
+if heartbeat_client.get("server_socket_path") is not None:
+    raise SystemExit(
+        f"expected no local server_socket_path for tcp heartbeat client, got {heartbeat_client.get('server_socket_path')!r}"
+    )
 heartbeat_age = heartbeat_client.get("last_heartbeat_age_ms")
 if not isinstance(heartbeat_age, int) or heartbeat_age < 0 or heartbeat_age > 5_000:
     raise SystemExit(f"unexpected last_heartbeat_age_ms: {heartbeat_age!r}")
@@ -235,6 +247,10 @@ server_info = servers[0]
 if server_info.get("auth_required") is not False:
     raise SystemExit(
         f"expected auth_required false for authless server diagnostics, got {server_info.get('auth_required')!r}"
+    )
+if server_info.get("local_socket_path") is not None:
+    raise SystemExit(
+        f"expected no local_socket_path for authless tcp daemon, got {server_info.get('local_socket_path')!r}"
     )
 if server_info.get("heartbeat_window_ms") != 20_000:
     raise SystemExit(
