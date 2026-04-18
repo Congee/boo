@@ -43,6 +43,10 @@ fn ime_debug_enabled() -> bool {
     std::env::var_os("BOO_IME_DEBUG").is_some()
 }
 
+fn remote_debug_status_enabled() -> bool {
+    std::env::var_os("BOO_REMOTE_DEBUG_STATUS").is_some()
+}
+
 fn ime_debug(args: std::fmt::Arguments<'_>) {
     if ime_debug_enabled() {
         eprintln!("[boo-ime] {args}");
@@ -58,6 +62,7 @@ macro_rules! ime_debug {
 #[derive(Debug, Clone)]
 pub enum Message {
     Frame,
+    RemoteDiagnosticsTick,
     IcedEvent(Event),
     StreamReady(std::sync::mpsc::Sender<StreamCommand>),
     StreamEvent(LocalStreamEvent),
@@ -166,6 +171,8 @@ pub struct ClientApp {
     next_snapshot_generation: u64,
     last_mouse_pos: Point,
     last_requested_viewport_points: Option<(u32, u32)>,
+    remote_debug_enabled: bool,
+    remote_debug_summary: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -342,6 +349,8 @@ impl ClientApp {
             next_snapshot_generation: 2,
             last_mouse_pos: Point::ORIGIN,
             last_requested_viewport_points: None,
+            remote_debug_enabled: remote_debug_status_enabled(),
+            remote_debug_summary: None,
         };
         app.update_gui_test_status();
         (app, Task::none())
@@ -356,6 +365,7 @@ impl ClientApp {
         let mut tasks = Vec::new();
         match message {
             Message::Frame => self.on_tick(),
+            Message::RemoteDiagnosticsTick => self.refresh_remote_debug_summary(),
             Message::StreamReady(tx) => {
                 self.stream_tx = Some(tx);
                 if matches!(self.mode, ClientMode::Recovering) {
@@ -425,6 +435,7 @@ impl ClientApp {
                 self.mode,
                 self.last_error.as_deref(),
                 self.remote_host.as_deref(),
+                self.remote_debug_summary.as_deref(),
             )
         } else {
             String::new()
@@ -679,6 +690,11 @@ impl ClientApp {
             iced::Subscription::run_with(self.socket_path.clone(), local_stream_subscription),
             gui_test_subscription(),
         ];
+        if self.remote_debug_enabled {
+            subscriptions.push(
+                time::every(Duration::from_secs(1)).map(|_| Message::RemoteDiagnosticsTick),
+            );
+        }
         if !self.cursor_blink_interval.is_zero()
             && self.focused_pane_has_blinking_cursor()
             && self.has_paintable_terminal()
@@ -726,6 +742,40 @@ impl ClientApp {
                 self.last_error = Some(error);
             }
         }
+    }
+
+    fn refresh_remote_debug_summary(&mut self) {
+        if !self.remote_debug_enabled {
+            return;
+        }
+        self.remote_debug_summary = match self.client.get_remote_clients() {
+            Ok(snapshot) => {
+                let attached = snapshot
+                    .clients
+                    .iter()
+                    .filter(|client| client.attached_session.is_some())
+                    .count();
+                let pending = snapshot
+                    .clients
+                    .iter()
+                    .filter(|client| client.challenge_pending)
+                    .count();
+                let stale_heartbeats = snapshot
+                    .clients
+                    .iter()
+                    .filter(|client| client.last_heartbeat_age_ms.is_some_and(|age| age > 5_000))
+                    .count();
+                Some(format!(
+                    "diag c={} a={} p={} h={} r={}",
+                    snapshot.clients.len(),
+                    attached,
+                    pending,
+                    stale_heartbeats,
+                    snapshot.revivable_attachments.len()
+                ))
+            }
+            Err(error) => Some(format!("diag error: {error}")),
+        };
     }
 
     fn on_tick(&mut self) {
@@ -2938,6 +2988,7 @@ fn build_status_right(
     mode: ClientMode,
     last_error: Option<&str>,
     remote_host: Option<&str>,
+    remote_debug_summary: Option<&str>,
 ) -> String {
     let mut right_parts = Vec::new();
     let remote_prefix = match remote_host.filter(|value| !value.is_empty()) {
@@ -2962,6 +3013,9 @@ fn build_status_right(
     }
     if !ui_state.pwd.is_empty() {
         right_parts.push(ui_state.pwd.clone());
+    }
+    if let Some(summary) = remote_debug_summary.filter(|value| !value.is_empty()) {
+        right_parts.push(summary.to_string());
     }
     right_parts.join("  ")
 }
@@ -3955,7 +4009,7 @@ mod tests {
     fn fallback_status_right_shows_bootstrap_state() {
         let ui_state = ClientUiState::default();
         assert_eq!(
-            build_status_right(&ui_state, ClientMode::Bootstrapping, None, None),
+            build_status_right(&ui_state, ClientMode::Bootstrapping, None, None, None),
             "remote: bootstrapping"
         );
     }
@@ -3968,7 +4022,7 @@ mod tests {
             ..ClientUiState::default()
         };
         assert_eq!(
-            build_status_right(&ui_state, ClientMode::Recovering, None, None),
+            build_status_right(&ui_state, ClientMode::Recovering, None, None, None),
             "remote: recovering  2 panes  /tmp"
         );
     }
@@ -3985,6 +4039,7 @@ mod tests {
                 ClientMode::Recovering,
                 Some("boo server stream disconnected"),
                 None,
+                None,
             ),
             "remote: error boo server stream disconnected  /work"
         );
@@ -3998,7 +4053,7 @@ mod tests {
             ..ClientUiState::default()
         };
         assert_eq!(
-            build_status_right(&ui_state, ClientMode::Attached, None, None),
+            build_status_right(&ui_state, ClientMode::Attached, None, None, None),
             "remote: connected  2 panes  /repo"
         );
     }
@@ -4015,8 +4070,27 @@ mod tests {
                 ClientMode::Recovering,
                 Some("boo server stream disconnected"),
                 Some("example-mbp.local"),
+                None,
             ),
             "remote:example-mbp.local: error boo server stream disconnected  /repo"
+        );
+    }
+
+    #[test]
+    fn fallback_status_right_appends_remote_debug_summary() {
+        let ui_state = ClientUiState {
+            pwd: "/repo".to_string(),
+            ..ClientUiState::default()
+        };
+        assert_eq!(
+            build_status_right(
+                &ui_state,
+                ClientMode::Attached,
+                None,
+                Some("example-mbp.local"),
+                Some("diag c=2 a=1 p=1 h=0 r=1"),
+            ),
+            "remote:example-mbp.local: connected  /repo  diag c=2 a=1 p=1 h=0 r=1"
         );
     }
 }

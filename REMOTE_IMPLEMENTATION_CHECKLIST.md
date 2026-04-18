@@ -349,6 +349,7 @@ Goal:
 
 - [ ] Show remote host/connection state in desktop Boo
 - [ ] Show transport/debug state in logs or developer UI
+  - [x] add an opt-in desktop fallback-status debug summary sourced from `get-remote-clients`
 - [ ] Surface resumable/disconnected state cleanly
 
 ### 2. Observability
