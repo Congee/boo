@@ -127,12 +127,24 @@ enum ConnectionStatus: Equatable {
     case connectionLost(reason: String)
 }
 
+enum TransportHealth: Equatable {
+    case idle
+    case healthy
+    case degraded(reason: String)
+    case lost(reason: String)
+}
+
 @MainActor
 final class ConnectionMonitor: ObservableObject {
     @Published var status: ConnectionStatus = .disconnected
+    @Published var transportHealth: TransportHealth = .idle
 
     private let client: GSPClient
     private var cancellables = Set<AnyCancellable>()
+    private var heartbeatTimer: AnyCancellable?
+
+    private static let degradedHeartbeatAge: TimeInterval = 8
+    private static let lostHeartbeatAge: TimeInterval = 15
 
     private(set) var lastHost: String?
     private(set) var lastPort: UInt16?
@@ -146,15 +158,19 @@ final class ConnectionMonitor: ObservableObject {
     }
 
     private func observe() {
-        Publishers.CombineLatest4(
-            client.$connected,
-            client.$authenticated,
-            client.$attachedSessionId,
-            client.$lastError
+        Publishers.CombineLatest(
+            Publishers.CombineLatest4(
+                client.$connected,
+                client.$authenticated,
+                client.$attachedSessionId,
+                client.$lastError
+            ),
+            client.$lastHeartbeatAck
         )
         .receive(on: DispatchQueue.main)
-        .sink { [weak self] connected, authenticated, sessionId, error in
+        .sink { [weak self] values, lastHeartbeatAck in
             guard let self else { return }
+            let (connected, authenticated, sessionId, error) = values
 
             if let sessionId {
                 self.status = .attached(sessionId: sessionId)
@@ -169,8 +185,28 @@ final class ConnectionMonitor: ObservableObject {
             } else {
                 self.status = .disconnected
             }
+
+            self.updateTransportHealth(
+                connected: connected,
+                authenticated: authenticated,
+                error: error,
+                lastHeartbeatAck: lastHeartbeatAck
+            )
         }
         .store(in: &cancellables)
+
+        heartbeatTimer = Timer
+            .publish(every: 1, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.updateTransportHealth(
+                    connected: self.client.connected,
+                    authenticated: self.client.authenticated,
+                    error: self.client.lastError,
+                    lastHeartbeatAck: self.client.lastHeartbeatAck
+                )
+            }
     }
 
     func connect(host: String, port: UInt16, authKey: String = "", historyId: UUID? = nil, nodeId: UUID? = nil) {
@@ -180,6 +216,7 @@ final class ConnectionMonitor: ObservableObject {
         currentHistoryId = historyId
         currentNodeId = nodeId
         status = .connecting
+        transportHealth = .idle
         client.connect(host: host, port: port, authKey: authKey)
     }
 
@@ -191,6 +228,7 @@ final class ConnectionMonitor: ObservableObject {
     func disconnect() {
         client.disconnect()
         status = .disconnected
+        transportHealth = .idle
         lastHost = nil
         lastPort = nil
         lastAuthKey = nil
@@ -201,5 +239,38 @@ final class ConnectionMonitor: ObservableObject {
     func clearTrackedConnection() {
         currentHistoryId = nil
         currentNodeId = nil
+    }
+
+    private func updateTransportHealth(
+        connected: Bool,
+        authenticated: Bool,
+        error: String?,
+        lastHeartbeatAck: Date?
+    ) {
+        if let error, !connected {
+            transportHealth = .lost(reason: error)
+            return
+        }
+        guard connected else {
+            transportHealth = .idle
+            return
+        }
+        guard authenticated else {
+            transportHealth = .healthy
+            return
+        }
+        guard let lastHeartbeatAck else {
+            transportHealth = .degraded(reason: "Waiting for heartbeat")
+            return
+        }
+
+        let age = Date().timeIntervalSince(lastHeartbeatAck)
+        if age > Self.lostHeartbeatAge {
+            transportHealth = .lost(reason: "Heartbeat timed out")
+        } else if age > Self.degradedHeartbeatAge {
+            transportHealth = .degraded(reason: "Heartbeat delayed")
+        } else {
+            transportHealth = .healthy
+        }
     }
 }

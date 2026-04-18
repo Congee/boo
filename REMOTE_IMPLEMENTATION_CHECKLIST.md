@@ -191,6 +191,9 @@ Goal:
 - [ ] Implement TCP/TLS fallback when UDP is unavailable or blocked
 - [ ] Make both transports speak the same application protocol
 - [ ] Expose negotiated transport details for debugging
+  - [x] iOS client surfaces negotiated protocol/capability/build metadata
+  - [x] iOS client surfaces heartbeat RTT in the debug summary
+  - [x] iOS client surfaces degraded/lost transport state in the UI
 
 ### 4. Resume and Reconnect
 
@@ -203,11 +206,13 @@ Goal:
 ### 5. Heartbeats and Timeouts
 
 - [ ] Implement active heartbeat traffic
-- [ ] Implement heartbeat failure detection
+  - [x] direct iOS client sends periodic heartbeat frames
+  - [x] server replies with heartbeat acknowledgements
+- [x] Implement heartbeat failure detection
 - [ ] Implement reconnect notification threshold
 - [ ] Implement reconnect deadline
 - [ ] Implement longer server-side session revival window
-- [ ] Surface connection state transitions to clients
+- [x] Surface connection state transitions to clients
 
 ### 6. Security
 
@@ -225,6 +230,7 @@ Goal:
   - [x] capability negotiation
   - reconnect/resume
   - multiplexed channels
+  - [x] heartbeat request/ack round-trip
   - heartbeat loss and recovery
   - transport fallback
 
@@ -259,6 +265,8 @@ Goal:
   - [x] incompatible-handshake rejection in the production client
   - [ ] resume token / reconnect metadata
 - [ ] Support direct connection to the canonical remote endpoint
+  - [x] auth-protected direct connect
+  - [x] authless direct connect
 - [ ] Support reconnect/resume after:
   - app background/foreground
   - device sleep/wake
@@ -295,12 +303,14 @@ Goal:
 
 - [ ] Extend protocol validation to cover the canonical iOS handshake and resume flow
   - [x] initial handshake with protocol version and capability decoding
+  - [x] heartbeat acknowledgement echo validation
   - [ ] resume flow
 
 #### End-to-End
 
 - [ ] Extend `scripts/test-ios-remote-view.sh` for the canonical protocol
   - [x] auth/list/create/attach/input/state-update validation on the current protocol
+  - [x] authless direct-connect validation
   - [ ] resume/reconnect validation
 - [ ] Add reconnect/resume validation for the iOS client
 

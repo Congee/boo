@@ -218,9 +218,9 @@ struct SessionsScreen: View {
 
     private var subtitleText: String? {
         let base = monitor.lastHost.map { "Connected to \($0)" }
-        guard let handshake = client.handshakeSummary else { return base }
-        guard let base else { return handshake }
-        return "\(base) · \(handshake)"
+        let transport = transportSummary
+        let joined = [base, client.handshakeSummary, transport].compactMap { $0 }.joined(separator: " · ")
+        return joined.isEmpty ? nil : joined
     }
 
     var body: some View {
@@ -229,6 +229,9 @@ struct SessionsScreen: View {
                 title: "Active Sessions",
                 subtitle: subtitleText
             )
+            if case .degraded(let reason) = monitor.transportHealth {
+                transportBanner(reason: reason, color: KineticColor.tertiary)
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: KineticSpacing.xl) {
                     if client.sessions.isEmpty {
@@ -266,6 +269,28 @@ struct SessionsScreen: View {
         }
         .onAppear { client.listSessions() }
     }
+
+    private var transportSummary: String? {
+        switch monitor.transportHealth {
+        case .idle:
+            return nil
+        case .healthy:
+            return "transport healthy"
+        case .degraded(let reason):
+            return "transport degraded: \(reason)"
+        case .lost(let reason):
+            return "transport lost: \(reason)"
+        }
+    }
+
+    private func transportBanner(reason: String, color: Color) -> some View {
+        Text(reason)
+            .font(KineticFont.caption)
+            .foregroundStyle(color)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(KineticSpacing.md)
+            .background(color.opacity(0.1))
+    }
 }
 
 struct TerminalSessionScreen: View {
@@ -293,13 +318,10 @@ struct TerminalSessionScreen: View {
                 subtitle: statusSubtitle
             )
 
-            if case .connectionLost(let reason) = monitor.status {
-                Text(reason)
-                    .font(KineticFont.caption)
-                    .foregroundStyle(KineticColor.error)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(KineticSpacing.md)
-                    .background(KineticColor.error.opacity(0.1))
+            if let disconnectReason {
+                transportBanner(reason: disconnectReason, color: KineticColor.error)
+            } else if case .degraded(let reason) = monitor.transportHealth {
+                transportBanner(reason: reason, color: KineticColor.tertiary)
             }
 
             RemoteTerminalView(screen: client.screen) { cols, rows in
@@ -343,17 +365,47 @@ struct TerminalSessionScreen: View {
 
     private var isDisconnected: Bool {
         if case .connectionLost = monitor.status { return true }
+        if case .lost = monitor.transportHealth { return true }
         return false
     }
 
     private var statusSubtitle: String? {
-        if case .connectionLost = monitor.status {
-            return "Disconnected from daemon"
-        }
         let base = monitor.lastHost.map { "Attached to \($0)" }
-        guard let handshake = client.handshakeSummary else { return base }
-        guard let base else { return handshake }
-        return "\(base) · \(handshake)"
+        let transport = transportSummary
+        let joined = [base, client.handshakeSummary, transport].compactMap { $0 }.joined(separator: " · ")
+        return joined.isEmpty ? nil : joined
+    }
+
+    private var disconnectReason: String? {
+        if case .connectionLost(let reason) = monitor.status {
+            return reason
+        }
+        if case .lost(let reason) = monitor.transportHealth {
+            return reason
+        }
+        return nil
+    }
+
+    private var transportSummary: String? {
+        switch monitor.transportHealth {
+        case .idle:
+            return nil
+        case .healthy:
+            return "transport healthy"
+        case .degraded(let reason):
+            return "transport degraded: \(reason)"
+        case .lost(let reason):
+            return "transport lost: \(reason)"
+        }
+    }
+
+    private func transportBanner(reason: String, color: Color) -> some View {
+        Text(reason)
+            .font(KineticFont.caption)
+            .foregroundStyle(color)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(KineticSpacing.md)
+            .background(color.opacity(0.1))
     }
 
     private func modifierButton(_ label: String, active: Bool = false, action: @escaping () -> Void) -> some View {
