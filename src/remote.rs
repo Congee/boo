@@ -5563,12 +5563,20 @@ mod tests {
         material: &DaemonIdentityMaterial,
         tls_config: Arc<rustls::ServerConfig>,
     ) -> (std::net::SocketAddr, std::thread::JoinHandle<()>) {
+        start_tls_test_server_with_auth(material, tls_config, None)
+    }
+
+    fn start_tls_test_server_with_auth(
+        material: &DaemonIdentityMaterial,
+        tls_config: Arc<rustls::ServerConfig>,
+        auth_key: Option<&[u8]>,
+    ) -> (std::net::SocketAddr, std::thread::JoinHandle<()>) {
         use std::net::TcpListener;
 
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::new(),
             revivable_attachments: HashMap::new(),
-            auth_key: None,
+            auth_key: auth_key.map(<[u8]>::to_vec),
             server_identity_id: material.identity_id.clone(),
             server_instance_id: "test-instance".to_string(),
             tls_clients: std::collections::HashSet::new(),
@@ -5615,6 +5623,62 @@ mod tests {
         );
 
         drop(session);
+        let _ = server_handle.join();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn direct_tls_client_succeeds_with_auth_key() {
+        let dir = unique_identity_dir("tls-auth-ok");
+        let _ = std::fs::remove_dir_all(&dir);
+        let material = load_or_create_daemon_identity_material_at(&dir);
+        let tls_config =
+            build_remote_server_tls_config(&material).expect("build server tls config");
+        let (addr, server_handle) =
+            start_tls_test_server_with_auth(&material, tls_config, Some(b"test-secret"));
+
+        let session = DirectTransportSession::<TlsClientStream>::connect_tls(
+            &addr.ip().to_string(),
+            addr.port(),
+            Some("test-secret"),
+            &material.identity_id,
+        )
+        .expect("tls+auth connect");
+        assert!(session.auth_required);
+        assert_eq!(
+            session.server_identity_id.as_deref(),
+            Some(material.identity_id.as_str())
+        );
+
+        drop(session);
+        let _ = server_handle.join();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn direct_tls_client_rejects_wrong_auth_key() {
+        let dir = unique_identity_dir("tls-auth-bad");
+        let _ = std::fs::remove_dir_all(&dir);
+        let material = load_or_create_daemon_identity_material_at(&dir);
+        let tls_config =
+            build_remote_server_tls_config(&material).expect("build server tls config");
+        let (addr, server_handle) =
+            start_tls_test_server_with_auth(&material, tls_config, Some(b"correct-key"));
+
+        let err = match DirectTransportSession::<TlsClientStream>::connect_tls(
+            &addr.ip().to_string(),
+            addr.port(),
+            Some("wrong-key"),
+            &material.identity_id,
+        ) {
+            Ok(_) => panic!("wrong auth key must fail inside tls tunnel"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_lowercase().contains("auth"),
+            "expected an auth failure message, got: {err}"
+        );
+
         let _ = server_handle.join();
         let _ = std::fs::remove_dir_all(&dir);
     }
