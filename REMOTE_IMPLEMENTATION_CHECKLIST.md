@@ -249,6 +249,7 @@ Goal:
   - [x] direct client connect on the current native iOS path
   - version mismatch
   - [x] resume after temporary drop within the revive window
+  - [x] local native-daemon diagnostics via [scripts/test-remote-daemon-diagnostics.sh](./scripts/test-remote-daemon-diagnostics.sh)
 
 #### Manual UX
 
