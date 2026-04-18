@@ -60,3 +60,20 @@ Use:
 - direct `cargo build` on `example-mbp.local` for real Mac verification
 
 Do not block the remote desktop or native transport work on the Darwin Nix issue.
+
+## Stable Remote Binary Reference
+
+When the Darwin Nix build is healthy, the preferred remote binary reference should be a managed
+wrapper or symlink on the remote host, not a raw Nix store path pasted into config.
+
+Recommended shape:
+
+- keep `remote-binary` pointed at a stable host-local path such as:
+  - `/Users/example/.local/bin/boo-current`
+- update that symlink or wrapper to point at the latest successful Nix build result
+
+Why:
+
+- the user config stays stable
+- SSH bootstrap does not need to know the current store hash
+- changing the build output does not require rewriting config every time

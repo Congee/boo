@@ -59,7 +59,7 @@ Goal:
 - [ ] Prove Linux can request a Darwin build through that builder
   - Current status: the split `libghostty-vt` Nix package works on Linux, but Darwin still fails inside Ghostty's Apple SDK discovery path.
   - Keep direct host `cargo build` on `example-mbp.local` as the working remote-Mac build path until the Darwin Nix derivation is fixed.
-- [ ] Decide the stable remote binary reference:
+- [x] Decide the stable remote binary reference:
   - direct Nix store path
   - or a managed wrapper/symlink pointing at the current Nix build
 
