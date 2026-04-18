@@ -222,4 +222,24 @@ if not data.get("server_identity_id"):
     raise SystemExit("missing server_identity_id in authless probe summary")
 PY
 
+authless_snapshot_json="$(./target/debug/boo remote-clients --socket "$AUTHLESS_SOCKET_PATH")"
+python3 - "$authless_snapshot_json" <<'PY'
+import json
+import sys
+
+snapshot = json.loads(sys.argv[1])
+servers = snapshot.get("servers")
+if not isinstance(servers, list) or not servers:
+    raise SystemExit("expected non-empty servers list for authless diagnostics")
+server_info = servers[0]
+if server_info.get("auth_required") is not False:
+    raise SystemExit(
+        f"expected auth_required false for authless server diagnostics, got {server_info.get('auth_required')!r}"
+    )
+if server_info.get("heartbeat_window_ms") != 20_000:
+    raise SystemExit(
+        f"unexpected authless heartbeat_window_ms: {server_info.get('heartbeat_window_ms')!r}"
+    )
+PY
+
 echo "remote daemon diagnostics validation passed"
