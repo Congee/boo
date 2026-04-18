@@ -402,6 +402,7 @@ struct TerminalSessionScreen: View {
     @State private var inputText = ""
     @State private var ctrlActive = false
     @State private var altActive = false
+    @State private var metaActive = false
 
     private var sessionTitle: String {
         guard let sessionId = client.attachedSessionId else { return "Session" }
@@ -429,22 +430,38 @@ struct TerminalSessionScreen: View {
 
             RemoteTerminalView(screen: client.screen) { cols, rows in
                 client.sendResize(cols: cols, rows: rows)
+            } onGestureAction: { action in
+                handleTerminalGesture(action)
             }
             .opacity(isDisconnected ? 0.5 : 1.0)
 
-            HStack(spacing: KineticSpacing.sm) {
-                modifierButton("ESC") { client.sendInputBytes(Data([0x1b])) }
-                modifierButton("CTRL", active: ctrlActive) { ctrlActive.toggle() }
-                modifierButton("ALT", active: altActive) { altActive.toggle() }
-                modifierButton("TAB") { client.sendInputBytes(Data([0x09])) }
-                Spacer()
-                modifierButton("↑") { client.sendInputBytes(Data([0x1b, 0x5b, 0x41])) }
-                modifierButton("↓") { client.sendInputBytes(Data([0x1b, 0x5b, 0x42])) }
-                modifierButton("←") { client.sendInputBytes(Data([0x1b, 0x5b, 0x44])) }
-                modifierButton("→") { client.sendInputBytes(Data([0x1b, 0x5b, 0x43])) }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: KineticSpacing.sm) {
+                    modifierButton("Sessions") {
+                        client.detach()
+                        selectedTab = .sessions
+                    }
+                    modifierButton("ESC") { sendSpecialKey([0x1b]) }
+                    modifierButton("CTRL", active: ctrlActive) { ctrlActive.toggle() }
+                    modifierButton("ALT", active: altActive) { altActive.toggle() }
+                    modifierButton("META", active: metaActive) { metaActive.toggle() }
+                    modifierButton("TAB") { sendSpecialKey([0x09]) }
+                    modifierButton("HOME") { sendSpecialKey([0x1b, 0x5b, 0x48]) }
+                    modifierButton("END") { sendSpecialKey([0x1b, 0x5b, 0x46]) }
+                    modifierButton("PG↑") { sendSpecialKey([0x1b, 0x5b, 0x35, 0x7e]) }
+                    modifierButton("PG↓") { sendSpecialKey([0x1b, 0x5b, 0x36, 0x7e]) }
+                    modifierButton("F1") { sendSpecialKey([0x1b, 0x4f, 0x50]) }
+                    modifierButton("F2") { sendSpecialKey([0x1b, 0x4f, 0x51]) }
+                    modifierButton("F3") { sendSpecialKey([0x1b, 0x4f, 0x52]) }
+                    modifierButton("F4") { sendSpecialKey([0x1b, 0x4f, 0x53]) }
+                    modifierButton("↑") { sendSpecialKey([0x1b, 0x5b, 0x41]) }
+                    modifierButton("↓") { sendSpecialKey([0x1b, 0x5b, 0x42]) }
+                    modifierButton("←") { sendSpecialKey([0x1b, 0x5b, 0x44]) }
+                    modifierButton("→") { sendSpecialKey([0x1b, 0x5b, 0x43]) }
+                }
+                .padding(.horizontal, KineticSpacing.md)
+                .padding(.vertical, KineticSpacing.sm)
             }
-            .padding(.horizontal, KineticSpacing.md)
-            .padding(.vertical, KineticSpacing.sm)
             .background(KineticColor.surfaceContainerHigh.opacity(0.8))
 
             HStack(spacing: KineticSpacing.sm) {
@@ -543,15 +560,60 @@ struct TerminalSessionScreen: View {
             let code = UInt8(first.uppercased().first!.asciiValue! - 64)
             client.sendInputBytes(Data([code]))
             ctrlActive = false
+            altActive = false
+            metaActive = false
             inputText = ""
             return
         }
-        if altActive {
+        if altActive || metaActive {
             text = "\u{1b}" + text
             altActive = false
+            metaActive = false
         }
         client.sendInput(text + "\r")
         inputText = ""
+    }
+
+    private func handleTerminalGesture(_ action: RemoteTerminalGestureAction) {
+        switch action {
+        case .pageUp:
+            sendSpecialKey([0x1b, 0x5b, 0x35, 0x7e])
+        case .pageDown:
+            sendSpecialKey([0x1b, 0x5b, 0x36, 0x7e])
+        case .arrowLeft:
+            sendSpecialKey([0x1b, 0x5b, 0x44])
+        case .arrowRight:
+            sendSpecialKey([0x1b, 0x5b, 0x43])
+        }
+    }
+
+    private func sendSpecialKey(_ bytes: [UInt8]) {
+        var payload = Data()
+        if altActive || metaActive {
+            payload.append(0x1b)
+            altActive = false
+            metaActive = false
+        }
+        if ctrlActive, bytes.count == 1, let ascii = asciiControlByte(for: bytes[0]) {
+            payload.append(ascii)
+            ctrlActive = false
+        } else {
+            payload.append(contentsOf: bytes)
+        }
+        client.sendInputBytes(payload)
+    }
+
+    private func asciiControlByte(for byte: UInt8) -> UInt8? {
+        switch byte {
+        case 0x69, 0x49:
+            return 0x09
+        case 0x6d, 0x4d:
+            return 0x0d
+        case 0x5b:
+            return 0x1b
+        default:
+            return nil
+        }
     }
 }
 

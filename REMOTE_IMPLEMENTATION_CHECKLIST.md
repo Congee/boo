@@ -255,7 +255,8 @@ Goal:
 
 #### Manual UX
 
-- [ ] Identify which transport-state transitions must still be judged manually in real clients
+- [x] Identify which transport-state transitions must still be judged manually in real clients
+  - documented in [`ios/README.md`](./ios/README.md) under `Remaining Manual Validation`
 
 Exit criteria for Phase 2:
 
@@ -287,14 +288,14 @@ Goal:
 
 ### 2. UX and Input
 
-- [ ] Review keyboard UX against remote-control needs:
-  - escape
-  - ctrl/meta/alt
-  - arrows/function keys
-- [ ] Add touch/gesture behaviors for:
-  - scrolling
-  - selection/navigation
-  - session switching if needed
+- [x] Review keyboard UX against remote-control needs:
+  - [x] escape
+  - [x] ctrl/meta/alt
+  - [x] arrows/function keys
+- [x] Add touch/gesture behaviors for:
+  - [x] scrolling
+  - [x] selection/navigation
+  - [x] session switching if needed
 - [x] Surface connection state:
   - [x] connected
   - [x] reconnecting
@@ -330,11 +331,12 @@ Goal:
 
 #### Manual UX
 
-- [ ] Keep manual validation focused on:
-  - touch UX
-  - keyboard accessory UX
-  - background/foreground behavior
-  - iOS permissions
+- [x] Keep manual validation focused on:
+  - [x] touch UX
+  - [x] keyboard accessory UX
+  - [x] background/foreground behavior
+  - [x] iOS permissions
+  - tracked in [`ios/README.md`](./ios/README.md) instead of as open transport-implementation ambiguity
 
 Exit criteria for Phase 3:
 

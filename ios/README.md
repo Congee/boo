@@ -12,7 +12,22 @@ This directory contains the Boo iOS remote viewer app.
   - optional auth key
   - saved nodes
   - connection history
+  - trusted daemon identity pinning per endpoint
+  - reconnect/resume against bounded revive windows
   - session list / attach / create
+  - explicit session detach back to the session list
+  - terminal accessory keys for:
+    - escape
+    - ctrl
+    - alt/meta
+    - tab
+    - home/end
+    - page up/down
+    - arrows
+    - F1-F4
+  - terminal swipe gestures for:
+    - page up/down scrolling
+    - left/right navigation
   - remote terminal cell-grid rendering
 
 ## Notes
@@ -46,3 +61,18 @@ bash scripts/test-ios-remote-view.sh
 ```
 
 In this environment, `xcodebuild` reaches full Swift compilation for the iOS app, but final linking still fails with an Xcode/linker environment issue during the last app-link step. The validation script treats that specific linker failure as environmental and still enforces the live Boo daemon protocol validation.
+
+## Remaining Manual Validation
+
+Automated validation covers the remote protocol, reconnect/resume flow, auth failures, and state updates. Manual validation is still reserved for client UX that depends on the real iOS interaction model:
+
+- keyboard accessory ergonomics on-device, especially modifier toggles and function-key reachability
+- swipe gesture feel for page navigation and left/right terminal movement
+- background / foreground reconnect behavior as seen by the user
+- iOS local-network permission prompts and discovery behavior in a real app install
+
+Transport-state transitions that still need manual judgment in a real client:
+
+- when degraded heartbeat state should feel visible but not alarming
+- when reconnecting state should block input vs leave the last terminal visible
+- how long a disconnected-but-resumable session should keep the last screen visible before the UI feels misleading

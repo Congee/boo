@@ -14,6 +14,13 @@ enum BooTab: String, CaseIterable {
     }
 }
 
+enum RemoteTerminalGestureAction {
+    case pageUp
+    case pageDown
+    case arrowLeft
+    case arrowRight
+}
+
 struct KineticTopBar: View {
     let title: String
     let subtitle: String?
@@ -144,10 +151,12 @@ struct KineticCardRow: View {
 struct RemoteTerminalView: View {
     @ObservedObject var screen: ScreenState
     var onResize: ((UInt16, UInt16) -> Void)?
+    var onGestureAction: ((RemoteTerminalGestureAction) -> Void)?
 
     private let font = Font.system(size: 14, design: .monospaced)
     private let cellWidth: CGFloat = 8.4
     private let cellHeight: CGFloat = 17
+    private let gestureThreshold: CGFloat = 28
 
     var body: some View {
         GeometryReader { geo in
@@ -198,6 +207,28 @@ struct RemoteTerminalView: View {
             .onChange(of: geo.size) { _, newSize in
                 onResize?(max(1, UInt16(newSize.width / cellWidth)), max(1, UInt16(newSize.height / cellHeight)))
             }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: gestureThreshold)
+                    .onEnded { drag in
+                        guard let onGestureAction else { return }
+                        let dx = drag.translation.width
+                        let dy = drag.translation.height
+                        if abs(dy) >= abs(dx) {
+                            if dy <= -gestureThreshold {
+                                onGestureAction(.pageUp)
+                            } else if dy >= gestureThreshold {
+                                onGestureAction(.pageDown)
+                            }
+                        } else {
+                            if dx <= -gestureThreshold {
+                                onGestureAction(.arrowLeft)
+                            } else if dx >= gestureThreshold {
+                                onGestureAction(.arrowRight)
+                            }
+                        }
+                    }
+            )
         }
         .background(.black)
     }
