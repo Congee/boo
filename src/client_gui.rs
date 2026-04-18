@@ -433,6 +433,7 @@ impl ClientApp {
             build_status_right(
                 &self.ui_state,
                 self.mode,
+                self.active_session_id,
                 self.last_error.as_deref(),
                 self.remote_host.as_deref(),
                 self.remote_debug_summary.as_deref(),
@@ -2987,6 +2988,7 @@ fn remote_cell_to_snapshot_default(cell: &remote::RemoteCell) -> vt_backend_core
 fn build_status_right(
     ui_state: &ClientUiState,
     mode: ClientMode,
+    active_session_id: Option<u32>,
     last_error: Option<&str>,
     remote_host: Option<&str>,
     remote_debug_summary: Option<&str>,
@@ -3004,7 +3006,11 @@ fn build_status_right(
                 right_parts.push(format!("{remote_prefix}: bootstrapping"))
             }
             ClientMode::Recovering => {
-                right_parts.push(format!("{remote_prefix}: recovering"))
+                if let Some(session_id) = active_session_id {
+                    right_parts.push(format!("{remote_prefix}: recovering session {session_id}"))
+                } else {
+                    right_parts.push(format!("{remote_prefix}: recovering"))
+                }
             }
             ClientMode::Attached => right_parts.push(format!("{remote_prefix}: connected")),
         }
@@ -4010,7 +4016,7 @@ mod tests {
     fn fallback_status_right_shows_bootstrap_state() {
         let ui_state = ClientUiState::default();
         assert_eq!(
-            build_status_right(&ui_state, ClientMode::Bootstrapping, None, None, None),
+            build_status_right(&ui_state, ClientMode::Bootstrapping, None, None, None, None),
             "remote: bootstrapping"
         );
     }
@@ -4023,8 +4029,20 @@ mod tests {
             ..ClientUiState::default()
         };
         assert_eq!(
-            build_status_right(&ui_state, ClientMode::Recovering, None, None, None),
+            build_status_right(&ui_state, ClientMode::Recovering, None, None, None, None),
             "remote: recovering  2 panes  /tmp"
+        );
+    }
+
+    #[test]
+    fn fallback_status_right_shows_recovering_active_session() {
+        let ui_state = ClientUiState {
+            pwd: "/tmp".to_string(),
+            ..ClientUiState::default()
+        };
+        assert_eq!(
+            build_status_right(&ui_state, ClientMode::Recovering, Some(7), None, None, None),
+            "remote: recovering session 7  /tmp"
         );
     }
 
@@ -4038,6 +4056,7 @@ mod tests {
             build_status_right(
                 &ui_state,
                 ClientMode::Recovering,
+                None,
                 Some("boo server stream disconnected"),
                 None,
                 None,
@@ -4054,7 +4073,7 @@ mod tests {
             ..ClientUiState::default()
         };
         assert_eq!(
-            build_status_right(&ui_state, ClientMode::Attached, None, None, None),
+            build_status_right(&ui_state, ClientMode::Attached, None, None, None, None),
             "remote: connected  2 panes  /repo"
         );
     }
@@ -4069,6 +4088,7 @@ mod tests {
             build_status_right(
                 &ui_state,
                 ClientMode::Recovering,
+                None,
                 Some("boo server stream disconnected"),
                 Some("example-mbp.local"),
                 None,
@@ -4087,6 +4107,7 @@ mod tests {
             build_status_right(
                 &ui_state,
                 ClientMode::Attached,
+                None,
                 None,
                 Some("example-mbp.local"),
                 Some("diag s=1 c=2 a=1 p=1 h=0 r=1"),

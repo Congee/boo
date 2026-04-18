@@ -353,6 +353,7 @@ Goal:
   - [x] add an opt-in desktop fallback-status debug summary sourced from `get-remote-clients`
   - [x] log native remote server startup metadata including protocol/capability/auth/identity details
 - [ ] Surface resumable/disconnected state cleanly
+  - [x] desktop fallback status distinguishes resumable recovery by active session id
 
 ### 2. Observability
 
