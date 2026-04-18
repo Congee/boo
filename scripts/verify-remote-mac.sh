@@ -10,6 +10,7 @@ host="${1:-example-mbp.local}"
 remote_repo="${2:-/Users/example/dev/boo}"
 local_socket="${3:-/tmp/boo-remote-mac-verify.sock}"
 remote_binary="${remote_repo}/target/debug/boo"
+prefer_nix_profile_binary="${BOO_REMOTE_MAC_USE_NIX_PROFILE:-0}"
 
 echo "==> sync sources to ${host}"
 bash scripts/sync-remote-mac.sh "$host" "$remote_repo"
@@ -18,7 +19,11 @@ echo "==> remote build and smoke tests on ${host}"
 ssh "$host" "cd '$remote_repo' && cargo build && cargo test short_and_long_help_are_different -- --nocapture && ./target/debug/boo --help >/dev/null"
 
 echo "==> local SSH forwarding verification through ${host}"
-bash scripts/verify-remote-host.sh "$host" "$remote_binary" "$local_socket"
+if [[ "$prefer_nix_profile_binary" == "1" ]]; then
+  bash scripts/verify-remote-host.sh "$host" --nix-profile "$local_socket"
+else
+  bash scripts/verify-remote-host.sh "$host" "$remote_binary" "$local_socket"
+fi
 
 echo "==> remote path expansion verification through ${host}"
 bash scripts/test-remote-path-expansion.sh "$host" "${local_socket%.sock}-paths.sock"
