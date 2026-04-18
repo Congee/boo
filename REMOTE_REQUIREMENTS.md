@@ -445,6 +445,37 @@ If Boo moves toward one canonical remote transport, the protocol should support 
 
 This keeps the current Boo split between control and stream semantics while allowing a single network endpoint for both desktop and iOS.
 
+For the first unified transport iteration, channel multiplexing shall use the existing Boo frame
+header rather than introducing a second nested envelope format:
+
+- keep the outer frame format:
+  - 2-byte magic `GS`
+  - 1-byte message type
+  - 4-byte little-endian payload length
+- logical channel membership is determined by message type family
+- channel families are:
+  - control:
+    - `Auth`, `AuthChallenge`, `AuthOk`, `AuthFail`
+    - `ListSessions`, `SessionList`
+    - `Create`, `SessionCreated`
+    - `Destroy`, `SessionExited`
+    - `ErrorMsg`
+  - session stream:
+    - `Attach`, `Attached`
+    - `Detach`, `Detached`
+    - `FullState`, `Delta`, `ScrollData`
+    - `UiRuntimeState`, `UiAppearance`, `UiPaneFullState`, `UiPaneDelta`
+  - input/control-plane actions:
+    - `Input`, `Key`, `Resize`
+    - `ExecuteCommand`
+    - `AppAction`, `AppKeyEvent`, `AppMouseEvent`, `FocusPane`
+  - health:
+    - `Heartbeat`, `HeartbeatAck`
+
+This means the first unified transport keeps logical multiplexing without adding an explicit channel
+id field. If later transports need independent congestion control or priorities per channel, Boo may
+add a new envelope version then, but the first unified transport should not block on that.
+
 ### Current Native Handshake Wire Format
 
 Until the unified transport introduces channel multiplexing, the native Boo daemon handshake shall
