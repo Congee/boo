@@ -2163,6 +2163,9 @@ pub fn create_remote_daemon_session(
     })
 }
 
+/// Default socket timeout for direct-client probes and RPCs.
+const DIRECT_CLIENT_SOCKET_TIMEOUT: Duration = Duration::from_secs(3);
+
 impl DirectTransportSession<std::net::TcpStream> {
     fn connect(
         host: &str,
@@ -2174,12 +2177,16 @@ impl DirectTransportSession<std::net::TcpStream> {
 
         let stream = TcpStream::connect((host, port))
             .map_err(|error| format!("failed to connect to {host}:{port}: {error}"))?;
-        stream.set_read_timeout(Some(Duration::from_secs(3))).map_err(|error| {
-            format!("failed to configure read timeout for {host}:{port}: {error}")
-        })?;
-        stream.set_write_timeout(Some(Duration::from_secs(3))).map_err(|error| {
-            format!("failed to configure write timeout for {host}:{port}: {error}")
-        })?;
+        stream
+            .set_read_timeout(Some(DIRECT_CLIENT_SOCKET_TIMEOUT))
+            .map_err(|error| {
+                format!("failed to configure read timeout for {host}:{port}: {error}")
+            })?;
+        stream
+            .set_write_timeout(Some(DIRECT_CLIENT_SOCKET_TIMEOUT))
+            .map_err(|error| {
+                format!("failed to configure write timeout for {host}:{port}: {error}")
+            })?;
 
         Self::connect_over_stream(
             stream,
@@ -2187,6 +2194,54 @@ impl DirectTransportSession<std::net::TcpStream> {
             port,
             auth_key,
             expected_server_identity,
+        )
+    }
+}
+
+type TlsClientStream = rustls::StreamOwned<rustls::ClientConnection, std::net::TcpStream>;
+
+impl DirectTransportSession<TlsClientStream> {
+    /// Connect to a remote daemon with an SPKI-pinned TLS handshake. `expected_identity`
+    /// is the `daemon_identity` string the caller already trusts; it is the
+    /// `base64url(sha256(SPKI))` of the server's ed25519 cert and is checked inside the
+    /// TLS handshake before any application data is exchanged.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn connect_tls(
+        host: &str,
+        port: u16,
+        auth_key: Option<&str>,
+        expected_identity: &str,
+    ) -> Result<Self, String> {
+        use std::net::TcpStream;
+
+        let tcp = TcpStream::connect((host, port))
+            .map_err(|error| format!("failed to connect to {host}:{port}: {error}"))?;
+        tcp.set_read_timeout(Some(DIRECT_CLIENT_SOCKET_TIMEOUT))
+            .map_err(|error| {
+                format!("failed to configure read timeout for {host}:{port}: {error}")
+            })?;
+        tcp.set_write_timeout(Some(DIRECT_CLIENT_SOCKET_TIMEOUT))
+            .map_err(|error| {
+                format!("failed to configure write timeout for {host}:{port}: {error}")
+            })?;
+
+        let client_config = build_remote_client_tls_config(expected_identity)?;
+        let server_name = rustls::pki_types::ServerName::try_from(REMOTE_DAEMON_SERVER_NAME)
+            .map_err(|error| format!("build remote server name: {error}"))?;
+        let client_conn = rustls::ClientConnection::new(Arc::new(client_config), server_name)
+            .map_err(|error| format!("build rustls client connection: {error}"))?;
+        let mut tls_stream = rustls::StreamOwned::new(client_conn, tcp);
+        tls_stream
+            .conn
+            .complete_io(&mut tls_stream.sock)
+            .map_err(|error| format!("tls handshake to {host}:{port} failed: {error}"))?;
+
+        Self::connect_over_stream(
+            tls_stream,
+            host.to_string(),
+            port,
+            auth_key,
+            Some(expected_identity),
         )
     }
 }
@@ -3289,6 +3344,109 @@ fn run_remote_client_session<R, W>(
         crate::notify_headless_wakeup();
     }
     read_loop(reader, client_id, state, cmd_tx);
+}
+
+/// DNS-like name presented by the server's self-signed cert. Used as the `ServerName`
+/// input to rustls on the client side. The pinning verifier ignores CA chain and hostname
+/// anyway, but rustls still requires a syntactically valid name to feed SNI.
+const REMOTE_DAEMON_SERVER_NAME: &str = "boo-remote-daemon";
+
+fn extract_cert_spki_der(cert_der: &[u8]) -> Result<Vec<u8>, String> {
+    use x509_parser::prelude::*;
+    let (_, cert) = X509Certificate::from_der(cert_der)
+        .map_err(|error| format!("parse remote daemon cert: {error}"))?;
+    Ok(cert.tbs_certificate.subject_pki.raw.to_vec())
+}
+
+fn cert_der_matches_identity(cert_der: &[u8], expected_identity: &str) -> bool {
+    match extract_cert_spki_der(cert_der) {
+        Ok(spki) => derive_identity_id(spki) == expected_identity,
+        Err(_) => false,
+    }
+}
+
+#[derive(Debug)]
+struct PinnedSpkiServerCertVerifier {
+    expected_identity: String,
+    provider: Arc<rustls::crypto::CryptoProvider>,
+}
+
+impl PinnedSpkiServerCertVerifier {
+    fn new(expected_identity: String) -> Self {
+        Self {
+            expected_identity,
+            provider: Arc::new(rustls::crypto::ring::default_provider()),
+        }
+    }
+}
+
+impl rustls::client::danger::ServerCertVerifier for PinnedSpkiServerCertVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        if cert_der_matches_identity(end_entity.as_ref(), &self.expected_identity) {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        } else {
+            Err(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::ApplicationVerificationFailure,
+            ))
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn build_remote_client_tls_config(
+    expected_identity: &str,
+) -> Result<rustls::ClientConfig, String> {
+    let verifier = Arc::new(PinnedSpkiServerCertVerifier::new(
+        expected_identity.to_string(),
+    ));
+    let provider = Arc::clone(&verifier.provider);
+    Ok(rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|error| format!("negotiate TLS protocol versions: {error}"))?
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth())
 }
 
 fn build_remote_server_tls_config(
@@ -5227,6 +5385,118 @@ mod tests {
                 provider,
             }))
             .with_no_client_auth()
+    }
+
+    fn start_tls_test_server(
+        material: &DaemonIdentityMaterial,
+        tls_config: Arc<rustls::ServerConfig>,
+    ) -> (std::net::SocketAddr, std::thread::JoinHandle<()>) {
+        use std::net::TcpListener;
+
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::new(),
+            revivable_attachments: HashMap::new(),
+            auth_key: None,
+            server_identity_id: material.identity_id.clone(),
+            server_instance_id: "test-instance".to_string(),
+        }));
+        let (cmd_tx, _cmd_rx) = mpsc::channel();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let addr = listener.local_addr().expect("local addr");
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            let _ = stream.set_read_timeout(Some(REMOTE_READ_TIMEOUT));
+            serve_incoming_tcp_client(stream, tls_config, state, cmd_tx);
+        });
+        // Prevent cmd_rx from being dropped early — keep the _cmd_rx alive via leak.
+        // (Simpler than plumbing it back out for a test that never reads from it.)
+        std::mem::forget(_cmd_rx);
+        (addr, handle)
+    }
+
+    #[test]
+    fn direct_tls_client_connects_with_matching_pin() {
+        let dir = unique_identity_dir("tls-pin-ok");
+        let _ = std::fs::remove_dir_all(&dir);
+        let material = load_or_create_daemon_identity_material_at(&dir);
+        let tls_config =
+            build_remote_server_tls_config(&material).expect("build server tls config");
+        let (addr, server_handle) = start_tls_test_server(&material, tls_config);
+
+        let session = DirectTransportSession::<TlsClientStream>::connect_tls(
+            &addr.ip().to_string(),
+            addr.port(),
+            None,
+            &material.identity_id,
+        )
+        .expect("tls connect");
+
+        assert!(!session.auth_required);
+        assert_eq!(
+            session.server_identity_id.as_deref(),
+            Some(material.identity_id.as_str())
+        );
+        assert_ne!(
+            session.capabilities & REMOTE_CAPABILITY_TCP_TLS_TRANSPORT,
+            0,
+        );
+
+        drop(session);
+        let _ = server_handle.join();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn direct_tls_client_rejects_mismatched_pin() {
+        let dir = unique_identity_dir("tls-pin-mismatch");
+        let _ = std::fs::remove_dir_all(&dir);
+        let material = load_or_create_daemon_identity_material_at(&dir);
+        let tls_config =
+            build_remote_server_tls_config(&material).expect("build server tls config");
+        let (addr, server_handle) = start_tls_test_server(&material, tls_config);
+
+        // Pin an identity that does not match the server's SPKI.
+        let bogus_pin = derive_identity_id([0xAAu8; 32].as_slice());
+        assert_ne!(bogus_pin, material.identity_id);
+
+        let err = match DirectTransportSession::<TlsClientStream>::connect_tls(
+            &addr.ip().to_string(),
+            addr.port(),
+            None,
+            &bogus_pin,
+        ) {
+            Ok(_) => panic!("tls connect must fail on mismatched pin"),
+            Err(error) => error,
+        };
+        assert!(
+            err.contains("tls handshake") || err.contains("failed"),
+            "error should describe a handshake failure, got: {err}"
+        );
+
+        // Server thread should also terminate (handshake failed there).
+        let _ = server_handle.join();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cert_der_matches_identity_accepts_current_cert() {
+        let dir = unique_identity_dir("spki-match");
+        let _ = std::fs::remove_dir_all(&dir);
+        let material = load_or_create_daemon_identity_material_at(&dir);
+
+        let cert_ders = rustls_pemfile::certs(&mut material.cert_pem.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .expect("parse certs");
+        let cert_der = cert_ders.first().expect("at least one cert");
+        assert!(cert_der_matches_identity(
+            cert_der.as_ref(),
+            &material.identity_id
+        ));
+
+        let bogus = derive_identity_id([0u8; 32].as_slice());
+        assert!(!cert_der_matches_identity(cert_der.as_ref(), &bogus));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
