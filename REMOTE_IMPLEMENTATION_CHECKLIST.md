@@ -389,7 +389,7 @@ These are implementation questions, not product-direction questions:
   - reconnect notification
   - reconnect deadline
   - session revival window
-- [ ] which status/diagnostic details are exposed to end users vs debug-only tooling
+- [x] which status/diagnostic details are exposed to end users vs debug-only tooling
 
 ## Recommended Immediate Next Steps
 

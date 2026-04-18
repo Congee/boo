@@ -487,6 +487,36 @@ The canonical Boo-native remote protocol shall require:
 
 SSH remains an acceptable bootstrap trust model for desktop clients, but the Boo-native transport itself shall still provide its own secure session establishment story for direct clients such as iOS.
 
+### End-User Versus Debug Diagnostics
+
+Remote Boo shall separate user-facing connection state from debug/operator diagnostics.
+
+End-user surfaces should show:
+
+- remote host or endpoint label
+- high-level connection state:
+  - connected
+  - bootstrapping
+  - reconnecting
+  - degraded
+  - disconnected
+- whether recovery is attempting to resume a specific session
+- actionable failure text when recovery cannot proceed
+
+Debug/operator surfaces may additionally show:
+
+- protocol version
+- capability bits
+- build id
+- daemon identity and instance ids
+- per-daemon client and revive counts
+- heartbeat RTT and age
+- heartbeat expiry / overdue state
+- attachment ids and resume-token presence
+- auth challenge age / expiry
+
+Raw tokens, auth keys, and other secret material shall not be displayed in either surface.
+
 ### Session Resume Rules
 
 The protocol shall support resumable attachment semantics:
