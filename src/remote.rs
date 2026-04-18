@@ -2446,6 +2446,26 @@ mod tests {
     }
 
     #[test]
+    fn parse_attach_request_supports_session_only_attachment_and_resume_token_forms() {
+        let session_only = 11_u32.to_le_bytes().to_vec();
+        assert_eq!(parse_attach_request(&session_only), Some((11, None, None)));
+
+        let mut with_attachment = session_only.clone();
+        with_attachment.extend_from_slice(&0xabc_u64.to_le_bytes());
+        assert_eq!(
+            parse_attach_request(&with_attachment),
+            Some((11, Some(0xabc), None))
+        );
+
+        let mut with_resume = with_attachment.clone();
+        with_resume.extend_from_slice(&0xdef_u64.to_le_bytes());
+        assert_eq!(
+            parse_attach_request(&with_resume),
+            Some((11, Some(0xabc), Some(0xdef)))
+        );
+    }
+
+    #[test]
     fn load_or_create_daemon_identity_reuses_existing_file_contents() {
         let path = std::env::temp_dir().join(format!(
             "boo-remote-daemon-id-reuse-{}",
