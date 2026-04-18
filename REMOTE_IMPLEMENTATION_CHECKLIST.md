@@ -201,7 +201,7 @@ Goal:
 - [ ] Add resumable attach tokens/metadata
 - [x] Support reconnect to the same attachment within the allowed revive window
 - [x] Prevent duplicate or phantom attachments after reconnect
-- [ ] Carry enough state for clients to resume without a full destructive reset when possible
+- [x] Carry enough state for clients to resume without a full destructive reset when possible
 
 ### 5. Heartbeats and Timeouts
 

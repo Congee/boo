@@ -373,7 +373,7 @@ final class GSPClient: ObservableObject {
         connection?.receive(minimumIncompleteLength: Self.headerLen, maximumLength: Self.headerLen) { [weak self] content, _, isComplete, _ in
             guard let self, self.connectionGeneration == generation else { return }
             guard let data = content, data.count == Self.headerLen else {
-                if isComplete { self.disconnect() }
+                if isComplete { self.protocolError("Connection closed") }
                 return
             }
             guard data[0] == Self.magic[0], data[1] == Self.magic[1] else {
@@ -396,7 +396,7 @@ final class GSPClient: ObservableObject {
         connection?.receive(minimumIncompleteLength: length, maximumLength: length) { [weak self] content, _, isComplete, _ in
             guard let self, self.connectionGeneration == generation else { return }
             guard let data = content else {
-                if isComplete { self.disconnect() }
+                if isComplete { self.protocolError("Connection closed") }
                 return
             }
             self.handleMessage(type: type, payload: data)
@@ -455,24 +455,30 @@ final class GSPClient: ObservableObject {
         validateAuthOkMetadata(payload, authRequired: authKey != nil)
     }
 
+    private var shouldPreserveRemoteStateOnReconnect: Bool {
+        desiredAttachedSessionId != nil || !sessions.isEmpty
+    }
+
     private func protocolError(_ message: String) {
         connection?.cancel()
         connection = nil
         connectionGeneration &+= 1
         connected = false
         authenticated = false
-        protocolVersion = nil
-        transportCapabilities = 0
-        serverBuildId = nil
-        serverInstanceId = nil
         lastHeartbeatAck = nil
         lastHeartbeatRttMs = nil
         lastHeartbeatSent = nil
         pendingHeartbeatToken = nil
-        attachedSessionId = nil
-        attachmentId = nil
-        sessions = []
-        screen = ScreenState()
+        if !shouldPreserveRemoteStateOnReconnect {
+            protocolVersion = nil
+            transportCapabilities = 0
+            serverBuildId = nil
+            serverInstanceId = nil
+            attachedSessionId = nil
+            attachmentId = nil
+            sessions = []
+            screen = ScreenState()
+        }
         lastError = message
         stopHeartbeatLoop()
     }
