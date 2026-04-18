@@ -606,9 +606,10 @@ final class GSPClient: ObservableObject {
             screen.objectWillChange.send()
         }
         if message == .authOk,
-           let expectedServerIdentityId,
-           let serverIdentityId,
-           expectedServerIdentityId != serverIdentityId {
+           serverIdentityMismatch(
+                expectedIdentityId: expectedServerIdentityId,
+                actualIdentityId: serverIdentityId
+           ) {
             protocolError("Server identity changed; connection rejected")
             return
         }
@@ -627,9 +628,10 @@ final class GSPClient: ObservableObject {
            let desiredAttachmentId,
            attachedSessionId == nil,
            sessions.contains(where: { $0.id == desiredSessionId }) {
-            if let expectedServerIdentityId,
-               let serverIdentityId,
-               expectedServerIdentityId != serverIdentityId {
+            if serverIdentityMismatch(
+                expectedIdentityId: expectedServerIdentityId,
+                actualIdentityId: serverIdentityId
+            ) {
                 lastError = "Server identity changed; refusing automatic resume"
                 return
             }

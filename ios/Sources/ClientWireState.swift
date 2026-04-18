@@ -140,6 +140,14 @@ func validateAuthOkMetadata(_ payload: Data, authRequired: Bool) -> String? {
     return nil
 }
 
+func serverIdentityMismatch(expectedIdentityId: String?, actualIdentityId: String?) -> Bool {
+    guard let expectedIdentityId, !expectedIdentityId.isEmpty,
+          let actualIdentityId, !actualIdentityId.isEmpty else {
+        return false
+    }
+    return expectedIdentityId != actualIdentityId
+}
+
 enum ClientWireReducer {
     static func reduce(message: ClientWireMessageType, payload: Data, state: inout ClientWireState) -> ClientWireEffect {
         switch message {

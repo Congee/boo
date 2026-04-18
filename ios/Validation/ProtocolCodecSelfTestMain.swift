@@ -115,6 +115,21 @@ struct ProtocolCodecSelfTestMain {
             "Remote server does not advertise attachment resume support",
             "missing attachment resume capability rejected"
         )
+        assertEqual(
+            serverIdentityMismatch(expectedIdentityId: "daemon-a", actualIdentityId: "daemon-b"),
+            true,
+            "server identity mismatch detects changed daemon"
+        )
+        assertEqual(
+            serverIdentityMismatch(expectedIdentityId: "daemon-a", actualIdentityId: "daemon-a"),
+            false,
+            "server identity mismatch accepts same daemon"
+        )
+        assertEqual(
+            serverIdentityMismatch(expectedIdentityId: nil, actualIdentityId: "daemon-a"),
+            false,
+            "server identity mismatch ignores unknown trusted identity"
+        )
 
         let listEffect = ClientWireReducer.reduce(message: .sessionList, payload: makeSessionListPayload(), state: &clientState)
         assertEqual(listEffect, .none, "session list has no side effect")
