@@ -142,6 +142,15 @@ if heartbeat_client is None:
 heartbeat_age = heartbeat_client.get("last_heartbeat_age_ms")
 if not isinstance(heartbeat_age, int) or heartbeat_age < 0 or heartbeat_age > 5_000:
     raise SystemExit(f"unexpected last_heartbeat_age_ms: {heartbeat_age!r}")
+heartbeat_expires_in = heartbeat_client.get("heartbeat_expires_in_ms")
+if not isinstance(heartbeat_expires_in, int) or heartbeat_expires_in <= 0:
+    raise SystemExit(
+        f"expected positive heartbeat_expires_in_ms, got {heartbeat_expires_in!r}"
+    )
+if heartbeat_client.get("heartbeat_overdue") is not False:
+    raise SystemExit(
+        f"expected heartbeat_overdue false for active client, got {heartbeat_client.get('heartbeat_overdue')!r}"
+    )
 if not isinstance(heartbeat_client.get("connection_age_ms"), int):
     raise SystemExit("missing connection_age_ms for authenticated client")
 
