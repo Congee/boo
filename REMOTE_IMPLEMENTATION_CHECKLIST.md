@@ -284,10 +284,10 @@ Goal:
   - selection/navigation
   - session switching if needed
 - [ ] Surface connection state:
-  - connected
-  - reconnecting
-  - degraded
-  - disconnected
+  - [x] connected
+  - [x] reconnecting
+  - [x] degraded
+  - [x] disconnected
 
 ### 3. Deployment Modes
 

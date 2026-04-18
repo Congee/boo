@@ -97,6 +97,33 @@ struct ConnectScreen: View {
     @State private var host = ""
     @State private var authKey = ""
 
+    private var statusBanner: (message: String, color: Color)? {
+        switch monitor.reconnectState {
+        case .waiting(let attempt, _):
+            return ("Reconnecting to saved host (attempt \(attempt))", KineticColor.primary)
+        case .failed(let reason):
+            return ("Reconnect failed: \(reason)", KineticColor.error)
+        case .idle:
+            break
+        }
+        switch monitor.transportHealth {
+        case .degraded(let reason):
+            return (reason, KineticColor.tertiary)
+        case .lost(let reason):
+            return (reason, KineticColor.error)
+        default:
+            break
+        }
+        switch monitor.status {
+        case .connecting:
+            return ("Connecting…", KineticColor.primary)
+        case .connectionLost(let reason):
+            return (reason, KineticColor.error)
+        default:
+            return nil
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             KineticTopBar(
@@ -105,6 +132,16 @@ struct ConnectScreen: View {
             )
             ScrollView {
                 VStack(alignment: .leading, spacing: KineticSpacing.xl) {
+                    if let statusBanner {
+                        Text(statusBanner.message)
+                            .font(KineticFont.caption)
+                            .foregroundStyle(statusBanner.color)
+                            .padding(KineticSpacing.md)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(statusBanner.color.opacity(0.1))
+                            .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+                    }
+
                     VStack(alignment: .leading, spacing: KineticSpacing.sm) {
                         KineticSectionLabel(text: "Machine Address")
                         KineticInputField(placeholder: "hostname or ip:port", text: $host)
