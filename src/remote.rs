@@ -27,6 +27,7 @@ pub const REMOTE_CAPABILITY_ATTACHMENT_RESUME: u32 = 1 << 5;
 pub const REMOTE_CAPABILITY_DAEMON_IDENTITY: u32 = 1 << 6;
 pub const REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT: u32 = 1 << 7;
 pub const REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT: u32 = 1 << 8;
+pub const REMOTE_CAPABILITY_TCP_TLS_TRANSPORT: u32 = 1 << 9;
 pub const REMOTE_CAPABILITIES: u32 = REMOTE_CAPABILITY_HMAC_AUTH
     | REMOTE_CAPABILITY_SCREEN_DELTAS
     | REMOTE_CAPABILITY_UI_STATE
@@ -34,7 +35,18 @@ pub const REMOTE_CAPABILITIES: u32 = REMOTE_CAPABILITY_HMAC_AUTH
     | REMOTE_CAPABILITY_HEARTBEAT
     | REMOTE_CAPABILITY_ATTACHMENT_RESUME
     | REMOTE_CAPABILITY_DAEMON_IDENTITY
-    | REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT;
+    | REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT
+    | REMOTE_CAPABILITY_TCP_TLS_TRANSPORT;
+
+/// First byte of a TLS 1.x record when the record carries a handshake (RFC 8446 §5.1).
+/// Distinguishes an incoming TLS ClientHello from Boo's plain-TCP wire format, whose
+/// first byte is `MAGIC[0]` (0x47).
+const TLS_HANDSHAKE_RECORD_TYPE: u8 = 0x16;
+const PROTOCOL_PEEK_BYTES: usize = 1;
+/// Read timeout on the inner TCP socket for TLS-wrapped connections. Lower than
+/// `REMOTE_READ_TIMEOUT` so that the reader thread releases the TLS stream lock
+/// promptly and the writer thread does not stall on idle connections.
+const TLS_INNER_READ_TIMEOUT: Duration = Duration::from_millis(100);
 
 const LOCAL_INPUT_SEQ_LEN: usize = 8;
 const REMOTE_FULL_STATE_HEADER_LEN: usize = 14;
@@ -570,11 +582,14 @@ impl RemoteServer {
         }
         let bind_address = config.effective_bind_address().to_string();
         let listener = TcpListener::bind((bind_address.as_str(), config.port))?;
+        let identity_material = load_or_create_daemon_identity_material();
+        let tls_config = build_remote_server_tls_config(&identity_material)
+            .map_err(io::Error::other)?;
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::new(),
             revivable_attachments: HashMap::new(),
             auth_key: config.auth_key.clone().map(|key| key.into_bytes()),
-            server_identity_id: load_or_create_daemon_identity(),
+            server_identity_id: identity_material.identity_id,
             server_instance_id: random_instance_id(),
         }));
         let state_for_listener = Arc::clone(&state);
@@ -585,56 +600,12 @@ impl RemoteServer {
                     continue;
                 };
                 let _ = stream.set_read_timeout(Some(REMOTE_READ_TIMEOUT));
-                let (client_id, outbound_rx, authenticated) = {
-                    let mut state = state_for_listener
-                        .lock()
-                        .expect("remote server state poisoned");
-                    let client_id = NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
-                    let (outbound_tx, outbound_rx) = mpsc::channel();
-                    let authenticated = state.auth_key.is_none();
-                    state.clients.insert(
-                        client_id,
-                        ClientState {
-                            outbound: outbound_tx,
-                            authenticated,
-                            challenge: None,
-                            connected_at: Instant::now(),
-                            authenticated_at: authenticated.then(Instant::now),
-                            last_heartbeat_at: None,
-                            attached_session: None,
-                            attachment_id: None,
-                            resume_token: None,
-                            last_session_list_payload: None,
-                            last_ui_runtime_state_payload: None,
-                            last_ui_appearance_payload: None,
-                            last_state: None,
-                            pane_states: HashMap::new(),
-                            latest_input_seq: None,
-                            is_local: false,
-                        },
-                    );
-                    (client_id, outbound_rx, authenticated)
-                };
-                log::info!(
-                    "remote tcp client connected: client_id={client_id} authenticated={authenticated}"
-                );
-
-                let Ok(writer_stream) = stream.try_clone() else {
-                    let mut state = state_for_listener
-                        .lock()
-                        .expect("remote server state poisoned");
-                    state.clients.remove(&client_id);
-                    continue;
-                };
-                std::thread::spawn(move || writer_loop(writer_stream, outbound_rx, true, true));
-
-                let cmd_tx = cmd_tx.clone();
                 let state = Arc::clone(&state_for_listener);
-                if authenticated {
-                    let _ = cmd_tx.send(RemoteCmd::Connected { client_id });
-                    crate::notify_headless_wakeup();
-                }
-                std::thread::spawn(move || read_loop(stream, client_id, state, cmd_tx));
+                let cmd_tx = cmd_tx.clone();
+                let tls_config = Arc::clone(&tls_config);
+                std::thread::spawn(move || {
+                    serve_incoming_tcp_client(stream, tls_config, state, cmd_tx);
+                });
             }
         });
 
@@ -3221,6 +3192,188 @@ fn load_or_create_daemon_identity_material_at(dir: &Path) -> DaemonIdentityMater
     material
 }
 
+fn serve_incoming_tcp_client(
+    stream: std::net::TcpStream,
+    tls_config: Arc<rustls::ServerConfig>,
+    state: Arc<Mutex<State>>,
+    cmd_tx: mpsc::Sender<RemoteCmd>,
+) {
+    let mut peek_buf = [0u8; PROTOCOL_PEEK_BYTES];
+    let peeked = match stream.peek(&mut peek_buf) {
+        Ok(n) => n,
+        Err(error) => {
+            log::debug!("remote tcp client dropped before peek: {error}");
+            return;
+        }
+    };
+    if peeked < PROTOCOL_PEEK_BYTES {
+        log::debug!("remote tcp client closed before protocol detection");
+        return;
+    }
+
+    if peek_buf[0] == TLS_HANDSHAKE_RECORD_TYPE {
+        let _ = stream.set_read_timeout(Some(TLS_INNER_READ_TIMEOUT));
+        let tls_conn = match rustls::ServerConnection::new(tls_config) {
+            Ok(conn) => conn,
+            Err(error) => {
+                log::warn!("remote tls: failed to construct server connection: {error}");
+                return;
+            }
+        };
+        let mut tls_stream = rustls::StreamOwned::new(tls_conn, stream);
+        if let Err(error) = tls_stream.conn.complete_io(&mut tls_stream.sock) {
+            log::warn!("remote tls handshake failed: {error}");
+            return;
+        }
+        log::info!(
+            "remote tls handshake completed: protocol_version={:?}",
+            tls_stream.conn.protocol_version()
+        );
+        let shared = SharedStream::new(tls_stream);
+        run_remote_client_session(shared.clone(), shared, state, cmd_tx, "tls");
+    } else {
+        let Ok(writer_stream) = stream.try_clone() else {
+            log::warn!("remote tcp client dropped: failed to clone stream for writer");
+            return;
+        };
+        run_remote_client_session(stream, writer_stream, state, cmd_tx, "plain");
+    }
+}
+
+fn run_remote_client_session<R, W>(
+    reader: R,
+    writer: W,
+    state: Arc<Mutex<State>>,
+    cmd_tx: mpsc::Sender<RemoteCmd>,
+    transport_label: &'static str,
+) where
+    R: Read + Send + 'static,
+    W: Write + Send + 'static,
+{
+    let (client_id, outbound_rx, authenticated) = {
+        let mut state = state.lock().expect("remote server state poisoned");
+        let client_id = NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
+        let (outbound_tx, outbound_rx) = mpsc::channel();
+        let authenticated = state.auth_key.is_none();
+        state.clients.insert(
+            client_id,
+            ClientState {
+                outbound: outbound_tx,
+                authenticated,
+                challenge: None,
+                connected_at: Instant::now(),
+                authenticated_at: authenticated.then(Instant::now),
+                last_heartbeat_at: None,
+                attached_session: None,
+                attachment_id: None,
+                resume_token: None,
+                last_session_list_payload: None,
+                last_ui_runtime_state_payload: None,
+                last_ui_appearance_payload: None,
+                last_state: None,
+                pane_states: HashMap::new(),
+                latest_input_seq: None,
+                is_local: false,
+            },
+        );
+        (client_id, outbound_rx, authenticated)
+    };
+    log::info!(
+        "remote tcp client connected: client_id={client_id} authenticated={authenticated} transport={transport_label}"
+    );
+
+    std::thread::spawn(move || writer_loop(writer, outbound_rx, true, true));
+
+    if authenticated {
+        let _ = cmd_tx.send(RemoteCmd::Connected { client_id });
+        crate::notify_headless_wakeup();
+    }
+    read_loop(reader, client_id, state, cmd_tx);
+}
+
+fn build_remote_server_tls_config(
+    material: &DaemonIdentityMaterial,
+) -> Result<Arc<rustls::ServerConfig>, String> {
+    use rustls::pki_types::PrivateKeyDer;
+
+    let cert_chain = rustls_pemfile::certs(&mut material.cert_pem.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("parse remote daemon cert: {error}"))?;
+    if cert_chain.is_empty() {
+        return Err("remote daemon cert.pem contained no certificates".to_string());
+    }
+    let key_der: PrivateKeyDer<'static> =
+        rustls_pemfile::private_key(&mut material.key_pem.as_bytes())
+            .map_err(|error| format!("parse remote daemon private key: {error}"))?
+            .ok_or_else(|| "remote daemon key.pem contained no private key".to_string())?;
+
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let config = rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|error| format!("negotiate TLS protocol versions: {error}"))?
+        .with_no_client_auth()
+        .with_single_cert(cert_chain, key_der)
+        .map_err(|error| format!("install remote daemon cert in rustls: {error}"))?;
+    Ok(Arc::new(config))
+}
+
+/// `Read + Write + Send + Clone` handle around a single underlying stream. Used for the
+/// TLS-wrapped path where the rustls session state cannot be duplicated via
+/// `TcpStream::try_clone` the way the plain-TCP path does. Reader and writer threads each
+/// hold a clone of the `Arc<Mutex<_>>` and serialize I/O; the lock hold time is bounded by
+/// `TLS_INNER_READ_TIMEOUT` on the reader side so writers are not starved during idle
+/// reads.
+struct SharedStream {
+    inner: Arc<Mutex<Box<dyn ReadWriteSend>>>,
+}
+
+trait ReadWriteSend: Read + Write + Send {}
+impl<T: Read + Write + Send + ?Sized> ReadWriteSend for T {}
+
+impl SharedStream {
+    fn new<S: Read + Write + Send + 'static>(stream: S) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Box::new(stream))),
+        }
+    }
+}
+
+impl Clone for SharedStream {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl Read for SharedStream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::other("shared remote stream poisoned"))?;
+        guard.read(buf)
+    }
+}
+
+impl Write for SharedStream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::other("shared remote stream poisoned"))?;
+        guard.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::other("shared remote stream poisoned"))?;
+        guard.flush()
+    }
+}
+
 fn generate_daemon_identity_material() -> DaemonIdentityMaterial {
     let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519)
         .expect("generate ed25519 keypair for remote daemon identity");
@@ -5011,6 +5164,135 @@ mod tests {
         let expected = derive_identity_id(keypair.public_key_der());
         assert_eq!(material.identity_id, expected);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[derive(Debug)]
+    struct TrustAllServerCertVerifier {
+        provider: Arc<rustls::crypto::CryptoProvider>,
+    }
+
+    impl rustls::client::danger::ServerCertVerifier for TrustAllServerCertVerifier {
+        fn verify_server_cert(
+            &self,
+            _end_entity: &rustls::pki_types::CertificateDer<'_>,
+            _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+            _server_name: &rustls::pki_types::ServerName<'_>,
+            _ocsp_response: &[u8],
+            _now: rustls::pki_types::UnixTime,
+        ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            message: &[u8],
+            cert: &rustls::pki_types::CertificateDer<'_>,
+            dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            rustls::crypto::verify_tls12_signature(
+                message,
+                cert,
+                dss,
+                &self.provider.signature_verification_algorithms,
+            )
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            message: &[u8],
+            cert: &rustls::pki_types::CertificateDer<'_>,
+            dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            rustls::crypto::verify_tls13_signature(
+                message,
+                cert,
+                dss,
+                &self.provider.signature_verification_algorithms,
+            )
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+            self.provider.signature_verification_algorithms.supported_schemes()
+        }
+    }
+
+    fn build_test_trust_all_client_config() -> rustls::ClientConfig {
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
+            .with_safe_default_protocol_versions()
+            .expect("client tls protocol versions")
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(TrustAllServerCertVerifier {
+                provider,
+            }))
+            .with_no_client_auth()
+    }
+
+    #[test]
+    fn serve_incoming_tcp_client_completes_tls_handshake_and_auth() {
+        use std::net::{TcpListener, TcpStream};
+
+        let dir = unique_identity_dir("tls-serve");
+        let _ = std::fs::remove_dir_all(&dir);
+        let material = load_or_create_daemon_identity_material_at(&dir);
+        let expected_identity = material.identity_id.clone();
+        let tls_config =
+            build_remote_server_tls_config(&material).expect("build server tls config");
+
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::new(),
+            revivable_attachments: HashMap::new(),
+            auth_key: None,
+            server_identity_id: expected_identity.clone(),
+            server_instance_id: "test-instance".to_string(),
+        }));
+        let (cmd_tx, _cmd_rx) = mpsc::channel();
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let addr = listener.local_addr().expect("local addr");
+        let server_handle = std::thread::spawn({
+            let tls_config = Arc::clone(&tls_config);
+            let state = Arc::clone(&state);
+            move || {
+                let (stream, _) = listener.accept().expect("accept");
+                let _ = stream.set_read_timeout(Some(REMOTE_READ_TIMEOUT));
+                serve_incoming_tcp_client(stream, tls_config, state, cmd_tx);
+            }
+        });
+
+        let tcp = TcpStream::connect(addr).expect("tcp connect");
+        tcp.set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("set read timeout");
+        let client_config = build_test_trust_all_client_config();
+        let server_name = rustls::pki_types::ServerName::try_from("boo-remote-daemon")
+            .expect("parse server name");
+        let client_conn =
+            rustls::ClientConnection::new(Arc::new(client_config), server_name)
+                .expect("client connection");
+        let mut tls_stream = rustls::StreamOwned::new(client_conn, tcp);
+
+        tls_stream
+            .write_all(&encode_message(MessageType::Auth, &[]))
+            .expect("send auth");
+        let (ty, payload) = read_message(&mut tls_stream).expect("read auth reply");
+        assert!(matches!(ty, MessageType::AuthOk), "got {ty:?}");
+
+        validate_auth_ok_payload(&payload, false).expect("auth ok payload valid");
+        let (_, capabilities, _, _, server_identity_id) =
+            decode_auth_ok_payload(&payload).expect("decode auth ok");
+        assert_eq!(
+            server_identity_id.as_deref(),
+            Some(expected_identity.as_str())
+        );
+        assert_ne!(
+            capabilities & REMOTE_CAPABILITY_TCP_TLS_TRANSPORT,
+            0,
+            "server should advertise TLS transport capability"
+        );
+
+        drop(tls_stream);
+        let _ = server_handle.join();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

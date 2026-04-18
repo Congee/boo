@@ -20,6 +20,8 @@ unicode-width = "0.2"
 hmac = "0.12"
 sha2 = "0.10"
 rcgen = { version = "0.13", default-features = false, features = ["pem", "crypto", "ring"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "logging", "tls12"] }
+rustls-pemfile = "2"
 crossbeam-channel = "0.5"
 open = "5"
 ttf-parser = "0.25"
