@@ -50,6 +50,12 @@ enum OutboundMessage {
     ScreenUpdate(Vec<u8>),
 }
 
+enum AuthHandling {
+    Authenticated,
+    Pending,
+    Disconnect,
+}
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageType {
@@ -1238,9 +1244,13 @@ fn read_loop(
         };
 
         if matches!(ty, MessageType::Auth) {
-            if handle_auth_message(client_id, &payload, &state) {
-                let _ = cmd_tx.send(RemoteCmd::Connected { client_id });
-                crate::notify_headless_wakeup();
+            match handle_auth_message(client_id, &payload, &state) {
+                AuthHandling::Authenticated => {
+                    let _ = cmd_tx.send(RemoteCmd::Connected { client_id });
+                    crate::notify_headless_wakeup();
+                }
+                AuthHandling::Pending => {}
+                AuthHandling::Disconnect => break,
             }
             continue;
         }
@@ -1348,13 +1358,17 @@ fn read_loop(
     }
 }
 
-fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>) -> bool {
+fn handle_auth_message(
+    client_id: u64,
+    payload: &[u8],
+    state: &Arc<Mutex<State>>,
+) -> AuthHandling {
     let mut state = state.lock().expect("remote server state poisoned");
     let auth_key = state.auth_key.clone();
     let server_identity_id = state.server_identity_id.clone();
     let server_instance_id = state.server_instance_id.clone();
     let Some(client) = state.clients.get_mut(&client_id) else {
-        return false;
+        return AuthHandling::Disconnect;
     };
 
     if auth_key.is_none() {
@@ -1363,7 +1377,7 @@ fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>
             MessageType::AuthOk,
             &encode_auth_ok_payload(&server_identity_id, &server_instance_id),
         )));
-        return true;
+        return AuthHandling::Authenticated;
     }
 
     if payload.is_empty() {
@@ -1376,7 +1390,7 @@ fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>
             MessageType::AuthChallenge,
             &challenge,
         )));
-        return false;
+        return AuthHandling::Pending;
     }
 
     let Some(challenge) = client.challenge.take() else {
@@ -1384,21 +1398,21 @@ fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>
             MessageType::AuthFail,
             &[],
         )));
-        return false;
+        return AuthHandling::Disconnect;
     };
     if Instant::now() > challenge.expires_at {
         let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
             MessageType::AuthFail,
             &[],
         )));
-        return false;
+        return AuthHandling::Disconnect;
     }
     let Some(key) = auth_key else {
         let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
             MessageType::AuthFail,
             &[],
         )));
-        return false;
+        return AuthHandling::Disconnect;
     };
 
     let mut mac = HmacSha256::new_from_slice(&key).expect("valid HMAC key");
@@ -1410,14 +1424,14 @@ fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>
                 MessageType::AuthOk,
                 &encode_auth_ok_payload(&server_identity_id, &server_instance_id),
             )));
-            true
+            AuthHandling::Authenticated
         }
         Err(_) => {
             let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
                 MessageType::AuthFail,
                 &[],
             )));
-            false
+            AuthHandling::Disconnect
         }
     }
 }
@@ -2441,7 +2455,10 @@ mod tests {
             server_instance_id: "test-instance".to_string(),
         }));
 
-        assert!(!handle_auth_message(1, &[], &state));
+        assert!(matches!(
+            handle_auth_message(1, &[], &state),
+            AuthHandling::Pending
+        ));
         let challenge = match outbound_rx.recv().expect("challenge frame") {
             OutboundMessage::Frame(frame) => {
                 let mut cursor = std::io::Cursor::new(frame);
@@ -2456,7 +2473,10 @@ mod tests {
         mac.update(&challenge);
         let response = mac.finalize().into_bytes().to_vec();
 
-        assert!(handle_auth_message(1, &response, &state));
+        assert!(matches!(
+            handle_auth_message(1, &response, &state),
+            AuthHandling::Authenticated
+        ));
         match outbound_rx.recv().expect("auth ok frame") {
             OutboundMessage::Frame(frame) => {
                 let mut cursor = std::io::Cursor::new(frame);
@@ -2505,7 +2525,10 @@ mod tests {
             server_instance_id: "test-instance".to_string(),
         }));
 
-        assert!(!handle_auth_message(1, &[], &state));
+        assert!(matches!(
+            handle_auth_message(1, &[], &state),
+            AuthHandling::Pending
+        ));
         let challenge = match outbound_rx.recv().expect("challenge frame") {
             OutboundMessage::Frame(frame) => {
                 let mut cursor = std::io::Cursor::new(frame);
@@ -2526,7 +2549,10 @@ mod tests {
         mac.update(&challenge);
         let response = mac.finalize().into_bytes().to_vec();
 
-        assert!(!handle_auth_message(1, &response, &state));
+        assert!(matches!(
+            handle_auth_message(1, &response, &state),
+            AuthHandling::Disconnect
+        ));
         match outbound_rx.recv().expect("auth fail frame") {
             OutboundMessage::Frame(frame) => {
                 let mut cursor = std::io::Cursor::new(frame);
@@ -2649,6 +2675,64 @@ mod tests {
             OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
         }
         assert!(cmd_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn read_loop_closes_connection_after_auth_failure() {
+        let (outbound_tx, outbound_rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: outbound_tx,
+                    authenticated: false,
+                    challenge: None,
+                    attached_session: None,
+                    attachment_id: None,
+                    resume_token: None,
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: false,
+                },
+            )]),
+            revivable_attachments: HashMap::new(),
+            auth_key: Some(b"test-key".to_vec()),
+            server_identity_id: "test-daemon".to_string(),
+            server_instance_id: "test-instance".to_string(),
+        }));
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let mut frames = Vec::new();
+        frames.extend_from_slice(&encode_message(MessageType::Auth, &[]));
+        frames.extend_from_slice(&encode_message(MessageType::Auth, b"definitely-wrong-hmac"));
+        frames.extend_from_slice(&encode_message(MessageType::ListSessions, &[]));
+
+        read_loop(std::io::Cursor::new(frames), 1, Arc::clone(&state), cmd_tx);
+
+        let mut saw_challenge = false;
+        let mut saw_fail = false;
+        while let Ok(message) = outbound_rx.try_recv() {
+            match message {
+                OutboundMessage::Frame(frame) => {
+                    let mut cursor = std::io::Cursor::new(frame);
+                    let (ty, _) = read_message(&mut cursor).expect("decoded outbound frame");
+                    if ty == MessageType::AuthChallenge {
+                        saw_challenge = true;
+                    } else if ty == MessageType::AuthFail {
+                        saw_fail = true;
+                    }
+                }
+                OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+            }
+        }
+        assert!(saw_challenge);
+        assert!(saw_fail);
+        assert!(cmd_rx.try_recv().is_err());
+        let guard = state.lock().expect("remote server state poisoned");
+        assert!(!guard.clients.contains_key(&1));
     }
 
     #[test]
