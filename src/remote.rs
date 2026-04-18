@@ -3424,6 +3424,85 @@ mod tests {
     }
 
     #[test]
+    fn heartbeat_timeout_preserves_revivable_attachment_for_remote_client() {
+        let (outbound_tx, outbound_rx) = mpsc::channel();
+        let cached_state = Arc::new(RemoteFullState {
+            rows: 1,
+            cols: 1,
+            cursor_x: 0,
+            cursor_y: 0,
+            cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 1,
+            cells: vec![RemoteCell {
+                codepoint: u32::from('x'),
+                fg: [1, 2, 3],
+                bg: [0, 0, 0],
+                style_flags: 0,
+                wide: false,
+            }],
+        });
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: outbound_tx,
+                    authenticated: true,
+                    challenge: None,
+                    connected_at: Instant::now()
+                        - DIRECT_CLIENT_HEARTBEAT_WINDOW
+                        - Duration::from_secs(2),
+                    authenticated_at: Some(
+                        Instant::now()
+                            - DIRECT_CLIENT_HEARTBEAT_WINDOW
+                            - Duration::from_secs(2),
+                    ),
+                    last_heartbeat_at: None,
+                    attached_session: Some(11),
+                    attachment_id: Some(0xabc),
+                    resume_token: Some(0xdef),
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: Some(Arc::clone(&cached_state)),
+                    pane_states: HashMap::new(),
+                    latest_input_seq: Some(9),
+                    is_local: false,
+                },
+            )]),
+            revivable_attachments: HashMap::new(),
+            auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
+            server_instance_id: "test-instance".to_string(),
+        }));
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let reader = TimeoutScriptedReader::new([Err(io::ErrorKind::TimedOut)]);
+
+        read_loop(reader, 1, Arc::clone(&state), cmd_tx);
+
+        match outbound_rx.recv().expect("heartbeat timeout error frame") {
+            OutboundMessage::Frame(frame) => {
+                let mut cursor = std::io::Cursor::new(frame);
+                let (ty, payload) = read_message(&mut cursor).expect("decoded error frame");
+                assert_eq!(ty, MessageType::ErrorMsg);
+                assert_eq!(String::from_utf8(payload).expect("utf8"), "heartbeat timeout");
+            }
+            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+        }
+        assert!(cmd_rx.try_recv().is_err());
+        let guard = state.lock().expect("remote server state poisoned");
+        assert!(!guard.clients.contains_key(&1));
+        let attachment = guard
+            .revivable_attachments
+            .get(&0xabc)
+            .expect("revivable attachment preserved");
+        assert_eq!(attachment.session_id, 11);
+        assert_eq!(attachment.resume_token, 0xdef);
+        assert_eq!(attachment.latest_input_seq, Some(9));
+        assert_eq!(attachment.last_state.as_ref(), Some(&cached_state));
+    }
+
+    #[test]
     fn parse_attach_request_supports_session_only_attachment_and_resume_token_forms() {
         let session_only = 11_u32.to_le_bytes().to_vec();
         assert_eq!(parse_attach_request(&session_only), Some((11, None, None)));
