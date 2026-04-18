@@ -172,6 +172,7 @@ final class GSPClient: ObservableObject {
     private var pendingHeartbeatToken: UInt64?
     private var desiredAttachedSessionId: UInt32?
     private var desiredAttachmentId: UInt64?
+    private var connectionGeneration: UInt64 = 0
 
     private nonisolated static let magic: [UInt8] = [0x47, 0x53]
     private nonisolated static let headerLen = 7
@@ -194,22 +195,25 @@ final class GSPClient: ObservableObject {
 
     func connect(host: String, port: UInt16, authKey: String = "") {
         self.authKey = authKey.isEmpty ? nil : SymmetricKey(data: Data(authKey.utf8))
+        connectionGeneration &+= 1
+        let generation = connectionGeneration
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
         connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: params)
         connection?.stateUpdateHandler = { [weak self] state in
             Task { @MainActor in
+                guard let self, self.connectionGeneration == generation else { return }
                 switch state {
                 case .ready:
-                    self?.connected = true
-                    self?.lastError = nil
-                    self?.readHeader()
-                    self?.sendAuth()
+                    self.connected = true
+                    self.lastError = nil
+                    self.readHeader(generation: generation)
+                    self.sendAuth()
                 case .failed(let error):
-                    self?.protocolError("Connection failed: \(error)")
+                    self.protocolError("Connection failed: \(error)")
                 case .cancelled:
-                    self?.stopHeartbeatLoop()
-                    self?.connected = false
+                    self.stopHeartbeatLoop()
+                    self.connected = false
                 default:
                     break
                 }
@@ -221,6 +225,7 @@ final class GSPClient: ObservableObject {
     func disconnect() {
         connection?.cancel()
         connection = nil
+        connectionGeneration &+= 1
         connected = false
         authenticated = false
         protocolVersion = nil
@@ -343,6 +348,7 @@ final class GSPClient: ObservableObject {
     }
 
     private func sendMessage(type: GSPMessageType, payload: Data) {
+        let generation = connectionGeneration
         var header = Data(count: Self.headerLen)
         header[0] = Self.magic[0]
         header[1] = Self.magic[1]
@@ -351,48 +357,45 @@ final class GSPClient: ObservableObject {
         header.withUnsafeMutableBytes { $0.storeBytes(of: len, toByteOffset: 3, as: UInt32.self) }
         connection?.send(content: header + payload, completion: .contentProcessed { [weak self] error in
             guard let error else { return }
-            Task { @MainActor in self?.lastError = "Send failed: \(error)" }
+            Task { @MainActor in
+                guard let self, self.connectionGeneration == generation else { return }
+                self.lastError = "Send failed: \(error)"
+            }
         })
     }
 
-    private func readHeader() {
+    private func readHeader(generation: UInt64) {
         connection?.receive(minimumIncompleteLength: Self.headerLen, maximumLength: Self.headerLen) { [weak self] content, _, isComplete, _ in
-            guard let self, let data = content, data.count == Self.headerLen else {
-                if isComplete { Task { @MainActor in self?.disconnect() } }
+            guard let self, self.connectionGeneration == generation else { return }
+            guard let data = content, data.count == Self.headerLen else {
+                if isComplete { self.disconnect() }
                 return
             }
             guard data[0] == Self.magic[0], data[1] == Self.magic[1] else {
-                Task { @MainActor in
-                    self.lastError = "Invalid protocol header"
-                    self.disconnect()
-                }
+                self.lastError = "Invalid protocol header"
+                self.disconnect()
                 return
             }
             let type = data[2]
             let payloadLen = data.withUnsafeBytes { UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 3, as: UInt32.self)) }
             if payloadLen == 0 {
-                Task { @MainActor in
-                    self.handleMessage(type: type, payload: Data())
-                    self.readHeader()
-                }
+                self.handleMessage(type: type, payload: Data())
+                self.readHeader(generation: generation)
             } else {
-                Task { @MainActor in
-                    self.readPayload(type: type, length: Int(payloadLen))
-                }
+                self.readPayload(type: type, length: Int(payloadLen), generation: generation)
             }
         }
     }
 
-    private func readPayload(type: UInt8, length: Int) {
+    private func readPayload(type: UInt8, length: Int, generation: UInt64) {
         connection?.receive(minimumIncompleteLength: length, maximumLength: length) { [weak self] content, _, isComplete, _ in
-            guard let self, let data = content else {
-                if isComplete { Task { @MainActor in self?.disconnect() } }
+            guard let self, self.connectionGeneration == generation else { return }
+            guard let data = content else {
+                if isComplete { self.disconnect() }
                 return
             }
-            Task { @MainActor in
-                self.handleMessage(type: type, payload: data)
-                self.readHeader()
-            }
+            self.handleMessage(type: type, payload: data)
+            self.readHeader(generation: generation)
         }
     }
 
@@ -450,6 +453,7 @@ final class GSPClient: ObservableObject {
     private func protocolError(_ message: String) {
         connection?.cancel()
         connection = nil
+        connectionGeneration &+= 1
         connected = false
         authenticated = false
         protocolVersion = nil

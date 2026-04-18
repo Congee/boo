@@ -305,7 +305,7 @@ Goal:
 - [ ] Extend protocol validation to cover the canonical iOS handshake and resume flow
   - [x] initial handshake with protocol version and capability decoding
   - [x] heartbeat acknowledgement echo validation
-  - [ ] resume flow
+  - [x] resume flow
 
 #### End-to-End
 
