@@ -288,12 +288,12 @@ That is a better fit for a unified desktop+iOS story than keeping the remote con
 The canonical Boo remote transport shall be:
 
 - one Boo-native encrypted network connection per client session
-- QUIC-capable by design
+- QUIC as the preferred live-session transport
 - able to fall back to a TCP/TLS transport when UDP is unavailable or blocked
 
 This means:
 
-- QUIC-like transport is the preferred live-session path because it supports connection migration and better roaming behavior
+- QUIC is the preferred live-session path because it supports connection migration and better roaming behavior
 - a TCP/TLS fallback is required for restricted environments
 - desktop and iOS clients shall share the same application-level remote protocol regardless of the underlying transport
 
