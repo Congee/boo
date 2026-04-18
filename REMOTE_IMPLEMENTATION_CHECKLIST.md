@@ -224,6 +224,7 @@ Goal:
 - [ ] Ensure bootstrap credentials are replay-resistant and bounded
   - [x] expire outstanding HMAC auth challenges on the server
   - [x] close unauthenticated direct-client connections after a failed HMAC response
+  - [x] close idle or challenge-expired unauthenticated direct-client connections after bounded timeout
 - [x] Ensure resumed connections cannot hijack unrelated sessions
   - [x] refuse automatic iOS resume when a known endpoint presents a different daemon identity
   - [x] require a server-issued resume token in addition to attachment identity

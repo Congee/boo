@@ -39,6 +39,7 @@ const LOCAL_DELTA_HEADER_LEN: usize = LOCAL_INPUT_SEQ_LEN + REMOTE_DELTA_HEADER_
 const REMOTE_CELL_ENCODED_LEN: usize = 12;
 const REVIVABLE_ATTACHMENT_WINDOW: Duration = Duration::from_secs(30);
 const AUTH_CHALLENGE_WINDOW: Duration = Duration::from_secs(10);
+const REMOTE_READ_TIMEOUT: Duration = Duration::from_secs(1);
 const STYLE_FLAG_BOLD: u8 = 0x01;
 const STYLE_FLAG_ITALIC: u8 = 0x02;
 const STYLE_FLAG_HYPERLINK: u8 = 0x04;
@@ -364,6 +365,7 @@ impl RemoteServer {
                 let Ok(stream) = stream else {
                     continue;
                 };
+                let _ = stream.set_read_timeout(Some(REMOTE_READ_TIMEOUT));
                 let (client_id, outbound_rx, authenticated) = {
                     let mut state = state_for_listener
                         .lock()
@@ -1342,6 +1344,28 @@ fn coalescible_frame_kind(frame: &[u8]) -> Option<CoalescibleFrameKind> {
     }
 }
 
+fn should_disconnect_unauthenticated_client(
+    state: &Arc<Mutex<State>>,
+    client_id: u64,
+) -> Option<&'static str> {
+    let state = state.lock().expect("remote server state poisoned");
+    let client = state.clients.get(&client_id)?;
+    if client.authenticated {
+        return None;
+    }
+    let now = Instant::now();
+    if let Some(challenge) = client.challenge {
+        if now > challenge.expires_at {
+            return Some("challenge-timeout");
+        }
+        return None;
+    }
+    if now.saturating_duration_since(client.connected_at) > AUTH_CHALLENGE_WINDOW {
+        return Some("auth-timeout");
+    }
+    None
+}
+
 fn read_loop(
     mut stream: impl Read,
     client_id: u64,
@@ -1351,8 +1375,22 @@ fn read_loop(
     loop {
         let mut scope =
             crate::profiling::scope("server.stream.read_message", crate::profiling::Kind::Io);
-        let Ok((ty, payload)) = read_message(&mut stream) else {
-            break;
+        let (ty, payload) = match read_message(&mut stream) {
+            Ok(message) => message,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                ) =>
+            {
+                if let Some(reason) = should_disconnect_unauthenticated_client(&state, client_id) {
+                    log::warn!("remote auth failed: client_id={client_id} reason={reason}");
+                    send_direct_frame(&state, client_id, MessageType::AuthFail, Vec::new());
+                    break;
+                }
+                continue;
+            }
+            Err(_) => break,
         };
         scope.add_bytes(payload.len() as u64);
         let (authenticated, is_local) = {
@@ -2297,6 +2335,36 @@ pub fn full_state_from_terminal(
 mod tests {
     use super::*;
     use crate::control;
+    use std::collections::VecDeque;
+
+    struct TimeoutScriptedReader {
+        chunks: VecDeque<Result<Vec<u8>, io::ErrorKind>>,
+    }
+
+    impl TimeoutScriptedReader {
+        fn new(chunks: impl IntoIterator<Item = Result<Vec<u8>, io::ErrorKind>>) -> Self {
+            Self {
+                chunks: chunks.into_iter().collect(),
+            }
+        }
+    }
+
+    impl Read for TimeoutScriptedReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            match self.chunks.pop_front() {
+                Some(Ok(chunk)) => {
+                    let len = chunk.len().min(buf.len());
+                    buf[..len].copy_from_slice(&chunk[..len]);
+                    if len < chunk.len() {
+                        self.chunks.push_front(Ok(chunk[len..].to_vec()));
+                    }
+                    Ok(len)
+                }
+                Some(Err(kind)) => Err(io::Error::new(kind, "scripted timeout")),
+                None => Ok(0),
+            }
+        }
+    }
 
     #[test]
     fn session_list_encoding_matches_client_layout() {
@@ -2893,6 +2961,107 @@ mod tests {
         }
         assert!(saw_challenge);
         assert!(saw_fail);
+        assert!(cmd_rx.try_recv().is_err());
+        let guard = state.lock().expect("remote server state poisoned");
+        assert!(!guard.clients.contains_key(&1));
+    }
+
+    #[test]
+    fn read_loop_closes_idle_unauthenticated_connection_after_timeout() {
+        let (outbound_tx, outbound_rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: outbound_tx,
+                    authenticated: false,
+                    challenge: None,
+                    connected_at: Instant::now() - AUTH_CHALLENGE_WINDOW - Duration::from_secs(1),
+                    authenticated_at: None,
+                    last_heartbeat_at: None,
+                    attached_session: None,
+                    attachment_id: None,
+                    resume_token: None,
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: false,
+                },
+            )]),
+            revivable_attachments: HashMap::new(),
+            auth_key: Some(b"test-key".to_vec()),
+            server_identity_id: "test-daemon".to_string(),
+            server_instance_id: "test-instance".to_string(),
+        }));
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let reader = TimeoutScriptedReader::new([Err(io::ErrorKind::TimedOut)]);
+
+        read_loop(reader, 1, Arc::clone(&state), cmd_tx);
+
+        match outbound_rx.recv().expect("auth fail frame") {
+            OutboundMessage::Frame(frame) => {
+                let mut cursor = std::io::Cursor::new(frame);
+                let (ty, payload) = read_message(&mut cursor).expect("decoded auth fail");
+                assert_eq!(ty, MessageType::AuthFail);
+                assert!(payload.is_empty());
+            }
+            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+        }
+        assert!(cmd_rx.try_recv().is_err());
+        let guard = state.lock().expect("remote server state poisoned");
+        assert!(!guard.clients.contains_key(&1));
+    }
+
+    #[test]
+    fn read_loop_closes_expired_auth_challenge_after_timeout() {
+        let (outbound_tx, outbound_rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: outbound_tx,
+                    authenticated: false,
+                    challenge: Some(AuthChallengeState {
+                        bytes: [5; 32],
+                        expires_at: Instant::now() - Duration::from_secs(1),
+                    }),
+                    connected_at: Instant::now(),
+                    authenticated_at: None,
+                    last_heartbeat_at: None,
+                    attached_session: None,
+                    attachment_id: None,
+                    resume_token: None,
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: false,
+                },
+            )]),
+            revivable_attachments: HashMap::new(),
+            auth_key: Some(b"test-key".to_vec()),
+            server_identity_id: "test-daemon".to_string(),
+            server_instance_id: "test-instance".to_string(),
+        }));
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let reader = TimeoutScriptedReader::new([Err(io::ErrorKind::TimedOut)]);
+
+        read_loop(reader, 1, Arc::clone(&state), cmd_tx);
+
+        match outbound_rx.recv().expect("auth fail frame") {
+            OutboundMessage::Frame(frame) => {
+                let mut cursor = std::io::Cursor::new(frame);
+                let (ty, payload) = read_message(&mut cursor).expect("decoded auth fail");
+                assert_eq!(ty, MessageType::AuthFail);
+                assert!(payload.is_empty());
+            }
+            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+        }
         assert!(cmd_rx.try_recv().is_err());
         let guard = state.lock().expect("remote server state poisoned");
         assert!(!guard.clients.contains_key(&1));
