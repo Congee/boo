@@ -26,6 +26,7 @@ use std::time::Duration;
 pub enum Request {
     Ping,
     GetVersion,
+    GetRemoteClients,
     ListSurfaces,
     ListTabs,
     GetClipboard,
@@ -71,6 +72,7 @@ pub enum Request {
 #[serde(untagged)]
 pub enum Response {
     Version { version: String },
+    RemoteClients { clients: Vec<crate::remote::RemoteClientInfo> },
     Surfaces { surfaces: Vec<SurfaceInfo> },
     Tabs { tabs: Vec<crate::tabs::TabInfo> },
     Clipboard { text: String },
@@ -269,6 +271,7 @@ pub enum ControlCmd {
     DumpKeysOn,
     DumpKeysOff,
     Ping,
+    GetRemoteClients { reply: mpsc::Sender<Response> },
     ListSurfaces { reply: mpsc::Sender<Response> },
     ListTabs { reply: mpsc::Sender<Response> },
     GetClipboard { reply: mpsc::Sender<Response> },
@@ -363,6 +366,14 @@ impl Client {
     pub fn get_version(&self) -> Result<String, String> {
         match self.request(&Request::GetVersion)? {
             Response::Version { version } => Ok(version),
+            Response::Error { error } => Err(error),
+            other => Err(format!("unexpected response: {other:?}")),
+        }
+    }
+
+    pub fn get_remote_clients(&self) -> Result<Vec<crate::remote::RemoteClientInfo>, String> {
+        match self.request(&Request::GetRemoteClients)? {
+            Response::RemoteClients { clients } => Ok(clients),
             Response::Error { error } => Err(error),
             other => Err(format!("unexpected response: {other:?}")),
         }
@@ -516,6 +527,17 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
         Request::GetVersion => Response::Version {
             version: env!("CARGO_PKG_VERSION").to_string(),
         },
+        Request::GetRemoteClients => {
+            let (reply_tx, reply_rx) = mpsc::channel();
+            let _ = tx.send(ControlCmd::GetRemoteClients { reply: reply_tx });
+            notify();
+            match reply_rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                Ok(resp) => resp,
+                Err(_) => Response::Error {
+                    error: "timeout".into(),
+                },
+            }
+        }
         Request::Quit => {
             let _ = tx.send(ControlCmd::Quit);
             notify();

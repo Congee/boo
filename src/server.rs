@@ -7,6 +7,9 @@ use std::sync::mpsc;
 pub enum Command {
     DumpKeys(bool),
     Ping,
+    GetRemoteClients {
+        reply: mpsc::Sender<control::Response>,
+    },
     Quit,
     ListSurfaces {
         reply: mpsc::Sender<control::Response>,
@@ -217,6 +220,7 @@ impl From<control::ControlCmd> for Command {
             control::ControlCmd::DumpKeysOn => Self::DumpKeys(true),
             control::ControlCmd::DumpKeysOff => Self::DumpKeys(false),
             control::ControlCmd::Ping => Self::Ping,
+            control::ControlCmd::GetRemoteClients { reply } => Self::GetRemoteClients { reply },
             control::ControlCmd::ListSurfaces { reply } => Self::ListSurfaces { reply },
             control::ControlCmd::ListTabs { reply } => Self::ListTabs { reply },
             control::ControlCmd::GetClipboard { reply } => Self::GetClipboard { reply },
@@ -354,6 +358,11 @@ mod tests {
         match Command::from(control::ControlCmd::ListTabs { reply: tx }) {
             Command::ListTabs { .. } => {}
             other => panic!("expected list-tabs mapping, got {other:?}"),
+        }
+        let (tx, _rx) = mpsc::channel();
+        match Command::from(control::ControlCmd::GetRemoteClients { reply: tx }) {
+            Command::GetRemoteClients { .. } => {}
+            other => panic!("expected get-remote-clients mapping, got {other:?}"),
         }
         match Command::from(control::ControlCmd::DumpKeysOn) {
             Command::DumpKeys(true) => {}

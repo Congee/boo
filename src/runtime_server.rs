@@ -130,6 +130,14 @@ impl BooApp {
         match cmd {
             server::Command::DumpKeys(enabled) => self.dump_keys = enabled,
             server::Command::Ping => {}
+            server::Command::GetRemoteClients { reply } => {
+                let mut clients = self
+                    .remote_servers()
+                    .flat_map(|server| server.client_info())
+                    .collect::<Vec<_>>();
+                clients.sort_by_key(|client| client.client_id);
+                let _ = reply.send(control::Response::RemoteClients { clients });
+            }
             server::Command::Quit => self.terminate(0),
             server::Command::ListSurfaces { reply } => {
                 let info = if let Some(tree) = self.server.tabs.active_tree() {

@@ -109,6 +109,8 @@ pub enum Command {
     KillServer,
     /// List live sessions on the Boo server
     Ls,
+    /// Show connected remote and local-stream client diagnostics
+    RemoteClients,
     /// Create a new live session
     NewSession,
     #[command(hide = true)]
@@ -182,6 +184,27 @@ where
                 Ok(other) => {
                     eprintln!("unexpected response: {other:?}");
                     Outcome::Exit(1)
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    Outcome::Exit(1)
+                }
+            }
+        }
+        Command::RemoteClients => {
+            ensure_server_running(&socket_path, boo_config);
+            let client = control::Client::connect(socket_path);
+            match client.get_remote_clients() {
+                Ok(clients) => {
+                    let mut stdout = std::io::stdout().lock();
+                    use std::io::Write;
+                    if serde_json::to_writer_pretty(&mut stdout, &clients).is_err() {
+                        eprintln!("failed to serialize remote client diagnostics");
+                        return Outcome::Exit(1);
+                    }
+                    let _ = writeln!(stdout);
+                    let _ = stdout.flush();
+                    Outcome::Exit(0)
                 }
                 Err(error) => {
                     eprintln!("{error}");
@@ -283,6 +306,12 @@ mod tests {
             }
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_remote_clients_subcommand() {
+        let cli = Cli::parse_from(["boo", "remote-clients"]);
+        assert!(matches!(cli.command, Some(super::Command::RemoteClients)));
     }
 
     #[test]
