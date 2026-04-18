@@ -364,7 +364,7 @@ Goal:
   - [x] expose remote client and revivable-attachment diagnostics over the control socket and `boo remote-clients`
   - [x] include auth/heartbeat age and revive-window expiry diagnostics in `boo remote-clients`
   - [x] include daemon metadata and per-client transport routing info in `boo remote-clients`
-- [ ] Add protocol/transport metrics useful for latency and reconnect debugging
+- [x] Add protocol/transport metrics useful for latency and reconnect debugging
   - [x] surface iOS client connect/auth/list/attach timing and heartbeat RTT in the debug summary
   - [x] expose per-daemon client/attachment counts in `boo remote-clients`
 
