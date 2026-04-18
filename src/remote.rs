@@ -2071,6 +2071,24 @@ pub fn probe_remote_endpoint(
     probe_summary_from_session(&mut client, port)
 }
 
+/// SPKI-pinned TLS variant of `probe_remote_endpoint`. `expected_identity` is the
+/// `daemon_identity` string the caller already trusts; the TLS handshake aborts if the
+/// presented cert's SPKI hash does not match.
+pub fn probe_remote_endpoint_tls(
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+    expected_identity: &str,
+) -> Result<RemoteProbeSummary, String> {
+    let mut client = DirectTransportSession::<TlsClientStream>::connect_tls(
+        host,
+        port,
+        auth_key,
+        expected_identity,
+    )?;
+    probe_summary_from_session(&mut client, port)
+}
+
 pub fn probe_selected_direct_transport(
     transport: DirectTransportKind,
     host: &str,
@@ -2121,6 +2139,21 @@ pub fn list_remote_daemon_sessions(
     list_summary_from_session(&mut client, port)
 }
 
+pub fn list_remote_daemon_sessions_tls(
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+    expected_identity: &str,
+) -> Result<RemoteSessionListSummary, String> {
+    let mut client = DirectTransportSession::<TlsClientStream>::connect_tls(
+        host,
+        port,
+        auth_key,
+        expected_identity,
+    )?;
+    list_summary_from_session(&mut client, port)
+}
+
 fn attach_summary_from_session<S: DirectReadWrite>(
     client: &mut DirectTransportSession<S>,
     port: u16,
@@ -2165,6 +2198,24 @@ pub fn attach_remote_daemon_session(
     attach_summary_from_session(&mut client, port, session_id, attachment_id, resume_token)
 }
 
+pub fn attach_remote_daemon_session_tls(
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+    expected_identity: &str,
+    session_id: u32,
+    attachment_id: Option<u64>,
+    resume_token: Option<u64>,
+) -> Result<RemoteAttachSummary, String> {
+    let mut client = DirectTransportSession::<TlsClientStream>::connect_tls(
+        host,
+        port,
+        auth_key,
+        expected_identity,
+    )?;
+    attach_summary_from_session(&mut client, port, session_id, attachment_id, resume_token)
+}
+
 fn create_summary_from_session<S: DirectReadWrite>(
     client: &mut DirectTransportSession<S>,
     port: u16,
@@ -2197,6 +2248,23 @@ pub fn create_remote_daemon_session(
 ) -> Result<RemoteCreateSummary, String> {
     let mut client =
         DirectRemoteClient::connect(host, port, auth_key, expected_server_identity)?;
+    create_summary_from_session(&mut client, port, cols, rows)
+}
+
+pub fn create_remote_daemon_session_tls(
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+    expected_identity: &str,
+    cols: u16,
+    rows: u16,
+) -> Result<RemoteCreateSummary, String> {
+    let mut client = DirectTransportSession::<TlsClientStream>::connect_tls(
+        host,
+        port,
+        auth_key,
+        expected_identity,
+    )?;
     create_summary_from_session(&mut client, port, cols, rows)
 }
 

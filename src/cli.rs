@@ -162,6 +162,10 @@ pub enum Command {
         auth_key: Option<String>,
         #[arg(long = "expect-server-identity")]
         expect_server_identity: Option<String>,
+        /// Wrap the connection in TLS and pin the server via its daemon identity.
+        /// Requires --expect-server-identity.
+        #[arg(long, requires = "expect_server_identity")]
+        tls: bool,
     },
     /// List sessions from a Boo-native TCP remote daemon directly
     RemoteDaemonSessions {
@@ -173,6 +177,10 @@ pub enum Command {
         auth_key: Option<String>,
         #[arg(long = "expect-server-identity")]
         expect_server_identity: Option<String>,
+        /// Wrap the connection in TLS and pin the server via its daemon identity.
+        /// Requires --expect-server-identity.
+        #[arg(long, requires = "expect_server_identity")]
+        tls: bool,
     },
     /// Create a session on a Boo-native TCP remote daemon directly
     RemoteDaemonCreate {
@@ -188,6 +196,10 @@ pub enum Command {
         cols: u16,
         #[arg(long, default_value_t = 40)]
         rows: u16,
+        /// Wrap the connection in TLS and pin the server via its daemon identity.
+        /// Requires --expect-server-identity.
+        #[arg(long, requires = "expect_server_identity")]
+        tls: bool,
     },
     /// Bootstrap a remote Boo host over SSH and report its canonical native remote endpoint
     RemoteUpgradeTarget,
@@ -212,6 +224,10 @@ pub enum Command {
         attachment_id: Option<u64>,
         #[arg(long = "resume-token")]
         resume_token: Option<u64>,
+        /// Wrap the connection in TLS and pin the server via its daemon identity.
+        /// Requires --expect-server-identity.
+        #[arg(long, requires = "expect_server_identity")]
+        tls: bool,
     },
     /// Show connected remote and local-stream client diagnostics
     RemoteClients,
@@ -240,6 +256,104 @@ pub enum Outcome {
 impl Cli {
     pub fn parse_args() -> Self {
         Self::parse()
+    }
+}
+
+fn probe_remote_daemon_dispatch(
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+    expected_identity: Option<&str>,
+    tls: bool,
+) -> Result<crate::remote::RemoteProbeSummary, String> {
+    if tls {
+        let identity = expected_identity.ok_or_else(|| {
+            "--tls requires --expect-server-identity for SPKI pinning".to_string()
+        })?;
+        crate::remote::probe_remote_endpoint_tls(host, port, auth_key, identity)
+    } else {
+        crate::remote::probe_remote_endpoint(host, port, auth_key, expected_identity)
+    }
+}
+
+fn list_remote_daemon_sessions_dispatch(
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+    expected_identity: Option<&str>,
+    tls: bool,
+) -> Result<crate::remote::RemoteSessionListSummary, String> {
+    if tls {
+        let identity = expected_identity.ok_or_else(|| {
+            "--tls requires --expect-server-identity for SPKI pinning".to_string()
+        })?;
+        crate::remote::list_remote_daemon_sessions_tls(host, port, auth_key, identity)
+    } else {
+        crate::remote::list_remote_daemon_sessions(host, port, auth_key, expected_identity)
+    }
+}
+
+fn create_remote_daemon_session_dispatch(
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+    expected_identity: Option<&str>,
+    cols: u16,
+    rows: u16,
+    tls: bool,
+) -> Result<crate::remote::RemoteCreateSummary, String> {
+    if tls {
+        let identity = expected_identity.ok_or_else(|| {
+            "--tls requires --expect-server-identity for SPKI pinning".to_string()
+        })?;
+        crate::remote::create_remote_daemon_session_tls(
+            host, port, auth_key, identity, cols, rows,
+        )
+    } else {
+        crate::remote::create_remote_daemon_session(
+            host,
+            port,
+            auth_key,
+            expected_identity,
+            cols,
+            rows,
+        )
+    }
+}
+
+fn attach_remote_daemon_session_dispatch(
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+    expected_identity: Option<&str>,
+    session_id: u32,
+    attachment_id: Option<u64>,
+    resume_token: Option<u64>,
+    tls: bool,
+) -> Result<crate::remote::RemoteAttachSummary, String> {
+    if tls {
+        let identity = expected_identity.ok_or_else(|| {
+            "--tls requires --expect-server-identity for SPKI pinning".to_string()
+        })?;
+        crate::remote::attach_remote_daemon_session_tls(
+            host,
+            port,
+            auth_key,
+            identity,
+            session_id,
+            attachment_id,
+            resume_token,
+        )
+    } else {
+        crate::remote::attach_remote_daemon_session(
+            host,
+            port,
+            auth_key,
+            expected_identity,
+            session_id,
+            attachment_id,
+            resume_token,
+        )
     }
 }
 
@@ -334,11 +448,13 @@ where
             port,
             auth_key,
             expect_server_identity,
-        } => match crate::remote::probe_remote_endpoint(
+            tls,
+        } => match probe_remote_daemon_dispatch(
             host,
             *port,
             auth_key.as_deref(),
             expect_server_identity.as_deref(),
+            *tls,
         ) {
             Ok(summary) => {
                 let mut stdout = std::io::stdout().lock();
@@ -361,11 +477,13 @@ where
             port,
             auth_key,
             expect_server_identity,
-        } => match crate::remote::list_remote_daemon_sessions(
+            tls,
+        } => match list_remote_daemon_sessions_dispatch(
             host,
             *port,
             auth_key.as_deref(),
             expect_server_identity.as_deref(),
+            *tls,
         ) {
             Ok(summary) => {
                 let mut stdout = std::io::stdout().lock();
@@ -390,13 +508,15 @@ where
             expect_server_identity,
             cols,
             rows,
-        } => match crate::remote::create_remote_daemon_session(
+            tls,
+        } => match create_remote_daemon_session_dispatch(
             host,
             *port,
             auth_key.as_deref(),
             expect_server_identity.as_deref(),
             *cols,
             *rows,
+            *tls,
         ) {
             Ok(summary) => {
                 let mut stdout = std::io::stdout().lock();
@@ -527,7 +647,8 @@ where
             expect_server_identity,
             attachment_id,
             resume_token,
-        } => match crate::remote::attach_remote_daemon_session(
+            tls,
+        } => match attach_remote_daemon_session_dispatch(
             host,
             *port,
             auth_key.as_deref(),
@@ -535,6 +656,7 @@ where
             *session_id,
             *attachment_id,
             *resume_token,
+            *tls,
         ) {
             Ok(summary) => {
                 let mut stdout = std::io::stdout().lock();
@@ -753,11 +875,52 @@ mod tests {
                 port,
                 auth_key,
                 expect_server_identity,
+                tls,
             }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, 7337);
                 assert_eq!(auth_key.as_deref(), Some("secret"));
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
+                assert!(!tls);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn probe_remote_daemon_tls_requires_expect_server_identity() {
+        let result = super::Cli::try_parse_from([
+            "boo",
+            "probe-remote-daemon",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "7337",
+            "--tls",
+        ]);
+        assert!(
+            result.is_err(),
+            "--tls without --expect-server-identity must be rejected"
+        );
+    }
+
+    #[test]
+    fn probe_remote_daemon_tls_with_expect_server_identity_parses() {
+        let cli = super::Cli::try_parse_from([
+            "boo",
+            "probe-remote-daemon",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "7337",
+            "--expect-server-identity",
+            "daemon-01",
+            "--tls",
+        ])
+        .expect("parse cli");
+        match cli.command {
+            Some(super::Command::ProbeRemoteDaemon { tls, .. }) => {
+                assert!(tls, "--tls must be recorded on the Command");
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -783,11 +946,13 @@ mod tests {
                 port,
                 auth_key,
                 expect_server_identity,
+                tls,
             }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, 7337);
                 assert_eq!(auth_key.as_deref(), Some("secret"));
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
+                assert!(!tls);
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -822,6 +987,7 @@ mod tests {
                 expect_server_identity,
                 attachment_id,
                 resume_token,
+                tls,
             }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, 7337);
@@ -830,6 +996,7 @@ mod tests {
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
                 assert_eq!(attachment_id, Some(99));
                 assert_eq!(resume_token, Some(1234));
+                assert!(!tls);
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -886,6 +1053,7 @@ mod tests {
                 expect_server_identity,
                 cols,
                 rows,
+                tls,
             }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, 7337);
@@ -893,6 +1061,7 @@ mod tests {
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
                 assert_eq!(cols, 132);
                 assert_eq!(rows, 48);
+                assert!(!tls);
             }
             other => panic!("unexpected command: {other:?}"),
         }
