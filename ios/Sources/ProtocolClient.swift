@@ -162,6 +162,13 @@ final class GSPClient: ObservableObject {
     @Published var lastSeenServerIdentityId: String?
     @Published var lastHeartbeatAck: Date?
     @Published var lastHeartbeatRttMs: Double?
+    @Published var lastConnectLatencyMs: Double?
+    @Published var lastAuthLatencyMs: Double?
+    @Published var lastSessionListLatencyMs: Double?
+    @Published var lastAttachLatencyMs: Double?
+    @Published var connectionAttemptCount: UInt32 = 0
+    @Published var reconnectAttemptCount: UInt32 = 0
+    @Published var connectionDebugGeneration: UInt64 = 0
     @Published var sessions: [SessionInfo] = []
     @Published var screen = ScreenState()
     @Published var attachedSessionId: UInt32?
@@ -180,6 +187,10 @@ final class GSPClient: ObservableObject {
     private var desiredResumeToken: UInt64?
     private var expectedServerIdentityId: String?
     private var connectionGeneration: UInt64 = 0
+    private var connectStartedAt: Date?
+    private var authRequestedAt: Date?
+    private var sessionListRequestedAt: Date?
+    private var attachRequestedAt: Date?
 
     private nonisolated static let magic: [UInt8] = [0x47, 0x53]
     private nonisolated static let headerLen = 7
@@ -192,17 +203,25 @@ final class GSPClient: ObservableObject {
             return nil
         }
         let heartbeat = lastHeartbeatRttMs.map { String(format: "hb %.0fms", $0) }
+        let connect = lastConnectLatencyMs.map { String(format: "conn %.0fms", $0) }
+        let auth = lastAuthLatencyMs.map { String(format: "auth %.0fms", $0) }
+        let listed = lastSessionListLatencyMs.map { String(format: "list %.0fms", $0) }
+        let attached = lastAttachLatencyMs.map { String(format: "att %.0fms", $0) }
         let attachment = attachmentId.map { "attach 0x" + String($0, radix: 16) }
         let resume = resumeToken.map { "resume 0x" + String($0, radix: 16) }
         let base = [ "proto \(protocolVersion)",
                      "caps 0x\(String(transportCapabilities, radix: 16))",
+                     "gen \(connectionDebugGeneration)",
+                     "conn# \(connectionAttemptCount)",
+                     reconnectAttemptCount > 0 ? "reconn# \(reconnectAttemptCount)" : nil,
                      serverBuildId,
                      "id \(serverIdentityId)",
                      "srv \(serverInstanceId)",
                      attachment,
                      resume].compactMap { $0 }.joined(separator: " · ")
-        if let heartbeat {
-            return "\(base) · \(heartbeat)"
+        let timings = [connect, auth, listed, attached, heartbeat].compactMap { $0 }
+        if !timings.isEmpty {
+            return "\(base) · \(timings.joined(separator: " · "))"
         }
         return base
     }
@@ -210,6 +229,12 @@ final class GSPClient: ObservableObject {
     func connect(host: String, port: UInt16, authKey: String = "") {
         self.authKey = authKey.isEmpty ? nil : SymmetricKey(data: Data(authKey.utf8))
         connectionGeneration &+= 1
+        connectionDebugGeneration = connectionGeneration
+        connectionAttemptCount &+= 1
+        if connectionAttemptCount > 1 {
+            reconnectAttemptCount &+= 1
+        }
+        connectStartedAt = Date()
         let generation = connectionGeneration
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
@@ -221,6 +246,10 @@ final class GSPClient: ObservableObject {
                 case .ready:
                     self.connected = true
                     self.lastError = nil
+                    if let connectStartedAt = self.connectStartedAt {
+                        self.lastConnectLatencyMs = Date().timeIntervalSince(connectStartedAt) * 1000
+                        self.connectStartedAt = nil
+                    }
                     self.readHeader(generation: generation)
                     self.sendAuth()
                 case .failed(let error):
@@ -260,9 +289,16 @@ final class GSPClient: ObservableObject {
         sessions = []
         screen = ScreenState()
         stopHeartbeatLoop()
+        connectStartedAt = nil
+        authRequestedAt = nil
+        sessionListRequestedAt = nil
+        attachRequestedAt = nil
     }
 
-    func listSessions() { sendMessage(type: .listSessions, payload: Data()) }
+    func listSessions() {
+        sessionListRequestedAt = Date()
+        sendMessage(type: .listSessions, payload: Data())
+    }
 
     func createSession(cols: UInt16 = 120, rows: UInt16 = 36) {
         var payload = Data(count: 4)
@@ -295,6 +331,7 @@ final class GSPClient: ObservableObject {
     }
 
     private func sendAttach(sessionId: UInt32, attachmentId: UInt64, resumeToken: UInt64?) {
+        attachRequestedAt = Date()
         var payload = Data(count: resumeToken == nil ? 12 : 20)
         payload.withUnsafeMutableBytes { $0.storeBytes(of: sessionId.littleEndian, as: UInt32.self) }
         payload.withUnsafeMutableBytes { $0.storeBytes(of: attachmentId.littleEndian, toByteOffset: 4, as: UInt64.self) }
@@ -379,6 +416,7 @@ final class GSPClient: ObservableObject {
     }
 
     private func sendAuth() {
+        authRequestedAt = Date()
         sendMessage(type: .auth, payload: Data())
     }
 
@@ -449,6 +487,10 @@ final class GSPClient: ObservableObject {
         case .authChallenge:
             handleAuthChallenge(payload)
         case .authOk:
+            if let authRequestedAt {
+                lastAuthLatencyMs = Date().timeIntervalSince(authRequestedAt) * 1000
+                self.authRequestedAt = nil
+            }
             if let error = validateAuthOkPayload(payload) {
                 protocolError(error)
                 return
@@ -457,8 +499,16 @@ final class GSPClient: ObservableObject {
         case .authFail:
             applyReducedMessage(.authFail, payload: payload)
         case .sessionList:
+            if let sessionListRequestedAt {
+                lastSessionListLatencyMs = Date().timeIntervalSince(sessionListRequestedAt) * 1000
+                self.sessionListRequestedAt = nil
+            }
             applyReducedMessage(.sessionList, payload: payload)
         case .attached:
+            if let attachRequestedAt {
+                lastAttachLatencyMs = Date().timeIntervalSince(attachRequestedAt) * 1000
+                self.attachRequestedAt = nil
+            }
             applyReducedMessage(.attached, payload: payload)
         case .sessionCreated:
             applyReducedMessage(.sessionCreated, payload: payload)
@@ -508,6 +558,10 @@ final class GSPClient: ObservableObject {
         lastHeartbeatRttMs = nil
         lastHeartbeatSent = nil
         pendingHeartbeatToken = nil
+        connectStartedAt = nil
+        authRequestedAt = nil
+        sessionListRequestedAt = nil
+        attachRequestedAt = nil
         if !shouldPreserveRemoteStateOnReconnect {
             protocolVersion = nil
             transportCapabilities = 0

@@ -351,6 +351,7 @@ Goal:
 - [ ] Add structured remote transport logging
 - [ ] Add per-connection and per-session diagnostic info
 - [ ] Add protocol/transport metrics useful for latency and reconnect debugging
+  - [x] surface iOS client connect/auth/list/attach timing and heartbeat RTT in the debug summary
 
 ### 3. Documentation
 
