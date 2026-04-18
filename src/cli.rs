@@ -168,6 +168,21 @@ pub enum Command {
         #[arg(long = "expect-server-identity")]
         expect_server_identity: Option<String>,
     },
+    /// Create a session on a Boo-native TCP remote daemon directly
+    RemoteDaemonCreate {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long)]
+        port: u16,
+        #[arg(long = "auth-key")]
+        auth_key: Option<String>,
+        #[arg(long = "expect-server-identity")]
+        expect_server_identity: Option<String>,
+        #[arg(long, default_value_t = 120)]
+        cols: u16,
+        #[arg(long, default_value_t = 40)]
+        rows: u16,
+    },
     /// Bootstrap a remote Boo host over SSH and report its canonical native remote endpoint
     RemoteUpgradeTarget,
     /// Attach to a session on a Boo-native TCP remote daemon directly
@@ -346,6 +361,37 @@ where
                 use std::io::Write;
                 if serde_json::to_writer_pretty(&mut stdout, &summary).is_err() {
                     eprintln!("failed to serialize remote daemon session summary");
+                    return Outcome::Exit(1);
+                }
+                let _ = writeln!(stdout);
+                let _ = stdout.flush();
+                Outcome::Exit(0)
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                Outcome::Exit(1)
+            }
+        },
+        Command::RemoteDaemonCreate {
+            host,
+            port,
+            auth_key,
+            expect_server_identity,
+            cols,
+            rows,
+        } => match crate::remote::create_remote_daemon_session(
+            host,
+            *port,
+            auth_key.as_deref(),
+            expect_server_identity.as_deref(),
+            *cols,
+            *rows,
+        ) {
+            Ok(summary) => {
+                let mut stdout = std::io::stdout().lock();
+                use std::io::Write;
+                if serde_json::to_writer_pretty(&mut stdout, &summary).is_err() {
+                    eprintln!("failed to serialize remote daemon create summary");
                     return Outcome::Exit(1);
                 }
                 let _ = writeln!(stdout);
@@ -713,6 +759,44 @@ mod tests {
             cli.command,
             Some(super::Command::RemoteUpgradeTarget)
         ));
+    }
+
+    #[test]
+    fn parse_remote_daemon_create_subcommand() {
+        let cli = Cli::parse_from([
+            "boo",
+            "remote-daemon-create",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "7337",
+            "--auth-key",
+            "secret",
+            "--expect-server-identity",
+            "daemon-01",
+            "--cols",
+            "132",
+            "--rows",
+            "48",
+        ]);
+        match cli.command {
+            Some(super::Command::RemoteDaemonCreate {
+                host,
+                port,
+                auth_key,
+                expect_server_identity,
+                cols,
+                rows,
+            }) => {
+                assert_eq!(host, "127.0.0.1");
+                assert_eq!(port, 7337);
+                assert_eq!(auth_key.as_deref(), Some("secret"));
+                assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
+                assert_eq!(cols, 132);
+                assert_eq!(rows, 48);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 
     #[test]

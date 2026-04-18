@@ -367,6 +367,32 @@ pub struct RemoteAttachSummary {
     pub cursor_style: i32,
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct RemoteCreateSummary {
+    pub host: String,
+    pub port: u16,
+    pub auth_required: bool,
+    pub protocol_version: u16,
+    pub capabilities: u32,
+    pub build_id: Option<String>,
+    pub server_instance_id: Option<String>,
+    pub server_identity_id: Option<String>,
+    pub heartbeat_rtt_ms: u64,
+    pub session_id: u32,
+}
+
+struct DirectRemoteClient {
+    stream: std::net::TcpStream,
+    host: String,
+    port: u16,
+    auth_required: bool,
+    protocol_version: u16,
+    capabilities: u32,
+    build_id: Option<String>,
+    server_instance_id: Option<String>,
+    server_identity_id: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteCell {
     pub codepoint: u32,
@@ -2032,92 +2058,18 @@ pub fn probe_remote_endpoint(
     auth_key: Option<&str>,
     expected_server_identity: Option<&str>,
 ) -> Result<RemoteProbeSummary, String> {
-    use std::net::TcpStream;
-
-    let mut stream = TcpStream::connect((host, port))
-        .map_err(|error| format!("failed to connect to {host}:{port}: {error}"))?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(3)))
-        .map_err(|error| format!("failed to configure read timeout for {host}:{port}: {error}"))?;
-    stream
-        .set_write_timeout(Some(Duration::from_secs(3)))
-        .map_err(|error| format!("failed to configure write timeout for {host}:{port}: {error}"))?;
-
-    stream
-        .write_all(&encode_message(MessageType::Auth, &[]))
-        .map_err(|error| format!("failed to send auth request to {host}:{port}: {error}"))?;
-    let (ty, auth_payload) = read_probe_auth_reply(&mut stream, host, port)?;
-
-    let (auth_required, auth_ok_payload) = match ty {
-        MessageType::AuthOk => (false, auth_payload),
-        MessageType::AuthChallenge => {
-            let key = auth_key.ok_or_else(|| {
-                format!("remote endpoint {host}:{port} requires --auth-key for probing")
-            })?;
-            let mut mac = HmacSha256::new_from_slice(key.as_bytes()).expect("valid HMAC key");
-            mac.update(&auth_payload);
-            let response = mac.finalize().into_bytes().to_vec();
-            stream
-                .write_all(&encode_message(MessageType::Auth, &response))
-                .map_err(|error| format!("failed to send auth response to {host}:{port}: {error}"))?;
-            let (reply_ty, reply_payload) = read_message(&mut stream).map_err(|error| {
-                format!("failed to read authenticated reply from {host}:{port}: {error}")
-            })?;
-            if reply_ty != MessageType::AuthOk {
-                return Err(format!(
-                    "expected auth ok from {host}:{port}, got {reply_ty:?}"
-                ));
-            }
-            (true, reply_payload)
-        }
-        MessageType::AuthFail => {
-            return Err(format!("authentication failed for remote endpoint {host}:{port}"));
-        }
-        other => {
-            return Err(format!(
-                "unexpected auth reply from {host}:{port}: {other:?}"
-            ));
-        }
-    };
-
-    validate_auth_ok_payload(&auth_ok_payload, auth_required)?;
-    let (protocol_version, capabilities, build_id, server_instance_id, server_identity_id) =
-        decode_auth_ok_payload(&auth_ok_payload).ok_or_else(|| {
-            format!("remote endpoint {host}:{port} returned malformed handshake metadata")
-        })?;
-    if let Some(expected_server_identity) = expected_server_identity {
-        if server_identity_id.as_deref() != Some(expected_server_identity) {
-            return Err(format!(
-                "remote endpoint {host}:{port} reported daemon identity {:?}, expected {:?}",
-                server_identity_id,
-                expected_server_identity
-            ));
-        }
-    }
-
-    let heartbeat_payload = b"boo-remote-probe";
-    let heartbeat_start = Instant::now();
-    stream
-        .write_all(&encode_message(MessageType::Heartbeat, heartbeat_payload))
-        .map_err(|error| format!("failed to send heartbeat to {host}:{port}: {error}"))?;
-    let (_heartbeat_ty, heartbeat_reply) =
-        read_probe_reply(&mut stream, host, port, MessageType::HeartbeatAck)?;
-    if heartbeat_reply != heartbeat_payload {
-        return Err(format!(
-            "heartbeat payload mismatch from remote endpoint {host}:{port}"
-        ));
-    }
-
+    let mut client = DirectRemoteClient::connect(host, port, auth_key, expected_server_identity)?;
+    let heartbeat_rtt_ms = client.heartbeat_round_trip(b"boo-remote-probe")?;
     Ok(RemoteProbeSummary {
-        host: host.to_string(),
+        host: client.host.clone(),
         port,
-        auth_required,
-        protocol_version,
-        capabilities,
-        build_id,
-        server_instance_id,
-        server_identity_id,
-        heartbeat_rtt_ms: heartbeat_start.elapsed().as_millis() as u64,
+        auth_required: client.auth_required,
+        protocol_version: client.protocol_version,
+        capabilities: client.capabilities,
+        build_id: client.build_id.clone(),
+        server_instance_id: client.server_instance_id.clone(),
+        server_identity_id: client.server_identity_id.clone(),
+        heartbeat_rtt_ms,
     })
 }
 
@@ -2127,100 +2079,19 @@ pub fn list_remote_daemon_sessions(
     auth_key: Option<&str>,
     expected_server_identity: Option<&str>,
 ) -> Result<RemoteSessionListSummary, String> {
-    use std::net::TcpStream;
-
-    let mut stream = TcpStream::connect((host, port))
-        .map_err(|error| format!("failed to connect to {host}:{port}: {error}"))?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(3)))
-        .map_err(|error| format!("failed to configure read timeout for {host}:{port}: {error}"))?;
-    stream
-        .set_write_timeout(Some(Duration::from_secs(3)))
-        .map_err(|error| format!("failed to configure write timeout for {host}:{port}: {error}"))?;
-
-    stream
-        .write_all(&encode_message(MessageType::Auth, &[]))
-        .map_err(|error| format!("failed to send auth request to {host}:{port}: {error}"))?;
-    let (ty, auth_payload) = read_probe_auth_reply(&mut stream, host, port)?;
-
-    let (auth_required, auth_ok_payload) = match ty {
-        MessageType::AuthOk => (false, auth_payload),
-        MessageType::AuthChallenge => {
-            let key = auth_key.ok_or_else(|| {
-                format!("remote endpoint {host}:{port} requires --auth-key for listing sessions")
-            })?;
-            let mut mac = HmacSha256::new_from_slice(key.as_bytes()).expect("valid HMAC key");
-            mac.update(&auth_payload);
-            let response = mac.finalize().into_bytes().to_vec();
-            stream
-                .write_all(&encode_message(MessageType::Auth, &response))
-                .map_err(|error| format!("failed to send auth response to {host}:{port}: {error}"))?;
-            let (reply_ty, reply_payload) = read_message(&mut stream).map_err(|error| {
-                format!("failed to read authenticated reply from {host}:{port}: {error}")
-            })?;
-            if reply_ty != MessageType::AuthOk {
-                return Err(format!(
-                    "expected auth ok from {host}:{port}, got {reply_ty:?}"
-                ));
-            }
-            (true, reply_payload)
-        }
-        MessageType::AuthFail => {
-            return Err(format!("authentication failed for remote endpoint {host}:{port}"));
-        }
-        other => {
-            return Err(format!(
-                "unexpected auth reply from {host}:{port}: {other:?}"
-            ));
-        }
-    };
-
-    validate_auth_ok_payload(&auth_ok_payload, auth_required)?;
-    let (protocol_version, capabilities, build_id, server_instance_id, server_identity_id) =
-        decode_auth_ok_payload(&auth_ok_payload).ok_or_else(|| {
-            format!("remote endpoint {host}:{port} returned malformed handshake metadata")
-        })?;
-    if let Some(expected_server_identity) = expected_server_identity {
-        if server_identity_id.as_deref() != Some(expected_server_identity) {
-            return Err(format!(
-                "remote endpoint {host}:{port} reported daemon identity {:?}, expected {:?}",
-                server_identity_id,
-                expected_server_identity
-            ));
-        }
-    }
-
-    let heartbeat_payload = b"boo-remote-list";
-    let heartbeat_start = Instant::now();
-    stream
-        .write_all(&encode_message(MessageType::Heartbeat, heartbeat_payload))
-        .map_err(|error| format!("failed to send heartbeat to {host}:{port}: {error}"))?;
-    let (_heartbeat_ty, heartbeat_reply) =
-        read_probe_reply(&mut stream, host, port, MessageType::HeartbeatAck)?;
-    if heartbeat_reply != heartbeat_payload {
-        return Err(format!(
-            "heartbeat payload mismatch from remote endpoint {host}:{port}"
-        ));
-    }
-
-    stream
-        .write_all(&encode_message(MessageType::ListSessions, &[]))
-        .map_err(|error| format!("failed to send list sessions request to {host}:{port}: {error}"))?;
-    let (_reply_ty, payload) =
-        read_probe_reply(&mut stream, host, port, MessageType::SessionList)?;
-    let sessions = decode_session_list_payload(&payload)
-        .map_err(|error| format!("failed to decode remote session list from {host}:{port}: {error}"))?;
-
+    let mut client = DirectRemoteClient::connect(host, port, auth_key, expected_server_identity)?;
+    let heartbeat_rtt_ms = client.heartbeat_round_trip(b"boo-remote-list")?;
+    let sessions = client.list_sessions()?;
     Ok(RemoteSessionListSummary {
-        host: host.to_string(),
+        host: client.host.clone(),
         port,
-        auth_required,
-        protocol_version,
-        capabilities,
-        build_id,
-        server_instance_id,
-        server_identity_id,
-        heartbeat_rtt_ms: heartbeat_start.elapsed().as_millis() as u64,
+        auth_required: client.auth_required,
+        protocol_version: client.protocol_version,
+        capabilities: client.capabilities,
+        build_id: client.build_id.clone(),
+        server_instance_id: client.server_instance_id.clone(),
+        server_identity_id: client.server_identity_id.clone(),
+        heartbeat_rtt_ms,
         sessions,
     })
 }
@@ -2234,107 +2105,19 @@ pub fn attach_remote_daemon_session(
     attachment_id: Option<u64>,
     resume_token: Option<u64>,
 ) -> Result<RemoteAttachSummary, String> {
-    use std::net::TcpStream;
-
-    let mut stream = TcpStream::connect((host, port))
-        .map_err(|error| format!("failed to connect to {host}:{port}: {error}"))?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(3)))
-        .map_err(|error| format!("failed to configure read timeout for {host}:{port}: {error}"))?;
-    stream
-        .set_write_timeout(Some(Duration::from_secs(3)))
-        .map_err(|error| format!("failed to configure write timeout for {host}:{port}: {error}"))?;
-
-    stream
-        .write_all(&encode_message(MessageType::Auth, &[]))
-        .map_err(|error| format!("failed to send auth request to {host}:{port}: {error}"))?;
-    let (ty, auth_payload) = read_probe_auth_reply(&mut stream, host, port)?;
-
-    let (auth_required, auth_ok_payload) = match ty {
-        MessageType::AuthOk => (false, auth_payload),
-        MessageType::AuthChallenge => {
-            let key = auth_key.ok_or_else(|| {
-                format!("remote endpoint {host}:{port} requires --auth-key for attach")
-            })?;
-            let mut mac = HmacSha256::new_from_slice(key.as_bytes()).expect("valid HMAC key");
-            mac.update(&auth_payload);
-            let response = mac.finalize().into_bytes().to_vec();
-            stream
-                .write_all(&encode_message(MessageType::Auth, &response))
-                .map_err(|error| format!("failed to send auth response to {host}:{port}: {error}"))?;
-            let (reply_ty, reply_payload) = read_message(&mut stream).map_err(|error| {
-                format!("failed to read authenticated reply from {host}:{port}: {error}")
-            })?;
-            if reply_ty != MessageType::AuthOk {
-                return Err(format!(
-                    "expected auth ok from {host}:{port}, got {reply_ty:?}"
-                ));
-            }
-            (true, reply_payload)
-        }
-        MessageType::AuthFail => {
-            return Err(format!("authentication failed for remote endpoint {host}:{port}"));
-        }
-        other => {
-            return Err(format!(
-                "unexpected auth reply from {host}:{port}: {other:?}"
-            ));
-        }
-    };
-
-    validate_auth_ok_payload(&auth_ok_payload, auth_required)?;
-    let (protocol_version, capabilities, build_id, server_instance_id, server_identity_id) =
-        decode_auth_ok_payload(&auth_ok_payload).ok_or_else(|| {
-            format!("remote endpoint {host}:{port} returned malformed handshake metadata")
-        })?;
-    if let Some(expected_server_identity) = expected_server_identity {
-        if server_identity_id.as_deref() != Some(expected_server_identity) {
-            return Err(format!(
-                "remote endpoint {host}:{port} reported daemon identity {:?}, expected {:?}",
-                server_identity_id,
-                expected_server_identity
-            ));
-        }
-    }
-
-    let heartbeat_payload = b"boo-remote-attach";
-    let heartbeat_start = Instant::now();
-    stream
-        .write_all(&encode_message(MessageType::Heartbeat, heartbeat_payload))
-        .map_err(|error| format!("failed to send heartbeat to {host}:{port}: {error}"))?;
-    let (_heartbeat_ty, heartbeat_reply) =
-        read_probe_reply(&mut stream, host, port, MessageType::HeartbeatAck)?;
-    if heartbeat_reply != heartbeat_payload {
-        return Err(format!(
-            "heartbeat payload mismatch from remote endpoint {host}:{port}"
-        ));
-    }
-
-    let mut attach_payload = session_id.to_le_bytes().to_vec();
-    if let Some(attachment_id) = attachment_id {
-        attach_payload.extend_from_slice(&attachment_id.to_le_bytes());
-    }
-    if let Some(resume_token) = resume_token {
-        if attachment_id.is_none() {
-            return Err("resume token requires attachment id".to_string());
-        }
-        attach_payload.extend_from_slice(&resume_token.to_le_bytes());
-    }
-    stream
-        .write_all(&encode_message(MessageType::Attach, &attach_payload))
-        .map_err(|error| format!("failed to send attach request to {host}:{port}: {error}"))?;
-
-    let (attached, full_state) = read_attach_bootstrap(&mut stream, host, port)?;
+    let mut client = DirectRemoteClient::connect(host, port, auth_key, expected_server_identity)?;
+    let heartbeat_rtt_ms = client.heartbeat_round_trip(b"boo-remote-attach")?;
+    let (attached, full_state) = client.attach(session_id, attachment_id, resume_token)?;
     Ok(RemoteAttachSummary {
-        host: host.to_string(),
+        host: client.host.clone(),
         port,
-        auth_required,
-        protocol_version,
-        capabilities,
-        build_id,
-        server_instance_id,
-        server_identity_id,
-        heartbeat_rtt_ms: heartbeat_start.elapsed().as_millis() as u64,
+        auth_required: client.auth_required,
+        protocol_version: client.protocol_version,
+        capabilities: client.capabilities,
+        build_id: client.build_id.clone(),
+        server_instance_id: client.server_instance_id.clone(),
+        server_identity_id: client.server_identity_id.clone(),
+        heartbeat_rtt_ms,
         attached,
         rows: full_state.rows,
         cols: full_state.cols,
@@ -2344,6 +2127,207 @@ pub fn attach_remote_daemon_session(
         cursor_blinking: full_state.cursor_blinking,
         cursor_style: full_state.cursor_style,
     })
+}
+
+pub fn create_remote_daemon_session(
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+    expected_server_identity: Option<&str>,
+    cols: u16,
+    rows: u16,
+) -> Result<RemoteCreateSummary, String> {
+    let mut client = DirectRemoteClient::connect(host, port, auth_key, expected_server_identity)?;
+    let heartbeat_rtt_ms = client.heartbeat_round_trip(b"boo-remote-create")?;
+    let session_id = client.create_session(cols, rows)?;
+    Ok(RemoteCreateSummary {
+        host: client.host.clone(),
+        port,
+        auth_required: client.auth_required,
+        protocol_version: client.protocol_version,
+        capabilities: client.capabilities,
+        build_id: client.build_id.clone(),
+        server_instance_id: client.server_instance_id.clone(),
+        server_identity_id: client.server_identity_id.clone(),
+        heartbeat_rtt_ms,
+        session_id,
+    })
+}
+
+impl DirectRemoteClient {
+    fn connect(
+        host: &str,
+        port: u16,
+        auth_key: Option<&str>,
+        expected_server_identity: Option<&str>,
+    ) -> Result<Self, String> {
+        use std::net::TcpStream;
+
+        let mut stream = TcpStream::connect((host, port))
+            .map_err(|error| format!("failed to connect to {host}:{port}: {error}"))?;
+        stream.set_read_timeout(Some(Duration::from_secs(3))).map_err(|error| {
+            format!("failed to configure read timeout for {host}:{port}: {error}")
+        })?;
+        stream.set_write_timeout(Some(Duration::from_secs(3))).map_err(|error| {
+            format!("failed to configure write timeout for {host}:{port}: {error}")
+        })?;
+
+        stream
+            .write_all(&encode_message(MessageType::Auth, &[]))
+            .map_err(|error| format!("failed to send auth request to {host}:{port}: {error}"))?;
+        let (ty, auth_payload) = read_probe_auth_reply(&mut stream, host, port)?;
+        let (auth_required, auth_ok_payload) = match ty {
+            MessageType::AuthOk => (false, auth_payload),
+            MessageType::AuthChallenge => {
+                let key = auth_key.ok_or_else(|| {
+                    format!("remote endpoint {host}:{port} requires --auth-key")
+                })?;
+                let mut mac =
+                    HmacSha256::new_from_slice(key.as_bytes()).expect("valid HMAC key");
+                mac.update(&auth_payload);
+                let response = mac.finalize().into_bytes().to_vec();
+                stream.write_all(&encode_message(MessageType::Auth, &response)).map_err(
+                    |error| {
+                        format!("failed to send auth response to {host}:{port}: {error}")
+                    },
+                )?;
+                let (reply_ty, reply_payload) = read_message(&mut stream).map_err(|error| {
+                    format!("failed to read authenticated reply from {host}:{port}: {error}")
+                })?;
+                if reply_ty != MessageType::AuthOk {
+                    return Err(format!(
+                        "expected auth ok from {host}:{port}, got {reply_ty:?}"
+                    ));
+                }
+                (true, reply_payload)
+            }
+            MessageType::AuthFail => {
+                return Err(format!("authentication failed for remote endpoint {host}:{port}"));
+            }
+            other => {
+                return Err(format!(
+                    "unexpected auth reply from {host}:{port}: {other:?}"
+                ));
+            }
+        };
+
+        validate_auth_ok_payload(&auth_ok_payload, auth_required)?;
+        let (protocol_version, capabilities, build_id, server_instance_id, server_identity_id) =
+            decode_auth_ok_payload(&auth_ok_payload).ok_or_else(|| {
+                format!("remote endpoint {host}:{port} returned malformed handshake metadata")
+            })?;
+        if let Some(expected_server_identity) = expected_server_identity {
+            if server_identity_id.as_deref() != Some(expected_server_identity) {
+                return Err(format!(
+                    "remote endpoint {host}:{port} reported daemon identity {:?}, expected {:?}",
+                    server_identity_id,
+                    expected_server_identity
+                ));
+            }
+        }
+
+        Ok(Self {
+            stream,
+            host: host.to_string(),
+            port,
+            auth_required,
+            protocol_version,
+            capabilities,
+            build_id,
+            server_instance_id,
+            server_identity_id,
+        })
+    }
+
+    fn heartbeat_round_trip(&mut self, payload: &[u8]) -> Result<u64, String> {
+        let heartbeat_start = Instant::now();
+        self.stream
+            .write_all(&encode_message(MessageType::Heartbeat, payload))
+            .map_err(|error| {
+                format!(
+                    "failed to send heartbeat to {}:{}: {error}",
+                    self.host, self.port
+                )
+            })?;
+        let (_heartbeat_ty, heartbeat_reply) =
+            read_probe_reply(&mut self.stream, &self.host, self.port, MessageType::HeartbeatAck)?;
+        if heartbeat_reply != payload {
+            return Err(format!(
+                "heartbeat payload mismatch from remote endpoint {}:{}",
+                self.host, self.port
+            ));
+        }
+        Ok(heartbeat_start.elapsed().as_millis() as u64)
+    }
+
+    fn list_sessions(&mut self) -> Result<Vec<RemoteDirectSessionInfo>, String> {
+        self.stream
+            .write_all(&encode_message(MessageType::ListSessions, &[]))
+            .map_err(|error| {
+                format!(
+                    "failed to send list sessions request to {}:{}: {error}",
+                    self.host, self.port
+                )
+            })?;
+        let (_reply_ty, payload) =
+            read_probe_reply(&mut self.stream, &self.host, self.port, MessageType::SessionList)?;
+        decode_session_list_payload(&payload).map_err(|error| {
+            format!(
+                "failed to decode remote session list from {}:{}: {error}",
+                self.host, self.port
+            )
+        })
+    }
+
+    fn attach(
+        &mut self,
+        session_id: u32,
+        attachment_id: Option<u64>,
+        resume_token: Option<u64>,
+    ) -> Result<(RemoteAttachedSummary, RemoteFullState), String> {
+        let mut attach_payload = session_id.to_le_bytes().to_vec();
+        if let Some(attachment_id) = attachment_id {
+            attach_payload.extend_from_slice(&attachment_id.to_le_bytes());
+        }
+        if let Some(resume_token) = resume_token {
+            if attachment_id.is_none() {
+                return Err("resume token requires attachment id".to_string());
+            }
+            attach_payload.extend_from_slice(&resume_token.to_le_bytes());
+        }
+        self.stream
+            .write_all(&encode_message(MessageType::Attach, &attach_payload))
+            .map_err(|error| {
+                format!(
+                    "failed to send attach request to {}:{}: {error}",
+                    self.host, self.port
+                )
+            })?;
+
+        read_attach_bootstrap(&mut self.stream, &self.host, self.port)
+    }
+
+    fn create_session(&mut self, cols: u16, rows: u16) -> Result<u32, String> {
+        let mut payload = Vec::with_capacity(4);
+        payload.extend_from_slice(&cols.to_le_bytes());
+        payload.extend_from_slice(&rows.to_le_bytes());
+        self.stream
+            .write_all(&encode_message(MessageType::Create, &payload))
+            .map_err(|error| {
+                format!(
+                    "failed to send create request to {}:{}: {error}",
+                    self.host, self.port
+                )
+            })?;
+        let (_reply_ty, payload) =
+            read_probe_reply(&mut self.stream, &self.host, self.port, MessageType::SessionCreated)?;
+        parse_session_id(&payload).ok_or_else(|| {
+            format!(
+                "invalid session-created payload from remote endpoint {}:{}",
+                self.host, self.port
+            )
+        })
+    }
 }
 
 fn read_probe_reply(
@@ -4293,6 +4277,59 @@ mod tests {
         assert_eq!(summary.cursor_style, 1);
 
         server.join().expect("attach server thread");
+    }
+
+    #[test]
+    fn create_remote_daemon_session_uses_shared_handshake_and_create_path() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
+        let port = listener.local_addr().expect("listener addr").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept create client");
+            let (ty, payload) = read_message(&mut stream).expect("read auth request");
+            assert_eq!(ty, MessageType::Auth);
+            assert!(payload.is_empty());
+
+            stream
+                .write_all(&encode_message(
+                    MessageType::AuthOk,
+                    &encode_auth_ok_payload("test-daemon", "test-instance"),
+                ))
+                .expect("write auth ok");
+
+            let (ty, payload) = read_message(&mut stream).expect("read heartbeat");
+            assert_eq!(ty, MessageType::Heartbeat);
+            stream
+                .write_all(&encode_message(MessageType::HeartbeatAck, &payload))
+                .expect("write heartbeat ack");
+
+            let (ty, payload) = read_message(&mut stream).expect("read create");
+            assert_eq!(ty, MessageType::Create);
+            assert_eq!(payload, [132, 0, 48, 0]);
+            stream
+                .write_all(&encode_message(
+                    MessageType::SessionCreated,
+                    &77_u32.to_le_bytes(),
+                ))
+                .expect("write session created");
+        });
+
+        let summary = create_remote_daemon_session(
+            "127.0.0.1",
+            port,
+            None,
+            Some("test-daemon"),
+            132,
+            48,
+        )
+        .expect("create summary");
+        assert_eq!(summary.protocol_version, REMOTE_PROTOCOL_VERSION);
+        assert_eq!(summary.server_identity_id.as_deref(), Some("test-daemon"));
+        assert_eq!(summary.server_instance_id.as_deref(), Some("test-instance"));
+        assert_eq!(summary.session_id, 77);
+
+        server.join().expect("create server thread");
     }
 
     #[test]
