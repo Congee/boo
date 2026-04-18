@@ -48,20 +48,23 @@ def send_message(sock: socket.socket, ty: int, payload: bytes = b"") -> None:
     sock.sendall(MAGIC + bytes([ty]) + struct.pack("<I", len(payload)) + payload)
 
 
+def read_exact(sock: socket.socket, size: int) -> bytes:
+    data = b""
+    while len(data) < size:
+        chunk = sock.recv(size - len(data))
+        if not chunk:
+            raise SystemExit(f"unexpected EOF while reading {size} bytes")
+        data += chunk
+    return data
+
+
 def read_message(sock: socket.socket) -> tuple[int, bytes]:
-    header = sock.recv(HEADER_LEN)
-    if len(header) != HEADER_LEN:
-        raise SystemExit(f"short remote header: {len(header)}")
+    header = read_exact(sock, HEADER_LEN)
     if header[:2] != MAGIC:
         raise SystemExit(f"invalid remote magic: {header[:2]!r}")
     ty = header[2]
     payload_len = struct.unpack("<I", header[3:])[0]
-    payload = b""
-    while len(payload) < payload_len:
-        chunk = sock.recv(payload_len - len(payload))
-        if not chunk:
-            raise SystemExit("unexpected EOF while reading remote payload")
-        payload += chunk
+    payload = read_exact(sock, payload_len)
     return ty, payload
 
 
@@ -130,6 +133,30 @@ if not isinstance(heartbeat_client.get("connection_age_ms"), int):
 
 pending.close()
 active.close()
+PY
+
+probe_json="$(./target/debug/boo probe-remote-daemon --host 127.0.0.1 --port "$PORT" --auth-key "$AUTH_KEY")"
+python3 - "$probe_json" <<'PY'
+import json
+import sys
+
+data = json.loads(sys.argv[1])
+if data.get("host") != "127.0.0.1":
+    raise SystemExit(f"unexpected probe host: {data.get('host')!r}")
+if data.get("auth_required") is not True:
+    raise SystemExit(f"expected auth_required true, got {data.get('auth_required')!r}")
+if data.get("protocol_version") != 1:
+    raise SystemExit(f"unexpected protocol version: {data.get('protocol_version')!r}")
+if not isinstance(data.get("capabilities"), int) or data["capabilities"] <= 0:
+    raise SystemExit(f"unexpected capabilities: {data.get('capabilities')!r}")
+if not data.get("build_id"):
+    raise SystemExit("missing build_id in probe summary")
+if not data.get("server_instance_id"):
+    raise SystemExit("missing server_instance_id in probe summary")
+if not data.get("server_identity_id"):
+    raise SystemExit("missing server_identity_id in probe summary")
+if not isinstance(data.get("heartbeat_rtt_ms"), int) or data["heartbeat_rtt_ms"] < 0:
+    raise SystemExit(f"unexpected heartbeat_rtt_ms: {data.get('heartbeat_rtt_ms')!r}")
 PY
 
 echo "remote daemon diagnostics validation passed"

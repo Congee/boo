@@ -172,6 +172,7 @@ Goal:
   - [x] reconnect/resume capabilities
 - [ ] Reject incompatible peers early and clearly
   - [x] iOS client rejects malformed or unsupported `AuthOk` metadata before issuing protocol side effects
+  - [x] desktop/developer direct probing uses the same Rust `AuthOk` validation rules before reporting success
   - [ ] desktop and all future direct clients enforce the same rejection rules
 - [ ] Add upgrade path from SSH bootstrap to canonical Boo transport
 

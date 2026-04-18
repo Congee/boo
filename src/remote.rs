@@ -196,6 +196,19 @@ pub struct RemoteClientsSnapshot {
     pub revivable_attachments: Vec<RevivableAttachmentInfo>,
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct RemoteProbeSummary {
+    pub host: String,
+    pub port: u16,
+    pub auth_required: bool,
+    pub protocol_version: u16,
+    pub capabilities: u32,
+    pub build_id: Option<String>,
+    pub server_instance_id: Option<String>,
+    pub server_identity_id: Option<String>,
+    pub heartbeat_rtt_ms: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteCell {
     pub codepoint: u32,
@@ -1719,6 +1732,135 @@ pub fn validate_auth_ok_payload(payload: &[u8], auth_required: bool) -> Result<(
         return Err("Remote handshake is missing server identity metadata".to_string());
     }
     Ok(())
+}
+
+pub fn probe_remote_endpoint(
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+) -> Result<RemoteProbeSummary, String> {
+    use std::net::TcpStream;
+
+    let mut stream = TcpStream::connect((host, port))
+        .map_err(|error| format!("failed to connect to {host}:{port}: {error}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .map_err(|error| format!("failed to configure read timeout for {host}:{port}: {error}"))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(3)))
+        .map_err(|error| format!("failed to configure write timeout for {host}:{port}: {error}"))?;
+
+    stream
+        .write_all(&encode_message(MessageType::Auth, &[]))
+        .map_err(|error| format!("failed to send auth request to {host}:{port}: {error}"))?;
+    let (ty, auth_payload) = read_message(&mut stream)
+        .map_err(|error| format!("failed to read auth reply from {host}:{port}: {error}"))?;
+
+    let (auth_required, auth_ok_payload) = match ty {
+        MessageType::AuthOk => (false, auth_payload),
+        MessageType::AuthChallenge => {
+            let key = auth_key.ok_or_else(|| {
+                format!("remote endpoint {host}:{port} requires --auth-key for probing")
+            })?;
+            let mut mac = HmacSha256::new_from_slice(key.as_bytes()).expect("valid HMAC key");
+            mac.update(&auth_payload);
+            let response = mac.finalize().into_bytes().to_vec();
+            stream
+                .write_all(&encode_message(MessageType::Auth, &response))
+                .map_err(|error| format!("failed to send auth response to {host}:{port}: {error}"))?;
+            let (reply_ty, reply_payload) = read_message(&mut stream).map_err(|error| {
+                format!("failed to read authenticated reply from {host}:{port}: {error}")
+            })?;
+            if reply_ty != MessageType::AuthOk {
+                return Err(format!(
+                    "expected auth ok from {host}:{port}, got {reply_ty:?}"
+                ));
+            }
+            (true, reply_payload)
+        }
+        MessageType::AuthFail => {
+            return Err(format!("authentication failed for remote endpoint {host}:{port}"));
+        }
+        other => {
+            return Err(format!(
+                "unexpected auth reply from {host}:{port}: {other:?}"
+            ));
+        }
+    };
+
+    validate_auth_ok_payload(&auth_ok_payload, auth_required)?;
+    let (protocol_version, capabilities, build_id, server_instance_id, server_identity_id) =
+        decode_auth_ok_payload(&auth_ok_payload).ok_or_else(|| {
+            format!("remote endpoint {host}:{port} returned malformed handshake metadata")
+        })?;
+
+    let heartbeat_payload = b"boo-remote-probe";
+    let heartbeat_start = Instant::now();
+    stream
+        .write_all(&encode_message(MessageType::Heartbeat, heartbeat_payload))
+        .map_err(|error| format!("failed to send heartbeat to {host}:{port}: {error}"))?;
+    let (_heartbeat_ty, heartbeat_reply) =
+        read_probe_reply(&mut stream, host, port, MessageType::HeartbeatAck)?;
+    if heartbeat_reply != heartbeat_payload {
+        return Err(format!(
+            "heartbeat payload mismatch from remote endpoint {host}:{port}"
+        ));
+    }
+
+    Ok(RemoteProbeSummary {
+        host: host.to_string(),
+        port,
+        auth_required,
+        protocol_version,
+        capabilities,
+        build_id,
+        server_instance_id,
+        server_identity_id,
+        heartbeat_rtt_ms: heartbeat_start.elapsed().as_millis() as u64,
+    })
+}
+
+fn read_probe_reply(
+    stream: &mut impl Read,
+    host: &str,
+    port: u16,
+    expected: MessageType,
+) -> Result<(MessageType, Vec<u8>), String> {
+    for _ in 0..8 {
+        let (ty, payload) = read_message(stream)
+            .map_err(|error| format!("failed to read probe reply from {host}:{port}: {error}"))?;
+        if ty == expected {
+            return Ok((ty, payload));
+        }
+        match ty {
+            MessageType::SessionList
+            | MessageType::FullState
+            | MessageType::Delta
+            | MessageType::Attached
+            | MessageType::Detached
+            | MessageType::UiRuntimeState
+            | MessageType::UiAppearance
+            | MessageType::UiPaneFullState
+            | MessageType::UiPaneDelta => continue,
+            MessageType::AuthFail => {
+                return Err(format!("authentication failed for remote endpoint {host}:{port}"));
+            }
+            MessageType::ErrorMsg => {
+                let message = String::from_utf8_lossy(&payload);
+                return Err(format!(
+                    "remote endpoint {host}:{port} reported probe error: {message}"
+                ));
+            }
+            other => {
+                return Err(format!(
+                    "expected {expected:?} from {host}:{port}, got {other:?}"
+                ));
+            }
+        }
+    }
+    Err(format!(
+        "timed out waiting for {expected:?} from remote endpoint {host}:{port}"
+    ))
 }
 
 fn send_direct_error(state: &Arc<Mutex<State>>, client_id: u64, message: &str) {

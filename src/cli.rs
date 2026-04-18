@@ -109,6 +109,15 @@ pub enum Command {
     KillServer,
     /// List live sessions on the Boo server
     Ls,
+    /// Probe a Boo-native TCP remote daemon directly
+    ProbeRemoteDaemon {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long)]
+        port: u16,
+        #[arg(long = "auth-key")]
+        auth_key: Option<String>,
+    },
     /// Show connected remote and local-stream client diagnostics
     RemoteClients,
     /// Create a new live session
@@ -225,6 +234,27 @@ where
                 }
             }
         }
+        Command::ProbeRemoteDaemon {
+            host,
+            port,
+            auth_key,
+        } => match crate::remote::probe_remote_endpoint(host, *port, auth_key.as_deref()) {
+            Ok(summary) => {
+                let mut stdout = std::io::stdout().lock();
+                use std::io::Write;
+                if serde_json::to_writer_pretty(&mut stdout, &summary).is_err() {
+                    eprintln!("failed to serialize remote daemon probe summary");
+                    return Outcome::Exit(1);
+                }
+                let _ = writeln!(stdout);
+                let _ = stdout.flush();
+                Outcome::Exit(0)
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                Outcome::Exit(1)
+            }
+        },
         Command::Completions { shell } => {
             let result = match shell {
                 CompletionShell::Bash => print_completions(Shell::Bash),
@@ -329,6 +359,32 @@ mod tests {
     fn parse_remote_clients_subcommand() {
         let cli = Cli::parse_from(["boo", "remote-clients"]);
         assert!(matches!(cli.command, Some(super::Command::RemoteClients)));
+    }
+
+    #[test]
+    fn parse_probe_remote_daemon_subcommand() {
+        let cli = Cli::parse_from([
+            "boo",
+            "probe-remote-daemon",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "7337",
+            "--auth-key",
+            "secret",
+        ]);
+        match cli.command {
+            Some(super::Command::ProbeRemoteDaemon {
+                host,
+                port,
+                auth_key,
+            }) => {
+                assert_eq!(host, "127.0.0.1");
+                assert_eq!(port, 7337);
+                assert_eq!(auth_key.as_deref(), Some("secret"));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 
     #[test]
