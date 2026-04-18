@@ -181,7 +181,12 @@ Goal:
 
 ### 2. Connection Model
 
-- [ ] Implement one encrypted Boo-native connection per attached client
+- [x] Implement one encrypted Boo-native connection per attached client
+  - [x] server generates an ed25519 keypair + self-signed X.509 cert at first start and persists them at `~/.config/boo/remote-daemon-identity/{key.pem,cert.pem}`
+  - [x] `daemon_identity` is derived deterministically from `base64url(sha256(SPKI))`, so the existing trust string is a real cryptographic pin anchor
+  - [x] the remote TCP listener peeks the first byte of each connection and dispatches to a rustls-wrapped handler for `0x16` (TLS ClientHello) or the existing plain handler for the Boo MAGIC byte; both share one port and advertise `REMOTE_CAPABILITY_TCP_TLS_TRANSPORT`
+  - [x] Rust direct client has `DirectTransportSession::connect_tls` with a `PinnedSpkiServerCertVerifier` that ignores CA chain and hostname, only matching SPKI hash to the pin
+  - [x] CLI exposes the TLS path: `probe-remote-daemon`, `remote-daemon-sessions`, `remote-daemon-create`, and `remote-daemon-attach` gain a `--tls` flag that requires `--expect-server-identity`
 - [x] Keep logical multiplexing for:
   - [x] control RPCs
   - [x] terminal/session stream
@@ -193,7 +198,9 @@ Goal:
 ### 3. Transport Backends
 
 - [ ] Implement preferred live transport with connection-migration support
-- [ ] Implement TCP/TLS fallback when UDP is unavailable or blocked
+  - blocker: needs a QUIC (quinn) server and client that reuse the Phase 1 ed25519 cert; the Rust client pinning verifier (`PinnedSpkiServerCertVerifier`) is already transport-agnostic via rustls
+- [x] Implement TCP/TLS fallback when UDP is unavailable or blocked
+  - this path is the TCP+TLS transport from the Connection Model section; when QUIC lands it will be the fallback, today it is the only encrypted transport
 - [x] Make both transports speak the same application protocol
   - the direct client handshake/heartbeat/session flow is now verified over both TCP and Unix stream transports using the same wire helpers
 - [x] Expose negotiated transport details for debugging
