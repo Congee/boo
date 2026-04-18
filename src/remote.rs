@@ -165,12 +165,17 @@ pub struct RemoteClientInfo {
     pub client_id: u64,
     pub authenticated: bool,
     pub is_local: bool,
+    pub challenge_pending: bool,
     pub attached_session: Option<u32>,
     pub attachment_id: Option<u64>,
     pub resume_token_present: bool,
     pub has_cached_state: bool,
     pub pane_state_count: usize,
     pub latest_input_seq: Option<u64>,
+    pub connection_age_ms: u64,
+    pub authenticated_age_ms: Option<u64>,
+    pub last_heartbeat_age_ms: Option<u64>,
+    pub challenge_expires_in_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -181,6 +186,7 @@ pub struct RevivableAttachmentInfo {
     pub has_cached_state: bool,
     pub pane_state_count: usize,
     pub latest_input_seq: Option<u64>,
+    pub revive_expires_in_ms: u64,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -277,6 +283,9 @@ struct ClientState {
     outbound: mpsc::Sender<OutboundMessage>,
     authenticated: bool,
     challenge: Option<AuthChallengeState>,
+    connected_at: Instant,
+    authenticated_at: Option<Instant>,
+    last_heartbeat_at: Option<Instant>,
     attached_session: Option<u32>,
     attachment_id: Option<u64>,
     resume_token: Option<u64>,
@@ -368,6 +377,9 @@ impl RemoteServer {
                             outbound: outbound_tx,
                             authenticated,
                             challenge: None,
+                            connected_at: Instant::now(),
+                            authenticated_at: authenticated.then(Instant::now),
+                            last_heartbeat_at: None,
                             attached_session: None,
                             attachment_id: None,
                             resume_token: None,
@@ -449,6 +461,9 @@ impl RemoteServer {
                             outbound: outbound_tx,
                             authenticated: true,
                             challenge: None,
+                            connected_at: Instant::now(),
+                            authenticated_at: Some(Instant::now()),
+                            last_heartbeat_at: None,
                             attached_session: None,
                             attachment_id: None,
                             resume_token: None,
@@ -539,6 +554,7 @@ impl RemoteServer {
 
     pub fn clients_snapshot(&self) -> RemoteClientsSnapshot {
         let state = self.state.lock().expect("remote server state poisoned");
+        let now = Instant::now();
         let mut clients = state
             .clients
             .iter()
@@ -546,12 +562,23 @@ impl RemoteServer {
                 client_id: *client_id,
                 authenticated: client.authenticated,
                 is_local: client.is_local,
+                challenge_pending: client.challenge.is_some(),
                 attached_session: client.attached_session,
                 attachment_id: client.attachment_id,
                 resume_token_present: client.resume_token.is_some(),
                 has_cached_state: client.last_state.is_some(),
                 pane_state_count: client.pane_states.len(),
                 latest_input_seq: client.latest_input_seq,
+                connection_age_ms: elapsed_ms(now, client.connected_at),
+                authenticated_age_ms: client
+                    .authenticated_at
+                    .map(|authenticated_at| elapsed_ms(now, authenticated_at)),
+                last_heartbeat_age_ms: client
+                    .last_heartbeat_at
+                    .map(|last_heartbeat_at| elapsed_ms(now, last_heartbeat_at)),
+                challenge_expires_in_ms: client
+                    .challenge
+                    .map(|challenge| remaining_ms(now, challenge.expires_at)),
             })
             .collect::<Vec<_>>();
         clients.sort_by_key(|client| client.client_id);
@@ -566,6 +593,7 @@ impl RemoteServer {
                 has_cached_state: attachment.last_state.is_some(),
                 pane_state_count: attachment.pane_states.len(),
                 latest_input_seq: attachment.latest_input_seq,
+                revive_expires_in_ms: remaining_ms(now, attachment.expires_at),
             })
             .collect::<Vec<_>>();
         revivable_attachments.sort_by_key(|attachment| attachment.attachment_id);
@@ -1354,6 +1382,11 @@ fn read_loop(
         }
 
         if matches!(ty, MessageType::Heartbeat) {
+            let mut state_guard = state.lock().expect("remote server state poisoned");
+            if let Some(client) = state_guard.clients.get_mut(&client_id) {
+                client.last_heartbeat_at = Some(Instant::now());
+            }
+            drop(state_guard);
             send_direct_frame(&state, client_id, MessageType::HeartbeatAck, payload);
             continue;
         }
@@ -1471,6 +1504,7 @@ fn handle_auth_message(
 
     if auth_key.is_none() {
         client.authenticated = true;
+        client.authenticated_at = Some(Instant::now());
         log::info!("remote auth bypassed: client_id={client_id} mode=authless");
         let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
             MessageType::AuthOk,
@@ -1523,6 +1557,7 @@ fn handle_auth_message(
     match mac.verify_slice(payload) {
         Ok(()) => {
             client.authenticated = true;
+            client.authenticated_at = Some(Instant::now());
             log::info!("remote auth succeeded: client_id={client_id}");
             let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
                 MessageType::AuthOk,
@@ -2113,6 +2148,14 @@ fn random_u64_nonzero() -> u64 {
     if value == 0 { 1 } else { value }
 }
 
+fn elapsed_ms(now: Instant, earlier: Instant) -> u64 {
+    now.saturating_duration_since(earlier).as_millis() as u64
+}
+
+fn remaining_ms(now: Instant, deadline: Instant) -> u64 {
+    deadline.saturating_duration_since(now).as_millis() as u64
+}
+
 fn load_or_create_daemon_identity() -> String {
     load_or_create_daemon_identity_at(&crate::config::config_dir().join("remote-daemon-id"))
 }
@@ -2542,6 +2585,9 @@ mod tests {
                     outbound: outbound_tx,
                     authenticated: false,
                     challenge: None,
+                    connected_at: Instant::now(),
+                    authenticated_at: None,
+                    last_heartbeat_at: None,
                     attached_session: None,
                     attachment_id: None,
                     resume_token: None,
@@ -2612,6 +2658,9 @@ mod tests {
                     outbound: outbound_tx,
                     authenticated: false,
                     challenge: None,
+                    connected_at: Instant::now(),
+                    authenticated_at: None,
+                    last_heartbeat_at: None,
                     attached_session: None,
                     attachment_id: None,
                     resume_token: None,
@@ -2709,6 +2758,9 @@ mod tests {
                     outbound: outbound_tx,
                     authenticated: true,
                     challenge: None,
+                    connected_at: Instant::now(),
+                    authenticated_at: Some(Instant::now()),
+                    last_heartbeat_at: None,
                     attached_session: None,
                     attachment_id: None,
                     resume_token: None,
@@ -2748,6 +2800,9 @@ mod tests {
                     outbound: outbound_tx,
                     authenticated: true,
                     challenge: None,
+                    connected_at: Instant::now(),
+                    authenticated_at: Some(Instant::now()),
+                    last_heartbeat_at: None,
                     attached_session: None,
                     attachment_id: None,
                     resume_token: None,
@@ -2792,6 +2847,9 @@ mod tests {
                     outbound: outbound_tx,
                     authenticated: false,
                     challenge: None,
+                    connected_at: Instant::now(),
+                    authenticated_at: None,
+                    last_heartbeat_at: None,
                     attached_session: None,
                     attachment_id: None,
                     resume_token: None,
@@ -3087,6 +3145,9 @@ mod tests {
                     outbound,
                     authenticated: true,
                     challenge: None,
+                    connected_at: Instant::now(),
+                    authenticated_at: Some(Instant::now()),
+                    last_heartbeat_at: None,
                     attached_session: Some(11),
                     attachment_id: None,
                     resume_token: None,
@@ -3154,6 +3215,9 @@ mod tests {
                     outbound,
                     authenticated: true,
                     challenge: None,
+                    connected_at: Instant::now(),
+                    authenticated_at: Some(Instant::now()),
+                    last_heartbeat_at: None,
                     attached_session: None,
                     attachment_id: None,
                     resume_token: None,
@@ -3226,6 +3290,9 @@ mod tests {
                     outbound: tx,
                     authenticated: true,
                     challenge: None,
+                    connected_at: Instant::now(),
+                    authenticated_at: Some(Instant::now()),
+                    last_heartbeat_at: None,
                     attached_session: None,
                     attachment_id: None,
                     resume_token: None,
@@ -3286,6 +3353,9 @@ mod tests {
                         outbound: active_tx,
                         authenticated: true,
                         challenge: None,
+                        connected_at: Instant::now(),
+                        authenticated_at: Some(Instant::now()),
+                        last_heartbeat_at: None,
                         attached_session: Some(11),
                         attachment_id: Some(0xabc),
                         resume_token: None,
@@ -3304,6 +3374,9 @@ mod tests {
                         outbound: new_tx,
                         authenticated: true,
                         challenge: None,
+                        connected_at: Instant::now(),
+                        authenticated_at: Some(Instant::now()),
+                        last_heartbeat_at: None,
                         attached_session: None,
                         attachment_id: None,
                         resume_token: None,
@@ -3345,6 +3418,9 @@ mod tests {
                     outbound: tx,
                     authenticated: true,
                     challenge: None,
+                    connected_at: Instant::now(),
+                    authenticated_at: Some(Instant::now()),
+                    last_heartbeat_at: None,
                     attached_session: None,
                     attachment_id: None,
                     resume_token: None,
@@ -3396,15 +3472,18 @@ mod tests {
     fn client_info_reports_remote_client_diagnostics() {
         let (tx, _rx) = mpsc::channel();
         let state = Arc::new(Mutex::new(State {
-            clients: HashMap::from([(
-                7,
-                ClientState {
-                    outbound: tx,
-                    authenticated: true,
-                    challenge: None,
-                    attached_session: Some(11),
-                    attachment_id: Some(0xabc),
-                    resume_token: Some(0xdef),
+                clients: HashMap::from([(
+                    7,
+                    ClientState {
+                        outbound: tx,
+                        authenticated: true,
+                        challenge: None,
+                        connected_at: Instant::now(),
+                        authenticated_at: Some(Instant::now()),
+                        last_heartbeat_at: Some(Instant::now()),
+                        attached_session: Some(11),
+                        attachment_id: Some(0xabc),
+                        resume_token: Some(0xdef),
                     last_session_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
@@ -3453,23 +3532,24 @@ mod tests {
             local_socket_path: None,
         };
 
-        assert_eq!(
-            server.clients_snapshot(),
-            RemoteClientsSnapshot {
-                clients: vec![RemoteClientInfo {
-                    client_id: 7,
-                    authenticated: true,
-                    is_local: false,
-                    attached_session: Some(11),
-                    attachment_id: Some(0xabc),
-                    resume_token_present: true,
-                    has_cached_state: true,
-                    pane_state_count: 1,
-                    latest_input_seq: Some(9),
-                }],
-                revivable_attachments: Vec::new(),
-            }
-        );
+        let snapshot = server.clients_snapshot();
+        assert!(snapshot.revivable_attachments.is_empty());
+        assert_eq!(snapshot.clients.len(), 1);
+        let client = &snapshot.clients[0];
+        assert_eq!(client.client_id, 7);
+        assert!(client.authenticated);
+        assert!(!client.is_local);
+        assert!(!client.challenge_pending);
+        assert_eq!(client.attached_session, Some(11));
+        assert_eq!(client.attachment_id, Some(0xabc));
+        assert!(client.resume_token_present);
+        assert!(client.has_cached_state);
+        assert_eq!(client.pane_state_count, 1);
+        assert_eq!(client.latest_input_seq, Some(9));
+        assert!(client.connection_age_ms <= 250);
+        assert!(client.authenticated_age_ms.is_some_and(|age| age <= 250));
+        assert!(client.last_heartbeat_age_ms.is_some_and(|age| age <= 250));
+        assert_eq!(client.challenge_expires_in_ms, None);
     }
 
     #[test]
@@ -3519,20 +3599,69 @@ mod tests {
             local_socket_path: None,
         };
 
-        assert_eq!(
-            server.clients_snapshot(),
-            RemoteClientsSnapshot {
-                clients: Vec::new(),
-                revivable_attachments: vec![RevivableAttachmentInfo {
-                    attachment_id: 0xabc,
-                    session_id: 11,
-                    resume_token_present: true,
-                    has_cached_state: true,
-                    pane_state_count: 1,
-                    latest_input_seq: Some(9),
-                }],
-            }
-        );
+        let snapshot = server.clients_snapshot();
+        assert!(snapshot.clients.is_empty());
+        assert_eq!(snapshot.revivable_attachments.len(), 1);
+        let attachment = &snapshot.revivable_attachments[0];
+        assert_eq!(attachment.attachment_id, 0xabc);
+        assert_eq!(attachment.session_id, 11);
+        assert!(attachment.resume_token_present);
+        assert!(attachment.has_cached_state);
+        assert_eq!(attachment.pane_state_count, 1);
+        assert_eq!(attachment.latest_input_seq, Some(9));
+        assert!(attachment.revive_expires_in_ms <= REVIVABLE_ATTACHMENT_WINDOW.as_millis() as u64);
+        assert!(attachment.revive_expires_in_ms > 0);
+    }
+
+    #[test]
+    fn clients_snapshot_reports_challenge_and_heartbeat_diagnostics() {
+        let (tx, _rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: tx,
+                    authenticated: false,
+                    challenge: Some(AuthChallengeState {
+                        bytes: [7; 32],
+                        expires_at: Instant::now() + Duration::from_secs(5),
+                    }),
+                    connected_at: Instant::now() - Duration::from_secs(2),
+                    authenticated_at: None,
+                    last_heartbeat_at: Some(Instant::now() - Duration::from_millis(750)),
+                    attached_session: None,
+                    attachment_id: None,
+                    resume_token: None,
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: false,
+                },
+            )]),
+            revivable_attachments: HashMap::new(),
+            auth_key: Some(b"test-key".to_vec()),
+            server_identity_id: "test-daemon".to_string(),
+            server_instance_id: "test-instance".to_string(),
+        }));
+        let server = RemoteServer {
+            state,
+            _listener: std::thread::spawn(|| {}),
+            _advertiser: None,
+            local_socket_path: None,
+        };
+
+        let snapshot = server.clients_snapshot();
+        assert_eq!(snapshot.clients.len(), 1);
+        let client = &snapshot.clients[0];
+        assert!(!client.authenticated);
+        assert!(client.challenge_pending);
+        assert!(client.connection_age_ms >= 2_000);
+        assert_eq!(client.authenticated_age_ms, None);
+        assert!(client.last_heartbeat_age_ms.is_some_and(|age| age >= 750));
+        assert!(client.challenge_expires_in_ms.is_some_and(|age| age > 0));
     }
 
     #[test]
@@ -3547,6 +3676,9 @@ mod tests {
                     outbound: attached_tx,
                     authenticated: true,
                     challenge: None,
+                    connected_at: Instant::now(),
+                    authenticated_at: Some(Instant::now()),
+                    last_heartbeat_at: None,
                     attached_session: Some(11),
                     attachment_id: None,
                     resume_token: None,
@@ -3565,6 +3697,9 @@ mod tests {
                     outbound: unattached_tx,
                     authenticated: true,
                     challenge: None,
+                    connected_at: Instant::now(),
+                    authenticated_at: Some(Instant::now()),
+                    last_heartbeat_at: None,
                     attached_session: None,
                     attachment_id: None,
                     resume_token: None,
@@ -3621,6 +3756,9 @@ mod tests {
                     outbound: tx,
                     authenticated: true,
                     challenge: None,
+                    connected_at: Instant::now(),
+                    authenticated_at: Some(Instant::now()),
+                    last_heartbeat_at: None,
                     attached_session: Some(11),
                     attachment_id: None,
                     resume_token: None,
@@ -3677,6 +3815,9 @@ mod tests {
                     outbound: tx,
                     authenticated: true,
                     challenge: None,
+                    connected_at: Instant::now(),
+                    authenticated_at: Some(Instant::now()),
+                    last_heartbeat_at: None,
                     attached_session: Some(11),
                     attachment_id: None,
                     resume_token: None,
@@ -3732,6 +3873,9 @@ mod tests {
                     outbound: tx,
                     authenticated: true,
                     challenge: None,
+                    connected_at: Instant::now(),
+                    authenticated_at: Some(Instant::now()),
+                    last_heartbeat_at: None,
                     attached_session: Some(11),
                     attachment_id: None,
                     resume_token: None,
@@ -3789,6 +3933,9 @@ mod tests {
                     outbound: tx,
                     authenticated: true,
                     challenge: None,
+                    connected_at: Instant::now(),
+                    authenticated_at: Some(Instant::now()),
+                    last_heartbeat_at: None,
                     attached_session: None,
                     attachment_id: None,
                     resume_token: None,
@@ -3831,6 +3978,9 @@ mod tests {
                         outbound: local_attached_tx,
                         authenticated: true,
                         challenge: None,
+                        connected_at: Instant::now(),
+                        authenticated_at: Some(Instant::now()),
+                        last_heartbeat_at: None,
                         attached_session: Some(11),
                         attachment_id: None,
                         resume_token: None,
@@ -3849,6 +3999,9 @@ mod tests {
                         outbound: local_unattached_tx,
                         authenticated: true,
                         challenge: None,
+                        connected_at: Instant::now(),
+                        authenticated_at: Some(Instant::now()),
+                        last_heartbeat_at: None,
                         attached_session: None,
                         attachment_id: None,
                         resume_token: None,
@@ -3867,6 +4020,9 @@ mod tests {
                         outbound: local_same_session_tx,
                         authenticated: true,
                         challenge: None,
+                        connected_at: Instant::now(),
+                        authenticated_at: Some(Instant::now()),
+                        last_heartbeat_at: None,
                         attached_session: Some(22),
                         attachment_id: None,
                         resume_token: None,
@@ -3885,6 +4041,9 @@ mod tests {
                         outbound: remote_attached_tx,
                         authenticated: true,
                         challenge: None,
+                        connected_at: Instant::now(),
+                        authenticated_at: Some(Instant::now()),
+                        last_heartbeat_at: None,
                         attached_session: Some(11),
                         attachment_id: None,
                         resume_token: None,
@@ -3934,6 +4093,9 @@ mod tests {
                     outbound: tx,
                     authenticated: true,
                     challenge: None,
+                    connected_at: Instant::now(),
+                    authenticated_at: Some(Instant::now()),
+                    last_heartbeat_at: None,
                     attached_session: Some(11),
                     attachment_id: None,
                     resume_token: None,
