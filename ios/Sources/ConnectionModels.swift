@@ -61,7 +61,6 @@ final class ConnectionStore: ObservableObject {
     private let trustedIdentitiesKey = "boo.remote.trustedServerIdentities"
     private let resumeAttachmentsKey = "boo.remote.resumeAttachments"
     private let maxHistory = 50
-    private let resumeWindow: TimeInterval = 30
     private var trustedServerIdentities: [String: String] = [:]
     private var resumeAttachments: [String: ResumeAttachmentMetadata] = [:]
 
@@ -142,14 +141,7 @@ final class ConnectionStore: ObservableObject {
     }
 
     func resumeAttachment(host: String, port: UInt16) -> ResumeAttachmentMetadata? {
-        let key = "\(host):\(port)"
-        guard let metadata = resumeAttachments[key] else { return nil }
-        guard Date().timeIntervalSince(metadata.recordedAt) <= resumeWindow else {
-            resumeAttachments.removeValue(forKey: key)
-            saveResumeAttachments()
-            return nil
-        }
-        return metadata
+        resumeAttachments["\(host):\(port)"]
     }
 
     func clearResumeAttachment(host: String, port: UInt16) {
@@ -324,6 +316,10 @@ final class ConnectionMonitor: ObservableObject {
         transportHealth = .idle
         reconnectAllowed = true
         cancelReconnect()
+        startClientConnection(host: host, port: port, authKey: authKey)
+    }
+
+    private func startClientConnection(host: String, port: UInt16, authKey: String) {
         client.configureTrustedServerIdentity(store.trustedServerIdentity(host: host, port: port))
         if let resume = store.resumeAttachment(host: host, port: port) {
             client.configureResumeAttachment(
@@ -456,7 +452,7 @@ final class ConnectionMonitor: ObservableObject {
                   let host = self.lastHost,
                   let port = self.lastPort else { return }
             self.status = .connecting
-            self.client.connect(host: host, port: port, authKey: self.lastAuthKey ?? "")
+            self.startClientConnection(host: host, port: port, authKey: self.lastAuthKey ?? "")
         }
         reconnectWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.reconnectDelay, execute: workItem)
