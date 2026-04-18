@@ -1877,6 +1877,7 @@ pub fn probe_remote_endpoint(
     host: &str,
     port: u16,
     auth_key: Option<&str>,
+    expected_server_identity: Option<&str>,
 ) -> Result<RemoteProbeSummary, String> {
     use std::net::TcpStream;
 
@@ -1931,6 +1932,15 @@ pub fn probe_remote_endpoint(
         decode_auth_ok_payload(&auth_ok_payload).ok_or_else(|| {
             format!("remote endpoint {host}:{port} returned malformed handshake metadata")
         })?;
+    if let Some(expected_server_identity) = expected_server_identity {
+        if server_identity_id.as_deref() != Some(expected_server_identity) {
+            return Err(format!(
+                "remote endpoint {host}:{port} reported daemon identity {:?}, expected {:?}",
+                server_identity_id,
+                expected_server_identity
+            ));
+        }
+    }
 
     let heartbeat_payload = b"boo-remote-probe";
     let heartbeat_start = Instant::now();
@@ -1962,6 +1972,7 @@ pub fn list_remote_daemon_sessions(
     host: &str,
     port: u16,
     auth_key: Option<&str>,
+    expected_server_identity: Option<&str>,
 ) -> Result<RemoteSessionListSummary, String> {
     use std::net::TcpStream;
 
@@ -2016,6 +2027,15 @@ pub fn list_remote_daemon_sessions(
         decode_auth_ok_payload(&auth_ok_payload).ok_or_else(|| {
             format!("remote endpoint {host}:{port} returned malformed handshake metadata")
         })?;
+    if let Some(expected_server_identity) = expected_server_identity {
+        if server_identity_id.as_deref() != Some(expected_server_identity) {
+            return Err(format!(
+                "remote endpoint {host}:{port} reported daemon identity {:?}, expected {:?}",
+                server_identity_id,
+                expected_server_identity
+            ));
+        }
+    }
 
     let heartbeat_payload = b"boo-remote-list";
     let heartbeat_start = Instant::now();
@@ -3424,8 +3444,8 @@ mod tests {
                 .expect("write auth ok");
         });
 
-        let error =
-            probe_remote_endpoint("127.0.0.1", port, None).expect_err("probe should reject");
+        let error = probe_remote_endpoint("127.0.0.1", port, None, None)
+            .expect_err("probe should reject");
         assert!(
             error.contains("Unsupported remote protocol version"),
             "unexpected error: {error}"
@@ -3522,8 +3542,8 @@ mod tests {
                 .expect("write session list");
         });
 
-        let summary =
-            list_remote_daemon_sessions("127.0.0.1", port, None).expect("list sessions summary");
+        let summary = list_remote_daemon_sessions("127.0.0.1", port, None, None)
+            .expect("list sessions summary");
         assert_eq!(summary.protocol_version, REMOTE_PROTOCOL_VERSION);
         assert_eq!(summary.server_identity_id.as_deref(), Some("test-daemon"));
         assert_eq!(summary.server_instance_id.as_deref(), Some("test-instance"));
@@ -3532,6 +3552,41 @@ mod tests {
         assert_eq!(summary.sessions[0].name, "dev");
         assert_eq!(summary.sessions[0].pwd, "/home/example/dev/boo");
         assert!(summary.sessions[0].attached);
+
+        server.join().expect("list server thread");
+    }
+
+    #[test]
+    fn list_remote_daemon_sessions_rejects_unexpected_server_identity() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
+        let port = listener.local_addr().expect("listener addr").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept list client");
+            let (ty, payload) = read_message(&mut stream).expect("read auth request");
+            assert_eq!(ty, MessageType::Auth);
+            assert!(payload.is_empty());
+
+            stream
+                .write_all(&encode_message(
+                    MessageType::AuthOk,
+                    &encode_auth_ok_payload("actual-daemon", "test-instance"),
+                ))
+                .expect("write auth ok");
+        });
+
+        let error = list_remote_daemon_sessions(
+            "127.0.0.1",
+            port,
+            None,
+            Some("expected-daemon"),
+        )
+        .expect_err("unexpected daemon identity should fail");
+        assert!(
+            error.contains("expected"),
+            "unexpected error text: {error}"
+        );
 
         server.join().expect("list server thread");
     }

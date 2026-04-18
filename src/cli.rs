@@ -117,6 +117,8 @@ pub enum Command {
         port: u16,
         #[arg(long = "auth-key")]
         auth_key: Option<String>,
+        #[arg(long = "expect-server-identity")]
+        expect_server_identity: Option<String>,
     },
     /// List sessions from a Boo-native TCP remote daemon directly
     RemoteDaemonSessions {
@@ -126,6 +128,8 @@ pub enum Command {
         port: u16,
         #[arg(long = "auth-key")]
         auth_key: Option<String>,
+        #[arg(long = "expect-server-identity")]
+        expect_server_identity: Option<String>,
     },
     /// Show connected remote and local-stream client diagnostics
     RemoteClients,
@@ -247,7 +251,13 @@ where
             host,
             port,
             auth_key,
-        } => match crate::remote::probe_remote_endpoint(host, *port, auth_key.as_deref()) {
+            expect_server_identity,
+        } => match crate::remote::probe_remote_endpoint(
+            host,
+            *port,
+            auth_key.as_deref(),
+            expect_server_identity.as_deref(),
+        ) {
             Ok(summary) => {
                 let mut stdout = std::io::stdout().lock();
                 use std::io::Write;
@@ -268,7 +278,13 @@ where
             host,
             port,
             auth_key,
-        } => match crate::remote::list_remote_daemon_sessions(host, *port, auth_key.as_deref()) {
+            expect_server_identity,
+        } => match crate::remote::list_remote_daemon_sessions(
+            host,
+            *port,
+            auth_key.as_deref(),
+            expect_server_identity.as_deref(),
+        ) {
             Ok(summary) => {
                 let mut stdout = std::io::stdout().lock();
                 use std::io::Write;
@@ -402,16 +418,20 @@ mod tests {
             "7337",
             "--auth-key",
             "secret",
+            "--expect-server-identity",
+            "daemon-01",
         ]);
         match cli.command {
             Some(super::Command::ProbeRemoteDaemon {
                 host,
                 port,
                 auth_key,
+                expect_server_identity,
             }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, 7337);
                 assert_eq!(auth_key.as_deref(), Some("secret"));
+                assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -428,16 +448,20 @@ mod tests {
             "7337",
             "--auth-key",
             "secret",
+            "--expect-server-identity",
+            "daemon-01",
         ]);
         match cli.command {
             Some(super::Command::RemoteDaemonSessions {
                 host,
                 port,
                 auth_key,
+                expect_server_identity,
             }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, 7337);
                 assert_eq!(auth_key.as_deref(), Some("secret"));
+                assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
             }
             other => panic!("unexpected command: {other:?}"),
         }
