@@ -233,6 +233,30 @@ pub struct RemoteProbeSummary {
     pub heartbeat_rtt_ms: u64,
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct RemoteDirectSessionInfo {
+    pub id: u32,
+    pub name: String,
+    pub title: String,
+    pub pwd: String,
+    pub attached: bool,
+    pub child_exited: bool,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct RemoteSessionListSummary {
+    pub host: String,
+    pub port: u16,
+    pub auth_required: bool,
+    pub protocol_version: u16,
+    pub capabilities: u32,
+    pub build_id: Option<String>,
+    pub server_instance_id: Option<String>,
+    pub server_identity_id: Option<String>,
+    pub heartbeat_rtt_ms: u64,
+    pub sessions: Vec<RemoteDirectSessionInfo>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteCell {
     pub codepoint: u32,
@@ -1934,6 +1958,100 @@ pub fn probe_remote_endpoint(
     })
 }
 
+pub fn list_remote_daemon_sessions(
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+) -> Result<RemoteSessionListSummary, String> {
+    use std::net::TcpStream;
+
+    let mut stream = TcpStream::connect((host, port))
+        .map_err(|error| format!("failed to connect to {host}:{port}: {error}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .map_err(|error| format!("failed to configure read timeout for {host}:{port}: {error}"))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(3)))
+        .map_err(|error| format!("failed to configure write timeout for {host}:{port}: {error}"))?;
+
+    stream
+        .write_all(&encode_message(MessageType::Auth, &[]))
+        .map_err(|error| format!("failed to send auth request to {host}:{port}: {error}"))?;
+    let (ty, auth_payload) = read_probe_auth_reply(&mut stream, host, port)?;
+
+    let (auth_required, auth_ok_payload) = match ty {
+        MessageType::AuthOk => (false, auth_payload),
+        MessageType::AuthChallenge => {
+            let key = auth_key.ok_or_else(|| {
+                format!("remote endpoint {host}:{port} requires --auth-key for listing sessions")
+            })?;
+            let mut mac = HmacSha256::new_from_slice(key.as_bytes()).expect("valid HMAC key");
+            mac.update(&auth_payload);
+            let response = mac.finalize().into_bytes().to_vec();
+            stream
+                .write_all(&encode_message(MessageType::Auth, &response))
+                .map_err(|error| format!("failed to send auth response to {host}:{port}: {error}"))?;
+            let (reply_ty, reply_payload) = read_message(&mut stream).map_err(|error| {
+                format!("failed to read authenticated reply from {host}:{port}: {error}")
+            })?;
+            if reply_ty != MessageType::AuthOk {
+                return Err(format!(
+                    "expected auth ok from {host}:{port}, got {reply_ty:?}"
+                ));
+            }
+            (true, reply_payload)
+        }
+        MessageType::AuthFail => {
+            return Err(format!("authentication failed for remote endpoint {host}:{port}"));
+        }
+        other => {
+            return Err(format!(
+                "unexpected auth reply from {host}:{port}: {other:?}"
+            ));
+        }
+    };
+
+    validate_auth_ok_payload(&auth_ok_payload, auth_required)?;
+    let (protocol_version, capabilities, build_id, server_instance_id, server_identity_id) =
+        decode_auth_ok_payload(&auth_ok_payload).ok_or_else(|| {
+            format!("remote endpoint {host}:{port} returned malformed handshake metadata")
+        })?;
+
+    let heartbeat_payload = b"boo-remote-list";
+    let heartbeat_start = Instant::now();
+    stream
+        .write_all(&encode_message(MessageType::Heartbeat, heartbeat_payload))
+        .map_err(|error| format!("failed to send heartbeat to {host}:{port}: {error}"))?;
+    let (_heartbeat_ty, heartbeat_reply) =
+        read_probe_reply(&mut stream, host, port, MessageType::HeartbeatAck)?;
+    if heartbeat_reply != heartbeat_payload {
+        return Err(format!(
+            "heartbeat payload mismatch from remote endpoint {host}:{port}"
+        ));
+    }
+
+    stream
+        .write_all(&encode_message(MessageType::ListSessions, &[]))
+        .map_err(|error| format!("failed to send list sessions request to {host}:{port}: {error}"))?;
+    let (_reply_ty, payload) =
+        read_probe_reply(&mut stream, host, port, MessageType::SessionList)?;
+    let sessions = decode_session_list_payload(&payload)
+        .map_err(|error| format!("failed to decode remote session list from {host}:{port}: {error}"))?;
+
+    Ok(RemoteSessionListSummary {
+        host: host.to_string(),
+        port,
+        auth_required,
+        protocol_version,
+        capabilities,
+        build_id,
+        server_instance_id,
+        server_identity_id,
+        heartbeat_rtt_ms: heartbeat_start.elapsed().as_millis() as u64,
+        sessions,
+    })
+}
+
 fn read_probe_reply(
     stream: &mut impl Read,
     host: &str,
@@ -2008,6 +2126,81 @@ fn read_probe_auth_reply(
     Err(format!(
         "timed out waiting for auth reply from remote endpoint {host}:{port}"
     ))
+}
+
+fn decode_session_list_payload(payload: &[u8]) -> Result<Vec<RemoteDirectSessionInfo>, String> {
+    if payload.len() < 4 {
+        return Err("payload too short".to_string());
+    }
+    let mut offset = 0usize;
+    let count = u32::from_le_bytes(
+        payload[offset..offset + 4]
+            .try_into()
+            .map_err(|_| "invalid session count".to_string())?,
+    ) as usize;
+    offset += 4;
+
+    fn read_u32(payload: &[u8], offset: &mut usize) -> Result<u32, String> {
+        if payload.len() < *offset + 4 {
+            return Err("payload truncated".to_string());
+        }
+        let value = u32::from_le_bytes(
+            payload[*offset..*offset + 4]
+                .try_into()
+                .map_err(|_| "invalid u32".to_string())?,
+        );
+        *offset += 4;
+        Ok(value)
+    }
+
+    fn read_u16(payload: &[u8], offset: &mut usize) -> Result<u16, String> {
+        if payload.len() < *offset + 2 {
+            return Err("payload truncated".to_string());
+        }
+        let value = u16::from_le_bytes(
+            payload[*offset..*offset + 2]
+                .try_into()
+                .map_err(|_| "invalid u16".to_string())?,
+        );
+        *offset += 2;
+        Ok(value)
+    }
+
+    fn read_string(payload: &[u8], offset: &mut usize) -> Result<String, String> {
+        let len = read_u16(payload, offset)? as usize;
+        if payload.len() < *offset + len {
+            return Err("payload truncated".to_string());
+        }
+        let value = std::str::from_utf8(&payload[*offset..*offset + len])
+            .map_err(|_| "invalid utf-8".to_string())?
+            .to_string();
+        *offset += len;
+        Ok(value)
+    }
+
+    let mut sessions = Vec::with_capacity(count);
+    for _ in 0..count {
+        let id = read_u32(payload, &mut offset)?;
+        let name = read_string(payload, &mut offset)?;
+        let title = read_string(payload, &mut offset)?;
+        let pwd = read_string(payload, &mut offset)?;
+        let flags = *payload
+            .get(offset)
+            .ok_or_else(|| "payload truncated".to_string())?;
+        offset += 1;
+        sessions.push(RemoteDirectSessionInfo {
+            id,
+            name,
+            title,
+            pwd,
+            attached: (flags & 0x01) != 0,
+            child_exited: (flags & 0x02) != 0,
+        });
+    }
+    if offset != payload.len() {
+        return Err("payload has trailing bytes".to_string());
+    }
+    Ok(sessions)
 }
 
 fn send_direct_error(state: &Arc<Mutex<State>>, client_id: u64, message: &str) {
@@ -3239,6 +3432,108 @@ mod tests {
         );
 
         server.join().expect("probe server thread");
+    }
+
+    #[test]
+    fn decode_session_list_payload_round_trips_encoded_sessions() {
+        let payload = encode_session_list(&[
+            RemoteSessionInfo {
+                id: 7,
+                name: "Tab 1".to_string(),
+                title: "shell".to_string(),
+                pwd: "/tmp".to_string(),
+                attached: true,
+                child_exited: false,
+            },
+            RemoteSessionInfo {
+                id: 8,
+                name: String::new(),
+                title: "logs".to_string(),
+                pwd: "/var/log".to_string(),
+                attached: false,
+                child_exited: true,
+            },
+        ]);
+
+        let decoded = decode_session_list_payload(&payload).expect("decode session list");
+        assert_eq!(
+            decoded,
+            vec![
+                RemoteDirectSessionInfo {
+                    id: 7,
+                    name: "Tab 1".to_string(),
+                    title: "shell".to_string(),
+                    pwd: "/tmp".to_string(),
+                    attached: true,
+                    child_exited: false,
+                },
+                RemoteDirectSessionInfo {
+                    id: 8,
+                    name: String::new(),
+                    title: "logs".to_string(),
+                    pwd: "/var/log".to_string(),
+                    attached: false,
+                    child_exited: true,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn list_remote_daemon_sessions_reuses_handshake_validation_over_socket() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
+        let port = listener.local_addr().expect("listener addr").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept list client");
+            let (ty, payload) = read_message(&mut stream).expect("read auth request");
+            assert_eq!(ty, MessageType::Auth);
+            assert!(payload.is_empty());
+
+            stream
+                .write_all(&encode_message(
+                    MessageType::AuthOk,
+                    &encode_auth_ok_payload("test-daemon", "test-instance"),
+                ))
+                .expect("write auth ok");
+
+            let (ty, payload) = read_message(&mut stream).expect("read heartbeat");
+            assert_eq!(ty, MessageType::Heartbeat);
+            stream
+                .write_all(&encode_message(MessageType::HeartbeatAck, &payload))
+                .expect("write heartbeat ack");
+
+            let (ty, payload) = read_message(&mut stream).expect("read list sessions");
+            assert_eq!(ty, MessageType::ListSessions);
+            assert!(payload.is_empty());
+            stream
+                .write_all(&encode_message(
+                    MessageType::SessionList,
+                    &encode_session_list(&[RemoteSessionInfo {
+                        id: 11,
+                        name: "dev".to_string(),
+                        title: "shell".to_string(),
+                        pwd: "/home/example/dev/boo".to_string(),
+                        attached: true,
+                        child_exited: false,
+                    }]),
+                ))
+                .expect("write session list");
+        });
+
+        let summary =
+            list_remote_daemon_sessions("127.0.0.1", port, None).expect("list sessions summary");
+        assert_eq!(summary.protocol_version, REMOTE_PROTOCOL_VERSION);
+        assert_eq!(summary.server_identity_id.as_deref(), Some("test-daemon"));
+        assert_eq!(summary.server_instance_id.as_deref(), Some("test-instance"));
+        assert_eq!(summary.sessions.len(), 1);
+        assert_eq!(summary.sessions[0].id, 11);
+        assert_eq!(summary.sessions[0].name, "dev");
+        assert_eq!(summary.sessions[0].pwd, "/home/example/dev/boo");
+        assert!(summary.sessions[0].attached);
+
+        server.join().expect("list server thread");
     }
 
     #[test]

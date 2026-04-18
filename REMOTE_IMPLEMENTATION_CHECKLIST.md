@@ -170,10 +170,10 @@ Goal:
   - [x] server version/build identifier
   - [x] transport capabilities
   - [x] reconnect/resume capabilities
-- [ ] Reject incompatible peers early and clearly
+- [x] Reject incompatible peers early and clearly
   - [x] iOS client rejects malformed or unsupported `AuthOk` metadata before issuing protocol side effects
   - [x] desktop/developer direct probing uses the same Rust `AuthOk` validation rules before reporting success
-  - [ ] desktop and all future direct clients enforce the same rejection rules
+  - [x] current desktop direct-client entrypoints (`probe-remote-daemon`, `remote-daemon-sessions`) reuse the same Rust `AuthOk` validation rules
 - [ ] Add upgrade path from SSH bootstrap to canonical Boo transport
 
 ### 2. Connection Model
