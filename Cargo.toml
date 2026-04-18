@@ -19,6 +19,7 @@ base64 = "0.22"
 unicode-width = "0.2"
 hmac = "0.12"
 sha2 = "0.10"
+rcgen = { version = "0.13", default-features = false, features = ["pem", "crypto", "ring"] }
 crossbeam-channel = "0.5"
 open = "5"
 ttf-parser = "0.25"

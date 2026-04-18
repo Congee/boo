@@ -3169,23 +3169,82 @@ fn remaining_ms(now: Instant, deadline: Instant) -> u64 {
     deadline.saturating_duration_since(now).as_millis() as u64
 }
 
-fn load_or_create_daemon_identity() -> String {
-    load_or_create_daemon_identity_at(&crate::config::config_dir().join("remote-daemon-id"))
+#[derive(Clone)]
+pub struct DaemonIdentityMaterial {
+    pub identity_id: String,
+    pub key_pem: String,
+    pub cert_pem: String,
 }
 
-fn load_or_create_daemon_identity_at(path: &Path) -> String {
-    if let Ok(existing) = std::fs::read_to_string(&path) {
-        let trimmed = existing.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_string();
+fn daemon_identity_dir() -> PathBuf {
+    crate::config::config_dir().join("remote-daemon-identity")
+}
+
+fn load_or_create_daemon_identity() -> String {
+    load_or_create_daemon_identity_material().identity_id
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn load_or_create_daemon_identity_material() -> DaemonIdentityMaterial {
+    load_or_create_daemon_identity_material_at(&daemon_identity_dir())
+}
+
+fn load_or_create_daemon_identity_material_at(dir: &Path) -> DaemonIdentityMaterial {
+    let key_path = dir.join("key.pem");
+    let cert_path = dir.join("cert.pem");
+    if let (Ok(key_pem), Ok(cert_pem)) = (
+        std::fs::read_to_string(&key_path),
+        std::fs::read_to_string(&cert_path),
+    ) {
+        if let Ok(keypair) = rcgen::KeyPair::from_pem(&key_pem) {
+            let identity_id = derive_identity_id(keypair.public_key_der());
+            return DaemonIdentityMaterial {
+                identity_id,
+                key_pem,
+                cert_pem,
+            };
         }
     }
-    let identity = random_instance_id();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    let material = generate_daemon_identity_material();
+    let _ = std::fs::create_dir_all(dir);
+    if std::fs::write(&key_path, &material.key_pem).is_ok() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                &key_path,
+                std::fs::Permissions::from_mode(0o600),
+            );
+        }
     }
-    let _ = std::fs::write(&path, format!("{identity}\n"));
-    identity
+    let _ = std::fs::write(&cert_path, &material.cert_pem);
+    material
+}
+
+fn generate_daemon_identity_material() -> DaemonIdentityMaterial {
+    let keypair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519)
+        .expect("generate ed25519 keypair for remote daemon identity");
+    let mut params = rcgen::CertificateParams::new(vec!["boo-remote-daemon".to_string()])
+        .expect("build remote daemon cert params");
+    params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "boo remote daemon");
+    let cert = params
+        .self_signed(&keypair)
+        .expect("self-sign remote daemon cert");
+    let identity_id = derive_identity_id(keypair.public_key_der());
+    DaemonIdentityMaterial {
+        identity_id,
+        key_pem: keypair.serialize_pem(),
+        cert_pem: cert.pem(),
+    }
+}
+
+fn derive_identity_id(spki_der: impl AsRef<[u8]>) -> String {
+    use base64::Engine;
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(spki_der.as_ref());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
 }
 
 impl ServiceAdvertiser {
@@ -4913,41 +4972,65 @@ mod tests {
         );
     }
 
-    #[test]
-    fn load_or_create_daemon_identity_reuses_existing_file_contents() {
-        let path = std::env::temp_dir().join(format!(
-            "boo-remote-daemon-id-reuse-{}",
+    fn unique_identity_dir(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(
+            "boo-remote-daemon-identity-{label}-{}-{nanos}",
             std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
-        std::fs::write(&path, "trusted-daemon\n").expect("write daemon identity fixture");
-
-        let identity = load_or_create_daemon_identity_at(&path);
-
-        assert_eq!(identity, "trusted-daemon");
-        let _ = std::fs::remove_file(&path);
+        ))
     }
 
     #[test]
-    fn load_or_create_daemon_identity_creates_and_persists_identity() {
-        let path = std::env::temp_dir().join(format!(
-            "boo-remote-daemon-id-create-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
+    fn load_or_create_daemon_identity_material_persists_keypair_and_cert() {
+        let dir = unique_identity_dir("persist");
+        let _ = std::fs::remove_dir_all(&dir);
 
-        let first = load_or_create_daemon_identity_at(&path);
-        let second = load_or_create_daemon_identity_at(&path);
+        let first = load_or_create_daemon_identity_material_at(&dir);
+        let second = load_or_create_daemon_identity_material_at(&dir);
 
-        assert!(!first.is_empty());
-        assert_eq!(first, second);
-        assert_eq!(
-            std::fs::read_to_string(&path)
-                .expect("daemon identity file")
-                .trim(),
-            first
+        assert!(!first.identity_id.is_empty());
+        assert_eq!(first.identity_id, second.identity_id);
+        assert_eq!(first.key_pem, second.key_pem);
+        assert_eq!(first.cert_pem, second.cert_pem);
+        assert!(dir.join("key.pem").exists());
+        assert!(dir.join("cert.pem").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_or_create_daemon_identity_material_derives_identity_from_spki() {
+        let dir = unique_identity_dir("spki");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let material = load_or_create_daemon_identity_material_at(&dir);
+        let keypair = rcgen::KeyPair::from_pem(&material.key_pem).expect("parse key");
+        let expected = derive_identity_id(keypair.public_key_der());
+        assert_eq!(material.identity_id, expected);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn daemon_identity_material_regenerates_when_key_is_missing() {
+        let dir = unique_identity_dir("regen");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create dir");
+        // Only a cert present, key missing — must regenerate both.
+        std::fs::write(dir.join("cert.pem"), "not a real cert").expect("write stale cert");
+
+        let material = load_or_create_daemon_identity_material_at(&dir);
+
+        assert!(!material.identity_id.is_empty());
+        assert!(
+            rcgen::KeyPair::from_pem(&material.key_pem).is_ok(),
+            "regenerated key must parse",
         );
-        let _ = std::fs::remove_file(&path);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
