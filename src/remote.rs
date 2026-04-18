@@ -173,6 +173,22 @@ pub struct RemoteClientInfo {
     pub latest_input_seq: Option<u64>,
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct RevivableAttachmentInfo {
+    pub attachment_id: u64,
+    pub session_id: u32,
+    pub resume_token_present: bool,
+    pub has_cached_state: bool,
+    pub pane_state_count: usize,
+    pub latest_input_seq: Option<u64>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct RemoteClientsSnapshot {
+    pub clients: Vec<RemoteClientInfo>,
+    pub revivable_attachments: Vec<RevivableAttachmentInfo>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteCell {
     pub codepoint: u32,
@@ -521,7 +537,7 @@ impl RemoteServer {
             .is_some_and(|client| client.is_local)
     }
 
-    pub fn client_info(&self) -> Vec<RemoteClientInfo> {
+    pub fn clients_snapshot(&self) -> RemoteClientsSnapshot {
         let state = self.state.lock().expect("remote server state poisoned");
         let mut clients = state
             .clients
@@ -539,7 +555,25 @@ impl RemoteServer {
             })
             .collect::<Vec<_>>();
         clients.sort_by_key(|client| client.client_id);
-        clients
+
+        let mut revivable_attachments = state
+            .revivable_attachments
+            .iter()
+            .map(|(attachment_id, attachment)| RevivableAttachmentInfo {
+                attachment_id: *attachment_id,
+                session_id: attachment.session_id,
+                resume_token_present: true,
+                has_cached_state: attachment.last_state.is_some(),
+                pane_state_count: attachment.pane_states.len(),
+                latest_input_seq: attachment.latest_input_seq,
+            })
+            .collect::<Vec<_>>();
+        revivable_attachments.sort_by_key(|attachment| attachment.attachment_id);
+
+        RemoteClientsSnapshot {
+            clients,
+            revivable_attachments,
+        }
     }
 
     pub fn send_session_list(&self, client_id: u64, sessions: &[RemoteSessionInfo]) {
@@ -3420,18 +3454,84 @@ mod tests {
         };
 
         assert_eq!(
-            server.client_info(),
-            vec![RemoteClientInfo {
-                client_id: 7,
-                authenticated: true,
-                is_local: false,
-                attached_session: Some(11),
-                attachment_id: Some(0xabc),
-                resume_token_present: true,
-                has_cached_state: true,
-                pane_state_count: 1,
-                latest_input_seq: Some(9),
-            }]
+            server.clients_snapshot(),
+            RemoteClientsSnapshot {
+                clients: vec![RemoteClientInfo {
+                    client_id: 7,
+                    authenticated: true,
+                    is_local: false,
+                    attached_session: Some(11),
+                    attachment_id: Some(0xabc),
+                    resume_token_present: true,
+                    has_cached_state: true,
+                    pane_state_count: 1,
+                    latest_input_seq: Some(9),
+                }],
+                revivable_attachments: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn clients_snapshot_includes_revivable_attachments() {
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::new(),
+            revivable_attachments: HashMap::from([(
+                0xabc,
+                RevivableAttachment {
+                    session_id: 11,
+                    resume_token: 0xdef,
+                    last_state: Some(Arc::new(RemoteFullState {
+                        rows: 1,
+                        cols: 1,
+                        cursor_x: 0,
+                        cursor_y: 0,
+                        cursor_visible: true,
+                        cursor_blinking: false,
+                        cursor_style: 1,
+                        cells: vec![],
+                    })),
+                    pane_states: HashMap::from([(
+                        22,
+                        Arc::new(RemoteFullState {
+                            rows: 1,
+                            cols: 1,
+                            cursor_x: 0,
+                            cursor_y: 0,
+                            cursor_visible: true,
+                            cursor_blinking: false,
+                            cursor_style: 1,
+                            cells: vec![],
+                        }),
+                    )]),
+                    latest_input_seq: Some(9),
+                    expires_at: Instant::now() + REVIVABLE_ATTACHMENT_WINDOW,
+                },
+            )]),
+            auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
+            server_instance_id: "test-instance".to_string(),
+        }));
+        let server = RemoteServer {
+            state,
+            _listener: std::thread::spawn(|| {}),
+            _advertiser: None,
+            local_socket_path: None,
+        };
+
+        assert_eq!(
+            server.clients_snapshot(),
+            RemoteClientsSnapshot {
+                clients: Vec::new(),
+                revivable_attachments: vec![RevivableAttachmentInfo {
+                    attachment_id: 0xabc,
+                    session_id: 11,
+                    resume_token_present: true,
+                    has_cached_state: true,
+                    pane_state_count: 1,
+                    latest_input_seq: Some(9),
+                }],
+            }
         );
     }
 

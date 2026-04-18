@@ -26,8 +26,12 @@ import sys
 path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as handle:
     data = json.load(handle)
-if not isinstance(data, list):
-    raise SystemExit(f"expected list JSON from remote-clients, got: {type(data).__name__}")
+if not isinstance(data, dict):
+    raise SystemExit(f"expected object JSON from remote-clients, got: {type(data).__name__}")
+if not isinstance(data.get("clients"), list):
+    raise SystemExit("expected 'clients' list in remote-clients JSON")
+if not isinstance(data.get("revivable_attachments"), list):
+    raise SystemExit("expected 'revivable_attachments' list in remote-clients JSON")
 PY
 
 echo "remote clients snapshot: ${out_json}"

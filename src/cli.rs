@@ -195,10 +195,10 @@ where
             ensure_server_running(&socket_path, boo_config);
             let client = control::Client::connect(socket_path);
             match client.get_remote_clients() {
-                Ok(clients) => {
+                Ok(snapshot) => {
                     let mut stdout = std::io::stdout().lock();
                     use std::io::Write;
-                    if serde_json::to_writer_pretty(&mut stdout, &clients).is_err() {
+                    if serde_json::to_writer_pretty(&mut stdout, &snapshot).is_err() {
                         eprintln!("failed to serialize remote client diagnostics");
                         return Outcome::Exit(1);
                     }

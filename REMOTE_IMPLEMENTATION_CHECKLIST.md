@@ -119,6 +119,7 @@ Goal:
 - [x] Add client/server version handshake for remote desktop mode
 - [x] Detect incompatible local vs remote Boo versions before attach
 - [x] Produce a clear actionable error for version mismatch
+  - [x] restart a stale remote server on the configured socket when control version negotiation proves it is out of date
 
 ### 5. Verification
 
@@ -353,7 +354,7 @@ Goal:
 - [ ] Add structured remote transport logging
   - [x] log remote connect/auth/attach/revive/disconnect lifecycle events on the Rust server
 - [ ] Add per-connection and per-session diagnostic info
-  - [x] expose remote client diagnostics over the control socket and `boo remote-clients`
+  - [x] expose remote client and revivable-attachment diagnostics over the control socket and `boo remote-clients`
 - [ ] Add protocol/transport metrics useful for latency and reconnect debugging
   - [x] surface iOS client connect/auth/list/attach timing and heartbeat RTT in the debug summary
 

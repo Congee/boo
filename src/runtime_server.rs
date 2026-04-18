@@ -131,12 +131,22 @@ impl BooApp {
             server::Command::DumpKeys(enabled) => self.dump_keys = enabled,
             server::Command::Ping => {}
             server::Command::GetRemoteClients { reply } => {
-                let mut clients = self
-                    .remote_servers()
-                    .flat_map(|server| server.client_info())
-                    .collect::<Vec<_>>();
-                clients.sort_by_key(|client| client.client_id);
-                let _ = reply.send(control::Response::RemoteClients { clients });
+                let mut snapshot = crate::remote::RemoteClientsSnapshot {
+                    clients: Vec::new(),
+                    revivable_attachments: Vec::new(),
+                };
+                for server in self.remote_servers() {
+                    let server_snapshot = server.clients_snapshot();
+                    snapshot.clients.extend(server_snapshot.clients);
+                    snapshot
+                        .revivable_attachments
+                        .extend(server_snapshot.revivable_attachments);
+                }
+                snapshot.clients.sort_by_key(|client| client.client_id);
+                snapshot
+                    .revivable_attachments
+                    .sort_by_key(|attachment| attachment.attachment_id);
+                let _ = reply.send(control::Response::RemoteClients { snapshot });
             }
             server::Command::Quit => self.terminate(0),
             server::Command::ListSurfaces { reply } => {

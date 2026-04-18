@@ -72,7 +72,7 @@ pub enum Request {
 #[serde(untagged)]
 pub enum Response {
     Version { version: String },
-    RemoteClients { clients: Vec<crate::remote::RemoteClientInfo> },
+    RemoteClients { snapshot: crate::remote::RemoteClientsSnapshot },
     Surfaces { surfaces: Vec<SurfaceInfo> },
     Tabs { tabs: Vec<crate::tabs::TabInfo> },
     Clipboard { text: String },
@@ -371,9 +371,9 @@ impl Client {
         }
     }
 
-    pub fn get_remote_clients(&self) -> Result<Vec<crate::remote::RemoteClientInfo>, String> {
+    pub fn get_remote_clients(&self) -> Result<crate::remote::RemoteClientsSnapshot, String> {
         match self.request(&Request::GetRemoteClients)? {
-            Response::RemoteClients { clients } => Ok(clients),
+            Response::RemoteClients { snapshot } => Ok(snapshot),
             Response::Error { error } => Err(error),
             other => Err(format!("unexpected response: {other:?}")),
         }
@@ -1039,17 +1039,20 @@ mod tests {
             ControlCmd::GetRemoteClients { reply } => {
                 reply
                     .send(Response::RemoteClients {
-                        clients: vec![crate::remote::RemoteClientInfo {
-                            client_id: 7,
-                            authenticated: true,
-                            is_local: false,
-                            attached_session: Some(11),
-                            attachment_id: Some(0xabc),
-                            resume_token_present: true,
-                            has_cached_state: true,
-                            pane_state_count: 1,
-                            latest_input_seq: Some(9),
-                        }],
+                        snapshot: crate::remote::RemoteClientsSnapshot {
+                            clients: vec![crate::remote::RemoteClientInfo {
+                                client_id: 7,
+                                authenticated: true,
+                                is_local: false,
+                                attached_session: Some(11),
+                                attachment_id: Some(0xabc),
+                                resume_token_present: true,
+                                has_cached_state: true,
+                                pane_state_count: 1,
+                                latest_input_seq: Some(9),
+                            }],
+                            revivable_attachments: Vec::new(),
+                        },
                     })
                     .unwrap();
             }
@@ -1060,11 +1063,12 @@ mod tests {
         worker.join().unwrap();
 
         match response {
-            Response::RemoteClients { clients } => {
-                assert_eq!(clients.len(), 1);
-                assert_eq!(clients[0].client_id, 7);
-                assert_eq!(clients[0].attached_session, Some(11));
-                assert!(clients[0].resume_token_present);
+            Response::RemoteClients { snapshot } => {
+                assert_eq!(snapshot.clients.len(), 1);
+                assert_eq!(snapshot.clients[0].client_id, 7);
+                assert_eq!(snapshot.clients[0].attached_session, Some(11));
+                assert!(snapshot.clients[0].resume_token_present);
+                assert!(snapshot.revivable_attachments.is_empty());
             }
             other => panic!("unexpected response: {other:?}"),
         }
