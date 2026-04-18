@@ -37,7 +37,21 @@ SERVER_PID=$!
 rm -f "$AUTHLESS_SOCKET_PATH"
 target/debug/boo server --socket "$AUTHLESS_SOCKET_PATH" --remote-port "$AUTHLESS_PORT" >"$AUTHLESS_LOG_PATH" 2>&1 &
 AUTHLESS_SERVER_PID=$!
-sleep 1
+
+wait_for_port() {
+  local port="$1"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if nc -z 127.0.0.1 "$port" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "timed out waiting for 127.0.0.1:$port" >&2
+  return 1
+}
+
+wait_for_port "$PORT"
+wait_for_port "$AUTHLESS_PORT"
 
 python3 - "$PORT" "$AUTH_KEY" "$SOCKET_PATH" <<'PY'
 import hashlib
