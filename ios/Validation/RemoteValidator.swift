@@ -222,7 +222,7 @@ final class RemoteValidator {
         }
         try startConnection(host: host, port: port)
         sendMessage(type: .auth, payload: Data())
-        try waitUntilError("authentication failed")
+        try waitUntilAnyError(["authentication failed", "connection closed"])
     }
 
     private func startConnection(host: String, port: UInt16) throws {
@@ -563,6 +563,22 @@ final class RemoteValidator {
             Thread.sleep(forTimeInterval: 0.05)
         }
         throw ValidationError("timed out waiting for expected remote error: \(expected)")
+    }
+
+    private func waitUntilAnyError(_ expectedErrors: [String], timeout: TimeInterval = 5) throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            lock.lock()
+            let error = lastError
+            lock.unlock()
+            if let error, expectedErrors.contains(error) {
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        throw ValidationError(
+            "timed out waiting for one of expected remote errors: \(expectedErrors.joined(separator: ", "))"
+        )
     }
 
     private func clearLastError() {

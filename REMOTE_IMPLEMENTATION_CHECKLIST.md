@@ -351,6 +351,7 @@ Goal:
 ### 2. Observability
 
 - [ ] Add structured remote transport logging
+  - [x] log remote connect/auth/attach/revive/disconnect lifecycle events on the Rust server
 - [ ] Add per-connection and per-session diagnostic info
 - [ ] Add protocol/transport metrics useful for latency and reconnect debugging
   - [x] surface iOS client connect/auth/list/attach timing and heartbeat RTT in the debug summary

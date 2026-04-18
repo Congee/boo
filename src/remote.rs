@@ -353,6 +353,9 @@ impl RemoteServer {
                     );
                     (client_id, outbound_rx, authenticated)
                 };
+                log::info!(
+                    "remote tcp client connected: client_id={client_id} authenticated={authenticated}"
+                );
 
                 let Ok(writer_stream) = stream.try_clone() else {
                     let mut state = state_for_listener
@@ -431,6 +434,7 @@ impl RemoteServer {
                     );
                     (client_id, outbound_rx)
                 };
+                log::info!("remote local-stream client connected: client_id={client_id}");
 
                 let Ok(writer_stream) = stream.try_clone() else {
                     let mut state = state_for_listener
@@ -563,6 +567,10 @@ impl RemoteServer {
                 client.latest_input_seq = None;
             }
         });
+        log::info!(
+            "remote attach sent: client_id={client_id} session_id={session_id} attachment_id={attachment_id:?} resume_token_present={}",
+            attached_resume_token.is_some()
+        );
         if let Some(resume_token) = attached_resume_token {
             payload.extend_from_slice(&resume_token.to_le_bytes());
         }
@@ -591,14 +599,24 @@ impl RemoteServer {
                 && other_client.attachment_id == Some(attachment_id)
                 && other_client.attached_session.is_some()
         }) {
+            log::warn!(
+                "remote revive rejected: client_id={client_id} attachment_id={attachment_id} reason=already-active"
+            );
             return Err("attachment already active");
         }
         let revive = state.revivable_attachments.get(&attachment_id).cloned();
         if let Some(revive) = revive {
             if revive.session_id != session_id {
+                log::warn!(
+                    "remote revive rejected: client_id={client_id} attachment_id={attachment_id} reason=session-mismatch expected={} actual={session_id}",
+                    revive.session_id
+                );
                 return Err("attachment belongs to different session");
             }
             if resume_token != Some(revive.resume_token) {
+                log::warn!(
+                    "remote revive rejected: client_id={client_id} attachment_id={attachment_id} reason=resume-token-mismatch"
+                );
                 return Err("attachment resume token mismatch");
             }
             let _ = state.revivable_attachments.remove(&attachment_id);
@@ -611,11 +629,17 @@ impl RemoteServer {
             client.last_state = revive.last_state;
             client.pane_states = revive.pane_states;
             client.latest_input_seq = revive.latest_input_seq;
+            log::info!(
+                "remote revive restored: client_id={client_id} session_id={session_id} attachment_id={attachment_id}"
+            );
         } else {
             let Some(client) = state.clients.get_mut(&client_id) else {
                 return Err("unknown client");
             };
             client.resume_token = None;
+            log::info!(
+                "remote attach prepared without revive: client_id={client_id} session_id={session_id} attachment_id={attachment_id}"
+            );
         }
         Ok(())
     }
@@ -629,6 +653,7 @@ impl RemoteServer {
             client.pane_states.clear();
             client.latest_input_seq = None;
         });
+        log::info!("remote detached: client_id={client_id}");
         self.send_to_client(client_id, MessageType::Detached, Vec::new());
     }
 
@@ -1354,6 +1379,11 @@ fn read_loop(
                     expires_at: Instant::now() + REVIVABLE_ATTACHMENT_WINDOW,
                 },
             );
+            log::info!(
+                "remote client disconnected with revivable attachment: client_id={client_id} session_id={session_id} attachment_id={attachment_id}"
+            );
+        } else {
+            log::info!("remote client disconnected: client_id={client_id}");
         }
     }
 }
@@ -1373,6 +1403,7 @@ fn handle_auth_message(
 
     if auth_key.is_none() {
         client.authenticated = true;
+        log::info!("remote auth bypassed: client_id={client_id} mode=authless");
         let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
             MessageType::AuthOk,
             &encode_auth_ok_payload(&server_identity_id, &server_instance_id),
@@ -1390,10 +1421,12 @@ fn handle_auth_message(
             MessageType::AuthChallenge,
             &challenge,
         )));
+        log::info!("remote auth challenge issued: client_id={client_id}");
         return AuthHandling::Pending;
     }
 
     let Some(challenge) = client.challenge.take() else {
+        log::warn!("remote auth failed: client_id={client_id} reason=missing-challenge");
         let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
             MessageType::AuthFail,
             &[],
@@ -1401,6 +1434,7 @@ fn handle_auth_message(
         return AuthHandling::Disconnect;
     };
     if Instant::now() > challenge.expires_at {
+        log::warn!("remote auth failed: client_id={client_id} reason=expired-challenge");
         let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
             MessageType::AuthFail,
             &[],
@@ -1408,6 +1442,7 @@ fn handle_auth_message(
         return AuthHandling::Disconnect;
     }
     let Some(key) = auth_key else {
+        log::warn!("remote auth failed: client_id={client_id} reason=missing-auth-key");
         let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
             MessageType::AuthFail,
             &[],
@@ -1420,6 +1455,7 @@ fn handle_auth_message(
     match mac.verify_slice(payload) {
         Ok(()) => {
             client.authenticated = true;
+            log::info!("remote auth succeeded: client_id={client_id}");
             let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
                 MessageType::AuthOk,
                 &encode_auth_ok_payload(&server_identity_id, &server_instance_id),
@@ -1427,6 +1463,7 @@ fn handle_auth_message(
             AuthHandling::Authenticated
         }
         Err(_) => {
+            log::warn!("remote auth failed: client_id={client_id} reason=invalid-hmac");
             let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
                 MessageType::AuthFail,
                 &[],
