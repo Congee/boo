@@ -104,6 +104,9 @@ final class RemoteValidator {
     private var lastError: String?
     private var discoveredEndpoint: NWEndpoint?
     private var messageTrace: [String] = []
+    private var connectedHost: String?
+    private var connectedPort: UInt16?
+    private var connectionGeneration: UInt64 = 0
 
     init(authKey: String) {
         self.authKey = authKey.isEmpty ? nil : SymmetricKey(data: Data(authKey.utf8))
@@ -138,6 +141,10 @@ final class RemoteValidator {
     }
 
     func connect(host: String, port: UInt16) throws {
+        connectedHost = host
+        connectedPort = port
+        connectionGeneration &+= 1
+        let generation = connectionGeneration
         let semaphore = DispatchSemaphore(value: 0)
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
@@ -147,15 +154,16 @@ final class RemoteValidator {
             using: params
         )
         conn.stateUpdateHandler = { [weak self] state in
+            guard let self, self.connectionGeneration == generation else { return }
             switch state {
             case .ready:
-                self?.lock.lock()
-                self?.connected = true
-                self?.lock.unlock()
-                self?.readHeader()
+                self.lock.lock()
+                self.connected = true
+                self.lock.unlock()
+                self.readHeader(generation: generation)
                 semaphore.signal()
             case .failed(let error):
-                self?.setError("connection failed: \(error)")
+                self.setError("connection failed: \(error)")
                 semaphore.signal()
             default:
                 break
@@ -222,6 +230,18 @@ final class RemoteValidator {
             self.lastScreenText.contains(marker)
         }
 
+        try reconnectForResumeValidation()
+        sessionListReceived = false
+        sendMessage(type: .listSessions, payload: Data())
+        try waitUntil("session list after reconnect") { self.sessionListReceived }
+        sendMessage(type: .attach, payload: attachPayload)
+        try waitUntil("attach acknowledgement after reconnect") {
+            self.attachedSessionId == sessionId && self.attachmentId == expectedAttachmentId
+        }
+        try waitUntil("terminal state restore after reconnect", timeout: 8) {
+            self.lastScreenText.contains(marker)
+        }
+
         sendMessage(type: .detach, payload: Data())
         sendMessage(type: .destroy, payload: attachPayload)
     }
@@ -229,6 +249,30 @@ final class RemoteValidator {
     func disconnect() {
         connection?.cancel()
         connection = nil
+        connectionGeneration &+= 1
+    }
+
+    private func reconnectForResumeValidation() throws {
+        disconnect()
+        lock.lock()
+        connected = false
+        authenticated = false
+        protocolVersion = nil
+        transportCapabilities = 0
+        serverBuildId = nil
+        heartbeatAckReceived = false
+        sessionListReceived = false
+        attachedSessionId = nil
+        attachmentId = nil
+        screenUpdateReceived = false
+        lastError = nil
+        messageTrace.removeAll()
+        lock.unlock()
+        Thread.sleep(forTimeInterval: 0.2)
+        guard let connectedHost, let connectedPort else {
+            throw ValidationError("missing reconnect target")
+        }
+        try connect(host: connectedHost, port: connectedPort)
     }
 
     private func sendMessage(type: WireMessageType, payload: Data) {
@@ -246,9 +290,9 @@ final class RemoteValidator {
         })
     }
 
-    private func readHeader() {
+    private func readHeader(generation: UInt64) {
         connection?.receive(minimumIncompleteLength: 7, maximumLength: 7) { [weak self] content, _, complete, error in
-            guard let self else { return }
+            guard let self, self.connectionGeneration == generation else { return }
             if let error {
                 self.setError("receive failed: \(error)")
                 return
@@ -269,16 +313,16 @@ final class RemoteValidator {
             }
             if length == 0 {
                 self.handleMessage(type: type, payload: Data())
-                self.readHeader()
+                self.readHeader(generation: generation)
             } else {
-                self.readPayload(type: type, length: length)
+                self.readPayload(type: type, length: length, generation: generation)
             }
         }
     }
 
-    private func readPayload(type: UInt8, length: Int) {
+    private func readPayload(type: UInt8, length: Int, generation: UInt64) {
         connection?.receive(minimumIncompleteLength: length, maximumLength: length) { [weak self] content, _, complete, error in
-            guard let self else { return }
+            guard let self, self.connectionGeneration == generation else { return }
             if let error {
                 self.setError("receive failed: \(error)")
                 return
@@ -290,7 +334,7 @@ final class RemoteValidator {
                 return
             }
             self.handleMessage(type: type, payload: content)
-            self.readHeader()
+            self.readHeader(generation: generation)
         }
     }
 

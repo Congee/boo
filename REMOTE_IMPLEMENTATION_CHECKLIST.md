@@ -240,7 +240,7 @@ Goal:
   - SSH bootstrap then protocol upgrade
   - [x] direct client connect on the current native iOS path
   - version mismatch
-  - resume after temporary drop
+  - [x] resume after temporary drop within the revive window
 
 #### Manual UX
 
@@ -312,8 +312,8 @@ Goal:
 - [ ] Extend `scripts/test-ios-remote-view.sh` for the canonical protocol
   - [x] auth/list/create/attach/input/state-update validation on the current protocol
   - [x] authless direct-connect validation
-  - [ ] resume/reconnect validation
-- [ ] Add reconnect/resume validation for the iOS client
+  - [x] resume/reconnect validation
+- [x] Add reconnect/resume validation for the iOS client
 
 #### Manual UX
 
