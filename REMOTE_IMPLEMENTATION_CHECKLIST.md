@@ -209,8 +209,8 @@ Goal:
   - [x] direct iOS client sends periodic heartbeat frames
   - [x] server replies with heartbeat acknowledgements
 - [x] Implement heartbeat failure detection
-- [ ] Implement reconnect notification threshold
-- [ ] Implement reconnect deadline
+- [x] Implement reconnect notification threshold
+- [x] Implement reconnect deadline
 - [ ] Implement longer server-side session revival window
 - [x] Surface connection state transitions to clients
 
@@ -270,7 +270,7 @@ Goal:
 - [ ] Support reconnect/resume after:
   - app background/foreground
   - device sleep/wake
-  - network change
+  - [x] network change with bounded client retries
 
 ### 2. UX and Input
 

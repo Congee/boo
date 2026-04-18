@@ -219,7 +219,8 @@ struct SessionsScreen: View {
     private var subtitleText: String? {
         let base = monitor.lastHost.map { "Connected to \($0)" }
         let transport = transportSummary
-        let joined = [base, client.handshakeSummary, transport].compactMap { $0 }.joined(separator: " · ")
+        let reconnect = reconnectSummary
+        let joined = [base, client.handshakeSummary, transport, reconnect].compactMap { $0 }.joined(separator: " · ")
         return joined.isEmpty ? nil : joined
     }
 
@@ -231,6 +232,10 @@ struct SessionsScreen: View {
             )
             if case .degraded(let reason) = monitor.transportHealth {
                 transportBanner(reason: reason, color: KineticColor.tertiary)
+            } else if case .waiting(let attempt, _) = monitor.reconnectState {
+                transportBanner(reason: "Reconnecting (attempt \(attempt))", color: KineticColor.primary)
+            } else if case .failed(let reason) = monitor.reconnectState {
+                transportBanner(reason: "Reconnect failed: \(reason)", color: KineticColor.error)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: KineticSpacing.xl) {
@@ -280,6 +285,17 @@ struct SessionsScreen: View {
             return "transport degraded: \(reason)"
         case .lost(let reason):
             return "transport lost: \(reason)"
+        }
+    }
+
+    private var reconnectSummary: String? {
+        switch monitor.reconnectState {
+        case .idle:
+            return nil
+        case .waiting(let attempt, _):
+            return "reconnecting (\(attempt))"
+        case .failed(let reason):
+            return "reconnect failed: \(reason)"
         }
     }
 
@@ -372,7 +388,8 @@ struct TerminalSessionScreen: View {
     private var statusSubtitle: String? {
         let base = monitor.lastHost.map { "Attached to \($0)" }
         let transport = transportSummary
-        let joined = [base, client.handshakeSummary, transport].compactMap { $0 }.joined(separator: " · ")
+        let reconnect = reconnectSummary
+        let joined = [base, client.handshakeSummary, transport, reconnect].compactMap { $0 }.joined(separator: " · ")
         return joined.isEmpty ? nil : joined
     }
 
@@ -396,6 +413,17 @@ struct TerminalSessionScreen: View {
             return "transport degraded: \(reason)"
         case .lost(let reason):
             return "transport lost: \(reason)"
+        }
+    }
+
+    private var reconnectSummary: String? {
+        switch monitor.reconnectState {
+        case .idle:
+            return nil
+        case .waiting(let attempt, _):
+            return "reconnecting (\(attempt))"
+        case .failed(let reason):
+            return "reconnect failed: \(reason)"
         }
     }
 

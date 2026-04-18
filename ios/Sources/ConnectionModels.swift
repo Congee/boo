@@ -134,17 +134,30 @@ enum TransportHealth: Equatable {
     case lost(reason: String)
 }
 
+enum ReconnectState: Equatable {
+    case idle
+    case waiting(attempt: Int, nextRetryIn: TimeInterval)
+    case failed(reason: String)
+}
+
 @MainActor
 final class ConnectionMonitor: ObservableObject {
     @Published var status: ConnectionStatus = .disconnected
     @Published var transportHealth: TransportHealth = .idle
+    @Published var reconnectState: ReconnectState = .idle
 
     private let client: GSPClient
     private var cancellables = Set<AnyCancellable>()
     private var heartbeatTimer: AnyCancellable?
+    private var reconnectWorkItem: DispatchWorkItem?
 
     private static let degradedHeartbeatAge: TimeInterval = 8
     private static let lostHeartbeatAge: TimeInterval = 15
+    private static let reconnectDelay: TimeInterval = 2
+    private static let maxReconnectAttempts = 5
+
+    private var reconnectAllowed = false
+    private var reconnectAttempt = 0
 
     private(set) var lastHost: String?
     private(set) var lastPort: UInt16?
@@ -192,6 +205,12 @@ final class ConnectionMonitor: ObservableObject {
                 error: error,
                 lastHeartbeatAck: lastHeartbeatAck
             )
+            self.updateReconnectState(
+                connected: connected,
+                authenticated: authenticated,
+                sessionId: sessionId,
+                error: error
+            )
         }
         .store(in: &cancellables)
 
@@ -217,6 +236,8 @@ final class ConnectionMonitor: ObservableObject {
         currentNodeId = nodeId
         status = .connecting
         transportHealth = .idle
+        reconnectAllowed = true
+        cancelReconnect()
         client.connect(host: host, port: port, authKey: authKey)
     }
 
@@ -226,9 +247,12 @@ final class ConnectionMonitor: ObservableObject {
     }
 
     func disconnect() {
+        reconnectAllowed = false
+        cancelReconnect()
         client.disconnect()
         status = .disconnected
         transportHealth = .idle
+        reconnectState = .idle
         lastHost = nil
         lastPort = nil
         lastAuthKey = nil
@@ -272,5 +296,81 @@ final class ConnectionMonitor: ObservableObject {
         } else {
             transportHealth = .healthy
         }
+    }
+
+    private func updateReconnectState(
+        connected: Bool,
+        authenticated: Bool,
+        sessionId: UInt32?,
+        error: String?
+    ) {
+        if connected, (authenticated || sessionId != nil) {
+            cancelReconnect()
+            reconnectState = .idle
+            return
+        }
+        guard reconnectAllowed, lastHost != nil, lastPort != nil else {
+            reconnectState = .idle
+            return
+        }
+
+        let reconnectReason: String? = {
+            switch transportHealth {
+            case .lost(let reason):
+                return reason
+            default:
+                break
+            }
+            if let error, !connected {
+                return error
+            }
+            if case .connectionLost(let reason) = status {
+                return reason
+            }
+            return nil
+        }()
+
+        guard let reconnectReason else {
+            if case .waiting = reconnectState {
+                return
+            }
+            reconnectState = .idle
+            return
+        }
+
+        guard reconnectAttempt < Self.maxReconnectAttempts else {
+            reconnectState = .failed(reason: reconnectReason)
+            reconnectAllowed = false
+            cancelReconnect()
+            return
+        }
+
+        if case .waiting = reconnectState {
+            return
+        }
+
+        reconnectAttempt += 1
+        reconnectState = .waiting(attempt: reconnectAttempt, nextRetryIn: Self.reconnectDelay)
+        scheduleReconnect()
+    }
+
+    private func scheduleReconnect() {
+        cancelReconnect()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.reconnectAllowed,
+                  let host = self.lastHost,
+                  let port = self.lastPort else { return }
+            self.status = .connecting
+            self.client.connect(host: host, port: port, authKey: self.lastAuthKey ?? "")
+        }
+        reconnectWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.reconnectDelay, execute: workItem)
+    }
+
+    private func cancelReconnect() {
+        reconnectWorkItem?.cancel()
+        reconnectWorkItem = nil
+        reconnectAttempt = 0
     }
 }
