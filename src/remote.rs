@@ -2810,6 +2810,62 @@ mod tests {
     }
 
     #[test]
+    fn send_attached_for_remote_client_includes_resume_token() {
+        let (outbound, outbound_rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                7,
+                ClientState {
+                    outbound,
+                    authenticated: true,
+                    challenge: None,
+                    attached_session: None,
+                    attachment_id: None,
+                    resume_token: None,
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: false,
+                },
+            )]),
+            revivable_attachments: HashMap::new(),
+            auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
+            server_instance_id: "test-instance".to_string(),
+        }));
+        let server = RemoteServer {
+            state: Arc::clone(&state),
+            _listener: std::thread::spawn(|| {}),
+            _advertiser: None,
+            local_socket_path: None,
+        };
+
+        server.send_attached(7, 11, Some(0xabc));
+
+        let guard = state.lock().expect("remote server state poisoned");
+        let client = guard.clients.get(&7).expect("client state");
+        let resume_token = client.resume_token.expect("resume token");
+        assert_ne!(resume_token, 0);
+        drop(guard);
+
+        match outbound_rx.recv().expect("attached frame") {
+            OutboundMessage::Frame(frame) => {
+                let mut cursor = std::io::Cursor::new(frame);
+                let (ty, payload) = read_message(&mut cursor).expect("attached frame decode");
+                assert_eq!(ty, MessageType::Attached);
+                assert_eq!(payload.len(), 20);
+                assert_eq!(u32::from_le_bytes(payload[0..4].try_into().unwrap()), 11);
+                assert_eq!(u64::from_le_bytes(payload[4..12].try_into().unwrap()), 0xabc);
+                assert_eq!(u64::from_le_bytes(payload[12..20].try_into().unwrap()), resume_token);
+            }
+            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+        }
+    }
+
+    #[test]
     fn prepare_attachment_restores_revived_state_for_matching_identity() {
         let (tx, _rx) = mpsc::channel();
         let restored_state = Arc::new(RemoteFullState {
