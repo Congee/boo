@@ -166,6 +166,7 @@ final class GSPClient: ObservableObject {
     @Published var screen = ScreenState()
     @Published var attachedSessionId: UInt32?
     @Published var attachmentId: UInt64?
+    @Published var resumeToken: UInt64?
     @Published var lastError: String?
 
     private var connection: NWConnection?
@@ -176,6 +177,7 @@ final class GSPClient: ObservableObject {
     private var pendingHeartbeatToken: UInt64?
     private var desiredAttachedSessionId: UInt32?
     private var desiredAttachmentId: UInt64?
+    private var desiredResumeToken: UInt64?
     private var expectedServerIdentityId: String?
     private var connectionGeneration: UInt64 = 0
 
@@ -191,12 +193,14 @@ final class GSPClient: ObservableObject {
         }
         let heartbeat = lastHeartbeatRttMs.map { String(format: "hb %.0fms", $0) }
         let attachment = attachmentId.map { "attach 0x" + String($0, radix: 16) }
+        let resume = resumeToken.map { "resume 0x" + String($0, radix: 16) }
         let base = [ "proto \(protocolVersion)",
                      "caps 0x\(String(transportCapabilities, radix: 16))",
                      serverBuildId,
                      "id \(serverIdentityId)",
                      "srv \(serverInstanceId)",
-                     attachment].compactMap { $0 }.joined(separator: " · ")
+                     attachment,
+                     resume].compactMap { $0 }.joined(separator: " · ")
         if let heartbeat {
             return "\(base) · \(heartbeat)"
         }
@@ -249,8 +253,10 @@ final class GSPClient: ObservableObject {
         pendingHeartbeatToken = nil
         attachedSessionId = nil
         attachmentId = nil
+        resumeToken = nil
         desiredAttachedSessionId = nil
         desiredAttachmentId = nil
+        desiredResumeToken = nil
         sessions = []
         screen = ScreenState()
         stopHeartbeatLoop()
@@ -271,24 +277,30 @@ final class GSPClient: ObservableObject {
         let newAttachmentId = generateAttachmentId()
         desiredAttachedSessionId = sessionId
         desiredAttachmentId = newAttachmentId
+        desiredResumeToken = nil
         attachedSessionId = sessionId
         attachmentId = newAttachmentId
-        sendAttach(sessionId: sessionId, attachmentId: newAttachmentId)
+        resumeToken = nil
+        sendAttach(sessionId: sessionId, attachmentId: newAttachmentId, resumeToken: nil)
     }
 
-    func configureResumeAttachment(sessionId: UInt32, attachmentId: UInt64) {
+    func configureResumeAttachment(sessionId: UInt32, attachmentId: UInt64, resumeToken: UInt64) {
         desiredAttachedSessionId = sessionId
         desiredAttachmentId = attachmentId
+        desiredResumeToken = resumeToken
     }
 
     func configureTrustedServerIdentity(_ identityId: String?) {
         expectedServerIdentityId = identityId
     }
 
-    private func sendAttach(sessionId: UInt32, attachmentId: UInt64) {
-        var payload = Data(count: 12)
+    private func sendAttach(sessionId: UInt32, attachmentId: UInt64, resumeToken: UInt64?) {
+        var payload = Data(count: resumeToken == nil ? 12 : 20)
         payload.withUnsafeMutableBytes { $0.storeBytes(of: sessionId.littleEndian, as: UInt32.self) }
         payload.withUnsafeMutableBytes { $0.storeBytes(of: attachmentId.littleEndian, toByteOffset: 4, as: UInt64.self) }
+        if let resumeToken {
+            payload.withUnsafeMutableBytes { $0.storeBytes(of: resumeToken.littleEndian, toByteOffset: 12, as: UInt64.self) }
+        }
         sendMessage(type: .attach, payload: payload)
     }
 
@@ -305,8 +317,10 @@ final class GSPClient: ObservableObject {
         sendMessage(type: .detach, payload: Data())
         attachedSessionId = nil
         attachmentId = nil
+        resumeToken = nil
         desiredAttachedSessionId = nil
         desiredAttachmentId = nil
+        desiredResumeToken = nil
     }
 
     func sendInput(_ text: String) {
@@ -502,6 +516,7 @@ final class GSPClient: ObservableObject {
             serverIdentityId = nil
             attachedSessionId = nil
             attachmentId = nil
+            resumeToken = nil
             sessions = []
             screen = ScreenState()
         }
@@ -587,6 +602,7 @@ final class GSPClient: ObservableObject {
             ),
             attachedSessionId: attachedSessionId,
             attachmentId: attachmentId,
+            resumeToken: resumeToken,
             lastError: lastError
         )
         let wasAuthenticated = authenticated
@@ -609,6 +625,7 @@ final class GSPClient: ObservableObject {
         lastError = state.lastError
         attachedSessionId = state.attachedSessionId
         attachmentId = state.attachmentId
+        resumeToken = state.resumeToken
         applyDecodedSessions(state.sessions)
         if let decodedScreen = state.screen {
             applyDecodedScreen(decodedScreen)
@@ -635,6 +652,7 @@ final class GSPClient: ObservableObject {
         if message == .sessionList,
            let desiredSessionId = desiredAttachedSessionId,
            let desiredAttachmentId,
+           let desiredResumeToken,
            attachedSessionId == nil,
            sessions.contains(where: { $0.id == desiredSessionId }) {
             if serverIdentityMismatch(
@@ -644,7 +662,11 @@ final class GSPClient: ObservableObject {
                 lastError = "Server identity changed; refusing automatic resume"
                 return
             }
-            sendAttach(sessionId: desiredSessionId, attachmentId: desiredAttachmentId)
+            sendAttach(
+                sessionId: desiredSessionId,
+                attachmentId: desiredAttachmentId,
+                resumeToken: desiredResumeToken
+            )
         }
     }
 

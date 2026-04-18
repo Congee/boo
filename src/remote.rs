@@ -186,6 +186,7 @@ pub enum RemoteCmd {
         client_id: u64,
         session_id: u32,
         attachment_id: Option<u64>,
+        resume_token: Option<u64>,
     },
     Detach {
         client_id: u64,
@@ -242,6 +243,7 @@ struct ClientState {
     challenge: Option<[u8; 32]>,
     attached_session: Option<u32>,
     attachment_id: Option<u64>,
+    resume_token: Option<u64>,
     last_session_list_payload: Option<Vec<u8>>,
     last_ui_runtime_state_payload: Option<Vec<u8>>,
     last_ui_appearance_payload: Option<Vec<u8>>,
@@ -253,6 +255,7 @@ struct ClientState {
 
 struct RevivableAttachment {
     session_id: u32,
+    resume_token: u64,
     last_state: Option<Arc<RemoteFullState>>,
     pane_states: HashMap<u64, Arc<RemoteFullState>>,
     latest_input_seq: Option<u64>,
@@ -324,6 +327,7 @@ impl RemoteServer {
                             challenge: None,
                             attached_session: None,
                             attachment_id: None,
+                            resume_token: None,
                             last_session_list_payload: None,
                             last_ui_runtime_state_payload: None,
                             last_ui_appearance_payload: None,
@@ -401,6 +405,7 @@ impl RemoteServer {
                             challenge: None,
                             attached_session: None,
                             attachment_id: None,
+                            resume_token: None,
                             last_session_list_payload: None,
                             last_ui_runtime_state_payload: None,
                             last_ui_appearance_payload: None,
@@ -525,6 +530,7 @@ impl RemoteServer {
 
     pub fn send_attached(&self, client_id: u64, session_id: u32, attachment_id: Option<u64>) {
         let mut payload = session_id.to_le_bytes().to_vec();
+        let mut attached_resume_token = None;
         if let Some(attachment_id) = attachment_id {
             payload.extend_from_slice(&attachment_id.to_le_bytes());
         }
@@ -532,12 +538,20 @@ impl RemoteServer {
             let same_session = client.attached_session == Some(session_id);
             client.attached_session = Some(session_id);
             client.attachment_id = attachment_id;
+            client.resume_token = attachment_id.map(|_| {
+                let token = client.resume_token.unwrap_or_else(random_u64_nonzero);
+                attached_resume_token = Some(token);
+                token
+            });
             if !same_session {
                 client.last_state = None;
                 client.pane_states.clear();
                 client.latest_input_seq = None;
             }
         });
+        if let Some(resume_token) = attached_resume_token {
+            payload.extend_from_slice(&resume_token.to_le_bytes());
+        }
         self.send_to_client(client_id, MessageType::Attached, payload);
     }
 
@@ -546,6 +560,7 @@ impl RemoteServer {
         client_id: u64,
         session_id: u32,
         attachment_id: Option<u64>,
+        resume_token: Option<u64>,
     ) -> Result<(), &'static str> {
         let mut state = self.state.lock().expect("remote server state poisoned");
         Self::prune_revivable_attachments(&mut state);
@@ -572,11 +587,17 @@ impl RemoteServer {
             if revive.session_id != session_id {
                 return Err("attachment belongs to different session");
             }
+            if resume_token != Some(revive.resume_token) {
+                return Err("attachment resume token mismatch");
+            }
             client.attached_session = Some(session_id);
             client.attachment_id = Some(attachment_id);
+            client.resume_token = Some(revive.resume_token);
             client.last_state = revive.last_state;
             client.pane_states = revive.pane_states;
             client.latest_input_seq = revive.latest_input_seq;
+        } else {
+            client.resume_token = None;
         }
         Ok(())
     }
@@ -585,6 +606,7 @@ impl RemoteServer {
         self.update_client(client_id, |client| {
             client.attached_session = None;
             client.attachment_id = None;
+            client.resume_token = None;
             client.last_state = None;
             client.pane_states.clear();
             client.latest_input_seq = None;
@@ -1224,10 +1246,11 @@ fn read_loop(
         let command = match ty {
             MessageType::ListSessions => Some(RemoteCmd::ListSessions { client_id }),
             MessageType::Attach => {
-                parse_attach_request(&payload).map(|(session_id, attachment_id)| RemoteCmd::Attach {
+                parse_attach_request(&payload).map(|(session_id, attachment_id, resume_token)| RemoteCmd::Attach {
                     client_id,
                     session_id,
                     attachment_id,
+                    resume_token,
                 })
             }
             MessageType::Detach => Some(RemoteCmd::Detach { client_id }),
@@ -1295,13 +1318,14 @@ fn read_loop(
     if let Some(client) = state.clients.remove(&client_id) {
         RemoteServer::prune_revivable_attachments(&mut state);
         if !client.is_local
-            && let (Some(session_id), Some(attachment_id)) =
-                (client.attached_session, client.attachment_id)
+            && let (Some(session_id), Some(attachment_id), Some(resume_token)) =
+                (client.attached_session, client.attachment_id, client.resume_token)
         {
             state.revivable_attachments.insert(
                 attachment_id,
                 RevivableAttachment {
                     session_id,
+                    resume_token,
                     last_state: client.last_state,
                     pane_states: client.pane_states,
                     latest_input_seq: client.latest_input_seq,
@@ -1496,7 +1520,7 @@ fn parse_session_id(payload: &[u8]) -> Option<u32> {
         .then(|| u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]))
 }
 
-fn parse_attach_request(payload: &[u8]) -> Option<(u32, Option<u64>)> {
+fn parse_attach_request(payload: &[u8]) -> Option<(u32, Option<u64>, Option<u64>)> {
     let session_id = parse_session_id(payload)?;
     let attachment_id = (payload.len() >= 12).then(|| {
         u64::from_le_bytes([
@@ -1504,7 +1528,19 @@ fn parse_attach_request(payload: &[u8]) -> Option<(u32, Option<u64>)> {
             payload[11],
         ])
     });
-    Some((session_id, attachment_id))
+    let resume_token = (payload.len() >= 20).then(|| {
+        u64::from_le_bytes([
+            payload[12],
+            payload[13],
+            payload[14],
+            payload[15],
+            payload[16],
+            payload[17],
+            payload[18],
+            payload[19],
+        ])
+    });
+    Some((session_id, attachment_id, resume_token))
 }
 
 fn parse_pane_id(payload: &[u8]) -> Option<u64> {
@@ -1892,6 +1928,14 @@ fn random_instance_id() -> String {
         let _ = write!(&mut output, "{byte:02x}");
     }
     output
+}
+
+fn random_u64_nonzero() -> u64 {
+    let challenge = random_challenge();
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&challenge[..8]);
+    let value = u64::from_le_bytes(bytes);
+    if value == 0 { 1 } else { value }
 }
 
 fn load_or_create_daemon_identity() -> String {
@@ -2325,6 +2369,7 @@ mod tests {
                     challenge: None,
                     attached_session: None,
                     attachment_id: None,
+                    resume_token: None,
                     last_session_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
@@ -2363,6 +2408,7 @@ mod tests {
                     challenge: None,
                     attached_session: None,
                     attachment_id: None,
+                    resume_token: None,
                     last_session_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
@@ -2623,6 +2669,7 @@ mod tests {
                     challenge: None,
                     attached_session: Some(11),
                     attachment_id: None,
+                    resume_token: None,
                     last_session_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
@@ -2705,6 +2752,7 @@ mod tests {
                     challenge: None,
                     attached_session: None,
                     attachment_id: None,
+                    resume_token: None,
                     last_session_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
@@ -2718,6 +2766,7 @@ mod tests {
                 0xabc,
                 RevivableAttachment {
                     session_id: 11,
+                    resume_token: 0xdef,
                     last_state: Some(Arc::clone(&restored_state)),
                     pane_states: HashMap::new(),
                     latest_input_seq: Some(9),
@@ -2735,12 +2784,15 @@ mod tests {
             local_socket_path: None,
         };
 
-        server.prepare_attachment(1, 11, Some(0xabc)).expect("prepare attachment");
+        server
+            .prepare_attachment(1, 11, Some(0xabc), Some(0xdef))
+            .expect("prepare attachment");
 
         let guard = state.lock().expect("remote server state poisoned");
         let client = guard.clients.get(&1).expect("client state");
         assert_eq!(client.attached_session, Some(11));
         assert_eq!(client.attachment_id, Some(0xabc));
+        assert_eq!(client.resume_token, Some(0xdef));
         assert_eq!(client.latest_input_seq, Some(9));
         assert_eq!(client.last_state.as_deref(), Some(restored_state.as_ref()));
         assert!(!guard.revivable_attachments.contains_key(&0xabc));
@@ -2760,6 +2812,7 @@ mod tests {
                         challenge: None,
                         attached_session: Some(11),
                         attachment_id: Some(0xabc),
+                        resume_token: None,
                         last_session_list_payload: None,
                         last_ui_runtime_state_payload: None,
                         last_ui_appearance_payload: None,
@@ -2777,6 +2830,7 @@ mod tests {
                         challenge: None,
                         attached_session: None,
                         attachment_id: None,
+                        resume_token: None,
                         last_session_list_payload: None,
                         last_ui_runtime_state_payload: None,
                         last_ui_appearance_payload: None,
@@ -2800,7 +2854,7 @@ mod tests {
         };
 
         let error = server
-            .prepare_attachment(2, 11, Some(0xabc))
+            .prepare_attachment(2, 11, Some(0xabc), Some(0xdef))
             .expect_err("duplicate active attachment should fail");
         assert_eq!(error, "attachment already active");
     }
@@ -2819,6 +2873,7 @@ mod tests {
                     challenge: None,
                     attached_session: Some(11),
                     attachment_id: None,
+                    resume_token: None,
                         last_session_list_payload: None,
                         last_ui_runtime_state_payload: None,
                         last_ui_appearance_payload: None,
@@ -2836,6 +2891,7 @@ mod tests {
                     challenge: None,
                     attached_session: None,
                     attachment_id: None,
+                    resume_token: None,
                         last_session_list_payload: None,
                         last_ui_runtime_state_payload: None,
                         last_ui_appearance_payload: None,
@@ -2891,6 +2947,7 @@ mod tests {
                     challenge: None,
                     attached_session: Some(11),
                     attachment_id: None,
+                    resume_token: None,
                     last_session_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
@@ -2946,6 +3003,7 @@ mod tests {
                     challenge: None,
                     attached_session: Some(11),
                     attachment_id: None,
+                    resume_token: None,
                     last_session_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
@@ -3000,6 +3058,7 @@ mod tests {
                     challenge: None,
                     attached_session: Some(11),
                     attachment_id: None,
+                    resume_token: None,
                     last_session_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
@@ -3056,6 +3115,7 @@ mod tests {
                     challenge: None,
                     attached_session: None,
                     attachment_id: None,
+                    resume_token: None,
                     last_session_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
@@ -3097,6 +3157,7 @@ mod tests {
                         challenge: None,
                         attached_session: Some(11),
                         attachment_id: None,
+                        resume_token: None,
                         last_session_list_payload: None,
                         last_ui_runtime_state_payload: None,
                         last_ui_appearance_payload: None,
@@ -3114,6 +3175,7 @@ mod tests {
                         challenge: None,
                         attached_session: None,
                         attachment_id: None,
+                        resume_token: None,
                         last_session_list_payload: None,
                         last_ui_runtime_state_payload: None,
                         last_ui_appearance_payload: None,
@@ -3131,6 +3193,7 @@ mod tests {
                         challenge: None,
                         attached_session: Some(22),
                         attachment_id: None,
+                        resume_token: None,
                         last_session_list_payload: None,
                         last_ui_runtime_state_payload: None,
                         last_ui_appearance_payload: None,
@@ -3148,6 +3211,7 @@ mod tests {
                         challenge: None,
                         attached_session: Some(11),
                         attachment_id: None,
+                        resume_token: None,
                         last_session_list_payload: None,
                         last_ui_runtime_state_payload: None,
                         last_ui_appearance_payload: None,
@@ -3196,6 +3260,7 @@ mod tests {
                     challenge: None,
                     attached_session: Some(11),
                     attachment_id: None,
+                    resume_token: None,
                     last_session_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,

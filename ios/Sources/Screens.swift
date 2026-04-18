@@ -83,13 +83,15 @@ struct BooRootView: View {
                     identityId: serverIdentityId
                 )
                 if let sessionId = client.attachedSessionId,
-                   let attachmentId = client.attachmentId
+                   let attachmentId = client.attachmentId,
+                   let resumeToken = client.resumeToken
                 {
                     store.recordResumeAttachment(
                         host: host,
                         port: port,
                         sessionId: sessionId,
-                        attachmentId: attachmentId
+                        attachmentId: attachmentId,
+                        resumeToken: resumeToken
                     )
                 }
             }

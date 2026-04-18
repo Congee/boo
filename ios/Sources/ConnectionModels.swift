@@ -47,6 +47,7 @@ struct ConnectionHistoryEntry: Identifiable, Codable {
 struct ResumeAttachmentMetadata: Codable, Equatable {
     var sessionId: UInt32
     var attachmentId: UInt64
+    var resumeToken: UInt64
     var recordedAt: Date
 }
 
@@ -130,10 +131,11 @@ final class ConnectionStore: ObservableObject {
         saveTrustedServerIdentities()
     }
 
-    func recordResumeAttachment(host: String, port: UInt16, sessionId: UInt32, attachmentId: UInt64) {
+    func recordResumeAttachment(host: String, port: UInt16, sessionId: UInt32, attachmentId: UInt64, resumeToken: UInt64) {
         resumeAttachments["\(host):\(port)"] = ResumeAttachmentMetadata(
             sessionId: sessionId,
             attachmentId: attachmentId,
+            resumeToken: resumeToken,
             recordedAt: Date()
         )
         saveResumeAttachments()
@@ -324,7 +326,11 @@ final class ConnectionMonitor: ObservableObject {
         cancelReconnect()
         client.configureTrustedServerIdentity(store.trustedServerIdentity(host: host, port: port))
         if let resume = store.resumeAttachment(host: host, port: port) {
-            client.configureResumeAttachment(sessionId: resume.sessionId, attachmentId: resume.attachmentId)
+            client.configureResumeAttachment(
+                sessionId: resume.sessionId,
+                attachmentId: resume.attachmentId,
+                resumeToken: resume.resumeToken
+            )
         }
         client.connect(host: host, port: port, authKey: authKey)
     }

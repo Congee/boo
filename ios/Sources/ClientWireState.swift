@@ -44,6 +44,7 @@ struct ClientWireState: Equatable {
     var screen: DecodedWireScreenState?
     var attachedSessionId: UInt32?
     var attachmentId: UInt64?
+    var resumeToken: UInt64?
     var lastError: String?
 }
 
@@ -180,10 +181,14 @@ enum ClientWireReducer {
             state.attachmentId = payload.count >= 12 ? payload.withUnsafeBytes {
                 UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: 4, as: UInt64.self))
             } : nil
+            state.resumeToken = payload.count >= 20 ? payload.withUnsafeBytes {
+                UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: 12, as: UInt64.self))
+            } : nil
             return .none
         case .detached, .sessionExited:
             state.attachedSessionId = nil
             state.attachmentId = nil
+            state.resumeToken = nil
             return .none
         case .sessionCreated:
             guard payload.count >= 4 else { return .none }

@@ -158,6 +158,7 @@ final class RemoteValidator {
     private var sessions: [DecodedWireSessionInfo] = []
     private var attachedSessionId: UInt32?
     private var attachmentId: UInt64?
+    private var resumeToken: UInt64?
     private var createdSessionId: UInt32?
     private var screenState: DecodedWireScreenState?
     private var lastScreenText = ""
@@ -272,7 +273,12 @@ final class RemoteValidator {
         }
         sendMessage(type: .attach, payload: attachPayload)
         try waitUntil("attach acknowledgement") {
-            self.attachedSessionId == sessionId && self.attachmentId == expectedAttachmentId
+            self.attachedSessionId == sessionId
+                && self.attachmentId == expectedAttachmentId
+                && self.resumeToken != nil
+        }
+        guard let resumeToken = resumeToken else {
+            throw ValidationError("server did not return a resume token")
         }
         try waitUntil("initial terminal screen update after attach", timeout: 8) {
             self.screenUpdateReceived
@@ -295,9 +301,17 @@ final class RemoteValidator {
         sessionListReceived = false
         sendMessage(type: .listSessions, payload: Data())
         try waitUntil("session list after reconnect") { self.sessionListReceived }
-        sendMessage(type: .attach, payload: attachPayload)
+        var resumeAttachPayload = Data(count: 20)
+        resumeAttachPayload.withUnsafeMutableBytes { bytes in
+            bytes.storeBytes(of: sessionId.littleEndian, as: UInt32.self)
+            bytes.storeBytes(of: expectedAttachmentId.littleEndian, toByteOffset: 4, as: UInt64.self)
+            bytes.storeBytes(of: resumeToken.littleEndian, toByteOffset: 12, as: UInt64.self)
+        }
+        sendMessage(type: .attach, payload: resumeAttachPayload)
         try waitUntil("attach acknowledgement after reconnect") {
-            self.attachedSessionId == sessionId && self.attachmentId == expectedAttachmentId
+            self.attachedSessionId == sessionId
+                && self.attachmentId == expectedAttachmentId
+                && self.resumeToken == resumeToken
         }
         try waitUntil("terminal state restore after reconnect", timeout: 8) {
             self.lastScreenText.contains(marker)
@@ -327,6 +341,7 @@ final class RemoteValidator {
         sessionListReceived = false
         attachedSessionId = nil
         attachmentId = nil
+        resumeToken = nil
         screenUpdateReceived = false
         lastError = nil
         messageTrace.removeAll()
@@ -458,6 +473,9 @@ final class RemoteValidator {
             attachmentId = payload.count >= 12 ? payload.withUnsafeBytes {
                 UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: 4, as: UInt64.self))
             } : nil
+            resumeToken = payload.count >= 20 ? payload.withUnsafeBytes {
+                UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: 12, as: UInt64.self))
+            } : nil
         case .fullState:
             screenUpdateReceived = true
             if let screen = WireCodec.decodeFullState(payload) {
@@ -496,7 +514,7 @@ final class RemoteValidator {
         let screenSnippet = lastScreenText
             .replacingOccurrences(of: "\n", with: "\\n")
             .prefix(160)
-        let stateSummary = "authenticated=\(authenticated) heartbeatAckReceived=\(heartbeatAckReceived) sessionListReceived=\(sessionListReceived) sessions=\(sessions.count) createdSessionId=\(String(describing: createdSessionId)) attachedSessionId=\(String(describing: attachedSessionId)) attachmentId=\(String(describing: attachmentId)) buildId=\(serverBuildId ?? "nil") serverIdentityId=\(serverIdentityId ?? "nil") serverInstanceId=\(serverInstanceId ?? "nil") screenUpdateReceived=\(screenUpdateReceived) screen=\"\(screenSnippet)\" trace=\(messageTrace.joined(separator: ","))"
+        let stateSummary = "authenticated=\(authenticated) heartbeatAckReceived=\(heartbeatAckReceived) sessionListReceived=\(sessionListReceived) sessions=\(sessions.count) createdSessionId=\(String(describing: createdSessionId)) attachedSessionId=\(String(describing: attachedSessionId)) attachmentId=\(String(describing: attachmentId)) resumeToken=\(String(describing: resumeToken)) buildId=\(serverBuildId ?? "nil") serverIdentityId=\(serverIdentityId ?? "nil") serverInstanceId=\(serverInstanceId ?? "nil") screenUpdateReceived=\(screenUpdateReceived) screen=\"\(screenSnippet)\" trace=\(messageTrace.joined(separator: ","))"
         lock.unlock()
         throw ValidationError("timed out waiting for \(description) (\(stateSummary))")
     }

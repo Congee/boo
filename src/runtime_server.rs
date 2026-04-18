@@ -355,6 +355,7 @@ impl BooApp {
                 client_id,
                 session_id,
                 attachment_id,
+                resume_token,
             } => {
                 if self.pane_for_session(session_id).is_some() {
                     self.invalidate_remote_sessions_cache();
@@ -369,7 +370,12 @@ impl BooApp {
                         .or(self.server.remote_server.as_ref())
                     {
                         if let Err(message) =
-                            server.prepare_attachment(client_id, session_id, attachment_id)
+                            server.prepare_attachment(
+                                client_id,
+                                session_id,
+                                attachment_id,
+                                resume_token,
+                            )
                         {
                             server.send_error(client_id, message);
                             return;
