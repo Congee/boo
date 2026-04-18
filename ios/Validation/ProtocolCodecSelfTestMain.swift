@@ -153,6 +153,22 @@ struct ProtocolCodecSelfTestMain {
         assertEqual(attachedEffect, .none, "attached has no side effect")
         assertEqual(clientState.attachedSessionId, 42, "attached stores session id")
 
+        var attachedWithResumePayload = Data(count: 20)
+        attachedWithResumePayload.withUnsafeMutableBytes { bytes in
+            bytes.storeBytes(of: UInt32(42).littleEndian, as: UInt32.self)
+            bytes.storeBytes(of: UInt64(0xB001D00DCAFEBEEF).littleEndian, toByteOffset: 4, as: UInt64.self)
+            bytes.storeBytes(of: UInt64(0x0BADF00DDEADC0DE).littleEndian, toByteOffset: 12, as: UInt64.self)
+        }
+        let attachedWithResumeEffect = ClientWireReducer.reduce(
+            message: .attached,
+            payload: attachedWithResumePayload,
+            state: &clientState
+        )
+        assertEqual(attachedWithResumeEffect, .none, "attached with resume token has no side effect")
+        assertEqual(clientState.attachedSessionId, 42, "attached with resume token stores session id")
+        assertEqual(clientState.attachmentId, 0xB001D00DCAFEBEEF, "attached with resume token stores attachment id")
+        assertEqual(clientState.resumeToken, 0x0BADF00DDEADC0DE, "attached with resume token stores resume token")
+
         clientState.screen = state
         let deltaEffect = ClientWireReducer.reduce(message: .delta, payload: makeDeltaPayload(), state: &clientState)
         assertEqual(deltaEffect, .none, "delta has no side effect")

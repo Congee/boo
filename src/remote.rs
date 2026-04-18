@@ -253,6 +253,7 @@ struct ClientState {
     is_local: bool,
 }
 
+#[derive(Clone)]
 struct RevivableAttachment {
     session_id: u32,
     resume_token: u64,
@@ -579,10 +580,7 @@ impl RemoteServer {
         }) {
             return Err("attachment already active");
         }
-        let revive = state.revivable_attachments.remove(&attachment_id);
-        let Some(client) = state.clients.get_mut(&client_id) else {
-            return Err("unknown client");
-        };
+        let revive = state.revivable_attachments.get(&attachment_id).cloned();
         if let Some(revive) = revive {
             if revive.session_id != session_id {
                 return Err("attachment belongs to different session");
@@ -590,6 +588,10 @@ impl RemoteServer {
             if resume_token != Some(revive.resume_token) {
                 return Err("attachment resume token mismatch");
             }
+            let _ = state.revivable_attachments.remove(&attachment_id);
+            let Some(client) = state.clients.get_mut(&client_id) else {
+                return Err("unknown client");
+            };
             client.attached_session = Some(session_id);
             client.attachment_id = Some(attachment_id);
             client.resume_token = Some(revive.resume_token);
@@ -597,6 +599,9 @@ impl RemoteServer {
             client.pane_states = revive.pane_states;
             client.latest_input_seq = revive.latest_input_seq;
         } else {
+            let Some(client) = state.clients.get_mut(&client_id) else {
+                return Err("unknown client");
+            };
             client.resume_token = None;
         }
         Ok(())
@@ -2857,6 +2862,63 @@ mod tests {
             .prepare_attachment(2, 11, Some(0xabc), Some(0xdef))
             .expect_err("duplicate active attachment should fail");
         assert_eq!(error, "attachment already active");
+    }
+
+    #[test]
+    fn prepare_attachment_rejects_wrong_resume_token() {
+        let (tx, _rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: tx,
+                    authenticated: true,
+                    challenge: None,
+                    attached_session: None,
+                    attachment_id: None,
+                    resume_token: None,
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: false,
+                },
+            )]),
+            revivable_attachments: HashMap::from([(
+                0xabc,
+                RevivableAttachment {
+                    session_id: 11,
+                    resume_token: 0xdef,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    expires_at: Instant::now() + REVIVABLE_ATTACHMENT_WINDOW,
+                },
+            )]),
+            auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
+            server_instance_id: "test-instance".to_string(),
+        }));
+        let server = RemoteServer {
+            state: Arc::clone(&state),
+            _listener: std::thread::spawn(|| {}),
+            _advertiser: None,
+            local_socket_path: None,
+        };
+
+        let error = server
+            .prepare_attachment(1, 11, Some(0xabc), Some(0x123))
+            .expect_err("wrong resume token should fail");
+        assert_eq!(error, "attachment resume token mismatch");
+        assert!(
+            state
+                .lock()
+                .expect("remote server state poisoned")
+                .revivable_attachments
+                .contains_key(&0xabc)
+        );
     }
 
     #[test]
