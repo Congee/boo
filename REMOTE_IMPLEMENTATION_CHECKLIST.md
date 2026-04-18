@@ -168,7 +168,7 @@ Goal:
   - [x] protocol version
   - [x] server version/build identifier
   - [x] transport capabilities
-  - [ ] reconnect/resume capabilities
+  - [x] reconnect/resume capabilities
 - [ ] Reject incompatible peers early and clearly
   - [x] iOS client rejects malformed or unsupported `AuthOk` metadata before issuing protocol side effects
   - [ ] desktop and all future direct clients enforce the same rejection rules
@@ -198,7 +198,7 @@ Goal:
 ### 4. Resume and Reconnect
 
 - [x] Add client attachment identity separate from session identity
-- [ ] Add resumable attach tokens/metadata
+- [x] Add resumable attach tokens/metadata
 - [x] Support reconnect to the same attachment within the allowed revive window
 - [x] Prevent duplicate or phantom attachments after reconnect
 - [x] Carry enough state for clients to resume without a full destructive reset when possible
@@ -221,8 +221,9 @@ Goal:
   - [x] persist and warn on daemon instance-id changes for known iOS endpoints
   - [x] allow users to trust the current daemon instance for a known iOS endpoint
 - [ ] Ensure bootstrap credentials are replay-resistant and bounded
-- [ ] Ensure resumed connections cannot hijack unrelated sessions
+- [x] Ensure resumed connections cannot hijack unrelated sessions
   - [x] refuse automatic iOS resume when a known endpoint presents a different daemon identity
+  - [x] require a server-issued resume token in addition to attachment identity
 
 ### 7. Verification
 
@@ -232,6 +233,7 @@ Goal:
   - [x] handshake
   - [x] capability negotiation
   - [x] reconnect/resume attachment restore primitives
+  - [x] resume-token rejection and recovery
   - multiplexed channels
   - [x] heartbeat request/ack round-trip
   - heartbeat loss and recovery
