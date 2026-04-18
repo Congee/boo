@@ -1654,14 +1654,16 @@ fn should_disconnect_idle_client(state: &Arc<Mutex<State>>, client_id: u64) -> O
         }
         return None;
     }
+    // Absolute deadline from connect time. This runs even when a challenge is
+    // outstanding so a client cannot keep the socket pinned by sending empty `Auth`
+    // frames that refresh `challenge.expires_at` indefinitely.
+    if now.saturating_duration_since(client.connected_at) > AUTH_CHALLENGE_WINDOW {
+        return Some("auth-timeout");
+    }
     if let Some(challenge) = client.challenge {
         if now > challenge.expires_at {
             return Some("challenge-timeout");
         }
-        return None;
-    }
-    if now.saturating_duration_since(client.connected_at) > AUTH_CHALLENGE_WINDOW {
-        return Some("auth-timeout");
     }
     None
 }
@@ -3355,33 +3357,87 @@ pub fn load_or_create_daemon_identity_material() -> DaemonIdentityMaterial {
 fn load_or_create_daemon_identity_material_at(dir: &Path) -> DaemonIdentityMaterial {
     let key_path = dir.join("key.pem");
     let cert_path = dir.join("cert.pem");
-    if let (Ok(key_pem), Ok(cert_pem)) = (
-        std::fs::read_to_string(&key_path),
-        std::fs::read_to_string(&cert_path),
-    ) {
-        if let Ok(keypair) = rcgen::KeyPair::from_pem(&key_pem) {
-            let identity_id = derive_identity_id(keypair.public_key_der());
-            return DaemonIdentityMaterial {
-                identity_id,
-                key_pem,
-                cert_pem,
-            };
-        }
+
+    if let Some(material) = try_load_validated_identity(&key_path, &cert_path) {
+        return material;
     }
+
     let material = generate_daemon_identity_material();
-    let _ = std::fs::create_dir_all(dir);
-    if std::fs::write(&key_path, &material.key_pem).is_ok() {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(
-                &key_path,
-                std::fs::Permissions::from_mode(0o600),
-            );
-        }
+    if let Err(error) = persist_daemon_identity(dir, &material) {
+        log::warn!(
+            "failed to persist remote daemon identity at {}: {error}",
+            dir.display()
+        );
     }
-    let _ = std::fs::write(&cert_path, &material.cert_pem);
     material
+}
+
+/// Load a previously-persisted daemon identity pair and verify that the cert's
+/// `SubjectPublicKeyInfo` hash matches the key's. A mismatch means the two files drifted
+/// (partial write, manual edit, disk corruption) and the stored pair cannot be trusted as
+/// a stable pin anchor, so the caller regenerates instead of silently rotating the
+/// identity.
+fn try_load_validated_identity(
+    key_path: &Path,
+    cert_path: &Path,
+) -> Option<DaemonIdentityMaterial> {
+    let key_pem = std::fs::read_to_string(key_path).ok()?;
+    let cert_pem = std::fs::read_to_string(cert_path).ok()?;
+    let keypair = rcgen::KeyPair::from_pem(&key_pem).ok()?;
+    let key_spki: Vec<u8> = keypair.public_key_der();
+
+    let cert_ders: Vec<_> = rustls_pemfile::certs(&mut cert_pem.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    let cert_der = cert_ders.first()?;
+    let cert_spki = extract_cert_spki_der(cert_der.as_ref()).ok()?;
+    if cert_spki != key_spki {
+        log::warn!(
+            "remote daemon cert/key SPKI mismatch at {}: regenerating identity pair",
+            key_path.parent().unwrap_or(key_path).display()
+        );
+        return None;
+    }
+
+    let identity_id = derive_identity_id(key_spki);
+    Some(DaemonIdentityMaterial {
+        identity_id,
+        key_pem,
+        cert_pem,
+    })
+}
+
+/// Persist a daemon identity pair via temp-file + rename. Errors surface to the caller
+/// instead of being silently dropped: the daemon may continue with the in-memory
+/// material for the current process, but the next restart can then retry persistence
+/// rather than masking disk-full or permission issues.
+fn persist_daemon_identity(dir: &Path, material: &DaemonIdentityMaterial) -> io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let key_path = dir.join("key.pem");
+    let cert_path = dir.join("cert.pem");
+    let key_tmp = dir.join("key.pem.tmp");
+    let cert_tmp = dir.join("cert.pem.tmp");
+
+    write_and_fsync(&key_tmp, material.key_pem.as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&key_tmp, std::fs::Permissions::from_mode(0o600))?;
+    }
+    write_and_fsync(&cert_tmp, material.cert_pem.as_bytes())?;
+    // Rename order is not load-atomic across the two files, but the SPKI validation
+    // in try_load_validated_identity catches any mismatch after a partial rename and
+    // forces regeneration — preventing silent identity rotation or startup failure.
+    std::fs::rename(&cert_tmp, &cert_path)?;
+    std::fs::rename(&key_tmp, &key_path)?;
+    Ok(())
+}
+
+fn write_and_fsync(path: &Path, data: &[u8]) -> io::Result<()> {
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(data)?;
+    file.sync_all()?;
+    Ok(())
 }
 
 fn serve_incoming_tcp_client(
@@ -5737,6 +5793,55 @@ mod tests {
     }
 
     #[test]
+    fn should_disconnect_idle_client_enforces_absolute_auth_deadline() {
+        // Simulates an attacker that keeps refreshing the HMAC challenge past
+        // AUTH_CHALLENGE_WINDOW. The client HAS an active challenge (expires in the
+        // future) but its connected_at is already older than the window. Absent the
+        // absolute deadline, should_disconnect_idle_client would return None and the
+        // socket would stay pinned forever.
+        let (outbound_tx, _outbound_rx) = mpsc::channel();
+        let now = Instant::now();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: outbound_tx,
+                    authenticated: false,
+                    challenge: Some(AuthChallengeState {
+                        bytes: [0u8; 32],
+                        // Fresh challenge — not expired on its own.
+                        expires_at: now + AUTH_CHALLENGE_WINDOW,
+                    }),
+                    connected_at: now - AUTH_CHALLENGE_WINDOW - Duration::from_secs(1),
+                    authenticated_at: None,
+                    last_heartbeat_at: None,
+                    attached_session: None,
+                    attachment_id: None,
+                    resume_token: None,
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: false,
+                },
+            )]),
+            revivable_attachments: HashMap::new(),
+            auth_key: Some(b"test-key".to_vec()),
+            server_identity_id: "test-daemon".to_string(),
+            server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
+        }));
+
+        assert_eq!(
+            should_disconnect_idle_client(&state, 1),
+            Some("auth-timeout"),
+            "clients past the absolute auth deadline must be disconnected even with a fresh challenge",
+        );
+    }
+
+    #[test]
     fn serve_incoming_tcp_client_completes_tls_handshake_and_auth() {
         use std::net::{TcpListener, TcpStream};
 
@@ -5813,6 +5918,41 @@ mod tests {
 
         drop(tls_stream);
         let _ = server_handle.join();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn daemon_identity_material_regenerates_on_cert_key_spki_mismatch() {
+        // Write a valid key.pem from keypair A but a valid cert.pem from keypair B.
+        // The pair is well-formed individually but the SPKI hashes do not match, so
+        // a stable-pin trust decision cannot be made and the loader must regenerate.
+        let dir = unique_identity_dir("spki-mismatch");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create dir");
+
+        let material_a = generate_daemon_identity_material();
+        let material_b = generate_daemon_identity_material();
+        assert_ne!(
+            material_a.identity_id, material_b.identity_id,
+            "test fixture requires distinct keypairs"
+        );
+        std::fs::write(dir.join("key.pem"), &material_a.key_pem).expect("write key");
+        std::fs::write(dir.join("cert.pem"), &material_b.cert_pem).expect("write cert");
+
+        let loaded = load_or_create_daemon_identity_material_at(&dir);
+        assert_ne!(
+            loaded.identity_id, material_a.identity_id,
+            "mismatched pair must not be accepted as identity A"
+        );
+        assert_ne!(
+            loaded.identity_id, material_b.identity_id,
+            "mismatched pair must not be accepted as identity B"
+        );
+
+        // Sanity: the newly-written pair must now validate on reload.
+        let reload = load_or_create_daemon_identity_material_at(&dir);
+        assert_eq!(reload.identity_id, loaded.identity_id);
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
