@@ -185,7 +185,7 @@ Goal:
   - input/resize
   - health/heartbeat
   - resume metadata
-- [ ] Preserve the existing control/stream semantics at the protocol level, even if they no longer require two physical sockets
+- [x] Preserve the existing control/stream semantics at the protocol level, even if they no longer require two physical sockets
 
 ### 3. Transport Backends
 
