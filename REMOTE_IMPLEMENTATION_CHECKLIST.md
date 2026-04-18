@@ -274,6 +274,7 @@ Goal:
   - [x] resume token / reconnect metadata
 - [ ] Support direct connection to the canonical remote endpoint
   - [x] auth-protected direct connect
+  - [x] wrong-key direct-auth rejection validation
   - [x] authless direct connect
 - [ ] Support reconnect/resume after:
   - [x] app background/foreground
@@ -318,6 +319,7 @@ Goal:
 
 - [ ] Extend `scripts/test-ios-remote-view.sh` for the canonical protocol
   - [x] auth/list/create/attach/input/state-update validation on the current protocol
+  - [x] wrong-key auth rejection validation
   - [x] authless direct-connect validation
   - [x] resume/reconnect validation
 - [x] Add reconnect/resume validation for the iOS client

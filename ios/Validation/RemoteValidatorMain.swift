@@ -14,8 +14,12 @@ struct RemoteValidatorMain {
                     FileHandle.standardError.write(Data("warning: Bonjour discovery did not resolve within timeout\n".utf8))
                 }
             }
-            try validator.connect(host: args.host, port: args.port)
-            try validator.validateRoundTrip()
+            if args.expectAuthFailure {
+                try validator.validateAuthenticationFailure(host: args.host, port: args.port)
+            } else {
+                try validator.connect(host: args.host, port: args.port)
+                try validator.validateRoundTrip()
+            }
             validator.disconnect()
             print("iOS remote daemon validation passed")
         } catch {

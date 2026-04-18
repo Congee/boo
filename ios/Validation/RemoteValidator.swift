@@ -203,6 +203,29 @@ final class RemoteValidator {
     }
 
     func connect(host: String, port: UInt16) throws {
+        try startConnection(host: host, port: port)
+        if authKey != nil {
+            sendMessage(type: .auth, payload: Data())
+            try waitUntil("authentication") { self.authenticated }
+        } else {
+            authenticated = true
+        }
+        heartbeatAckReceived = false
+        expectedHeartbeatPayload = Data(withUnsafeBytes(of: UInt64(0x424f4f5f50494e47).littleEndian, Array.init))
+        sendMessage(type: .heartbeat, payload: expectedHeartbeatPayload)
+        try waitUntil("heartbeat acknowledgement") { self.heartbeatAckReceived }
+    }
+
+    func validateAuthenticationFailure(host: String, port: UInt16) throws {
+        guard authKey != nil else {
+            throw ValidationError("authentication-failure validation requires an auth key")
+        }
+        try startConnection(host: host, port: port)
+        sendMessage(type: .auth, payload: Data())
+        try waitUntilError("authentication failed")
+    }
+
+    private func startConnection(host: String, port: UInt16) throws {
         connectedHost = host
         connectedPort = port
         connectionGeneration &+= 1
@@ -237,16 +260,6 @@ final class RemoteValidator {
             throw ValidationError("timed out connecting to Boo daemon")
         }
         try throwIfError()
-        if authKey != nil {
-            sendMessage(type: .auth, payload: Data())
-            try waitUntil("authentication") { self.authenticated }
-        } else {
-            authenticated = true
-        }
-        heartbeatAckReceived = false
-        expectedHeartbeatPayload = Data(withUnsafeBytes(of: UInt64(0x424f4f5f50494e47).littleEndian, Array.init))
-        sendMessage(type: .heartbeat, payload: expectedHeartbeatPayload)
-        try waitUntil("heartbeat acknowledgement") { self.heartbeatAckReceived }
     }
 
     func validateRoundTrip() throws {
@@ -570,11 +583,12 @@ struct ValidationError: Error, CustomStringConvertible {
     init(_ description: String) { self.description = description }
 }
 
-func resolveRemoteValidatorArgs() -> (host: String, port: UInt16, authKey: String, checkDiscovery: Bool) {
+func resolveRemoteValidatorArgs() -> (host: String, port: UInt16, authKey: String, checkDiscovery: Bool, expectAuthFailure: Bool) {
     var host = "127.0.0.1"
     var port: UInt16 = 7337
     var authKey = ""
     var checkDiscovery = false
+    var expectAuthFailure = false
     var index = 1
     while index < CommandLine.arguments.count {
         switch CommandLine.arguments[index] {
@@ -589,10 +603,12 @@ func resolveRemoteValidatorArgs() -> (host: String, port: UInt16, authKey: Strin
             authKey = CommandLine.arguments[index]
         case "--check-discovery":
             checkDiscovery = true
+        case "--expect-auth-failure":
+            expectAuthFailure = true
         default:
             break
         }
         index += 1
     }
-    return (host, port, authKey, checkDiscovery)
+    return (host, port, authKey, checkDiscovery, expectAuthFailure)
 }

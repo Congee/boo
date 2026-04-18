@@ -59,6 +59,12 @@ swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
   --auth-key "$AUTH_KEY" \
   --check-discovery
 
+"$VALIDATOR_BIN" \
+  --host 127.0.0.1 \
+  --port "$PORT" \
+  --auth-key "${AUTH_KEY}-wrong" \
+  --expect-auth-failure
+
 AUTHLESS_SERVER_PID="$(start_server "$AUTHLESS_SOCKET_PATH" "$AUTHLESS_PORT" "" /tmp/boo-ios-remote-authless-server.log)"
 sleep 1
 "$VALIDATOR_BIN" \
