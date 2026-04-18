@@ -179,12 +179,12 @@ Goal:
 ### 2. Connection Model
 
 - [ ] Implement one encrypted Boo-native connection per attached client
-- [ ] Keep logical multiplexing for:
-  - control RPCs
-  - terminal/session stream
-  - input/resize
-  - health/heartbeat
-  - resume metadata
+- [x] Keep logical multiplexing for:
+  - [x] control RPCs
+  - [x] terminal/session stream
+  - [x] input/resize
+  - [x] health/heartbeat
+  - [x] resume metadata
 - [x] Preserve the existing control/stream semantics at the protocol level, even if they no longer require two physical sockets
 
 ### 3. Transport Backends
@@ -239,7 +239,7 @@ Goal:
   - [x] capability negotiation
   - [x] reconnect/resume attachment restore primitives
   - [x] resume-token rejection and recovery
-  - multiplexed channels
+  - [x] multiplexed channels
   - [x] heartbeat request/ack round-trip
   - [x] heartbeat loss and recovery
   - transport fallback

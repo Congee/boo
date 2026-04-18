@@ -99,6 +99,54 @@ pub enum MessageType {
     HeartbeatAck = 0x92,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogicalChannel {
+    Control,
+    SessionStream,
+    InputControl,
+    Health,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub const fn logical_channel_for_message_type(message_type: MessageType) -> LogicalChannel {
+    match message_type {
+        MessageType::Auth
+        | MessageType::AuthChallenge
+        | MessageType::AuthOk
+        | MessageType::AuthFail
+        | MessageType::ListSessions
+        | MessageType::SessionList
+        | MessageType::Create
+        | MessageType::SessionCreated
+        | MessageType::Destroy
+        | MessageType::SessionExited
+        | MessageType::ErrorMsg => LogicalChannel::Control,
+        MessageType::Attach
+        | MessageType::Attached
+        | MessageType::Detach
+        | MessageType::Detached
+        | MessageType::FullState
+        | MessageType::Delta
+        | MessageType::ScrollData
+        | MessageType::UiRuntimeState
+        | MessageType::UiAppearance
+        | MessageType::UiPaneFullState
+        | MessageType::UiPaneDelta => LogicalChannel::SessionStream,
+        MessageType::Input
+        | MessageType::Resize
+        | MessageType::Scroll
+        | MessageType::Key
+        | MessageType::ExecuteCommand
+        | MessageType::AppAction
+        | MessageType::AppKeyEvent
+        | MessageType::AppMouseEvent
+        | MessageType::FocusPane => LogicalChannel::InputControl,
+        MessageType::Heartbeat | MessageType::HeartbeatAck => LogicalChannel::Health,
+        MessageType::Clipboard | MessageType::Image => LogicalChannel::SessionStream,
+    }
+}
+
 impl TryFrom<u8> for MessageType {
     type Error = ();
 
@@ -3142,6 +3190,47 @@ mod tests {
                 Some("deadbeefcafebabe".to_string()),
                 Some("daemon-identity-01".to_string()),
             ))
+        );
+    }
+
+    #[test]
+    fn logical_channel_mapping_matches_current_message_families() {
+        assert_eq!(logical_channel_for_message_type(MessageType::Auth), LogicalChannel::Control);
+        assert_eq!(
+            logical_channel_for_message_type(MessageType::SessionList),
+            LogicalChannel::Control
+        );
+        assert_eq!(
+            logical_channel_for_message_type(MessageType::Attach),
+            LogicalChannel::SessionStream
+        );
+        assert_eq!(
+            logical_channel_for_message_type(MessageType::Delta),
+            LogicalChannel::SessionStream
+        );
+        assert_eq!(
+            logical_channel_for_message_type(MessageType::UiPaneDelta),
+            LogicalChannel::SessionStream
+        );
+        assert_eq!(
+            logical_channel_for_message_type(MessageType::Input),
+            LogicalChannel::InputControl
+        );
+        assert_eq!(
+            logical_channel_for_message_type(MessageType::Scroll),
+            LogicalChannel::InputControl
+        );
+        assert_eq!(
+            logical_channel_for_message_type(MessageType::ExecuteCommand),
+            LogicalChannel::InputControl
+        );
+        assert_eq!(
+            logical_channel_for_message_type(MessageType::Heartbeat),
+            LogicalChannel::Health
+        );
+        assert_eq!(
+            logical_channel_for_message_type(MessageType::HeartbeatAck),
+            LogicalChannel::Health
         );
     }
 
