@@ -241,7 +241,7 @@ Goal:
   - [x] resume-token rejection and recovery
   - multiplexed channels
   - [x] heartbeat request/ack round-trip
-  - heartbeat loss and recovery
+  - [x] heartbeat loss and recovery
   - transport fallback
 
 #### End-to-End
@@ -249,7 +249,7 @@ Goal:
 - [ ] Add end-to-end tests for:
   - SSH bootstrap then protocol upgrade
   - [x] direct client connect on the current native iOS path
-  - version mismatch
+  - [x] version mismatch
   - [x] resume after temporary drop within the revive window
   - [x] local native-daemon diagnostics via [scripts/test-remote-daemon-diagnostics.sh](./scripts/test-remote-daemon-diagnostics.sh)
 

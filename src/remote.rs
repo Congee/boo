@@ -3213,6 +3213,35 @@ mod tests {
     }
 
     #[test]
+    fn probe_remote_endpoint_rejects_unsupported_protocol_version_over_socket() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
+        let port = listener.local_addr().expect("listener addr").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept probe client");
+            let (ty, payload) = read_message(&mut stream).expect("read auth request");
+            assert_eq!(ty, MessageType::Auth);
+            assert!(payload.is_empty());
+
+            let mut auth_ok = encode_auth_ok_payload("test-daemon", "test-instance");
+            auth_ok[0..2].copy_from_slice(&(REMOTE_PROTOCOL_VERSION + 1).to_le_bytes());
+            stream
+                .write_all(&encode_message(MessageType::AuthOk, &auth_ok))
+                .expect("write auth ok");
+        });
+
+        let error =
+            probe_remote_endpoint("127.0.0.1", port, None).expect_err("probe should reject");
+        assert!(
+            error.contains("Unsupported remote protocol version"),
+            "unexpected error: {error}"
+        );
+
+        server.join().expect("probe server thread");
+    }
+
+    #[test]
     fn read_loop_closes_connection_after_auth_failure() {
         let (outbound_tx, outbound_rx) = mpsc::channel();
         let state = Arc::new(Mutex::new(State {
@@ -4418,6 +4447,66 @@ mod tests {
         assert_eq!(client.server_socket_path, None);
         assert!(client.heartbeat_overdue);
         assert_eq!(client.heartbeat_expires_in_ms, Some(0));
+    }
+
+    #[test]
+    fn clients_snapshot_recovers_after_fresh_direct_heartbeat() {
+        let (tx, _rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: tx,
+                    authenticated: true,
+                    challenge: None,
+                    connected_at: Instant::now() - Duration::from_secs(30),
+                    authenticated_at: Some(
+                        Instant::now() - DIRECT_CLIENT_HEARTBEAT_WINDOW - Duration::from_secs(1),
+                    ),
+                    last_heartbeat_at: Some(
+                        Instant::now() - DIRECT_CLIENT_HEARTBEAT_WINDOW - Duration::from_secs(1),
+                    ),
+                    attached_session: None,
+                    attachment_id: None,
+                    resume_token: None,
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: false,
+                },
+            )]),
+            revivable_attachments: HashMap::new(),
+            auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
+            server_instance_id: "test-instance".to_string(),
+        }));
+        let server = RemoteServer {
+            state: Arc::clone(&state),
+            _listener: std::thread::spawn(|| {}),
+            _advertiser: None,
+            local_socket_path: None,
+        };
+
+        let stale_snapshot = server.clients_snapshot();
+        assert!(stale_snapshot.clients[0].heartbeat_overdue);
+
+        {
+            let mut guard = state.lock().expect("remote server state poisoned");
+            guard.clients.get_mut(&1).expect("client state").last_heartbeat_at = Some(Instant::now());
+        }
+
+        let recovered_snapshot = server.clients_snapshot();
+        let client = &recovered_snapshot.clients[0];
+        assert!(!client.heartbeat_overdue);
+        assert!(client.last_heartbeat_age_ms.is_some_and(|age| age <= 250));
+        assert!(
+            client.heartbeat_expires_in_ms.is_some_and(
+                |ms| ms > 0 && ms <= DIRECT_CLIENT_HEARTBEAT_WINDOW.as_millis() as u64
+            )
+        );
     }
 
     #[test]
