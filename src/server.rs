@@ -159,12 +159,14 @@ impl State {
     pub fn new(
         control_socket: Option<String>,
         remote_port: Option<u16>,
+        remote_bind_address: Option<String>,
         remote_auth_key: Option<String>,
     ) -> Self {
         let ctl_rx = control::start(control_socket.as_deref());
         let (remote_server, remote_rx) = if let Some(port) = remote_port {
             match remote::RemoteServer::start(remote::RemoteConfig {
                 port,
+                bind_address: remote_bind_address,
                 auth_key: remote_auth_key,
                 service_name: "boo".to_string(),
             }) {

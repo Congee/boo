@@ -86,6 +86,13 @@ pub struct GlobalArgs {
     pub remote_port: Option<u16>,
 
     #[arg(
+        long = "remote-bind-address",
+        global = true,
+        help = "Bind address for the Boo-native TCP remote daemon; authless daemons default to 127.0.0.1"
+    )]
+    pub remote_bind_address: Option<String>,
+
+    #[arg(
         long = "remote-auth-key",
         global = true,
         help = "Shared secret for the Boo-native TCP remote daemon"
@@ -504,6 +511,7 @@ mod tests {
         assert!(long.contains("local forwarded socket"));
         assert!(long.contains("Remote Boo control socket path on the SSH host"));
         assert!(long.contains("Boo-native TCP remote daemon"));
+        assert!(long.contains("authless daemons default to 127.0.0.1"));
     }
 
     #[test]

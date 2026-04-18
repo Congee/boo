@@ -18,6 +18,7 @@ pub struct Config {
     pub remote_socket: Option<String>,
     pub remote_binary: Option<String>,
     pub remote_port: Option<u16>,
+    pub remote_bind_address: Option<String>,
     pub remote_auth_key: Option<String>,
     pub keybinds: HashMap<String, String>,
     pub font_families: Vec<String>,
@@ -146,6 +147,11 @@ impl Config {
                         config.remote_port = Some(port);
                     }
                 }
+                "remote-bind-address" => {
+                    if !value.is_empty() {
+                        config.remote_bind_address = Some(value.to_string());
+                    }
+                }
                 "remote-auth-key" => {
                     if !value.is_empty() {
                         config.remote_auth_key = Some(value.to_string());
@@ -268,6 +274,7 @@ impl Default for Config {
             remote_socket: None,
             remote_binary: None,
             remote_port: None,
+            remote_bind_address: None,
             remote_auth_key: None,
             keybinds: HashMap::new(),
             font_families: Vec::new(),
@@ -478,6 +485,7 @@ cursor-blink-interval = 750ms
 prefix-key = ctrl+s
 control-socket = /tmp/boo.sock
 remote-port = 7337
+remote-bind-address = 0.0.0.0
 remote-auth-key = "secret"
 
 keybind = " = new_split:right
@@ -488,6 +496,7 @@ keybind = super+1 = goto_tab:1
         assert_eq!(config.prefix_key.as_deref(), Some("ctrl+s"));
         assert_eq!(config.control_socket.as_deref(), Some("/tmp/boo.sock"));
         assert_eq!(config.remote_port, Some(7337));
+        assert_eq!(config.remote_bind_address.as_deref(), Some("0.0.0.0"));
         assert_eq!(config.remote_auth_key.as_deref(), Some("secret"));
         assert_eq!(
             config.font_families,

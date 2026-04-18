@@ -196,8 +196,25 @@ impl TryFrom<u8> for MessageType {
 #[derive(Clone, Debug)]
 pub struct RemoteConfig {
     pub port: u16,
+    pub bind_address: Option<String>,
     pub auth_key: Option<String>,
     pub service_name: String,
+}
+
+impl RemoteConfig {
+    fn effective_bind_address(&self) -> &str {
+        self.bind_address.as_deref().unwrap_or_else(|| {
+            if self.auth_key.is_some() {
+                "0.0.0.0"
+            } else {
+                "127.0.0.1"
+            }
+        })
+    }
+
+    fn should_advertise(&self) -> bool {
+        !matches!(self.effective_bind_address(), "127.0.0.1" | "localhost" | "::1")
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -459,11 +476,12 @@ impl RemoteServer {
     }
 
     pub fn start(config: RemoteConfig) -> io::Result<(Self, mpsc::Receiver<RemoteCmd>)> {
-        let listener = TcpListener::bind(("0.0.0.0", config.port))?;
+        let bind_address = config.effective_bind_address().to_string();
+        let listener = TcpListener::bind((bind_address.as_str(), config.port))?;
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::new(),
             revivable_attachments: HashMap::new(),
-            auth_key: config.auth_key.map(|key| key.into_bytes()),
+            auth_key: config.auth_key.clone().map(|key| key.into_bytes()),
             server_identity_id: load_or_create_daemon_identity(),
             server_instance_id: random_instance_id(),
         }));
@@ -528,11 +546,16 @@ impl RemoteServer {
             }
         });
 
-        let advertiser = ServiceAdvertiser::spawn(&config.service_name, config.port);
+        let advertiser = if config.should_advertise() {
+            ServiceAdvertiser::spawn(&config.service_name, config.port)
+        } else {
+            None
+        };
         {
             let state = state.lock().expect("remote server state poisoned");
             log::info!(
-                "remote tcp server started: port={} auth_required={} protocol_version={} capabilities={} build_id={} server_identity_id={} server_instance_id={}",
+                "remote tcp server started: bind_address={} port={} auth_required={} protocol_version={} capabilities={} build_id={} server_identity_id={} server_instance_id={}",
+                bind_address,
                 config.port,
                 state.auth_key.is_some(),
                 REMOTE_PROTOCOL_VERSION,
@@ -2914,6 +2937,42 @@ mod tests {
                 None => Ok(0),
             }
         }
+    }
+
+    #[test]
+    fn remote_config_defaults_authless_tcp_to_loopback_without_advertising() {
+        let config = RemoteConfig {
+            port: 7337,
+            bind_address: None,
+            auth_key: None,
+            service_name: "boo".to_string(),
+        };
+        assert_eq!(config.effective_bind_address(), "127.0.0.1");
+        assert!(!config.should_advertise());
+    }
+
+    #[test]
+    fn remote_config_defaults_authenticated_tcp_to_public_bind_with_advertising() {
+        let config = RemoteConfig {
+            port: 7337,
+            bind_address: None,
+            auth_key: Some("secret".to_string()),
+            service_name: "boo".to_string(),
+        };
+        assert_eq!(config.effective_bind_address(), "0.0.0.0");
+        assert!(config.should_advertise());
+    }
+
+    #[test]
+    fn remote_config_explicit_bind_address_overrides_defaults() {
+        let config = RemoteConfig {
+            port: 7337,
+            bind_address: Some("192.168.0.5".to_string()),
+            auth_key: None,
+            service_name: "boo".to_string(),
+        };
+        assert_eq!(config.effective_bind_address(), "192.168.0.5");
+        assert!(config.should_advertise());
     }
 
     #[test]

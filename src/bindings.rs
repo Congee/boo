@@ -708,6 +708,7 @@ mod tests {
             remote_socket: None,
             remote_binary: None,
             remote_port: None,
+            remote_bind_address: None,
             remote_auth_key: None,
             font_families: Vec::new(),
             font_size: None,

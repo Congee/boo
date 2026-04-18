@@ -125,6 +125,7 @@ impl BooApp {
         let server = server::State::new(
             boo_config.control_socket.clone(),
             boo_config.remote_port,
+            boo_config.remote_bind_address.clone(),
             boo_config.remote_auth_key.clone(),
         );
         let bindings = bindings::Bindings::from_config(&boo_config);

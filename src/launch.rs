@@ -15,6 +15,7 @@ static STARTUP_REMOTE_WORKDIR: std::sync::OnceLock<String> = std::sync::OnceLock
 static STARTUP_REMOTE_SOCKET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_BINARY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+static STARTUP_REMOTE_BIND_ADDRESS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_AUTH_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -26,6 +27,7 @@ struct StartupOverrides {
     remote_socket: Option<String>,
     remote_binary: Option<String>,
     remote_port: Option<u16>,
+    remote_bind_address: Option<String>,
     remote_auth_key: Option<String>,
 }
 
@@ -146,6 +148,11 @@ pub fn parse_startup_args(cli: &crate::cli::Cli) -> bool {
     if let Some(port) = cli.global.remote_port {
         STARTUP_REMOTE_PORT.set(port).ok();
     }
+    if let Some(bind_address) = cli.global.remote_bind_address.as_ref() {
+        STARTUP_REMOTE_BIND_ADDRESS
+            .set(bind_address.clone())
+            .ok();
+    }
     if let Some(key) = cli.global.remote_auth_key.as_ref() {
         STARTUP_REMOTE_AUTH_KEY.set(key.clone()).ok();
     }
@@ -170,6 +177,7 @@ fn startup_overrides() -> StartupOverrides {
         remote_socket: STARTUP_REMOTE_SOCKET.get().cloned(),
         remote_binary: STARTUP_REMOTE_BINARY.get().cloned(),
         remote_port: STARTUP_REMOTE_PORT.get().copied(),
+        remote_bind_address: STARTUP_REMOTE_BIND_ADDRESS.get().cloned(),
         remote_auth_key: STARTUP_REMOTE_AUTH_KEY.get().cloned(),
     }
 }
@@ -196,6 +204,9 @@ fn apply_startup_overrides(
     }
     if let Some(port) = overrides.remote_port {
         boo_config.remote_port = Some(port);
+    }
+    if let Some(bind_address) = overrides.remote_bind_address.as_ref() {
+        boo_config.remote_bind_address = Some(bind_address.clone());
     }
     if let Some(key) = overrides.remote_auth_key.as_ref() {
         boo_config.remote_auth_key = Some(key.clone());
