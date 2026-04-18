@@ -2108,6 +2108,29 @@ pub fn probe_selected_direct_transport(
     }
 }
 
+/// SPKI-pinned TLS variant of `probe_selected_direct_transport`. Intended for the
+/// SSH-bootstrap → direct-TLS upgrade flow: the caller has already learned the server's
+/// `daemon_identity` out-of-band (typically over the forwarded SSH control socket) and
+/// wants the subsequent direct connection to be TLS with that pin as the trust anchor.
+pub fn probe_selected_direct_transport_tls(
+    transport: DirectTransportKind,
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+    expected_identity: &str,
+) -> Result<RemoteUpgradeProbeSummary, String> {
+    match transport {
+        DirectTransportKind::TcpDirect => Ok(RemoteUpgradeProbeSummary {
+            selected_transport: transport,
+            probe: probe_remote_endpoint_tls(host, port, auth_key, expected_identity)?,
+        }),
+        DirectTransportKind::QuicDirect => Err(
+            "QUIC direct transport is not implemented yet; TCP fallback is required for now"
+                .to_string(),
+        ),
+    }
+}
+
 fn list_summary_from_session<S: DirectReadWrite>(
     client: &mut DirectTransportSession<S>,
     port: u16,

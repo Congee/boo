@@ -207,6 +207,11 @@ pub enum Command {
     RemoteUpgradeProbe {
         #[arg(long = "auth-key")]
         auth_key: Option<String>,
+        /// Wrap the direct connection in TLS using the SSH-discovered daemon identity
+        /// as the SPKI pin. Errors out if the SSH-bootstrapped target did not report an
+        /// identity.
+        #[arg(long)]
+        tls: bool,
     },
     /// Attach to a session on a Boo-native TCP remote daemon directly
     RemoteDaemonAttach {
@@ -567,7 +572,7 @@ where
                 }
             }
         }
-        Command::RemoteUpgradeProbe { auth_key } => {
+        Command::RemoteUpgradeProbe { auth_key, tls } => {
             let Some(ssh_host) = cli
                 .global
                 .host
@@ -608,13 +613,32 @@ where
                         eprintln!("remote upgrade target has no direct port");
                         return Outcome::Exit(1);
                     };
-                    match crate::remote::probe_selected_direct_transport(
-                        selected_transport,
-                        direct_host,
-                        port,
-                        auth_key.as_deref(),
-                        target.server_identity_id.as_deref(),
-                    ) {
+                    let probe_result = if *tls {
+                        match target.server_identity_id.as_deref() {
+                            Some(identity) => {
+                                crate::remote::probe_selected_direct_transport_tls(
+                                    selected_transport,
+                                    direct_host,
+                                    port,
+                                    auth_key.as_deref(),
+                                    identity,
+                                )
+                            }
+                            None => Err(
+                                "--tls requires the SSH-bootstrapped target to report a daemon identity"
+                                    .to_string(),
+                            ),
+                        }
+                    } else {
+                        crate::remote::probe_selected_direct_transport(
+                            selected_transport,
+                            direct_host,
+                            port,
+                            auth_key.as_deref(),
+                            target.server_identity_id.as_deref(),
+                        )
+                    };
+                    match probe_result {
                         Ok(probe) => {
                             let summary = RemoteUpgradeProbeCommandSummary { target, probe };
                             let mut stdout = std::io::stdout().lock();
@@ -1020,8 +1044,21 @@ mod tests {
             "secret",
         ]);
         match cli.command {
-            Some(super::Command::RemoteUpgradeProbe { auth_key }) => {
+            Some(super::Command::RemoteUpgradeProbe { auth_key, tls }) => {
                 assert_eq!(auth_key.as_deref(), Some("secret"));
+                assert!(!tls);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_remote_upgrade_probe_with_tls() {
+        let cli = Cli::parse_from(["boo", "remote-upgrade-probe", "--tls"]);
+        match cli.command {
+            Some(super::Command::RemoteUpgradeProbe { auth_key, tls }) => {
+                assert!(tls);
+                assert!(auth_key.is_none());
             }
             other => panic!("unexpected command: {other:?}"),
         }
