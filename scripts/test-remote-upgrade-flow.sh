@@ -86,11 +86,10 @@ SERVER_INSTANCE_ID="$(printf '%s\n' "$upgrade_fields" | sed -n '2p')"
 SERVER_BUILD_ID="$(printf '%s\n' "$upgrade_fields" | sed -n '3p')"
 
 probe_json="$(
-  ./target/debug/boo probe-remote-daemon \
+  ./target/debug/boo remote-upgrade-probe \
     --host 127.0.0.1 \
-    --port "$PORT" \
-    --auth-key "$AUTH_KEY" \
-    --expect-server-identity "$SERVER_IDENTITY_ID"
+    --socket "$SOCKET_PATH" \
+    --auth-key "$AUTH_KEY"
 )"
 python3 - "$probe_json" "$SERVER_IDENTITY_ID" "$SERVER_INSTANCE_ID" "$SERVER_BUILD_ID" <<'PY'
 import json
@@ -101,20 +100,33 @@ expected_identity = sys.argv[2]
 expected_instance = sys.argv[3]
 expected_build = sys.argv[4]
 
-if data.get("host") != "127.0.0.1":
-    raise SystemExit(f"unexpected probe host: {data.get('host')!r}")
-if data.get("auth_required") is not True:
-    raise SystemExit(f"expected auth_required true, got {data.get('auth_required')!r}")
-if data.get("protocol_version") != 1:
-    raise SystemExit(f"unexpected protocol_version: {data.get('protocol_version')!r}")
-if data.get("server_identity_id") != expected_identity:
+target = data.get("target")
+probe = data.get("probe")
+if not isinstance(target, dict):
+    raise SystemExit("missing target summary")
+if not isinstance(probe, dict):
+    raise SystemExit("missing probe summary")
+if target.get("selected_transport") != "tcp-direct":
+    raise SystemExit(f"unexpected target selected_transport: {target.get('selected_transport')!r}")
+if probe.get("selected_transport") != "tcp-direct":
+    raise SystemExit(f"unexpected probe selected_transport: {probe.get('selected_transport')!r}")
+probe_summary = probe.get("probe")
+if not isinstance(probe_summary, dict):
+    raise SystemExit("missing nested probe summary")
+if probe_summary.get("host") != "127.0.0.1":
+    raise SystemExit(f"unexpected probe host: {probe_summary.get('host')!r}")
+if probe_summary.get("auth_required") is not True:
+    raise SystemExit(f"expected auth_required true, got {probe_summary.get('auth_required')!r}")
+if probe_summary.get("protocol_version") != 1:
+    raise SystemExit(f"unexpected protocol_version: {probe_summary.get('protocol_version')!r}")
+if probe_summary.get("server_identity_id") != expected_identity:
     raise SystemExit("probe server_identity_id mismatch")
-if data.get("server_instance_id") != expected_instance:
+if probe_summary.get("server_instance_id") != expected_instance:
     raise SystemExit("probe server_instance_id mismatch")
-if data.get("build_id") != expected_build:
+if probe_summary.get("build_id") != expected_build:
     raise SystemExit("probe build_id mismatch")
-if not isinstance(data.get("heartbeat_rtt_ms"), int) or data["heartbeat_rtt_ms"] < 0:
-    raise SystemExit(f"unexpected heartbeat_rtt_ms: {data.get('heartbeat_rtt_ms')!r}")
+if not isinstance(probe_summary.get("heartbeat_rtt_ms"), int) or probe_summary["heartbeat_rtt_ms"] < 0:
+    raise SystemExit(f"unexpected heartbeat_rtt_ms: {probe_summary.get('heartbeat_rtt_ms')!r}")
 PY
 
 create_json="$(

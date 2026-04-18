@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::os::unix::net::UnixListener;
+#[cfg(test)]
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -387,8 +389,11 @@ pub struct RemoteUpgradeProbeSummary {
     pub probe: RemoteProbeSummary,
 }
 
-struct DirectRemoteClient {
-    stream: std::net::TcpStream,
+trait DirectReadWrite: Read + Write {}
+impl<T: Read + Write> DirectReadWrite for T {}
+
+struct DirectTransportSession<S: DirectReadWrite> {
+    stream: S,
     host: String,
     port: u16,
     auth_required: bool,
@@ -398,6 +403,8 @@ struct DirectRemoteClient {
     server_instance_id: Option<String>,
     server_identity_id: Option<String>,
 }
+
+type DirectRemoteClient = DirectTransportSession<std::net::TcpStream>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteCell {
@@ -2179,7 +2186,7 @@ pub fn create_remote_daemon_session(
     })
 }
 
-impl DirectRemoteClient {
+impl DirectTransportSession<std::net::TcpStream> {
     fn connect(
         host: &str,
         port: u16,
@@ -2188,7 +2195,7 @@ impl DirectRemoteClient {
     ) -> Result<Self, String> {
         use std::net::TcpStream;
 
-        let mut stream = TcpStream::connect((host, port))
+        let stream = TcpStream::connect((host, port))
             .map_err(|error| format!("failed to connect to {host}:{port}: {error}"))?;
         stream.set_read_timeout(Some(Duration::from_secs(3))).map_err(|error| {
             format!("failed to configure read timeout for {host}:{port}: {error}")
@@ -2197,24 +2204,38 @@ impl DirectRemoteClient {
             format!("failed to configure write timeout for {host}:{port}: {error}")
         })?;
 
+        Self::connect_over_stream(
+            stream,
+            host.to_string(),
+            port,
+            auth_key,
+            expected_server_identity,
+        )
+    }
+}
+
+impl<S: DirectReadWrite> DirectTransportSession<S> {
+    fn connect_over_stream(
+        mut stream: S,
+        host: String,
+        port: u16,
+        auth_key: Option<&str>,
+        expected_server_identity: Option<&str>,
+    ) -> Result<Self, String> {
         stream
             .write_all(&encode_message(MessageType::Auth, &[]))
             .map_err(|error| format!("failed to send auth request to {host}:{port}: {error}"))?;
-        let (ty, auth_payload) = read_probe_auth_reply(&mut stream, host, port)?;
+        let (ty, auth_payload) = read_probe_auth_reply(&mut stream, &host, port)?;
         let (auth_required, auth_ok_payload) = match ty {
             MessageType::AuthOk => (false, auth_payload),
             MessageType::AuthChallenge => {
-                let key = auth_key.ok_or_else(|| {
-                    format!("remote endpoint {host}:{port} requires --auth-key")
-                })?;
-                let mut mac =
-                    HmacSha256::new_from_slice(key.as_bytes()).expect("valid HMAC key");
+                let key = auth_key
+                    .ok_or_else(|| format!("remote endpoint {host}:{port} requires --auth-key"))?;
+                let mut mac = HmacSha256::new_from_slice(key.as_bytes()).expect("valid HMAC key");
                 mac.update(&auth_payload);
                 let response = mac.finalize().into_bytes().to_vec();
                 stream.write_all(&encode_message(MessageType::Auth, &response)).map_err(
-                    |error| {
-                        format!("failed to send auth response to {host}:{port}: {error}")
-                    },
+                    |error| format!("failed to send auth response to {host}:{port}: {error}"),
                 )?;
                 let (reply_ty, reply_payload) = read_message(&mut stream).map_err(|error| {
                     format!("failed to read authenticated reply from {host}:{port}: {error}")
@@ -2245,15 +2266,14 @@ impl DirectRemoteClient {
             if server_identity_id.as_deref() != Some(expected_server_identity) {
                 return Err(format!(
                     "remote endpoint {host}:{port} reported daemon identity {:?}, expected {:?}",
-                    server_identity_id,
-                    expected_server_identity
+                    server_identity_id, expected_server_identity
                 ));
             }
         }
 
         Ok(Self {
             stream,
-            host: host.to_string(),
+            host,
             port,
             auth_required,
             protocol_version,
@@ -2409,6 +2429,11 @@ fn read_attach_bootstrap(
         let (ty, payload) = read_message(stream)
             .map_err(|error| format!("failed to read attach reply from {host}:{port}: {error}"))?;
         match ty {
+            MessageType::SessionList
+            | MessageType::UiRuntimeState
+            | MessageType::UiAppearance
+            | MessageType::UiPaneFullState
+            | MessageType::UiPaneDelta => continue,
             MessageType::Attached => {
                 attached = Some(
                     decode_attached_payload(&payload)
@@ -4148,6 +4173,68 @@ mod tests {
     }
 
     #[test]
+    fn direct_transport_session_lists_sessions_over_unix_stream() {
+        let (client_stream, mut server_stream) =
+            UnixStream::pair().expect("create unix stream pair");
+        let server = std::thread::spawn(move || {
+            let (ty, payload) = read_message(&mut server_stream).expect("read auth request");
+            assert_eq!(ty, MessageType::Auth);
+            assert!(payload.is_empty());
+
+            server_stream
+                .write_all(&encode_message(
+                    MessageType::AuthOk,
+                    &encode_auth_ok_payload("unix-daemon", "unix-instance"),
+                ))
+                .expect("write auth ok");
+
+            let (ty, payload) = read_message(&mut server_stream).expect("read heartbeat");
+            assert_eq!(ty, MessageType::Heartbeat);
+            server_stream
+                .write_all(&encode_message(MessageType::HeartbeatAck, &payload))
+                .expect("write heartbeat ack");
+
+            let (ty, payload) = read_message(&mut server_stream).expect("read list sessions");
+            assert_eq!(ty, MessageType::ListSessions);
+            assert!(payload.is_empty());
+            server_stream
+                .write_all(&encode_message(
+                    MessageType::SessionList,
+                    &encode_session_list(&[RemoteSessionInfo {
+                        id: 21,
+                        name: "unix".to_string(),
+                        title: "shell".to_string(),
+                        pwd: "/tmp".to_string(),
+                        attached: false,
+                        child_exited: false,
+                    }]),
+                ))
+                .expect("write session list");
+        });
+
+        let mut client = DirectTransportSession::connect_over_stream(
+            client_stream,
+            "unix-test".to_string(),
+            0,
+            None,
+            Some("unix-daemon"),
+        )
+        .expect("connect over unix stream");
+        let heartbeat_rtt_ms = client
+            .heartbeat_round_trip(b"unix-heartbeat")
+            .expect("heartbeat round trip");
+        assert!(heartbeat_rtt_ms <= 5_000);
+        let sessions = client.list_sessions().expect("list sessions over unix stream");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, 21);
+        assert_eq!(sessions[0].name, "unix");
+        assert_eq!(client.server_identity_id.as_deref(), Some("unix-daemon"));
+        assert_eq!(client.server_instance_id.as_deref(), Some("unix-instance"));
+
+        server.join().expect("unix server thread");
+    }
+
+    #[test]
     fn list_remote_daemon_sessions_rejects_unexpected_server_identity() {
         use std::net::TcpListener;
 
@@ -4313,6 +4400,90 @@ mod tests {
         assert_eq!(summary.rows, 1);
         assert_eq!(summary.cols, 1);
         assert_eq!(summary.cursor_style, 1);
+
+        server.join().expect("attach server thread");
+    }
+
+    #[test]
+    fn attach_remote_daemon_session_tolerates_cached_session_list_before_attach() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
+        let port = listener.local_addr().expect("listener addr").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept attach client");
+            let (ty, payload) = read_message(&mut stream).expect("read auth request");
+            assert_eq!(ty, MessageType::Auth);
+            assert!(payload.is_empty());
+
+            stream
+                .write_all(&encode_message(
+                    MessageType::AuthOk,
+                    &encode_auth_ok_payload("test-daemon", "test-instance"),
+                ))
+                .expect("write auth ok");
+
+            let (ty, payload) = read_message(&mut stream).expect("read heartbeat");
+            assert_eq!(ty, MessageType::Heartbeat);
+            stream
+                .write_all(&encode_message(MessageType::HeartbeatAck, &payload))
+                .expect("write heartbeat ack");
+
+            let (ty, payload) = read_message(&mut stream).expect("read attach");
+            assert_eq!(ty, MessageType::Attach);
+            let (session_id, attachment_id, resume_token) =
+                parse_attach_request(&payload).expect("decoded attach");
+            assert_eq!(session_id, 7);
+            assert_eq!(attachment_id, None);
+            assert_eq!(resume_token, None);
+
+            stream
+                .write_all(&encode_message(
+                    MessageType::SessionList,
+                    &encode_session_list(&[RemoteSessionInfo {
+                        id: 7,
+                        name: "Tab 7".to_string(),
+                        title: "shell".to_string(),
+                        pwd: "/tmp".to_string(),
+                        attached: true,
+                        child_exited: false,
+                    }]),
+                ))
+                .expect("write session list");
+
+            stream
+                .write_all(&encode_message(MessageType::Attached, &7_u32.to_le_bytes()))
+                .expect("write attached");
+
+            let state = RemoteFullState {
+                rows: 1,
+                cols: 1,
+                cursor_x: 0,
+                cursor_y: 0,
+                cursor_visible: true,
+                cursor_blinking: false,
+                cursor_style: 1,
+                cells: vec![RemoteCell {
+                    codepoint: u32::from('Q'),
+                    fg: [1, 2, 3],
+                    bg: [4, 5, 6],
+                    style_flags: 0,
+                    wide: false,
+                }],
+            };
+            stream
+                .write_all(&encode_message(
+                    MessageType::FullState,
+                    &encode_full_state(&state, None, false),
+                ))
+                .expect("write full state");
+        });
+
+        let summary = attach_remote_daemon_session("127.0.0.1", port, None, Some("test-daemon"), 7, None, None)
+            .expect("attach summary");
+        assert_eq!(summary.attached.session_id, 7);
+        assert_eq!(summary.rows, 1);
+        assert_eq!(summary.cols, 1);
 
         server.join().expect("attach server thread");
     }

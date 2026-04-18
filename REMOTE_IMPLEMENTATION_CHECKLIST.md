@@ -194,7 +194,8 @@ Goal:
 
 - [ ] Implement preferred live transport with connection-migration support
 - [ ] Implement TCP/TLS fallback when UDP is unavailable or blocked
-- [ ] Make both transports speak the same application protocol
+- [x] Make both transports speak the same application protocol
+  - the direct client handshake/heartbeat/session flow is now verified over both TCP and Unix stream transports using the same wire helpers
 - [x] Expose negotiated transport details for debugging
   - [x] iOS client surfaces negotiated protocol/capability/build/instance metadata
   - [x] iOS client surfaces heartbeat RTT in the debug summary
