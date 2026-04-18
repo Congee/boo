@@ -602,7 +602,7 @@ struct SettingsScreen: View {
     private var trustedIdentityRow: (current: String, trusted: String?)? {
         guard let host = monitor.lastHost,
               let port = monitor.lastPort,
-              let current = client.serverIdentityId,
+              let current = client.serverIdentityId ?? client.lastSeenServerIdentityId,
               !current.isEmpty else { return nil }
         return (current, store.trustedServerIdentity(host: host, port: port))
     }

@@ -158,6 +158,8 @@ final class GSPClient: ObservableObject {
     @Published var serverBuildId: String?
     @Published var serverInstanceId: String?
     @Published var serverIdentityId: String?
+    @Published var lastSeenServerInstanceId: String?
+    @Published var lastSeenServerIdentityId: String?
     @Published var lastHeartbeatAck: Date?
     @Published var lastHeartbeatRttMs: Double?
     @Published var sessions: [SessionInfo] = []
@@ -589,6 +591,12 @@ final class GSPClient: ObservableObject {
         serverBuildId = state.serverBuildId
         serverInstanceId = state.serverInstanceId
         serverIdentityId = state.serverIdentityId
+        if let serverInstanceId = state.serverInstanceId, !serverInstanceId.isEmpty {
+            lastSeenServerInstanceId = serverInstanceId
+        }
+        if let serverIdentityId = state.serverIdentityId, !serverIdentityId.isEmpty {
+            lastSeenServerIdentityId = serverIdentityId
+        }
         lastError = state.lastError
         attachedSessionId = state.attachedSessionId
         attachmentId = state.attachmentId
@@ -597,6 +605,14 @@ final class GSPClient: ObservableObject {
             applyDecodedScreen(decodedScreen)
             screen.objectWillChange.send()
         }
+        if message == .authOk,
+           let expectedServerIdentityId,
+           let serverIdentityId,
+           expectedServerIdentityId != serverIdentityId {
+            protocolError("Server identity changed; connection rejected")
+            return
+        }
+
         switch effect {
         case .none:
             break
