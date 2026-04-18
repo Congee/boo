@@ -489,8 +489,29 @@ fn ensure_remote_server_running(host: &str, local_socket_path: &str, boo_config:
     if let Err(error) =
         ensure_remote_control_version_compatible(host, local_socket_path, &resolved_paths)
     {
-        log::error!("failed remote control version check on {host}: {error}");
-        return;
+        if remote_control_version_negotiation_unsupported(&error) {
+            log::warn!(
+                "remote control version negotiation failed on {host}; restarting remote server on {}",
+                resolved_paths.socket_path
+            );
+            if let Err(restart_error) = restart_remote_server(host, &resolved_paths) {
+                log::error!(
+                    "failed to restart remote boo on {host} after version negotiation error: {restart_error}"
+                );
+                return;
+            }
+            if let Err(retry_error) =
+                ensure_remote_control_version_compatible(host, local_socket_path, &resolved_paths)
+            {
+                log::error!(
+                    "failed remote control version check on {host} after restart: {retry_error}"
+                );
+                return;
+            }
+        } else {
+            log::error!("failed remote control version check on {host}: {error}");
+            return;
+        }
     }
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
@@ -748,6 +769,68 @@ fn ensure_remote_control_version_compatible(
         &resolved_paths.binary_path,
         &remote_version,
     ))
+}
+
+fn remote_control_version_negotiation_unsupported(error: &str) -> bool {
+    error.contains("does not support control version negotiation")
+}
+
+fn restart_remote_server(host: &str, resolved_paths: &ResolvedRemotePaths) -> Result<(), String> {
+    let remote_log = format!("/tmp/boo-{}-restart.log", sanitize_for_path(host));
+    let stream_socket = format!("{}.stream", resolved_paths.socket_path);
+    let mut script_parts = vec!["set -e".to_string()];
+    if let Some(workdir) = resolved_paths.workdir.as_deref() {
+        script_parts.push(format!("cd {}", shell_single_quote(workdir)));
+    }
+    script_parts.push(format!(
+        "if [ -S {socket} ]; then \
+            {binary} quit-server --socket {socket} >/dev/null 2>&1 || true; \
+            i=0; \
+            while [ \"$i\" -lt 20 ]; do \
+                if [ ! -S {socket} ]; then break; fi; \
+                i=$((i + 1)); \
+                sleep 0.1; \
+            done; \
+        fi; \
+        rm -f {socket} {stream_socket}; \
+        nohup {binary} server --socket {socket} >{log} 2>&1 </dev/null & \
+        pid=$!; \
+        i=0; \
+        while [ \"$i\" -lt 40 ]; do \
+            if [ -S {socket} ]; then break; fi; \
+            if ! kill -0 \"$pid\" 2>/dev/null; then break; fi; \
+            i=$((i + 1)); \
+            sleep 0.1; \
+        done; \
+        if [ ! -S {socket} ]; then \
+            tail_line=$(tail -n 20 {log} 2>/dev/null | tr '\\n' ' ' | sed 's/[[:space:]]\\+/ /g' | sed 's/^ //; s/ $//'); \
+            if [ -n \"$tail_line\" ]; then \
+                printf '%s\\n' {failed_prefix}\"$tail_line\"; \
+            else \
+                printf '%s\\n' {failed_log}; \
+            fi; \
+            exit 51; \
+        fi",
+        socket = shell_single_quote(&resolved_paths.socket_path),
+        stream_socket = shell_single_quote(&stream_socket),
+        binary = shell_single_quote(&resolved_paths.binary_path),
+        log = shell_single_quote(&remote_log),
+        failed_prefix = shell_single_quote(&format!(
+            "{}start-failed:",
+            REMOTE_BOOTSTRAP_MARKER
+        )),
+        failed_log = shell_single_quote(&format!(
+            "{}start-failed:{}",
+            REMOTE_BOOTSTRAP_MARKER, remote_log
+        )),
+    ));
+    let output = run_remote_shell_output(host, &script_parts.join("; "), false)
+        .map_err(|error| format!("ssh restart: {error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(classify_remote_bootstrap_failure(&output))
+    }
 }
 
 fn fetch_remote_boo_version(host: &str, resolved_paths: &ResolvedRemotePaths) -> Result<String, String> {
@@ -1023,7 +1106,8 @@ mod tests {
         forwarded_control_path, forwarded_control_socket_healthy, forwarded_socket_path,
         forwarded_stream_socket_healthy, format_remote_version_mismatch, merge_family_lists,
         parse_boo_version_output, parse_remote_path_parts,
-        remote_binary_looks_like_path, remote_tunnel_healthy, sanitize_for_path, RemotePathPart, RemotePathSpec,
+        remote_binary_looks_like_path, remote_control_version_negotiation_unsupported,
+        remote_tunnel_healthy, sanitize_for_path, RemotePathPart, RemotePathSpec,
         StartupOverrides,
         REMOTE_BOOTSTRAP_MARKER, REMOTE_PREFLIGHT_MARKER,
     };
@@ -1160,6 +1244,16 @@ mod tests {
         assert!(message.contains("example-mbp.local"));
         assert!(message.contains("/Users/example/dev/boo/target/debug/boo"));
         assert!(message.contains("rebuild the remote binary"));
+    }
+
+    #[test]
+    fn remote_control_version_negotiation_detection_matches_actionable_errors() {
+        assert!(remote_control_version_negotiation_unsupported(
+            "remote boo server on example-mbp.local does not support control version negotiation; rebuild the remote binary at /Users/example/dev/boo/target/debug/boo so both sides match"
+        ));
+        assert!(!remote_control_version_negotiation_unsupported(
+            "control get-version failed: connection refused"
+        ));
     }
 
     #[test]
