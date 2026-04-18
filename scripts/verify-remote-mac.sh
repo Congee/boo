@@ -26,6 +26,9 @@ bash scripts/test-remote-path-expansion.sh "$host" "${local_socket%.sock}-paths.
 echo "==> stale tunnel recovery verification through ${host}"
 bash scripts/test-remote-tunnel-recovery.sh "$host" "$remote_binary" "${local_socket%.sock}-recovery.sock"
 
+echo "==> remote client diagnostics verification through ${host}"
+bash scripts/test-remote-clients.sh "$host" "${local_socket%.sock}-clients.sock"
+
 echo "==> verification complete"
 echo "remote host: ${host}"
 echo "remote repo: ${remote_repo}"
