@@ -6,6 +6,7 @@ private struct ValidationAuthOkMetadata {
     let protocolVersion: UInt16
     let transportCapabilities: UInt32
     let serverBuildId: String?
+    let serverInstanceId: String?
 }
 
 private func decodeValidationAuthOkMetadata(_ payload: Data) -> ValidationAuthOkMetadata? {
@@ -20,17 +21,36 @@ private func decodeValidationAuthOkMetadata(_ payload: Data) -> ValidationAuthOk
         return ValidationAuthOkMetadata(
             protocolVersion: protocolVersion,
             transportCapabilities: transportCapabilities,
-            serverBuildId: nil
+            serverBuildId: nil,
+            serverInstanceId: nil
         )
     }
     let buildLength = payload.withUnsafeBytes {
         Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 6, as: UInt16.self)))
     }
     guard payload.count >= 8 + buildLength else { return nil }
+    let instanceLengthOffset = 8 + buildLength
+    let serverBuildId = String(data: payload[8..<(8 + buildLength)], encoding: .utf8)
+    guard payload.count >= instanceLengthOffset + 2 else {
+        return ValidationAuthOkMetadata(
+            protocolVersion: protocolVersion,
+            transportCapabilities: transportCapabilities,
+            serverBuildId: serverBuildId,
+            serverInstanceId: nil
+        )
+    }
+    let instanceLength = payload.withUnsafeBytes {
+        Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: instanceLengthOffset, as: UInt16.self)))
+    }
+    guard payload.count >= instanceLengthOffset + 2 + instanceLength else { return nil }
     return ValidationAuthOkMetadata(
         protocolVersion: protocolVersion,
         transportCapabilities: transportCapabilities,
-        serverBuildId: String(data: payload[8..<(8 + buildLength)], encoding: .utf8)
+        serverBuildId: serverBuildId,
+        serverInstanceId: String(
+            data: payload[(instanceLengthOffset + 2)..<(instanceLengthOffset + 2 + instanceLength)],
+            encoding: .utf8
+        )
     )
 }
 
@@ -49,6 +69,9 @@ private func validateValidationAuthOkMetadata(_ payload: Data, authRequired: Boo
     }
     if metadata.serverBuildId?.isEmpty != false {
         return "Remote handshake is missing server build metadata"
+    }
+    if metadata.serverInstanceId?.isEmpty != false {
+        return "Remote handshake is missing server instance metadata"
     }
     return nil
 }
@@ -91,6 +114,7 @@ final class RemoteValidator {
     private var protocolVersion: UInt16?
     private var transportCapabilities: UInt32 = 0
     private var serverBuildId: String?
+    private var serverInstanceId: String?
     private var heartbeatAckReceived = false
     private var expectedHeartbeatPayload = Data()
     private var sessionListReceived = false
@@ -260,6 +284,7 @@ final class RemoteValidator {
         protocolVersion = nil
         transportCapabilities = 0
         serverBuildId = nil
+        serverInstanceId = nil
         heartbeatAckReceived = false
         sessionListReceived = false
         attachedSessionId = nil
@@ -363,6 +388,7 @@ final class RemoteValidator {
                 protocolVersion = metadata.protocolVersion
                 transportCapabilities = metadata.transportCapabilities
                 serverBuildId = metadata.serverBuildId
+                serverInstanceId = metadata.serverInstanceId
             }
             if let error = validateValidationAuthOkMetadata(payload, authRequired: authKey != nil) {
                 lastError = error
@@ -431,7 +457,7 @@ final class RemoteValidator {
         let screenSnippet = lastScreenText
             .replacingOccurrences(of: "\n", with: "\\n")
             .prefix(160)
-        let stateSummary = "authenticated=\(authenticated) heartbeatAckReceived=\(heartbeatAckReceived) sessionListReceived=\(sessionListReceived) sessions=\(sessions.count) createdSessionId=\(String(describing: createdSessionId)) attachedSessionId=\(String(describing: attachedSessionId)) attachmentId=\(String(describing: attachmentId)) buildId=\(serverBuildId ?? "nil") screenUpdateReceived=\(screenUpdateReceived) screen=\"\(screenSnippet)\" trace=\(messageTrace.joined(separator: ","))"
+        let stateSummary = "authenticated=\(authenticated) heartbeatAckReceived=\(heartbeatAckReceived) sessionListReceived=\(sessionListReceived) sessions=\(sessions.count) createdSessionId=\(String(describing: createdSessionId)) attachedSessionId=\(String(describing: attachedSessionId)) attachmentId=\(String(describing: attachmentId)) buildId=\(serverBuildId ?? "nil") serverInstanceId=\(serverInstanceId ?? "nil") screenUpdateReceived=\(screenUpdateReceived) screen=\"\(screenSnippet)\" trace=\(messageTrace.joined(separator: ","))"
         lock.unlock()
         throw ValidationError("timed out waiting for \(description) (\(stateSummary))")
     }

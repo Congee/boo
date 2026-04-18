@@ -156,6 +156,7 @@ final class GSPClient: ObservableObject {
     @Published var protocolVersion: UInt16?
     @Published var transportCapabilities: UInt32 = 0
     @Published var serverBuildId: String?
+    @Published var serverInstanceId: String?
     @Published var lastHeartbeatAck: Date?
     @Published var lastHeartbeatRttMs: Double?
     @Published var sessions: [SessionInfo] = []
@@ -178,7 +179,9 @@ final class GSPClient: ObservableObject {
     private nonisolated static let headerLen = 7
 
     var handshakeSummary: String? {
-        guard let protocolVersion, let serverBuildId, !serverBuildId.isEmpty else {
+        guard let protocolVersion,
+              let serverBuildId, !serverBuildId.isEmpty,
+              let serverInstanceId, !serverInstanceId.isEmpty else {
             return nil
         }
         let heartbeat = lastHeartbeatRttMs.map { String(format: "hb %.0fms", $0) }
@@ -186,6 +189,7 @@ final class GSPClient: ObservableObject {
         let base = [ "proto \(protocolVersion)",
                      "caps 0x\(String(transportCapabilities, radix: 16))",
                      serverBuildId,
+                     "srv \(serverInstanceId)",
                      attachment].compactMap { $0 }.joined(separator: " · ")
         if let heartbeat {
             return "\(base) · \(heartbeat)"
@@ -231,6 +235,7 @@ final class GSPClient: ObservableObject {
         protocolVersion = nil
         transportCapabilities = 0
         serverBuildId = nil
+        serverInstanceId = nil
         lastHeartbeatAck = nil
         lastHeartbeatRttMs = nil
         lastHeartbeatSent = nil
@@ -459,6 +464,7 @@ final class GSPClient: ObservableObject {
         protocolVersion = nil
         transportCapabilities = 0
         serverBuildId = nil
+        serverInstanceId = nil
         lastHeartbeatAck = nil
         lastHeartbeatRttMs = nil
         lastHeartbeatSent = nil
@@ -513,6 +519,7 @@ final class GSPClient: ObservableObject {
             protocolVersion: protocolVersion,
             transportCapabilities: transportCapabilities,
             serverBuildId: serverBuildId,
+            serverInstanceId: serverInstanceId,
             sessions: sessions.map {
                 DecodedWireSessionInfo(
                     id: $0.id,
@@ -558,6 +565,7 @@ final class GSPClient: ObservableObject {
         protocolVersion = state.protocolVersion
         transportCapabilities = state.transportCapabilities
         serverBuildId = state.serverBuildId
+        serverInstanceId = state.serverInstanceId
         lastError = state.lastError
         attachedSessionId = state.attachedSessionId
         attachmentId = state.attachmentId

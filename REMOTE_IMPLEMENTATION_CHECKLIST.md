@@ -191,7 +191,7 @@ Goal:
 - [ ] Implement TCP/TLS fallback when UDP is unavailable or blocked
 - [ ] Make both transports speak the same application protocol
 - [ ] Expose negotiated transport details for debugging
-  - [x] iOS client surfaces negotiated protocol/capability/build metadata
+  - [x] iOS client surfaces negotiated protocol/capability/build/instance metadata
   - [x] iOS client surfaces heartbeat RTT in the debug summary
   - [x] iOS client surfaces degraded/lost transport state in the UI
 

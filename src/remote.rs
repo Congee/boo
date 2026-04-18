@@ -259,6 +259,7 @@ struct State {
     clients: HashMap<u64, ClientState>,
     revivable_attachments: HashMap<u64, RevivableAttachment>,
     auth_key: Option<Vec<u8>>,
+    server_instance_id: String,
 }
 
 pub struct RemoteServer {
@@ -293,6 +294,7 @@ impl RemoteServer {
             clients: HashMap::new(),
             revivable_attachments: HashMap::new(),
             auth_key: config.auth_key.map(|key| key.into_bytes()),
+            server_instance_id: random_instance_id(),
         }));
         let state_for_listener = Arc::clone(&state);
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -369,6 +371,7 @@ impl RemoteServer {
             clients: HashMap::new(),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_instance_id: random_instance_id(),
         }));
         let state_for_listener = Arc::clone(&state);
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -1305,6 +1308,7 @@ fn read_loop(
 fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>) -> bool {
     let mut state = state.lock().expect("remote server state poisoned");
     let auth_key = state.auth_key.clone();
+    let server_instance_id = state.server_instance_id.clone();
     let Some(client) = state.clients.get_mut(&client_id) else {
         return false;
     };
@@ -1313,7 +1317,7 @@ fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>
         client.authenticated = true;
         let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
             MessageType::AuthOk,
-            &encode_auth_ok_payload(),
+            &encode_auth_ok_payload(&server_instance_id),
         )));
         return true;
     }
@@ -1350,7 +1354,7 @@ fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>
             client.authenticated = true;
             let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
                 MessageType::AuthOk,
-                &encode_auth_ok_payload(),
+                &encode_auth_ok_payload(&server_instance_id),
             )));
             true
         }
@@ -1364,18 +1368,21 @@ fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>
     }
 }
 
-fn encode_auth_ok_payload() -> Vec<u8> {
+fn encode_auth_ok_payload(server_instance_id: &str) -> Vec<u8> {
     let build_id = env!("CARGO_PKG_VERSION").as_bytes();
-    let mut payload = Vec::with_capacity(8 + build_id.len());
+    let server_instance_id = server_instance_id.as_bytes();
+    let mut payload = Vec::with_capacity(10 + build_id.len() + server_instance_id.len());
     payload.extend_from_slice(&REMOTE_PROTOCOL_VERSION.to_le_bytes());
     payload.extend_from_slice(&REMOTE_CAPABILITIES.to_le_bytes());
     payload.extend_from_slice(&(build_id.len() as u16).to_le_bytes());
     payload.extend_from_slice(build_id);
+    payload.extend_from_slice(&(server_instance_id.len() as u16).to_le_bytes());
+    payload.extend_from_slice(server_instance_id);
     payload
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-pub fn decode_auth_ok_payload(payload: &[u8]) -> Option<(u16, u32, Option<String>)> {
+pub fn decode_auth_ok_payload(payload: &[u8]) -> Option<(u16, u32, Option<String>, Option<String>)> {
     if payload.is_empty() {
         return None;
     }
@@ -1385,14 +1392,27 @@ pub fn decode_auth_ok_payload(payload: &[u8]) -> Option<(u16, u32, Option<String
     let version = u16::from_le_bytes([payload[0], payload[1]]);
     let capabilities = u32::from_le_bytes([payload[2], payload[3], payload[4], payload[5]]);
     if payload.len() < 8 {
-        return Some((version, capabilities, None));
+        return Some((version, capabilities, None, None));
     }
     let build_len = u16::from_le_bytes([payload[6], payload[7]]) as usize;
     if payload.len() < 8 + build_len {
         return None;
     }
     let build_id = String::from_utf8(payload[8..8 + build_len].to_vec()).ok();
-    Some((version, capabilities, build_id))
+    if payload.len() < 10 + build_len {
+        return Some((version, capabilities, build_id, None));
+    }
+    let instance_offset = 8 + build_len;
+    let instance_len =
+        u16::from_le_bytes([payload[instance_offset], payload[instance_offset + 1]]) as usize;
+    if payload.len() < instance_offset + 2 + instance_len {
+        return None;
+    }
+    let server_instance_id = String::from_utf8(
+        payload[instance_offset + 2..instance_offset + 2 + instance_len].to_vec(),
+    )
+    .ok();
+    Some((version, capabilities, build_id, server_instance_id))
 }
 
 fn send_direct_error(state: &Arc<Mutex<State>>, client_id: u64, message: &str) {
@@ -1828,6 +1848,16 @@ fn random_challenge() -> [u8; 32] {
         *byte = (seed.wrapping_shr((idx % 8) as u32) as u8) ^ (idx as u8).wrapping_mul(17);
     }
     challenge
+}
+
+fn random_instance_id() -> String {
+    let challenge = random_challenge();
+    let mut output = String::with_capacity(16);
+    for byte in &challenge[..8] {
+        use std::fmt::Write as _;
+        let _ = write!(&mut output, "{byte:02x}");
+    }
+    output
 }
 
 impl ServiceAdvertiser {

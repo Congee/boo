@@ -40,19 +40,29 @@ struct ProtocolCodecSelfTestMain {
 
         var clientState = ClientWireState()
         let buildId = "0.1.0"
-        var authOkPayload = Data(count: 8 + buildId.utf8.count)
+        let serverInstanceId = "deadbeefcafebabe"
+        var authOkPayload = Data(count: 10 + buildId.utf8.count + serverInstanceId.utf8.count)
         authOkPayload.withUnsafeMutableBytes { bytes in
             bytes.storeBytes(of: UInt16(1).littleEndian, as: UInt16.self)
             bytes.storeBytes(of: UInt32(0x1f).littleEndian, toByteOffset: 2, as: UInt32.self)
             bytes.storeBytes(of: UInt16(buildId.utf8.count).littleEndian, toByteOffset: 6, as: UInt16.self)
         }
         authOkPayload.replaceSubrange(8..<(8 + buildId.utf8.count), with: buildId.utf8)
+        let instanceLengthOffset = 8 + buildId.utf8.count
+        authOkPayload.withUnsafeMutableBytes { bytes in
+            bytes.storeBytes(of: UInt16(serverInstanceId.utf8.count).littleEndian, toByteOffset: instanceLengthOffset, as: UInt16.self)
+        }
+        authOkPayload.replaceSubrange(
+            (instanceLengthOffset + 2)..<(instanceLengthOffset + 2 + serverInstanceId.utf8.count),
+            with: serverInstanceId.utf8
+        )
         let authEffect = ClientWireReducer.reduce(message: .authOk, payload: authOkPayload, state: &clientState)
         assertEqual(authEffect, .listSessions, "auth ok triggers session refresh")
         assertEqual(clientState.authenticated, true, "auth ok sets authenticated")
         assertEqual(clientState.protocolVersion, 1, "auth ok protocol version decode")
         assertEqual(clientState.transportCapabilities, 0x1f, "auth ok capability decode")
         assertEqual(clientState.serverBuildId, buildId, "auth ok build id decode")
+        assertEqual(clientState.serverInstanceId, serverInstanceId, "auth ok instance id decode")
         assertEqual(validateAuthOkMetadata(authOkPayload, authRequired: true), nil, "auth ok metadata validation")
 
         var missingBuildPayload = Data(count: 6)
