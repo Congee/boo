@@ -13,6 +13,7 @@ private struct ValidationAuthOkMetadata {
 private let validationCapabilityHmacAuth: UInt32 = 1 << 0
 private let validationCapabilityHeartbeat: UInt32 = 1 << 4
 private let validationCapabilityAttachmentResume: UInt32 = 1 << 5
+private let validationCapabilityDaemonIdentity: UInt32 = 1 << 6
 
 private func decodeValidationAuthOkMetadata(_ payload: Data) -> ValidationAuthOkMetadata? {
     guard payload.count >= 6 else { return nil }
@@ -95,6 +96,9 @@ private func validateValidationAuthOkMetadata(_ payload: Data, authRequired: Boo
     }
     if (metadata.transportCapabilities & validationCapabilityAttachmentResume) == 0 {
         return "Remote server does not advertise attachment resume support"
+    }
+    if (metadata.transportCapabilities & validationCapabilityDaemonIdentity) == 0 {
+        return "Remote server does not advertise daemon identity support"
     }
     if metadata.serverBuildId?.isEmpty != false {
         return "Remote handshake is missing server build metadata"

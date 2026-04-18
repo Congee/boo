@@ -31,6 +31,7 @@ private let expectedRemoteProtocolVersion: UInt16 = 1
 private let remoteCapabilityHmacAuth: UInt32 = 1 << 0
 private let remoteCapabilityHeartbeat: UInt32 = 1 << 4
 private let remoteCapabilityAttachmentResume: UInt32 = 1 << 5
+private let remoteCapabilityDaemonIdentity: UInt32 = 1 << 6
 
 struct ClientWireState: Equatable {
     var authenticated = false
@@ -127,6 +128,9 @@ func validateAuthOkMetadata(_ payload: Data, authRequired: Bool) -> String? {
     }
     if (metadata.transportCapabilities & remoteCapabilityAttachmentResume) == 0 {
         return "Remote server does not advertise attachment resume support"
+    }
+    if (metadata.transportCapabilities & remoteCapabilityDaemonIdentity) == 0 {
+        return "Remote server does not advertise daemon identity support"
     }
     if metadata.serverBuildId?.isEmpty != false {
         return "Remote handshake is missing server build metadata"

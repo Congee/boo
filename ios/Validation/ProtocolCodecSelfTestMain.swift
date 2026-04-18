@@ -45,7 +45,7 @@ struct ProtocolCodecSelfTestMain {
         var authOkPayload = Data(count: 12 + buildId.utf8.count + serverInstanceId.utf8.count + serverIdentityId.utf8.count)
         authOkPayload.withUnsafeMutableBytes { bytes in
             bytes.storeBytes(of: UInt16(1).littleEndian, as: UInt16.self)
-            bytes.storeBytes(of: UInt32(0x3f).littleEndian, toByteOffset: 2, as: UInt32.self)
+            bytes.storeBytes(of: UInt32(0x7f).littleEndian, toByteOffset: 2, as: UInt32.self)
             bytes.storeBytes(of: UInt16(buildId.utf8.count).littleEndian, toByteOffset: 6, as: UInt16.self)
         }
         authOkPayload.replaceSubrange(8..<(8 + buildId.utf8.count), with: buildId.utf8)
@@ -69,7 +69,7 @@ struct ProtocolCodecSelfTestMain {
         assertEqual(authEffect, .listSessions, "auth ok triggers session refresh")
         assertEqual(clientState.authenticated, true, "auth ok sets authenticated")
         assertEqual(clientState.protocolVersion, 1, "auth ok protocol version decode")
-        assertEqual(clientState.transportCapabilities, 0x3f, "auth ok capability decode")
+        assertEqual(clientState.transportCapabilities, 0x7f, "auth ok capability decode")
         assertEqual(clientState.serverBuildId, buildId, "auth ok build id decode")
         assertEqual(clientState.serverInstanceId, serverInstanceId, "auth ok instance id decode")
         assertEqual(clientState.serverIdentityId, serverIdentityId, "auth ok identity id decode")
@@ -78,7 +78,7 @@ struct ProtocolCodecSelfTestMain {
         var missingBuildPayload = Data(count: 6)
         missingBuildPayload.withUnsafeMutableBytes { bytes in
             bytes.storeBytes(of: UInt16(1).littleEndian, as: UInt16.self)
-            bytes.storeBytes(of: UInt32(0x3f).littleEndian, toByteOffset: 2, as: UInt32.self)
+            bytes.storeBytes(of: UInt32(0x7f).littleEndian, toByteOffset: 2, as: UInt32.self)
         }
         assertEqual(
             validateAuthOkMetadata(missingBuildPayload, authRequired: true),
@@ -114,6 +114,16 @@ struct ProtocolCodecSelfTestMain {
             validateAuthOkMetadata(missingResumePayload, authRequired: true),
             "Remote server does not advertise attachment resume support",
             "missing attachment resume capability rejected"
+        )
+
+        var missingIdentityCapabilityPayload = authOkPayload
+        missingIdentityCapabilityPayload.withUnsafeMutableBytes { bytes in
+            bytes.storeBytes(of: UInt32(0x3f).littleEndian, toByteOffset: 2, as: UInt32.self)
+        }
+        assertEqual(
+            validateAuthOkMetadata(missingIdentityCapabilityPayload, authRequired: true),
+            "Remote server does not advertise daemon identity support",
+            "missing daemon identity capability rejected"
         )
         assertEqual(
             serverIdentityMismatch(expectedIdentityId: "daemon-a", actualIdentityId: "daemon-b"),
