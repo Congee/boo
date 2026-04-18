@@ -174,7 +174,8 @@ Goal:
   - [x] iOS client rejects malformed or unsupported `AuthOk` metadata before issuing protocol side effects
   - [x] desktop/developer direct probing uses the same Rust `AuthOk` validation rules before reporting success
   - [x] current desktop direct-client entrypoints (`probe-remote-daemon`, `remote-daemon-sessions`, `remote-daemon-attach`) reuse the same Rust `AuthOk` validation rules
-- [ ] Add upgrade path from SSH bootstrap to canonical Boo transport
+- [x] Add upgrade path from SSH bootstrap to canonical Boo transport
+  - [x] `boo remote-upgrade-target` bootstraps the SSH host, inspects forwarded control diagnostics, and resolves the canonical native endpoint when the remote daemon is directly reachable
 
 ### 2. Connection Model
 
@@ -236,7 +237,7 @@ Goal:
 
 #### Protocol-Level
 
-- [ ] Add tests for:
+- [x] Add tests for:
   - [x] handshake
   - [x] capability negotiation
   - [x] reconnect/resume attachment restore primitives
@@ -244,7 +245,7 @@ Goal:
   - [x] multiplexed channels
   - [x] heartbeat request/ack round-trip
   - [x] heartbeat loss and recovery
-  - transport fallback
+  - [x] transport fallback
 
 #### End-to-End
 

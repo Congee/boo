@@ -26,6 +26,7 @@ struct RemoteUpgradeTargetSummary {
     ssh_host: String,
     upgrade_ready: bool,
     reason: Option<String>,
+    selected_transport: Option<crate::remote::DirectTransportKind>,
     direct_host: Option<String>,
     port: Option<u16>,
     auth_required: bool,
@@ -473,6 +474,7 @@ fn resolve_remote_upgrade_target(
             ssh_host: ssh_host.to_string(),
             upgrade_ready: false,
             reason: Some("no native remote daemon is running on the forwarded Boo server".to_string()),
+            selected_transport: None,
             direct_host: None,
             port: None,
             auth_required: false,
@@ -487,6 +489,7 @@ fn resolve_remote_upgrade_target(
             ssh_host: ssh_host.to_string(),
             upgrade_ready: false,
             reason: Some("forwarded Boo server does not advertise a native remote daemon port".to_string()),
+            selected_transport: None,
             direct_host: None,
             port: None,
             auth_required: server.auth_required,
@@ -503,20 +506,28 @@ fn resolve_remote_upgrade_target(
         "127.0.0.1" | "localhost" | "::1" => None,
         other => Some(other.to_string()),
     };
-    let (upgrade_ready, reason) = if direct_host.is_some() {
-        (true, None)
-    } else {
+    let transport_selection =
+        crate::remote::select_direct_transport(server.capabilities, false).ok();
+    let (upgrade_ready, reason) = if direct_host.is_none() {
         (
             false,
             Some(format!(
                 "native remote daemon is bound to loopback ({bind_address}); it is not reachable for direct transport upgrade"
             )),
         )
+    } else if transport_selection.is_none() {
+        (
+            false,
+            Some("native remote daemon does not advertise a usable direct transport".to_string()),
+        )
+    } else {
+        (true, None)
     };
     RemoteUpgradeTargetSummary {
         ssh_host: ssh_host.to_string(),
         upgrade_ready,
         reason,
+        selected_transport: transport_selection,
         direct_host,
         port: Some(port),
         auth_required: server.auth_required,
@@ -777,6 +788,10 @@ mod tests {
             },
         );
         assert!(summary.upgrade_ready);
+        assert_eq!(
+            summary.selected_transport,
+            Some(crate::remote::DirectTransportKind::TcpDirect)
+        );
         assert_eq!(summary.direct_host.as_deref(), Some("macbook.local"));
         assert_eq!(summary.port, Some(7337));
     }
@@ -809,6 +824,10 @@ mod tests {
             },
         );
         assert!(!summary.upgrade_ready);
+        assert_eq!(
+            summary.selected_transport,
+            Some(crate::remote::DirectTransportKind::TcpDirect)
+        );
         assert_eq!(summary.direct_host, None);
         assert!(
             summary

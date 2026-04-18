@@ -23,13 +23,16 @@ pub const REMOTE_CAPABILITY_IMAGES: u32 = 1 << 3;
 pub const REMOTE_CAPABILITY_HEARTBEAT: u32 = 1 << 4;
 pub const REMOTE_CAPABILITY_ATTACHMENT_RESUME: u32 = 1 << 5;
 pub const REMOTE_CAPABILITY_DAEMON_IDENTITY: u32 = 1 << 6;
+pub const REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT: u32 = 1 << 7;
+pub const REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT: u32 = 1 << 8;
 pub const REMOTE_CAPABILITIES: u32 = REMOTE_CAPABILITY_HMAC_AUTH
     | REMOTE_CAPABILITY_SCREEN_DELTAS
     | REMOTE_CAPABILITY_UI_STATE
     | REMOTE_CAPABILITY_IMAGES
     | REMOTE_CAPABILITY_HEARTBEAT
     | REMOTE_CAPABILITY_ATTACHMENT_RESUME
-    | REMOTE_CAPABILITY_DAEMON_IDENTITY;
+    | REMOTE_CAPABILITY_DAEMON_IDENTITY
+    | REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT;
 
 const LOCAL_INPUT_SEQ_LEN: usize = 8;
 const REMOTE_FULL_STATE_HEADER_LEN: usize = 14;
@@ -106,6 +109,13 @@ pub enum LogicalChannel {
     SessionStream,
     InputControl,
     Health,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DirectTransportKind {
+    TcpDirect,
+    QuicDirect,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1981,6 +1991,11 @@ pub fn validate_auth_ok_payload(payload: &[u8], auth_required: bool) -> Result<(
     if (capabilities & REMOTE_CAPABILITY_DAEMON_IDENTITY) == 0 {
         return Err("Remote server does not advertise daemon identity support".to_string());
     }
+    if (capabilities & (REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT | REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT))
+        == 0
+    {
+        return Err("Remote server does not advertise a supported direct transport".to_string());
+    }
     if build_id.as_deref().is_none_or(str::is_empty) {
         return Err("Remote handshake is missing server build metadata".to_string());
     }
@@ -1991,6 +2006,24 @@ pub fn validate_auth_ok_payload(payload: &[u8], auth_required: bool) -> Result<(
         return Err("Remote handshake is missing server identity metadata".to_string());
     }
     Ok(())
+}
+
+pub fn select_direct_transport(
+    capabilities: u32,
+    migration_capable_path_available: bool,
+) -> Result<DirectTransportKind, String> {
+    let supports_quic = (capabilities & REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT) != 0;
+    let supports_tcp = (capabilities & REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT) != 0;
+    if supports_quic && migration_capable_path_available {
+        return Ok(DirectTransportKind::QuicDirect);
+    }
+    if supports_tcp {
+        return Ok(DirectTransportKind::TcpDirect);
+    }
+    if supports_quic {
+        return Err("direct remote endpoint only advertises QUIC transport; TCP fallback is unavailable".to_string());
+    }
+    Err("direct remote endpoint does not advertise a supported transport".to_string())
 }
 
 pub fn probe_remote_endpoint(
@@ -3811,6 +3844,47 @@ mod tests {
             validate_auth_ok_payload(&payload, true),
             Err("Remote handshake is malformed".to_string())
         );
+    }
+
+    #[test]
+    fn validate_auth_ok_payload_rejects_missing_direct_transport_capability() {
+        let mut payload = encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe");
+        payload[2..6].copy_from_slice(
+            &(REMOTE_CAPABILITIES
+                & !(REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT | REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT))
+                .to_le_bytes(),
+        );
+        assert_eq!(
+            validate_auth_ok_payload(&payload, true),
+            Err("Remote server does not advertise a supported direct transport".to_string())
+        );
+    }
+
+    #[test]
+    fn select_direct_transport_prefers_quic_when_migration_path_is_available() {
+        let transport = select_direct_transport(
+            REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT | REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT,
+            true,
+        )
+        .expect("selected transport");
+        assert_eq!(transport, DirectTransportKind::QuicDirect);
+    }
+
+    #[test]
+    fn select_direct_transport_falls_back_to_tcp_when_udp_path_is_unavailable() {
+        let transport = select_direct_transport(
+            REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT | REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT,
+            false,
+        )
+        .expect("selected transport");
+        assert_eq!(transport, DirectTransportKind::TcpDirect);
+    }
+
+    #[test]
+    fn select_direct_transport_rejects_quic_only_endpoints_without_fallback() {
+        let error = select_direct_transport(REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT, false)
+            .expect_err("quic-only endpoint without migration-capable path should fail");
+        assert!(error.contains("QUIC"));
     }
 
     #[test]
