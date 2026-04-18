@@ -271,16 +271,16 @@ Goal:
 
 ### 1. Transport Integration
 
-- [ ] Update iOS client handshake to the canonical protocol
+- [x] Update iOS client handshake to the canonical protocol
   - [x] protocol version / capability / build-id handshake decoding
   - [x] incompatible-handshake rejection in the production client
   - [x] attachment identity propagation
   - [x] resume token / reconnect metadata
-- [ ] Support direct connection to the canonical remote endpoint
+- [x] Support direct connection to the canonical remote endpoint
   - [x] auth-protected direct connect
   - [x] wrong-key direct-auth rejection validation
   - [x] authless direct connect
-- [ ] Support reconnect/resume after:
+- [x] Support reconnect/resume after:
   - [x] app background/foreground
   - [x] device sleep/wake via the same active-scene reconnect path
   - [x] network change with bounded client retries
@@ -314,14 +314,14 @@ Goal:
 
 #### Protocol-Level
 
-- [ ] Extend protocol validation to cover the canonical iOS handshake and resume flow
+- [x] Extend protocol validation to cover the canonical iOS handshake and resume flow
   - [x] initial handshake with protocol version and capability decoding
   - [x] heartbeat acknowledgement echo validation
   - [x] resume flow
 
 #### End-to-End
 
-- [ ] Extend `scripts/test-ios-remote-view.sh` for the canonical protocol
+- [x] Extend `scripts/test-ios-remote-view.sh` for the canonical protocol
   - [x] auth/list/create/attach/input/state-update validation on the current protocol
   - [x] wrong-key auth rejection validation
   - [x] authless direct-connect validation
