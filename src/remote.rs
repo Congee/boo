@@ -1893,7 +1893,10 @@ fn random_instance_id() -> String {
 }
 
 fn load_or_create_daemon_identity() -> String {
-    let path = crate::config::config_dir().join("remote-daemon-id");
+    load_or_create_daemon_identity_at(&crate::config::config_dir().join("remote-daemon-id"))
+}
+
+fn load_or_create_daemon_identity_at(path: &Path) -> String {
     if let Ok(existing) = std::fs::read_to_string(&path) {
         let trimmed = existing.trim();
         if !trimmed.is_empty() {
@@ -2387,6 +2390,43 @@ mod tests {
             OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
         }
         assert!(cmd_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn load_or_create_daemon_identity_reuses_existing_file_contents() {
+        let path = std::env::temp_dir().join(format!(
+            "boo-remote-daemon-id-reuse-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, "trusted-daemon\n").expect("write daemon identity fixture");
+
+        let identity = load_or_create_daemon_identity_at(&path);
+
+        assert_eq!(identity, "trusted-daemon");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_or_create_daemon_identity_creates_and_persists_identity() {
+        let path = std::env::temp_dir().join(format!(
+            "boo-remote-daemon-id-create-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let first = load_or_create_daemon_identity_at(&path);
+        let second = load_or_create_daemon_identity_at(&path);
+
+        assert!(!first.is_empty());
+        assert_eq!(first, second);
+        assert_eq!(
+            std::fs::read_to_string(&path)
+                .expect("daemon identity file")
+                .trim(),
+            first
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
