@@ -29,6 +29,9 @@ bash scripts/test-remote-tunnel-recovery.sh "$host" "$remote_binary" "${local_so
 echo "==> remote client diagnostics verification through ${host}"
 bash scripts/test-remote-clients.sh "$host" "${local_socket%.sock}-clients.sock"
 
+echo "==> local native daemon diagnostics verification"
+bash scripts/test-remote-daemon-diagnostics.sh
+
 echo "==> verification complete"
 echo "remote host: ${host}"
 echo "remote repo: ${remote_repo}"
