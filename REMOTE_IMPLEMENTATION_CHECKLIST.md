@@ -222,6 +222,7 @@ Goal:
   - [x] allow users to trust the current daemon instance for a known iOS endpoint
 - [ ] Ensure bootstrap credentials are replay-resistant and bounded
 - [ ] Ensure resumed connections cannot hijack unrelated sessions
+  - [x] refuse automatic iOS resume when a known endpoint presents a different daemon identity
 
 ### 7. Verification
 
@@ -272,7 +273,7 @@ Goal:
   - [x] authless direct connect
 - [ ] Support reconnect/resume after:
   - [x] app background/foreground
-  - device sleep/wake
+  - [x] device sleep/wake via the same active-scene reconnect path
   - [x] network change with bounded client retries
 
 ### 2. UX and Input

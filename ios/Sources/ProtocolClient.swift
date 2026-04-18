@@ -173,6 +173,7 @@ final class GSPClient: ObservableObject {
     private var pendingHeartbeatToken: UInt64?
     private var desiredAttachedSessionId: UInt32?
     private var desiredAttachmentId: UInt64?
+    private var expectedServerInstanceId: String?
     private var connectionGeneration: UInt64 = 0
 
     private nonisolated static let magic: [UInt8] = [0x47, 0x53]
@@ -272,6 +273,10 @@ final class GSPClient: ObservableObject {
     func configureResumeAttachment(sessionId: UInt32, attachmentId: UInt64) {
         desiredAttachedSessionId = sessionId
         desiredAttachmentId = attachmentId
+    }
+
+    func configureTrustedServerInstance(_ instanceId: String?) {
+        expectedServerInstanceId = instanceId
     }
 
     private func sendAttach(sessionId: UInt32, attachmentId: UInt64) {
@@ -599,6 +604,12 @@ final class GSPClient: ObservableObject {
            let desiredAttachmentId,
            attachedSessionId == nil,
            sessions.contains(where: { $0.id == desiredSessionId }) {
+            if let expectedServerInstanceId,
+               let serverInstanceId,
+               expectedServerInstanceId != serverInstanceId {
+                lastError = "Server identity changed; refusing automatic resume"
+                return
+            }
             sendAttach(sessionId: desiredSessionId, attachmentId: desiredAttachmentId)
         }
     }

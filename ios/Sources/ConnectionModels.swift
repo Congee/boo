@@ -322,6 +322,7 @@ final class ConnectionMonitor: ObservableObject {
         transportHealth = .idle
         reconnectAllowed = true
         cancelReconnect()
+        client.configureTrustedServerInstance(store.trustedServerInstance(host: host, port: port))
         if let resume = store.resumeAttachment(host: host, port: port) {
             client.configureResumeAttachment(sessionId: resume.sessionId, attachmentId: resume.attachmentId)
         }
