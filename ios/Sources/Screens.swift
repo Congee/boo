@@ -2,6 +2,7 @@ import SwiftUI
 import Network
 
 struct BooRootView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var client = GSPClient()
     @StateObject private var browser = BonjourBrowser()
     @StateObject private var store = ConnectionStore()
@@ -48,6 +49,11 @@ struct BooRootView: View {
         }
         .onChange(of: activeMonitor.status) { oldValue, newValue in
             handleStatusChange(from: oldValue, to: newValue)
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else { return }
+            guard activeMonitor.lastHost != nil, !client.connected else { return }
+            activeMonitor.reconnect()
         }
     }
 

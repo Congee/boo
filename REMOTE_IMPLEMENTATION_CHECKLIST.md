@@ -269,7 +269,7 @@ Goal:
   - [x] auth-protected direct connect
   - [x] authless direct connect
 - [ ] Support reconnect/resume after:
-  - app background/foreground
+  - [x] app background/foreground
   - device sleep/wake
   - [x] network change with bounded client retries
 
