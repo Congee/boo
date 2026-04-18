@@ -21,11 +21,13 @@ pub const REMOTE_CAPABILITY_SCREEN_DELTAS: u32 = 1 << 1;
 pub const REMOTE_CAPABILITY_UI_STATE: u32 = 1 << 2;
 pub const REMOTE_CAPABILITY_IMAGES: u32 = 1 << 3;
 pub const REMOTE_CAPABILITY_HEARTBEAT: u32 = 1 << 4;
+pub const REMOTE_CAPABILITY_ATTACHMENT_RESUME: u32 = 1 << 5;
 pub const REMOTE_CAPABILITIES: u32 = REMOTE_CAPABILITY_HMAC_AUTH
     | REMOTE_CAPABILITY_SCREEN_DELTAS
     | REMOTE_CAPABILITY_UI_STATE
     | REMOTE_CAPABILITY_IMAGES
-    | REMOTE_CAPABILITY_HEARTBEAT;
+    | REMOTE_CAPABILITY_HEARTBEAT
+    | REMOTE_CAPABILITY_ATTACHMENT_RESUME;
 
 const LOCAL_INPUT_SEQ_LEN: usize = 8;
 const REMOTE_FULL_STATE_HEADER_LEN: usize = 14;
@@ -2241,7 +2243,7 @@ mod tests {
 
     #[test]
     fn auth_ok_payload_round_trips_protocol_version_and_capabilities() {
-        let frame = encode_message(MessageType::AuthOk, &encode_auth_ok_payload());
+        let frame = encode_message(MessageType::AuthOk, &encode_auth_ok_payload("deadbeefcafebabe"));
         let mut cursor = std::io::Cursor::new(frame);
         let (ty, payload) = read_message(&mut cursor).expect("auth ok frame");
         assert_eq!(ty, MessageType::AuthOk);
@@ -2251,6 +2253,7 @@ mod tests {
                 REMOTE_PROTOCOL_VERSION,
                 REMOTE_CAPABILITIES,
                 Some(env!("CARGO_PKG_VERSION").to_string()),
+                Some("deadbeefcafebabe".to_string()),
             ))
         );
     }
@@ -2278,6 +2281,7 @@ mod tests {
             )]),
             revivable_attachments: HashMap::new(),
             auth_key: Some(b"test-key".to_vec()),
+            server_instance_id: "test-instance".to_string(),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let mut frames = Vec::new();
@@ -2314,6 +2318,7 @@ mod tests {
             )]),
             revivable_attachments: HashMap::new(),
             auth_key: Some(b"test-key".to_vec()),
+            server_instance_id: "test-instance".to_string(),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let frame = encode_message(MessageType::Heartbeat, b"ping");
@@ -2550,6 +2555,7 @@ mod tests {
             )]),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
             state: Arc::clone(&state),
@@ -2624,6 +2630,7 @@ mod tests {
                 },
             )]),
             auth_key: None,
+            server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
             state: Arc::clone(&state),
@@ -2686,6 +2693,7 @@ mod tests {
             ]),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
             state,
@@ -2743,6 +2751,7 @@ mod tests {
             ]),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
             state,
@@ -2795,6 +2804,7 @@ mod tests {
             )]),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
             state,
@@ -2848,6 +2858,7 @@ mod tests {
             )]),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
             state,
@@ -2900,6 +2911,7 @@ mod tests {
             )]),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
             state,
@@ -2954,6 +2966,7 @@ mod tests {
             )]),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
             state,
@@ -3045,6 +3058,7 @@ mod tests {
             ]),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
             state,
@@ -3129,6 +3143,7 @@ mod tests {
             )]),
             revivable_attachments: HashMap::new(),
             auth_key: None,
+            server_instance_id: "test-instance".to_string(),
         }));
         let server = RemoteServer {
             state: Arc::clone(&state),

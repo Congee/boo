@@ -9,6 +9,10 @@ private struct ValidationAuthOkMetadata {
     let serverInstanceId: String?
 }
 
+private let validationCapabilityHmacAuth: UInt32 = 1 << 0
+private let validationCapabilityHeartbeat: UInt32 = 1 << 4
+private let validationCapabilityAttachmentResume: UInt32 = 1 << 5
+
 private func decodeValidationAuthOkMetadata(_ payload: Data) -> ValidationAuthOkMetadata? {
     guard payload.count >= 6 else { return nil }
     let protocolVersion = payload.withUnsafeBytes {
@@ -61,11 +65,14 @@ private func validateValidationAuthOkMetadata(_ payload: Data, authRequired: Boo
     if metadata.protocolVersion != 1 {
         return "Unsupported remote protocol version: \(metadata.protocolVersion)"
     }
-    if authRequired && (metadata.transportCapabilities & (1 << 0)) == 0 {
+    if authRequired && (metadata.transportCapabilities & validationCapabilityHmacAuth) == 0 {
         return "Remote server does not advertise HMAC authentication"
     }
-    if (metadata.transportCapabilities & (1 << 4)) == 0 {
+    if (metadata.transportCapabilities & validationCapabilityHeartbeat) == 0 {
         return "Remote server does not advertise heartbeat support"
+    }
+    if (metadata.transportCapabilities & validationCapabilityAttachmentResume) == 0 {
+        return "Remote server does not advertise attachment resume support"
     }
     if metadata.serverBuildId?.isEmpty != false {
         return "Remote handshake is missing server build metadata"
