@@ -766,7 +766,8 @@ impl ClientApp {
                     .filter(|client| client.heartbeat_overdue)
                     .count();
                 Some(format!(
-                    "diag c={} a={} p={} h={} r={}",
+                    "diag s={} c={} a={} p={} h={} r={}",
+                    snapshot.servers.len(),
                     snapshot.clients.len(),
                     attached,
                     pending,
@@ -4088,9 +4089,9 @@ mod tests {
                 ClientMode::Attached,
                 None,
                 Some("example-mbp.local"),
-                Some("diag c=2 a=1 p=1 h=0 r=1"),
+                Some("diag s=1 c=2 a=1 p=1 h=0 r=1"),
             ),
-            "remote:example-mbp.local: connected  /repo  diag c=2 a=1 p=1 h=0 r=1"
+            "remote:example-mbp.local: connected  /repo  diag s=1 c=2 a=1 p=1 h=0 r=1"
         );
     }
 }
