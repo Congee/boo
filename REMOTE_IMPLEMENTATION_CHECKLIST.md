@@ -365,6 +365,7 @@ Goal:
   - [x] include daemon metadata and per-client transport routing info in `boo remote-clients`
 - [ ] Add protocol/transport metrics useful for latency and reconnect debugging
   - [x] surface iOS client connect/auth/list/attach timing and heartbeat RTT in the debug summary
+  - [x] expose per-daemon client/attachment counts in `boo remote-clients`
 
 ### 3. Documentation
 
