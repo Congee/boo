@@ -170,6 +170,8 @@ final class GSPClient: ObservableObject {
     private var heartbeatTimer: DispatchSourceTimer?
     private var lastHeartbeatSent: Date?
     private var pendingHeartbeatToken: UInt64?
+    private var desiredAttachedSessionId: UInt32?
+    private var desiredAttachmentId: UInt64?
 
     private nonisolated static let magic: [UInt8] = [0x47, 0x53]
     private nonisolated static let headerLen = 7
@@ -230,6 +232,8 @@ final class GSPClient: ObservableObject {
         pendingHeartbeatToken = nil
         attachedSessionId = nil
         attachmentId = nil
+        desiredAttachedSessionId = nil
+        desiredAttachmentId = nil
         sessions = []
         screen = ScreenState()
         stopHeartbeatLoop()
@@ -247,12 +251,18 @@ final class GSPClient: ObservableObject {
     }
 
     func attach(sessionId: UInt32) {
-        attachedSessionId = sessionId
         let newAttachmentId = UInt64(Date().timeIntervalSince1970 * 1000)
+        desiredAttachedSessionId = sessionId
+        desiredAttachmentId = newAttachmentId
+        attachedSessionId = sessionId
         attachmentId = newAttachmentId
+        sendAttach(sessionId: sessionId, attachmentId: newAttachmentId)
+    }
+
+    private func sendAttach(sessionId: UInt32, attachmentId: UInt64) {
         var payload = Data(count: 12)
         payload.withUnsafeMutableBytes { $0.storeBytes(of: sessionId.littleEndian, as: UInt32.self) }
-        payload.withUnsafeMutableBytes { $0.storeBytes(of: newAttachmentId.littleEndian, toByteOffset: 4, as: UInt64.self) }
+        payload.withUnsafeMutableBytes { $0.storeBytes(of: attachmentId.littleEndian, toByteOffset: 4, as: UInt64.self) }
         sendMessage(type: .attach, payload: payload)
     }
 
@@ -260,6 +270,8 @@ final class GSPClient: ObservableObject {
         sendMessage(type: .detach, payload: Data())
         attachedSessionId = nil
         attachmentId = nil
+        desiredAttachedSessionId = nil
+        desiredAttachmentId = nil
     }
 
     func sendInput(_ text: String) {
@@ -557,6 +569,14 @@ final class GSPClient: ObservableObject {
             listSessions()
         case .attach(let sessionId):
             attach(sessionId: sessionId)
+        }
+
+        if message == .sessionList,
+           let desiredSessionId = desiredAttachedSessionId,
+           let desiredAttachmentId,
+           attachedSessionId == nil,
+           sessions.contains(where: { $0.id == desiredSessionId }) {
+            sendAttach(sessionId: desiredSessionId, attachmentId: desiredAttachmentId)
         }
     }
 
