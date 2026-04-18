@@ -49,7 +49,7 @@ Goal:
 - [x] Add `packages.default` for `boo`
 - [x] Add `apps.default` for `boo`
 - [x] Add a basic `checks.default`
-- [ ] Add a documented Nix run/build flow for developers and remote verification
+- [x] Add a documented Nix run/build flow for developers and remote verification
 
 ### 2. Remote Darwin Builder
 
