@@ -268,6 +268,8 @@ pub struct RevivableAttachmentInfo {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct RemoteServerInfo {
     pub local_socket_path: Option<String>,
+    pub bind_address: Option<String>,
+    pub port: Option<u16>,
     pub protocol_version: u16,
     pub capabilities: u32,
     pub build_id: String,
@@ -487,6 +489,8 @@ pub struct RemoteServer {
     _listener: std::thread::JoinHandle<()>,
     _advertiser: Option<ServiceAdvertiser>,
     local_socket_path: Option<PathBuf>,
+    bind_address: Option<String>,
+    port: Option<u16>,
 }
 
 struct ServiceAdvertiser {
@@ -610,6 +614,8 @@ impl RemoteServer {
                 _listener: listener_thread,
                 _advertiser: advertiser,
                 local_socket_path: None,
+                bind_address: Some(bind_address),
+                port: Some(config.port),
             },
             cmd_rx,
         ))
@@ -701,6 +707,8 @@ impl RemoteServer {
                 _listener: listener_thread,
                 _advertiser: None,
                 local_socket_path: Some(socket_path),
+                bind_address: None,
+                port: None,
             },
             cmd_rx,
         ))
@@ -770,6 +778,8 @@ impl RemoteServer {
                 .local_socket_path
                 .as_ref()
                 .map(|path| path.display().to_string()),
+            bind_address: self.bind_address.clone(),
+            port: self.port,
             protocol_version: REMOTE_PROTOCOL_VERSION,
             capabilities: REMOTE_CAPABILITIES,
             build_id: env!("CARGO_PKG_VERSION").to_string(),
@@ -4844,6 +4854,8 @@ mod tests {
             _listener: std::thread::spawn(|| {}),
             _advertiser: None,
             local_socket_path: None,
+            bind_address: None,
+            port: None,
         };
 
         server.send_attached(7, 11, None);
@@ -4899,6 +4911,8 @@ mod tests {
             _listener: std::thread::spawn(|| {}),
             _advertiser: None,
             local_socket_path: None,
+            bind_address: None,
+            port: None,
         };
 
         server.send_attached(7, 11, Some(0xabc));
@@ -4984,6 +4998,8 @@ mod tests {
             _listener: std::thread::spawn(|| {}),
             _advertiser: None,
             local_socket_path: None,
+            bind_address: None,
+            port: None,
         };
 
         server
@@ -5059,6 +5075,8 @@ mod tests {
             _listener: std::thread::spawn(|| {}),
             _advertiser: None,
             local_socket_path: None,
+            bind_address: None,
+            port: None,
         };
 
         let error = server
@@ -5112,6 +5130,8 @@ mod tests {
             _listener: std::thread::spawn(|| {}),
             _advertiser: None,
             local_socket_path: None,
+            bind_address: None,
+            port: None,
         };
 
         let error = server
@@ -5189,6 +5209,8 @@ mod tests {
             _listener: std::thread::spawn(|| {}),
             _advertiser: None,
             local_socket_path: None,
+            bind_address: None,
+            port: None,
         };
 
         let snapshot = server.clients_snapshot();
@@ -5278,6 +5300,8 @@ mod tests {
             _listener: std::thread::spawn(|| {}),
             _advertiser: None,
             local_socket_path: None,
+            bind_address: None,
+            port: None,
         };
 
         let snapshot = server.clients_snapshot();
@@ -5337,6 +5361,8 @@ mod tests {
             _listener: std::thread::spawn(|| {}),
             _advertiser: None,
             local_socket_path: None,
+            bind_address: None,
+            port: None,
         };
 
         let snapshot = server.clients_snapshot();
@@ -5403,6 +5429,8 @@ mod tests {
             _listener: std::thread::spawn(|| {}),
             _advertiser: None,
             local_socket_path: None,
+            bind_address: None,
+            port: None,
         };
 
         let snapshot = server.clients_snapshot();
@@ -5458,6 +5486,8 @@ mod tests {
             _listener: std::thread::spawn(|| {}),
             _advertiser: None,
             local_socket_path: None,
+            bind_address: None,
+            port: None,
         };
 
         let stale_snapshot = server.clients_snapshot();
@@ -5538,6 +5568,8 @@ mod tests {
             _listener: std::thread::spawn(|| {}),
             _advertiser: None,
             local_socket_path: None,
+            bind_address: None,
+            port: None,
         };
         let ui_state = control::UiRuntimeState {
             active_tab: 0,
@@ -5596,6 +5628,8 @@ mod tests {
             _listener: std::thread::spawn(|| {}),
             _advertiser: None,
             local_socket_path: None,
+            bind_address: None,
+            port: None,
         };
         let ui_state = control::UiRuntimeState {
             active_tab: 0,
@@ -5655,6 +5689,8 @@ mod tests {
             _listener: std::thread::spawn(|| {}),
             _advertiser: None,
             local_socket_path: None,
+            bind_address: None,
+            port: None,
         };
         let sessions = vec![RemoteSessionInfo {
             id: 11,
@@ -5713,6 +5749,8 @@ mod tests {
             _listener: std::thread::spawn(|| {}),
             _advertiser: None,
             local_socket_path: None,
+            bind_address: None,
+            port: None,
         };
         let sessions = vec![RemoteSessionInfo {
             id: 11,
@@ -5773,6 +5811,8 @@ mod tests {
             _listener: std::thread::spawn(|| {}),
             _advertiser: None,
             local_socket_path: None,
+            bind_address: None,
+            port: None,
         };
 
         assert!(server.has_client(1));
@@ -5882,6 +5922,8 @@ mod tests {
             _listener: std::thread::spawn(|| {}),
             _advertiser: None,
             local_socket_path: None,
+            bind_address: None,
+            port: None,
         };
 
         server.retarget_local_attached_to_session(22);
@@ -5972,6 +6014,8 @@ mod tests {
             _listener: std::thread::spawn(|| {}),
             _advertiser: None,
             local_socket_path: None,
+            bind_address: None,
+            port: None,
         };
 
         server.retain_local_attached_pane_states(11, &[20]);

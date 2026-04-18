@@ -2,6 +2,7 @@ use crate::config;
 use crate::control;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Generator, Shell, generate};
+use serde::Serialize;
 
 #[derive(Debug, Clone, Parser)]
 #[command(
@@ -18,6 +19,20 @@ pub struct Cli {
 
     #[command(subcommand)]
     pub command: Option<Command>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct RemoteUpgradeTargetSummary {
+    ssh_host: String,
+    upgrade_ready: bool,
+    reason: Option<String>,
+    direct_host: Option<String>,
+    port: Option<u16>,
+    auth_required: bool,
+    server_identity_id: Option<String>,
+    server_instance_id: Option<String>,
+    build_id: Option<String>,
+    capabilities: Option<u32>,
 }
 
 #[derive(Debug, Clone, clap::Args, Default)]
@@ -145,6 +160,8 @@ pub enum Command {
         #[arg(long = "expect-server-identity")]
         expect_server_identity: Option<String>,
     },
+    /// Bootstrap a remote Boo host over SSH and report its canonical native remote endpoint
+    RemoteUpgradeTarget,
     /// Attach to a session on a Boo-native TCP remote daemon directly
     RemoteDaemonAttach {
         #[arg(long, default_value = "127.0.0.1")]
@@ -332,6 +349,39 @@ where
                 Outcome::Exit(1)
             }
         },
+        Command::RemoteUpgradeTarget => {
+            let Some(ssh_host) = cli
+                .global
+                .host
+                .as_deref()
+                .or(boo_config.remote_host.as_deref())
+            else {
+                eprintln!("remote upgrade target discovery requires --host or remote-host in config");
+                return Outcome::Exit(1);
+            };
+            if !require_server() {
+                return Outcome::Exit(1);
+            }
+            let client = control::Client::connect(socket_path);
+            match client.get_remote_clients() {
+                Ok(snapshot) => {
+                    let summary = resolve_remote_upgrade_target(ssh_host, &snapshot);
+                    let mut stdout = std::io::stdout().lock();
+                    use std::io::Write;
+                    if serde_json::to_writer_pretty(&mut stdout, &summary).is_err() {
+                        eprintln!("failed to serialize remote upgrade target summary");
+                        return Outcome::Exit(1);
+                    }
+                    let _ = writeln!(stdout);
+                    let _ = stdout.flush();
+                    Outcome::Exit(0)
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    Outcome::Exit(1)
+                }
+            }
+        }
         Command::RemoteDaemonAttach {
             host,
             port,
@@ -411,6 +461,69 @@ where
         }
         Command::Attach => Outcome::Continue,
         Command::Server => Outcome::Continue,
+    }
+}
+
+fn resolve_remote_upgrade_target(
+    ssh_host: &str,
+    snapshot: &crate::remote::RemoteClientsSnapshot,
+) -> RemoteUpgradeTargetSummary {
+    let Some(server) = snapshot.servers.first() else {
+        return RemoteUpgradeTargetSummary {
+            ssh_host: ssh_host.to_string(),
+            upgrade_ready: false,
+            reason: Some("no native remote daemon is running on the forwarded Boo server".to_string()),
+            direct_host: None,
+            port: None,
+            auth_required: false,
+            server_identity_id: None,
+            server_instance_id: None,
+            build_id: None,
+            capabilities: None,
+        };
+    };
+    let Some(port) = server.port else {
+        return RemoteUpgradeTargetSummary {
+            ssh_host: ssh_host.to_string(),
+            upgrade_ready: false,
+            reason: Some("forwarded Boo server does not advertise a native remote daemon port".to_string()),
+            direct_host: None,
+            port: None,
+            auth_required: server.auth_required,
+            server_identity_id: Some(server.server_identity_id.clone()),
+            server_instance_id: Some(server.server_instance_id.clone()),
+            build_id: Some(server.build_id.clone()),
+            capabilities: Some(server.capabilities),
+        };
+    };
+    let bind_address = server.bind_address.as_deref().unwrap_or_default();
+    let direct_host = match bind_address {
+        "" => None,
+        "0.0.0.0" | "::" => Some(ssh_host.to_string()),
+        "127.0.0.1" | "localhost" | "::1" => None,
+        other => Some(other.to_string()),
+    };
+    let (upgrade_ready, reason) = if direct_host.is_some() {
+        (true, None)
+    } else {
+        (
+            false,
+            Some(format!(
+                "native remote daemon is bound to loopback ({bind_address}); it is not reachable for direct transport upgrade"
+            )),
+        )
+    };
+    RemoteUpgradeTargetSummary {
+        ssh_host: ssh_host.to_string(),
+        upgrade_ready,
+        reason,
+        direct_host,
+        port: Some(port),
+        auth_required: server.auth_required,
+        server_identity_id: Some(server.server_identity_id.clone()),
+        server_instance_id: Some(server.server_instance_id.clone()),
+        build_id: Some(server.build_id.clone()),
+        capabilities: Some(server.capabilities),
     }
 }
 
@@ -574,6 +687,15 @@ mod tests {
     }
 
     #[test]
+    fn parse_remote_upgrade_target_subcommand() {
+        let cli = Cli::parse_from(["boo", "remote-upgrade-target"]);
+        assert!(matches!(
+            cli.command,
+            Some(super::Command::RemoteUpgradeTarget)
+        ));
+    }
+
+    #[test]
     fn help_mentions_default_gui_behavior() {
         let help = Cli::command().render_long_help().to_string();
         assert!(help.contains("Running `boo` with no subcommand opens the GUI client."));
@@ -625,5 +747,76 @@ mod tests {
         });
         assert_eq!(ensured, 1);
         assert!(matches!(outcome, super::Outcome::Exit(1)));
+    }
+
+    #[test]
+    fn resolve_remote_upgrade_target_maps_public_bind_to_ssh_host() {
+        let summary = super::resolve_remote_upgrade_target(
+            "macbook.local",
+            &crate::remote::RemoteClientsSnapshot {
+                servers: vec![crate::remote::RemoteServerInfo {
+                    local_socket_path: Some("/tmp/boo.sock".to_string()),
+                    bind_address: Some("0.0.0.0".to_string()),
+                    port: Some(7337),
+                    protocol_version: crate::remote::REMOTE_PROTOCOL_VERSION,
+                    capabilities: crate::remote::REMOTE_CAPABILITIES,
+                    build_id: env!("CARGO_PKG_VERSION").to_string(),
+                    server_instance_id: "test-instance".to_string(),
+                    server_identity_id: "test-daemon".to_string(),
+                    auth_required: true,
+                    auth_challenge_window_ms: 10_000,
+                    heartbeat_window_ms: 20_000,
+                    revive_window_ms: 30_000,
+                    connected_clients: 0,
+                    attached_clients: 0,
+                    pending_auth_clients: 0,
+                    revivable_attachments: 0,
+                }],
+                clients: Vec::new(),
+                revivable_attachments: Vec::new(),
+            },
+        );
+        assert!(summary.upgrade_ready);
+        assert_eq!(summary.direct_host.as_deref(), Some("macbook.local"));
+        assert_eq!(summary.port, Some(7337));
+    }
+
+    #[test]
+    fn resolve_remote_upgrade_target_rejects_loopback_bind() {
+        let summary = super::resolve_remote_upgrade_target(
+            "macbook.local",
+            &crate::remote::RemoteClientsSnapshot {
+                servers: vec![crate::remote::RemoteServerInfo {
+                    local_socket_path: Some("/tmp/boo.sock".to_string()),
+                    bind_address: Some("127.0.0.1".to_string()),
+                    port: Some(7337),
+                    protocol_version: crate::remote::REMOTE_PROTOCOL_VERSION,
+                    capabilities: crate::remote::REMOTE_CAPABILITIES,
+                    build_id: env!("CARGO_PKG_VERSION").to_string(),
+                    server_instance_id: "test-instance".to_string(),
+                    server_identity_id: "test-daemon".to_string(),
+                    auth_required: false,
+                    auth_challenge_window_ms: 10_000,
+                    heartbeat_window_ms: 20_000,
+                    revive_window_ms: 30_000,
+                    connected_clients: 0,
+                    attached_clients: 0,
+                    pending_auth_clients: 0,
+                    revivable_attachments: 0,
+                }],
+                clients: Vec::new(),
+                revivable_attachments: Vec::new(),
+            },
+        );
+        assert!(!summary.upgrade_ready);
+        assert_eq!(summary.direct_host, None);
+        assert!(
+            summary
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("loopback")),
+            "unexpected reason: {:?}",
+            summary.reason
+        );
     }
 }
