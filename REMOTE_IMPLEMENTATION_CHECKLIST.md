@@ -303,9 +303,9 @@ Goal:
 
 ### 3. Deployment Modes
 
-- [ ] Preserve LAN discovery via Bonjour where useful
-- [ ] Support manual endpoint entry for internet mode
-- [ ] Clarify saved-host model for:
+- [x] Preserve LAN discovery via Bonjour where useful
+- [x] Support manual endpoint entry for internet mode
+- [x] Clarify saved-host model for:
   - LAN-discovered hosts
   - directly entered hosts
   - auth material
