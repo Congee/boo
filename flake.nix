@@ -137,6 +137,14 @@
           export LIBGHOSTTY_VT_SYS_LIBDIR="${libghosttyVtPackage}/lib"
           export LIBGHOSTTY_VT_SYS_INCLUDEDIR="${libghosttyVtPackage}/include"
         '';
+        # cargoCheckHook runs test binaries via `cargo test`, which on Darwin
+        # launches them out of target/release/deps/ where @rpath cannot find
+        # libghostty-vt.dylib. Adding the libghostty-vt store path to
+        # DYLD_LIBRARY_PATH lets dyld resolve it at test time without touching
+        # the shipped binary's link-time rpath.
+        preCheck = lib.optionalString pkgs.stdenv.isDarwin ''
+          export DYLD_LIBRARY_PATH="${libghosttyVtPackage}/lib''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+        '';
         meta = with lib; {
           description = "Rust/iced terminal app built on libghostty-vt";
           mainProgram = "boo";
