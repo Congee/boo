@@ -518,6 +518,25 @@ The canonical Boo-native remote protocol shall require:
 
 SSH remains an acceptable bootstrap trust model for desktop clients, but the Boo-native transport itself shall still provide its own secure session establishment story for direct clients such as iOS.
 
+#### Transport encryption and identity pinning
+
+The encrypted transport is TLS 1.2/1.3 (and QUIC, when that backend lands, via its built-in TLS 1.3). The server generates an ed25519 keypair and self-signed X.509 certificate on first start, persisted at `~/.config/boo/remote-daemon-identity/{key.pem,cert.pem}` with the private key at `0600`. There is no CA, no chain, and no user-provided cert material.
+
+The daemon identity string is `base64url-nopad(sha256(SubjectPublicKeyInfo_DER))`. It is:
+
+- a cryptographic pin anchor: presenting this identity over TLS means presenting the one cert whose SPKI hashes to that value
+- stable across cert re-issuance from the same keypair
+- algorithm-agnostic at the wire level (the string alone carries no algorithm tag, but the stored private key format does, so PQC migration replaces cert and key together and the identity string recomputes)
+
+Clients bootstrap trust in one of two ways:
+
+1. **SSH-bootstrapped** (desktop): SSH authenticates the user and verifies the host via `~/.ssh/known_hosts`. The client then asks the forwarded Boo control socket for `server_identity_id` and uses it as the SPKI pin for a direct TLS connection. No TOFU window: SSH already vouched.
+2. **TOFU** (iOS and direct CLI use): the client opens TLS, the cert is accepted on first contact, the identity string is stored (e.g. `ConnectionStore.trustedServerIdentities`), and every subsequent connect verifies the same pin.
+
+Third parties who deploy Boo daemons behind their own PKI may want a `--cert-path`/`--key-path` escape hatch so rustls uses the caller-provided cert instead of the generated self-signed one. This is a future addition; the pinning model above keeps working unchanged for clients that pin the deployed cert's SPKI.
+
+The client-side verifier (`PinnedSpkiServerCertVerifier` in Rust, its iOS counterpart on the other side) ignores CA chain validation and hostname verification entirely. Cert expiry dates are not consulted either — a pin is an end-entity trust statement, not a chain-and-expiry delegation.
+
 ### End-User Versus Debug Diagnostics
 
 Remote Boo shall separate user-facing connection state from debug/operator diagnostics.
