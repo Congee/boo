@@ -132,16 +132,23 @@ impl BooApp {
             server::Command::Ping => {}
             server::Command::GetRemoteClients { reply } => {
                 let mut snapshot = crate::remote::RemoteClientsSnapshot {
+                    servers: Vec::new(),
                     clients: Vec::new(),
                     revivable_attachments: Vec::new(),
                 };
                 for server in self.remote_servers() {
                     let server_snapshot = server.clients_snapshot();
+                    snapshot.servers.extend(server_snapshot.servers);
                     snapshot.clients.extend(server_snapshot.clients);
                     snapshot
                         .revivable_attachments
                         .extend(server_snapshot.revivable_attachments);
                 }
+                snapshot.servers.sort_by(|a, b| {
+                    a.local_socket_path
+                        .cmp(&b.local_socket_path)
+                        .then_with(|| a.server_instance_id.cmp(&b.server_instance_id))
+                });
                 snapshot.clients.sort_by_key(|client| client.client_id);
                 snapshot
                     .revivable_attachments

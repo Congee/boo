@@ -1040,6 +1040,18 @@ mod tests {
                 reply
                     .send(Response::RemoteClients {
                         snapshot: crate::remote::RemoteClientsSnapshot {
+                            servers: vec![crate::remote::RemoteServerInfo {
+                                local_socket_path: Some("/tmp/boo.sock".to_string()),
+                                protocol_version: 1,
+                                capabilities: crate::remote::REMOTE_CAPABILITIES,
+                                build_id: env!("CARGO_PKG_VERSION").to_string(),
+                                server_instance_id: "test-instance".to_string(),
+                                server_identity_id: "test-daemon".to_string(),
+                                auth_required: true,
+                                auth_challenge_window_ms: 10_000,
+                                heartbeat_window_ms: 20_000,
+                                revive_window_ms: 30_000,
+                            }],
                             clients: vec![crate::remote::RemoteClientInfo {
                                 client_id: 7,
                                 authenticated: true,

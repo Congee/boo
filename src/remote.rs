@@ -194,7 +194,22 @@ pub struct RevivableAttachmentInfo {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct RemoteServerInfo {
+    pub local_socket_path: Option<String>,
+    pub protocol_version: u16,
+    pub capabilities: u32,
+    pub build_id: String,
+    pub server_instance_id: String,
+    pub server_identity_id: String,
+    pub auth_required: bool,
+    pub auth_challenge_window_ms: u64,
+    pub heartbeat_window_ms: u64,
+    pub revive_window_ms: u64,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct RemoteClientsSnapshot {
+    pub servers: Vec<RemoteServerInfo>,
     pub clients: Vec<RemoteClientInfo>,
     pub revivable_attachments: Vec<RevivableAttachmentInfo>,
 }
@@ -573,6 +588,21 @@ impl RemoteServer {
     pub fn clients_snapshot(&self) -> RemoteClientsSnapshot {
         let state = self.state.lock().expect("remote server state poisoned");
         let now = Instant::now();
+        let servers = vec![RemoteServerInfo {
+            local_socket_path: self
+                .local_socket_path
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            protocol_version: REMOTE_PROTOCOL_VERSION,
+            capabilities: REMOTE_CAPABILITIES,
+            build_id: env!("CARGO_PKG_VERSION").to_string(),
+            server_instance_id: state.server_instance_id.clone(),
+            server_identity_id: state.server_identity_id.clone(),
+            auth_required: state.auth_key.is_some(),
+            auth_challenge_window_ms: AUTH_CHALLENGE_WINDOW.as_millis() as u64,
+            heartbeat_window_ms: DIRECT_CLIENT_HEARTBEAT_WINDOW.as_millis() as u64,
+            revive_window_ms: REVIVABLE_ATTACHMENT_WINDOW.as_millis() as u64,
+        }];
         let mut clients = state
             .clients
             .iter()
@@ -631,6 +661,7 @@ impl RemoteServer {
         revivable_attachments.sort_by_key(|attachment| attachment.attachment_id);
 
         RemoteClientsSnapshot {
+            servers,
             clients,
             revivable_attachments,
         }
@@ -4027,6 +4058,18 @@ mod tests {
         };
 
         let snapshot = server.clients_snapshot();
+        assert_eq!(snapshot.servers.len(), 1);
+        let server_info = &snapshot.servers[0];
+        assert_eq!(server_info.protocol_version, REMOTE_PROTOCOL_VERSION);
+        assert_eq!(server_info.capabilities, REMOTE_CAPABILITIES);
+        assert_eq!(server_info.build_id, env!("CARGO_PKG_VERSION"));
+        assert_eq!(server_info.server_instance_id, "test-instance");
+        assert_eq!(server_info.server_identity_id, "test-daemon");
+        assert!(!server_info.auth_required);
+        assert_eq!(
+            server_info.heartbeat_window_ms,
+            DIRECT_CLIENT_HEARTBEAT_WINDOW.as_millis() as u64
+        );
         assert!(snapshot.revivable_attachments.is_empty());
         assert_eq!(snapshot.clients.len(), 1);
         let client = &snapshot.clients[0];
@@ -4098,6 +4141,7 @@ mod tests {
         };
 
         let snapshot = server.clients_snapshot();
+        assert_eq!(snapshot.servers.len(), 1);
         assert!(snapshot.clients.is_empty());
         assert_eq!(snapshot.revivable_attachments.len(), 1);
         let attachment = &snapshot.revivable_attachments[0];
@@ -4152,6 +4196,12 @@ mod tests {
         };
 
         let snapshot = server.clients_snapshot();
+        assert_eq!(snapshot.servers.len(), 1);
+        assert!(snapshot.servers[0].auth_required);
+        assert_eq!(
+            snapshot.servers[0].auth_challenge_window_ms,
+            AUTH_CHALLENGE_WINDOW.as_millis() as u64
+        );
         assert_eq!(snapshot.clients.len(), 1);
         let client = &snapshot.clients[0];
         assert!(!client.authenticated);
@@ -4206,6 +4256,7 @@ mod tests {
         };
 
         let snapshot = server.clients_snapshot();
+        assert_eq!(snapshot.servers.len(), 1);
         assert_eq!(snapshot.clients.len(), 1);
         let client = &snapshot.clients[0];
         assert!(client.heartbeat_overdue);

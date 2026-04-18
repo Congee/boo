@@ -114,6 +114,28 @@ output = subprocess.check_output(
     text=True,
 )
 snapshot = json.loads(output)
+servers = snapshot.get("servers")
+if not isinstance(servers, list) or not servers:
+    raise SystemExit("expected non-empty servers list in remote-clients output")
+server_info = servers[0]
+if server_info.get("protocol_version") != 1:
+    raise SystemExit(f"unexpected server protocol version: {server_info.get('protocol_version')!r}")
+if not isinstance(server_info.get("capabilities"), int) or server_info["capabilities"] <= 0:
+    raise SystemExit(f"unexpected server capabilities: {server_info.get('capabilities')!r}")
+if not server_info.get("build_id"):
+    raise SystemExit("missing build_id in server diagnostics")
+if not server_info.get("server_instance_id"):
+    raise SystemExit("missing server_instance_id in server diagnostics")
+if not server_info.get("server_identity_id"):
+    raise SystemExit("missing server_identity_id in server diagnostics")
+if server_info.get("auth_required") is not True:
+    raise SystemExit(f"expected auth_required true in server diagnostics, got {server_info.get('auth_required')!r}")
+if server_info.get("auth_challenge_window_ms") != 10_000:
+    raise SystemExit(f"unexpected auth_challenge_window_ms: {server_info.get('auth_challenge_window_ms')!r}")
+if server_info.get("heartbeat_window_ms") != 20_000:
+    raise SystemExit(f"unexpected heartbeat_window_ms: {server_info.get('heartbeat_window_ms')!r}")
+if server_info.get("revive_window_ms") != 30_000:
+    raise SystemExit(f"unexpected revive_window_ms: {server_info.get('revive_window_ms')!r}")
 clients = snapshot.get("clients")
 if not isinstance(clients, list):
     raise SystemExit("expected clients list in remote-clients output")
