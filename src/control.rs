@@ -1033,6 +1033,44 @@ mod tests {
     }
 
     #[test]
+    fn get_remote_clients_round_trips_reply() {
+        let (tx, rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || match rx.recv().unwrap() {
+            ControlCmd::GetRemoteClients { reply } => {
+                reply
+                    .send(Response::RemoteClients {
+                        clients: vec![crate::remote::RemoteClientInfo {
+                            client_id: 7,
+                            authenticated: true,
+                            is_local: false,
+                            attached_session: Some(11),
+                            attachment_id: Some(0xabc),
+                            resume_token_present: true,
+                            has_cached_state: true,
+                            pane_state_count: 1,
+                            latest_input_seq: Some(9),
+                        }],
+                    })
+                    .unwrap();
+            }
+            other => panic!("unexpected command: {other:?}"),
+        });
+
+        let response = dispatch_request(Request::GetRemoteClients, &tx);
+        worker.join().unwrap();
+
+        match response {
+            Response::RemoteClients { clients } => {
+                assert_eq!(clients.len(), 1);
+                assert_eq!(clients[0].client_id, 7);
+                assert_eq!(clients[0].attached_session, Some(11));
+                assert!(clients[0].resume_token_present);
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
     fn get_ui_snapshot_round_trips_reply() {
         let (tx, rx) = mpsc::channel();
         let worker = std::thread::spawn(move || match rx.recv().unwrap() {
