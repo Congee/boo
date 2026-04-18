@@ -39,6 +39,7 @@ const LOCAL_DELTA_HEADER_LEN: usize = LOCAL_INPUT_SEQ_LEN + REMOTE_DELTA_HEADER_
 const REMOTE_CELL_ENCODED_LEN: usize = 12;
 const REVIVABLE_ATTACHMENT_WINDOW: Duration = Duration::from_secs(30);
 const AUTH_CHALLENGE_WINDOW: Duration = Duration::from_secs(10);
+const DIRECT_CLIENT_HEARTBEAT_WINDOW: Duration = Duration::from_secs(20);
 const REMOTE_READ_TIMEOUT: Duration = Duration::from_secs(1);
 const STYLE_FLAG_BOLD: u8 = 0x01;
 const STYLE_FLAG_ITALIC: u8 = 0x02;
@@ -1357,16 +1358,20 @@ fn coalescible_frame_kind(frame: &[u8]) -> Option<CoalescibleFrameKind> {
     }
 }
 
-fn should_disconnect_unauthenticated_client(
-    state: &Arc<Mutex<State>>,
-    client_id: u64,
-) -> Option<&'static str> {
+fn should_disconnect_idle_client(state: &Arc<Mutex<State>>, client_id: u64) -> Option<&'static str> {
     let state = state.lock().expect("remote server state poisoned");
     let client = state.clients.get(&client_id)?;
+    let now = Instant::now();
     if client.authenticated {
+        if client.is_local {
+            return None;
+        }
+        let last_liveness = client.last_heartbeat_at.or(client.authenticated_at)?;
+        if now.saturating_duration_since(last_liveness) > DIRECT_CLIENT_HEARTBEAT_WINDOW {
+            return Some("heartbeat-timeout");
+        }
         return None;
     }
-    let now = Instant::now();
     if let Some(challenge) = client.challenge {
         if now > challenge.expires_at {
             return Some("challenge-timeout");
@@ -1396,9 +1401,16 @@ fn read_loop(
                     io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
                 ) =>
             {
-                if let Some(reason) = should_disconnect_unauthenticated_client(&state, client_id) {
-                    log::warn!("remote auth failed: client_id={client_id} reason={reason}");
-                    send_direct_frame(&state, client_id, MessageType::AuthFail, Vec::new());
+                if let Some(reason) = should_disconnect_idle_client(&state, client_id) {
+                    if reason == "heartbeat-timeout" {
+                        log::warn!(
+                            "remote direct client disconnected: client_id={client_id} reason={reason}"
+                        );
+                        send_direct_error(&state, client_id, "heartbeat timeout");
+                    } else {
+                        log::warn!("remote auth failed: client_id={client_id} reason={reason}");
+                        send_direct_frame(&state, client_id, MessageType::AuthFail, Vec::new());
+                    }
                     break;
                 }
                 continue;
@@ -3254,6 +3266,111 @@ mod tests {
             }
             OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
         }
+        assert!(cmd_rx.try_recv().is_err());
+        let guard = state.lock().expect("remote server state poisoned");
+        assert!(!guard.clients.contains_key(&1));
+    }
+
+    #[test]
+    fn read_loop_closes_authenticated_remote_client_after_heartbeat_timeout() {
+        let (outbound_tx, outbound_rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: outbound_tx,
+                    authenticated: true,
+                    challenge: None,
+                    connected_at: Instant::now()
+                        - DIRECT_CLIENT_HEARTBEAT_WINDOW
+                        - Duration::from_secs(2),
+                    authenticated_at: Some(
+                        Instant::now()
+                            - DIRECT_CLIENT_HEARTBEAT_WINDOW
+                            - Duration::from_secs(2),
+                    ),
+                    last_heartbeat_at: None,
+                    attached_session: None,
+                    attachment_id: None,
+                    resume_token: None,
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: false,
+                },
+            )]),
+            revivable_attachments: HashMap::new(),
+            auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
+            server_instance_id: "test-instance".to_string(),
+        }));
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let reader = TimeoutScriptedReader::new([Err(io::ErrorKind::TimedOut)]);
+
+        read_loop(reader, 1, Arc::clone(&state), cmd_tx);
+
+        match outbound_rx.recv().expect("heartbeat timeout error frame") {
+            OutboundMessage::Frame(frame) => {
+                let mut cursor = std::io::Cursor::new(frame);
+                let (ty, payload) = read_message(&mut cursor).expect("decoded error frame");
+                assert_eq!(ty, MessageType::ErrorMsg);
+                assert_eq!(String::from_utf8(payload).expect("utf8"), "heartbeat timeout");
+            }
+            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+        }
+        assert!(cmd_rx.try_recv().is_err());
+        let guard = state.lock().expect("remote server state poisoned");
+        assert!(!guard.clients.contains_key(&1));
+    }
+
+    #[test]
+    fn local_authenticated_clients_do_not_timeout_without_heartbeat() {
+        let (outbound_tx, outbound_rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: outbound_tx,
+                    authenticated: true,
+                    challenge: None,
+                    connected_at: Instant::now()
+                        - DIRECT_CLIENT_HEARTBEAT_WINDOW
+                        - Duration::from_secs(2),
+                    authenticated_at: Some(
+                        Instant::now()
+                            - DIRECT_CLIENT_HEARTBEAT_WINDOW
+                            - Duration::from_secs(2),
+                    ),
+                    last_heartbeat_at: None,
+                    attached_session: None,
+                    attachment_id: None,
+                    resume_token: None,
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: true,
+                },
+            )]),
+            revivable_attachments: HashMap::new(),
+            auth_key: None,
+            server_identity_id: "test-daemon".to_string(),
+            server_instance_id: "test-instance".to_string(),
+        }));
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let reader = TimeoutScriptedReader::new([
+            Err(io::ErrorKind::TimedOut),
+            Err(io::ErrorKind::BrokenPipe),
+        ]);
+
+        read_loop(reader, 1, Arc::clone(&state), cmd_tx);
+
+        assert!(outbound_rx.try_recv().is_err());
         assert!(cmd_rx.try_recv().is_err());
         let guard = state.lock().expect("remote server state poisoned");
         assert!(!guard.clients.contains_key(&1));
