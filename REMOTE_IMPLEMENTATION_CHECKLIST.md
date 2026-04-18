@@ -221,6 +221,7 @@ Goal:
   - [x] persist and warn on daemon instance-id changes for known iOS endpoints
   - [x] allow users to trust the current daemon instance for a known iOS endpoint
 - [ ] Ensure bootstrap credentials are replay-resistant and bounded
+  - [x] expire outstanding HMAC auth challenges on the server
 - [x] Ensure resumed connections cannot hijack unrelated sessions
   - [x] refuse automatic iOS resume when a known endpoint presents a different daemon identity
   - [x] require a server-issued resume token in addition to attachment identity
