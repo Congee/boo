@@ -453,6 +453,19 @@ impl RemoteServer {
         });
 
         let advertiser = ServiceAdvertiser::spawn(&config.service_name, config.port);
+        {
+            let state = state.lock().expect("remote server state poisoned");
+            log::info!(
+                "remote tcp server started: port={} auth_required={} protocol_version={} capabilities={} build_id={} server_identity_id={} server_instance_id={}",
+                config.port,
+                state.auth_key.is_some(),
+                REMOTE_PROTOCOL_VERSION,
+                REMOTE_CAPABILITIES,
+                env!("CARGO_PKG_VERSION"),
+                state.server_identity_id,
+                state.server_instance_id
+            );
+        }
         Ok((
             Self {
                 state,
@@ -532,6 +545,18 @@ impl RemoteServer {
             }
         });
 
+        {
+            let state = state.lock().expect("remote server state poisoned");
+            log::info!(
+                "remote local-stream server started: socket={} protocol_version={} capabilities={} build_id={} server_identity_id={} server_instance_id={}",
+                socket_path.display(),
+                REMOTE_PROTOCOL_VERSION,
+                REMOTE_CAPABILITIES,
+                env!("CARGO_PKG_VERSION"),
+                state.server_identity_id,
+                state.server_instance_id
+            );
+        }
         Ok((
             Self {
                 state,
