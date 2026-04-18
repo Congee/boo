@@ -348,16 +348,16 @@ Goal:
 
 ### 1. UI Surfaces
 
-- [ ] Show remote host/connection state in desktop Boo
-- [ ] Show transport/debug state in logs or developer UI
+- [x] Show remote host/connection state in desktop Boo
+- [x] Show transport/debug state in logs or developer UI
   - [x] add an opt-in desktop fallback-status debug summary sourced from `get-remote-clients`
   - [x] log native remote server startup metadata including protocol/capability/auth/identity details
-- [ ] Surface resumable/disconnected state cleanly
+- [x] Surface resumable/disconnected state cleanly
   - [x] desktop fallback status distinguishes resumable recovery by active session id
 
 ### 2. Observability
 
-- [ ] Add structured remote transport logging
+- [x] Add structured remote transport logging
   - [x] log remote connect/auth/attach/revive/disconnect lifecycle events on the Rust server
   - [x] log native remote server startup metadata for direct TCP and local-stream daemons
 - [x] Add per-connection and per-session diagnostic info
