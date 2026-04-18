@@ -197,7 +197,7 @@ Goal:
 
 ### 4. Resume and Reconnect
 
-- [ ] Add client attachment identity separate from session identity
+- [x] Add client attachment identity separate from session identity
 - [ ] Add resumable attach tokens/metadata
 - [ ] Support reconnect to the same attachment within the allowed revive window
 - [ ] Prevent duplicate or phantom attachments after reconnect
@@ -263,6 +263,7 @@ Goal:
 - [ ] Update iOS client handshake to the canonical protocol
   - [x] protocol version / capability / build-id handshake decoding
   - [x] incompatible-handshake rejection in the production client
+  - [x] attachment identity propagation
   - [ ] resume token / reconnect metadata
 - [ ] Support direct connection to the canonical remote endpoint
   - [x] auth-protected direct connect

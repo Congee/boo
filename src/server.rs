@@ -90,6 +90,7 @@ pub enum Command {
     RemoteAttach {
         client_id: u64,
         session_id: u32,
+        attachment_id: Option<u64>,
     },
     RemoteDetach {
         client_id: u64,
@@ -268,9 +269,11 @@ impl From<remote::RemoteCmd> for Command {
             remote::RemoteCmd::Attach {
                 client_id,
                 session_id,
+                attachment_id,
             } => Self::RemoteAttach {
                 client_id,
                 session_id,
+                attachment_id,
             },
             remote::RemoteCmd::Detach { client_id } => Self::RemoteDetach { client_id },
             remote::RemoteCmd::Create {

@@ -106,7 +106,7 @@ impl BooApp {
     }
 
     fn bootstrap_local_stream_client(&self, server: &remote::RemoteServer, client_id: u64, session_id: u32) {
-        server.send_attached(client_id, session_id);
+        server.send_attached(client_id, session_id, None);
         server.send_ui_appearance(client_id, &self.ui_appearance_snapshot());
         server.send_ui_runtime_state(client_id, &self.ui_runtime_state());
     }
@@ -354,6 +354,7 @@ impl BooApp {
             server::Command::RemoteAttach {
                 client_id,
                 session_id,
+                attachment_id,
             } => {
                 if self.pane_for_session(session_id).is_some() {
                     self.invalidate_remote_sessions_cache();
@@ -370,7 +371,7 @@ impl BooApp {
                         if bootstrap_local {
                             self.bootstrap_local_stream_client(server, client_id, session_id);
                         } else {
-                            server.send_attached(client_id, session_id);
+                            server.send_attached(client_id, session_id, attachment_id);
                         }
                     }
                     self.publish_remote_session(session_id);
@@ -548,7 +549,7 @@ impl BooApp {
                     server.send_ui_runtime_state(client_id, &ui_state);
                     server.send_session_list(client_id, sessions.as_ref());
                     if let Some(session_id) = focused_session_id {
-                        server.send_attached(client_id, session_id);
+                        server.send_attached(client_id, session_id, None);
                         self.publish_remote_session(session_id);
                     }
                 }
@@ -600,7 +601,7 @@ impl BooApp {
                         server.send_ui_runtime_state(client_id, &ui_state);
                         server.send_session_list(client_id, sessions.as_ref());
                         if let Some(session_id) = focused_session_id {
-                            server.send_attached(client_id, session_id);
+                            server.send_attached(client_id, session_id, None);
                             self.publish_remote_session(session_id);
                         }
                     }
@@ -648,7 +649,7 @@ impl BooApp {
                 {
                     server.send_ui_runtime_state(client_id, &ui_state);
                     server.send_session_list(client_id, sessions.as_ref());
-                    server.send_attached(client_id, session_id);
+                    server.send_attached(client_id, session_id, None);
                     self.publish_remote_session(session_id);
                 }
             }
@@ -665,7 +666,7 @@ impl BooApp {
                     server.send_ui_runtime_state(client_id, &ui_state);
                     server.send_session_list(client_id, sessions.as_ref());
                     if let Some(session_id) = focused_session_id {
-                        server.send_attached(client_id, session_id);
+                        server.send_attached(client_id, session_id, None);
                         self.publish_remote_session(session_id);
                     }
                 }
@@ -712,7 +713,7 @@ impl BooApp {
                     {
                     server.send_ui_runtime_state(client_id, &ui_state);
                     server.send_session_list(client_id, sessions.as_ref());
-                    server.send_attached(client_id, session_id);
+                    server.send_attached(client_id, session_id, None);
                     self.publish_remote_session(session_id);
                     }
                 }

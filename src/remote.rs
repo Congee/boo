@@ -180,6 +180,7 @@ pub enum RemoteCmd {
     Attach {
         client_id: u64,
         session_id: u32,
+        attachment_id: Option<u64>,
     },
     Detach {
         client_id: u64,
@@ -235,6 +236,7 @@ struct ClientState {
     authenticated: bool,
     challenge: Option<[u8; 32]>,
     attached_session: Option<u32>,
+    attachment_id: Option<u64>,
     last_session_list_payload: Option<Vec<u8>>,
     last_ui_runtime_state_payload: Option<Vec<u8>>,
     last_ui_appearance_payload: Option<Vec<u8>>,
@@ -295,6 +297,7 @@ impl RemoteServer {
                             authenticated,
                             challenge: None,
                             attached_session: None,
+                            attachment_id: None,
                             last_session_list_payload: None,
                             last_ui_runtime_state_payload: None,
                             last_ui_appearance_payload: None,
@@ -368,6 +371,7 @@ impl RemoteServer {
                             authenticated: true,
                             challenge: None,
                             attached_session: None,
+                            attachment_id: None,
                             last_session_list_payload: None,
                             last_ui_runtime_state_payload: None,
                             last_ui_appearance_payload: None,
@@ -490,11 +494,15 @@ impl RemoteServer {
         }
     }
 
-    pub fn send_attached(&self, client_id: u64, session_id: u32) {
-        let payload = session_id.to_le_bytes().to_vec();
+    pub fn send_attached(&self, client_id: u64, session_id: u32, attachment_id: Option<u64>) {
+        let mut payload = session_id.to_le_bytes().to_vec();
+        if let Some(attachment_id) = attachment_id {
+            payload.extend_from_slice(&attachment_id.to_le_bytes());
+        }
         self.update_client(client_id, |client| {
             let same_session = client.attached_session == Some(session_id);
             client.attached_session = Some(session_id);
+            client.attachment_id = attachment_id;
             if !same_session {
                 client.last_state = None;
                 client.pane_states.clear();
@@ -507,6 +515,7 @@ impl RemoteServer {
     pub fn send_detached(&self, client_id: u64) {
         self.update_client(client_id, |client| {
             client.attached_session = None;
+            client.attachment_id = None;
             client.last_state = None;
             client.pane_states.clear();
             client.latest_input_seq = None;
@@ -603,7 +612,7 @@ impl RemoteServer {
             return false;
         }
         for client_id in client_ids {
-            self.send_attached(client_id, session_id);
+            self.send_attached(client_id, session_id, None);
         }
         true
     }
@@ -1145,10 +1154,13 @@ fn read_loop(
 
         let command = match ty {
             MessageType::ListSessions => Some(RemoteCmd::ListSessions { client_id }),
-            MessageType::Attach => parse_session_id(&payload).map(|session_id| RemoteCmd::Attach {
-                client_id,
-                session_id,
-            }),
+            MessageType::Attach => {
+                parse_attach_request(&payload).map(|(session_id, attachment_id)| RemoteCmd::Attach {
+                    client_id,
+                    session_id,
+                    attachment_id,
+                })
+            }
             MessageType::Detach => Some(RemoteCmd::Detach { client_id }),
             MessageType::Create => parse_resize(&payload).map(|(cols, rows)| RemoteCmd::Create {
                 client_id,
@@ -1352,6 +1364,17 @@ pub(crate) fn read_message(stream: &mut impl Read) -> io::Result<(MessageType, V
 fn parse_session_id(payload: &[u8]) -> Option<u32> {
     (payload.len() >= 4)
         .then(|| u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]))
+}
+
+fn parse_attach_request(payload: &[u8]) -> Option<(u32, Option<u64>)> {
+    let session_id = parse_session_id(payload)?;
+    let attachment_id = (payload.len() >= 12).then(|| {
+        u64::from_le_bytes([
+            payload[4], payload[5], payload[6], payload[7], payload[8], payload[9], payload[10],
+            payload[11],
+        ])
+    });
+    Some((session_id, attachment_id))
 }
 
 fn parse_pane_id(payload: &[u8]) -> Option<u64> {

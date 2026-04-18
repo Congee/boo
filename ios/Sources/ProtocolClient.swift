@@ -161,6 +161,7 @@ final class GSPClient: ObservableObject {
     @Published var sessions: [SessionInfo] = []
     @Published var screen = ScreenState()
     @Published var attachedSessionId: UInt32?
+    @Published var attachmentId: UInt64?
     @Published var lastError: String?
 
     private var connection: NWConnection?
@@ -178,7 +179,11 @@ final class GSPClient: ObservableObject {
             return nil
         }
         let heartbeat = lastHeartbeatRttMs.map { String(format: "hb %.0fms", $0) }
-        let base = "proto \(protocolVersion) · caps 0x\(String(transportCapabilities, radix: 16)) · \(serverBuildId)"
+        let attachment = attachmentId.map { "attach 0x" + String($0, radix: 16) }
+        let base = [ "proto \(protocolVersion)",
+                     "caps 0x\(String(transportCapabilities, radix: 16))",
+                     serverBuildId,
+                     attachment].compactMap { $0 }.joined(separator: " · ")
         if let heartbeat {
             return "\(base) · \(heartbeat)"
         }
@@ -224,6 +229,7 @@ final class GSPClient: ObservableObject {
         lastHeartbeatSent = nil
         pendingHeartbeatToken = nil
         attachedSessionId = nil
+        attachmentId = nil
         sessions = []
         screen = ScreenState()
         stopHeartbeatLoop()
@@ -242,14 +248,18 @@ final class GSPClient: ObservableObject {
 
     func attach(sessionId: UInt32) {
         attachedSessionId = sessionId
-        var payload = Data(count: 4)
+        let newAttachmentId = UInt64(Date().timeIntervalSince1970 * 1000)
+        attachmentId = newAttachmentId
+        var payload = Data(count: 12)
         payload.withUnsafeMutableBytes { $0.storeBytes(of: sessionId.littleEndian, as: UInt32.self) }
+        payload.withUnsafeMutableBytes { $0.storeBytes(of: newAttachmentId.littleEndian, toByteOffset: 4, as: UInt64.self) }
         sendMessage(type: .attach, payload: payload)
     }
 
     func detach() {
         sendMessage(type: .detach, payload: Data())
         attachedSessionId = nil
+        attachmentId = nil
     }
 
     func sendInput(_ text: String) {
@@ -438,6 +448,7 @@ final class GSPClient: ObservableObject {
         lastHeartbeatSent = nil
         pendingHeartbeatToken = nil
         attachedSessionId = nil
+        attachmentId = nil
         sessions = []
         screen = ScreenState()
         lastError = message
@@ -519,6 +530,7 @@ final class GSPClient: ObservableObject {
                 cursorStyle: screen.cursorStyle
             ),
             attachedSessionId: attachedSessionId,
+            attachmentId: attachmentId,
             lastError: lastError
         )
         let wasAuthenticated = authenticated
@@ -532,6 +544,7 @@ final class GSPClient: ObservableObject {
         serverBuildId = state.serverBuildId
         lastError = state.lastError
         attachedSessionId = state.attachedSessionId
+        attachmentId = state.attachmentId
         applyDecodedSessions(state.sessions)
         if let decodedScreen = state.screen {
             applyDecodedScreen(decodedScreen)

@@ -96,6 +96,7 @@ final class RemoteValidator {
     private var sessionListReceived = false
     private var sessions: [DecodedWireSessionInfo] = []
     private var attachedSessionId: UInt32?
+    private var attachmentId: UInt64?
     private var createdSessionId: UInt32?
     private var screenState: DecodedWireScreenState?
     private var lastScreenText = ""
@@ -194,12 +195,16 @@ final class RemoteValidator {
             throw ValidationError("server did not return a created session id")
         }
 
-        var attachPayload = Data(count: 4)
+        let expectedAttachmentId = UInt64(0xB001D00DCAFEBEEF)
+        var attachPayload = Data(count: 12)
         attachPayload.withUnsafeMutableBytes { bytes in
             bytes.storeBytes(of: sessionId.littleEndian, as: UInt32.self)
+            bytes.storeBytes(of: expectedAttachmentId.littleEndian, toByteOffset: 4, as: UInt64.self)
         }
         sendMessage(type: .attach, payload: attachPayload)
-        try waitUntil("attach acknowledgement") { self.attachedSessionId == sessionId }
+        try waitUntil("attach acknowledgement") {
+            self.attachedSessionId == sessionId && self.attachmentId == expectedAttachmentId
+        }
         try waitUntil("initial terminal screen update after attach", timeout: 8) {
             self.screenUpdateReceived
         }
@@ -341,6 +346,9 @@ final class RemoteValidator {
             attachedSessionId = payload.withUnsafeBytes {
                 UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
             }
+            attachmentId = payload.count >= 12 ? payload.withUnsafeBytes {
+                UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: 4, as: UInt64.self))
+            } : nil
         case .fullState:
             screenUpdateReceived = true
             if let screen = WireCodec.decodeFullState(payload) {
@@ -355,6 +363,7 @@ final class RemoteValidator {
             }
         case .detached, .sessionExited:
             attachedSessionId = nil
+            attachmentId = nil
         case .errorMsg:
             lastError = String(data: payload, encoding: .utf8) ?? "remote error"
         default:
@@ -378,7 +387,7 @@ final class RemoteValidator {
         let screenSnippet = lastScreenText
             .replacingOccurrences(of: "\n", with: "\\n")
             .prefix(160)
-        let stateSummary = "authenticated=\(authenticated) heartbeatAckReceived=\(heartbeatAckReceived) sessionListReceived=\(sessionListReceived) sessions=\(sessions.count) createdSessionId=\(String(describing: createdSessionId)) attachedSessionId=\(String(describing: attachedSessionId)) buildId=\(serverBuildId ?? "nil") screenUpdateReceived=\(screenUpdateReceived) screen=\"\(screenSnippet)\" trace=\(messageTrace.joined(separator: ","))"
+        let stateSummary = "authenticated=\(authenticated) heartbeatAckReceived=\(heartbeatAckReceived) sessionListReceived=\(sessionListReceived) sessions=\(sessions.count) createdSessionId=\(String(describing: createdSessionId)) attachedSessionId=\(String(describing: attachedSessionId)) attachmentId=\(String(describing: attachmentId)) buildId=\(serverBuildId ?? "nil") screenUpdateReceived=\(screenUpdateReceived) screen=\"\(screenSnippet)\" trace=\(messageTrace.joined(separator: ","))"
         lock.unlock()
         throw ValidationError("timed out waiting for \(description) (\(stateSummary))")
     }
