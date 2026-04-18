@@ -363,13 +363,16 @@ mod tests {
         match Command::from(remote::RemoteCmd::Attach {
             client_id: 7,
             session_id: 11,
+            attachment_id: Some(42),
         }) {
             Command::RemoteAttach {
                 client_id,
                 session_id,
+                attachment_id,
             } => {
                 assert_eq!(client_id, 7);
                 assert_eq!(session_id, 11);
+                assert_eq!(attachment_id, Some(42));
             }
             other => panic!("expected remote attach mapping, got {other:?}"),
         }

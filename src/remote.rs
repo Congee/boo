@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -33,6 +33,7 @@ const REMOTE_DELTA_HEADER_LEN: usize = 13;
 #[cfg(test)]
 const LOCAL_DELTA_HEADER_LEN: usize = LOCAL_INPUT_SEQ_LEN + REMOTE_DELTA_HEADER_LEN;
 const REMOTE_CELL_ENCODED_LEN: usize = 12;
+const REVIVABLE_ATTACHMENT_WINDOW: Duration = Duration::from_secs(30);
 const STYLE_FLAG_BOLD: u8 = 0x01;
 const STYLE_FLAG_ITALIC: u8 = 0x02;
 const STYLE_FLAG_HYPERLINK: u8 = 0x04;
@@ -246,8 +247,17 @@ struct ClientState {
     is_local: bool,
 }
 
+struct RevivableAttachment {
+    session_id: u32,
+    last_state: Option<Arc<RemoteFullState>>,
+    pane_states: HashMap<u64, Arc<RemoteFullState>>,
+    latest_input_seq: Option<u64>,
+    expires_at: Instant,
+}
+
 struct State {
     clients: HashMap<u64, ClientState>,
+    revivable_attachments: HashMap<u64, RevivableAttachment>,
     auth_key: Option<Vec<u8>>,
 }
 
@@ -270,10 +280,18 @@ impl Drop for ServiceAdvertiser {
 }
 
 impl RemoteServer {
+    fn prune_revivable_attachments(state: &mut State) {
+        let now = Instant::now();
+        state
+            .revivable_attachments
+            .retain(|_, attachment| attachment.expires_at > now);
+    }
+
     pub fn start(config: RemoteConfig) -> io::Result<(Self, mpsc::Receiver<RemoteCmd>)> {
         let listener = TcpListener::bind(("0.0.0.0", config.port))?;
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::new(),
+            revivable_attachments: HashMap::new(),
             auth_key: config.auth_key.map(|key| key.into_bytes()),
         }));
         let state_for_listener = Arc::clone(&state);
@@ -349,6 +367,7 @@ impl RemoteServer {
         let listener = UnixListener::bind(&socket_path)?;
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::new(),
+            revivable_attachments: HashMap::new(),
             auth_key: None,
         }));
         let state_for_listener = Arc::clone(&state);
@@ -510,6 +529,46 @@ impl RemoteServer {
             }
         });
         self.send_to_client(client_id, MessageType::Attached, payload);
+    }
+
+    pub fn prepare_attachment(
+        &self,
+        client_id: u64,
+        session_id: u32,
+        attachment_id: Option<u64>,
+    ) -> Result<(), &'static str> {
+        let mut state = self.state.lock().expect("remote server state poisoned");
+        Self::prune_revivable_attachments(&mut state);
+        let Some(client) = state.clients.get(&client_id) else {
+            return Err("unknown client");
+        };
+        if client.is_local || attachment_id.is_none() {
+            return Ok(());
+        }
+        let attachment_id = attachment_id.expect("checked above");
+        if state.clients.iter().any(|(other_client_id, other_client)| {
+            *other_client_id != client_id
+                && !other_client.is_local
+                && other_client.attachment_id == Some(attachment_id)
+                && other_client.attached_session.is_some()
+        }) {
+            return Err("attachment already active");
+        }
+        let revive = state.revivable_attachments.remove(&attachment_id);
+        let Some(client) = state.clients.get_mut(&client_id) else {
+            return Err("unknown client");
+        };
+        if let Some(revive) = revive {
+            if revive.session_id != session_id {
+                return Err("attachment belongs to different session");
+            }
+            client.attached_session = Some(session_id);
+            client.attachment_id = Some(attachment_id);
+            client.last_state = revive.last_state;
+            client.pane_states = revive.pane_states;
+            client.latest_input_seq = revive.latest_input_seq;
+        }
+        Ok(())
     }
 
     pub fn send_detached(&self, client_id: u64) {
@@ -1223,7 +1282,24 @@ fn read_loop(
     }
 
     let mut state = state.lock().expect("remote server state poisoned");
-    state.clients.remove(&client_id);
+    if let Some(client) = state.clients.remove(&client_id) {
+        RemoteServer::prune_revivable_attachments(&mut state);
+        if !client.is_local
+            && let (Some(session_id), Some(attachment_id)) =
+                (client.attached_session, client.attachment_id)
+        {
+            state.revivable_attachments.insert(
+                attachment_id,
+                RevivableAttachment {
+                    session_id,
+                    last_state: client.last_state,
+                    pane_states: client.pane_states,
+                    latest_input_seq: client.latest_input_seq,
+                    expires_at: Instant::now() + REVIVABLE_ATTACHMENT_WINDOW,
+                },
+            );
+        }
+    }
 }
 
 fn handle_auth_message(client_id: u64, payload: &[u8], state: &Arc<Mutex<State>>) -> bool {
@@ -2160,6 +2236,7 @@ mod tests {
                     authenticated: true,
                     challenge: None,
                     attached_session: None,
+                    attachment_id: None,
                     last_session_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
@@ -2169,6 +2246,7 @@ mod tests {
                     is_local: false,
                 },
             )]),
+            revivable_attachments: HashMap::new(),
             auth_key: Some(b"test-key".to_vec()),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -2194,6 +2272,7 @@ mod tests {
                     authenticated: true,
                     challenge: None,
                     attached_session: None,
+                    attachment_id: None,
                     last_session_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
@@ -2203,6 +2282,7 @@ mod tests {
                     is_local: false,
                 },
             )]),
+            revivable_attachments: HashMap::new(),
             auth_key: Some(b"test-key".to_vec()),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -2413,6 +2493,7 @@ mod tests {
                     authenticated: true,
                     challenge: None,
                     attached_session: Some(11),
+                    attachment_id: None,
                     last_session_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
@@ -2437,6 +2518,7 @@ mod tests {
                     is_local: true,
                 },
             )]),
+            revivable_attachments: HashMap::new(),
             auth_key: None,
         }));
         let server = RemoteServer {
@@ -2446,7 +2528,7 @@ mod tests {
             local_socket_path: None,
         };
 
-        server.send_attached(7, 11);
+        server.send_attached(7, 11, None);
 
         let guard = state.lock().expect("remote server state poisoned");
         let client = guard.clients.get(&7).expect("client state");
@@ -2465,6 +2547,130 @@ mod tests {
     }
 
     #[test]
+    fn prepare_attachment_restores_revived_state_for_matching_identity() {
+        let (tx, _rx) = mpsc::channel();
+        let restored_state = Arc::new(RemoteFullState {
+            rows: 1,
+            cols: 1,
+            cursor_x: 0,
+            cursor_y: 0,
+            cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 1,
+            cells: vec![RemoteCell {
+                codepoint: u32::from('R'),
+                fg: [1, 2, 3],
+                bg: [0, 0, 0],
+                style_flags: 0,
+                wide: false,
+            }],
+        });
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(
+                1,
+                ClientState {
+                    outbound: tx,
+                    authenticated: true,
+                    challenge: None,
+                    attached_session: None,
+                    attachment_id: None,
+                    last_session_list_payload: None,
+                    last_ui_runtime_state_payload: None,
+                    last_ui_appearance_payload: None,
+                    last_state: None,
+                    pane_states: HashMap::new(),
+                    latest_input_seq: None,
+                    is_local: false,
+                },
+            )]),
+            revivable_attachments: HashMap::from([(
+                0xabc,
+                RevivableAttachment {
+                    session_id: 11,
+                    last_state: Some(Arc::clone(&restored_state)),
+                    pane_states: HashMap::new(),
+                    latest_input_seq: Some(9),
+                    expires_at: Instant::now() + REVIVABLE_ATTACHMENT_WINDOW,
+                },
+            )]),
+            auth_key: None,
+        }));
+        let server = RemoteServer {
+            state: Arc::clone(&state),
+            _listener: std::thread::spawn(|| {}),
+            _advertiser: None,
+            local_socket_path: None,
+        };
+
+        server.prepare_attachment(1, 11, Some(0xabc)).expect("prepare attachment");
+
+        let guard = state.lock().expect("remote server state poisoned");
+        let client = guard.clients.get(&1).expect("client state");
+        assert_eq!(client.attached_session, Some(11));
+        assert_eq!(client.attachment_id, Some(0xabc));
+        assert_eq!(client.latest_input_seq, Some(9));
+        assert_eq!(client.last_state.as_deref(), Some(restored_state.as_ref()));
+        assert!(!guard.revivable_attachments.contains_key(&0xabc));
+    }
+
+    #[test]
+    fn prepare_attachment_rejects_duplicate_active_attachment() {
+        let (active_tx, _active_rx) = mpsc::channel();
+        let (new_tx, _new_rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([
+                (
+                    1,
+                    ClientState {
+                        outbound: active_tx,
+                        authenticated: true,
+                        challenge: None,
+                        attached_session: Some(11),
+                        attachment_id: Some(0xabc),
+                        last_session_list_payload: None,
+                        last_ui_runtime_state_payload: None,
+                        last_ui_appearance_payload: None,
+                        last_state: None,
+                        pane_states: HashMap::new(),
+                        latest_input_seq: None,
+                        is_local: false,
+                    },
+                ),
+                (
+                    2,
+                    ClientState {
+                        outbound: new_tx,
+                        authenticated: true,
+                        challenge: None,
+                        attached_session: None,
+                        attachment_id: None,
+                        last_session_list_payload: None,
+                        last_ui_runtime_state_payload: None,
+                        last_ui_appearance_payload: None,
+                        last_state: None,
+                        pane_states: HashMap::new(),
+                        latest_input_seq: None,
+                        is_local: false,
+                    },
+                ),
+            ]),
+            revivable_attachments: HashMap::new(),
+            auth_key: None,
+        }));
+        let server = RemoteServer {
+            state,
+            _listener: std::thread::spawn(|| {}),
+            _advertiser: None,
+            local_socket_path: None,
+        };
+
+        let error = server
+            .prepare_attachment(2, 11, Some(0xabc))
+            .expect_err("duplicate active attachment should fail");
+        assert_eq!(error, "attachment already active");
+    }
+
+    #[test]
     fn send_ui_runtime_state_to_local_attached_only_targets_matching_session() {
         let (attached_tx, attached_rx) = mpsc::channel();
         let (unattached_tx, unattached_rx) = mpsc::channel();
@@ -2472,11 +2678,12 @@ mod tests {
             clients: HashMap::from([
                 (
                     1,
-                    ClientState {
-                        outbound: attached_tx,
-                        authenticated: true,
-                        challenge: None,
-                        attached_session: Some(11),
+                ClientState {
+                    outbound: attached_tx,
+                    authenticated: true,
+                    challenge: None,
+                    attached_session: Some(11),
+                    attachment_id: None,
                         last_session_list_payload: None,
                         last_ui_runtime_state_payload: None,
                         last_ui_appearance_payload: None,
@@ -2488,11 +2695,12 @@ mod tests {
                 ),
                 (
                     2,
-                    ClientState {
-                        outbound: unattached_tx,
-                        authenticated: true,
-                        challenge: None,
-                        attached_session: None,
+                ClientState {
+                    outbound: unattached_tx,
+                    authenticated: true,
+                    challenge: None,
+                    attached_session: None,
+                    attachment_id: None,
                         last_session_list_payload: None,
                         last_ui_runtime_state_payload: None,
                         last_ui_appearance_payload: None,
@@ -2503,6 +2711,7 @@ mod tests {
                     },
                 ),
             ]),
+            revivable_attachments: HashMap::new(),
             auth_key: None,
         }));
         let server = RemoteServer {
@@ -2544,6 +2753,7 @@ mod tests {
                     authenticated: true,
                     challenge: None,
                     attached_session: Some(11),
+                    attachment_id: None,
                     last_session_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
@@ -2553,6 +2763,7 @@ mod tests {
                     is_local: true,
                 },
             )]),
+            revivable_attachments: HashMap::new(),
             auth_key: None,
         }));
         let server = RemoteServer {
@@ -2595,6 +2806,7 @@ mod tests {
                     authenticated: true,
                     challenge: None,
                     attached_session: Some(11),
+                    attachment_id: None,
                     last_session_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
@@ -2604,6 +2816,7 @@ mod tests {
                     is_local: true,
                 },
             )]),
+            revivable_attachments: HashMap::new(),
             auth_key: None,
         }));
         let server = RemoteServer {
@@ -2645,6 +2858,7 @@ mod tests {
                     authenticated: true,
                     challenge: None,
                     attached_session: Some(11),
+                    attachment_id: None,
                     last_session_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
@@ -2654,6 +2868,7 @@ mod tests {
                     is_local: true,
                 },
             )]),
+            revivable_attachments: HashMap::new(),
             auth_key: None,
         }));
         let server = RemoteServer {
@@ -2697,6 +2912,7 @@ mod tests {
                     authenticated: true,
                     challenge: None,
                     attached_session: None,
+                    attachment_id: None,
                     last_session_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
@@ -2706,6 +2922,7 @@ mod tests {
                     is_local: false,
                 },
             )]),
+            revivable_attachments: HashMap::new(),
             auth_key: None,
         }));
         let server = RemoteServer {
@@ -2734,6 +2951,7 @@ mod tests {
                         authenticated: true,
                         challenge: None,
                         attached_session: Some(11),
+                        attachment_id: None,
                         last_session_list_payload: None,
                         last_ui_runtime_state_payload: None,
                         last_ui_appearance_payload: None,
@@ -2750,6 +2968,7 @@ mod tests {
                         authenticated: true,
                         challenge: None,
                         attached_session: None,
+                        attachment_id: None,
                         last_session_list_payload: None,
                         last_ui_runtime_state_payload: None,
                         last_ui_appearance_payload: None,
@@ -2766,6 +2985,7 @@ mod tests {
                         authenticated: true,
                         challenge: None,
                         attached_session: Some(22),
+                        attachment_id: None,
                         last_session_list_payload: None,
                         last_ui_runtime_state_payload: None,
                         last_ui_appearance_payload: None,
@@ -2782,6 +3002,7 @@ mod tests {
                         authenticated: true,
                         challenge: None,
                         attached_session: Some(11),
+                        attachment_id: None,
                         last_session_list_payload: None,
                         last_ui_runtime_state_payload: None,
                         last_ui_appearance_payload: None,
@@ -2792,6 +3013,7 @@ mod tests {
                     },
                 ),
             ]),
+            revivable_attachments: HashMap::new(),
             auth_key: None,
         }));
         let server = RemoteServer {
@@ -2826,6 +3048,7 @@ mod tests {
                     authenticated: true,
                     challenge: None,
                     attached_session: Some(11),
+                    attachment_id: None,
                     last_session_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
@@ -2874,6 +3097,7 @@ mod tests {
                     is_local: true,
                 },
             )]),
+            revivable_attachments: HashMap::new(),
             auth_key: None,
         }));
         let server = RemoteServer {

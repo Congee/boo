@@ -199,8 +199,8 @@ Goal:
 
 - [x] Add client attachment identity separate from session identity
 - [ ] Add resumable attach tokens/metadata
-- [ ] Support reconnect to the same attachment within the allowed revive window
-- [ ] Prevent duplicate or phantom attachments after reconnect
+- [x] Support reconnect to the same attachment within the allowed revive window
+- [x] Prevent duplicate or phantom attachments after reconnect
 - [ ] Carry enough state for clients to resume without a full destructive reset when possible
 
 ### 5. Heartbeats and Timeouts
@@ -211,7 +211,7 @@ Goal:
 - [x] Implement heartbeat failure detection
 - [x] Implement reconnect notification threshold
 - [x] Implement reconnect deadline
-- [ ] Implement longer server-side session revival window
+- [x] Implement longer server-side session revival window
 - [x] Surface connection state transitions to clients
 
 ### 6. Security
@@ -228,7 +228,7 @@ Goal:
 - [ ] Add tests for:
   - [x] handshake
   - [x] capability negotiation
-  - reconnect/resume
+  - [x] reconnect/resume attachment restore primitives
   - multiplexed channels
   - [x] heartbeat request/ack round-trip
   - heartbeat loss and recovery

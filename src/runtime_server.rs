@@ -368,6 +368,12 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
+                        if let Err(message) =
+                            server.prepare_attachment(client_id, session_id, attachment_id)
+                        {
+                            server.send_error(client_id, message);
+                            return;
+                        }
                         if bootstrap_local {
                             self.bootstrap_local_stream_client(server, client_id, session_id);
                         } else {
