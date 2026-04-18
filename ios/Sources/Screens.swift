@@ -12,7 +12,7 @@ struct BooRootView: View {
 
     private var activeMonitor: ConnectionMonitor {
         if let monitor { return monitor }
-        let created = ConnectionMonitor(client: client)
+        let created = ConnectionMonitor(client: client, store: store)
         DispatchQueue.main.async { self.monitor = created }
         return created
     }
@@ -45,7 +45,7 @@ struct BooRootView: View {
         .background(KineticColor.surface)
         .onAppear {
             if monitor == nil {
-                monitor = ConnectionMonitor(client: client)
+                monitor = ConnectionMonitor(client: client, store: store)
             }
         }
         .onChange(of: activeMonitor.status) { oldValue, newValue in
@@ -82,6 +82,16 @@ struct BooRootView: View {
                     port: port,
                     instanceId: serverInstanceId
                 )
+                if let sessionId = client.attachedSessionId,
+                   let attachmentId = client.attachmentId
+                {
+                    store.recordResumeAttachment(
+                        host: host,
+                        port: port,
+                        sessionId: sessionId,
+                        attachmentId: attachmentId
+                    )
+                }
             }
         case .connectionLost:
             if let historyId = activeMonitor.currentHistoryId {
@@ -89,6 +99,9 @@ struct BooRootView: View {
                 activeMonitor.clearTrackedConnection()
             }
         case .disconnected:
+            if let host = activeMonitor.lastHost, let port = activeMonitor.lastPort {
+                store.clearResumeAttachment(host: host, port: port)
+            }
             if wasConnected, let historyId = activeMonitor.currentHistoryId {
                 store.endConnection(id: historyId, status: .disconnected)
                 activeMonitor.clearTrackedConnection()

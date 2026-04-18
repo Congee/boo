@@ -44,6 +44,12 @@ struct ConnectionHistoryEntry: Identifiable, Codable {
     }
 }
 
+struct ResumeAttachmentMetadata: Codable, Equatable {
+    var sessionId: UInt32
+    var attachmentId: UInt64
+    var recordedAt: Date
+}
+
 @MainActor
 final class ConnectionStore: ObservableObject {
     @Published var savedNodes: [SavedNode] = []
@@ -52,13 +58,17 @@ final class ConnectionStore: ObservableObject {
     private let nodesKey = "boo.remote.savedNodes"
     private let historyKey = "boo.remote.connectionHistory"
     private let trustedInstancesKey = "boo.remote.trustedServerInstances"
+    private let resumeAttachmentsKey = "boo.remote.resumeAttachments"
     private let maxHistory = 50
+    private let resumeWindow: TimeInterval = 30
     private var trustedServerInstances: [String: String] = [:]
+    private var resumeAttachments: [String: ResumeAttachmentMetadata] = [:]
 
     init() {
         loadNodes()
         loadHistory()
         loadTrustedServerInstances()
+        loadResumeAttachments()
     }
 
     func addNode(_ node: SavedNode) {
@@ -120,6 +130,31 @@ final class ConnectionStore: ObservableObject {
         saveTrustedServerInstances()
     }
 
+    func recordResumeAttachment(host: String, port: UInt16, sessionId: UInt32, attachmentId: UInt64) {
+        resumeAttachments["\(host):\(port)"] = ResumeAttachmentMetadata(
+            sessionId: sessionId,
+            attachmentId: attachmentId,
+            recordedAt: Date()
+        )
+        saveResumeAttachments()
+    }
+
+    func resumeAttachment(host: String, port: UInt16) -> ResumeAttachmentMetadata? {
+        let key = "\(host):\(port)"
+        guard let metadata = resumeAttachments[key] else { return nil }
+        guard Date().timeIntervalSince(metadata.recordedAt) <= resumeWindow else {
+            resumeAttachments.removeValue(forKey: key)
+            saveResumeAttachments()
+            return nil
+        }
+        return metadata
+    }
+
+    func clearResumeAttachment(host: String, port: UInt16) {
+        resumeAttachments.removeValue(forKey: "\(host):\(port)")
+        saveResumeAttachments()
+    }
+
     private func loadNodes() {
         guard let data = UserDefaults.standard.data(forKey: nodesKey),
               let nodes = try? JSONDecoder().decode([SavedNode].self, from: data) else { return }
@@ -152,6 +187,17 @@ final class ConnectionStore: ObservableObject {
         guard let data = try? JSONEncoder().encode(trustedServerInstances) else { return }
         UserDefaults.standard.set(data, forKey: trustedInstancesKey)
     }
+
+    private func loadResumeAttachments() {
+        guard let data = UserDefaults.standard.data(forKey: resumeAttachmentsKey),
+              let attachments = try? JSONDecoder().decode([String: ResumeAttachmentMetadata].self, from: data) else { return }
+        resumeAttachments = attachments
+    }
+
+    private func saveResumeAttachments() {
+        guard let data = try? JSONEncoder().encode(resumeAttachments) else { return }
+        UserDefaults.standard.set(data, forKey: resumeAttachmentsKey)
+    }
 }
 
 enum ConnectionStatus: Equatable {
@@ -183,6 +229,7 @@ final class ConnectionMonitor: ObservableObject {
     @Published var reconnectState: ReconnectState = .idle
 
     private let client: GSPClient
+    private let store: ConnectionStore
     private var cancellables = Set<AnyCancellable>()
     private var heartbeatTimer: AnyCancellable?
     private var reconnectWorkItem: DispatchWorkItem?
@@ -201,8 +248,9 @@ final class ConnectionMonitor: ObservableObject {
     private(set) var currentHistoryId: UUID?
     private(set) var currentNodeId: UUID?
 
-    init(client: GSPClient) {
+    init(client: GSPClient, store: ConnectionStore) {
         self.client = client
+        self.store = store
         observe()
     }
 
@@ -274,6 +322,9 @@ final class ConnectionMonitor: ObservableObject {
         transportHealth = .idle
         reconnectAllowed = true
         cancelReconnect()
+        if let resume = store.resumeAttachment(host: host, port: port) {
+            client.configureResumeAttachment(sessionId: resume.sessionId, attachmentId: resume.attachmentId)
+        }
         client.connect(host: host, port: port, authKey: authKey)
     }
 

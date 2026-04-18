@@ -266,7 +266,7 @@ Goal:
   - [x] protocol version / capability / build-id handshake decoding
   - [x] incompatible-handshake rejection in the production client
   - [x] attachment identity propagation
-  - [ ] resume token / reconnect metadata
+  - [x] resume token / reconnect metadata
 - [ ] Support direct connection to the canonical remote endpoint
   - [x] auth-protected direct connect
   - [x] authless direct connect

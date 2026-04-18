@@ -269,6 +269,11 @@ final class GSPClient: ObservableObject {
         sendAttach(sessionId: sessionId, attachmentId: newAttachmentId)
     }
 
+    func configureResumeAttachment(sessionId: UInt32, attachmentId: UInt64) {
+        desiredAttachedSessionId = sessionId
+        desiredAttachmentId = attachmentId
+    }
+
     private func sendAttach(sessionId: UInt32, attachmentId: UInt64) {
         var payload = Data(count: 12)
         payload.withUnsafeMutableBytes { $0.storeBytes(of: sessionId.littleEndian, as: UInt32.self) }
