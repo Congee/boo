@@ -113,23 +113,30 @@ chrome, layout, and VT rendering path.
 - Headless mode exposes the same snapshot/query/control surface as the GUI app
 - Tabs, splits, sessions, PTYs, and terminal snapshots stay on the same runtime path as the GUI build
 
+### Remote Desktop
+- `boo --host <ssh-host>` is the current remote desktop milestone
+- Boo bootstraps a remote `boo server`, forwards the remote control and `.stream` sockets over SSH, and attaches the local GUI/client to the forwarded local sockets
+- SSH is the current desktop bootstrap and trust boundary, not the final long-term transport contract
+- Remote desktop verification is covered by the SSH verifier scripts under [`scripts/`](./scripts)
+
 ### Remote Daemon
-- Optional Boo-native TCP daemon for the iOS remote viewer and other LAN clients
+- Optional Boo-native TCP daemon for the iOS remote viewer and the canonical Boo-native transport work
 - Bonjour advertisement on `_boo._tcp`
 - Uses the Boo GSP-compatible framing already consumed by the iOS client
 - Supports session listing, attach/detach, create, resize, destroy, text input, and full terminal-state publishing
 - Can require HMAC-SHA256 challenge/response auth when `remote-auth-key` is configured
+- Exposes daemon/client diagnostics through `boo remote-clients`
 - PTY ingest is event-driven: the worker blocks on typed PTY read/exit events and command events instead of polling on a timeout
 - PTY exit/reap now follows an explicit EOF/worker event path instead of periodic child-exit probes in the hot ingest loop
 
 ### iOS Remote Viewer
 - A native SwiftUI iOS app lives under [`ios/`](/Users/example/dev/boo/ios)
 - Bundle identifier: `me.congee.boo`
-- Connects to a compatible remote daemon using the existing GSP wire protocol
+- Connects to a compatible remote daemon using Boo's current native remote protocol
 - Browses `_boo._tcp` Bonjour services
 - Includes manual host/auth-key entry, saved nodes, connection history, session listing, and a VT cell-grid viewer
 - Uses iOS local-network permissions via `NSLocalNetworkUsageDescription` and `NSBonjourServices`
-- Automated validation lives in [`scripts/test-ios-remote-view.sh`](/Users/example/dev/boo/scripts/test-ios-remote-view.sh) and covers discovery, auth, session listing, attach, resize, and terminal-state updates against a live Boo daemon
+- Automated validation lives in [`scripts/test-ios-remote-view.sh`](/Users/example/dev/boo/scripts/test-ios-remote-view.sh) and covers discovery, auth, session listing, attach, resize, reconnect/resume, and terminal-state updates against a live Boo daemon
 - Remaining manual validation: simulator/device pass for touch UI, local-network permission prompts, and real attach/resize behavior from the rendered app
 
 ---
