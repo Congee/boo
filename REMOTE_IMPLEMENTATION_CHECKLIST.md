@@ -295,7 +295,7 @@ Goal:
   - scrolling
   - selection/navigation
   - session switching if needed
-- [ ] Surface connection state:
+- [x] Surface connection state:
   - [x] connected
   - [x] reconnecting
   - [x] degraded
