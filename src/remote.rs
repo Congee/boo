@@ -381,6 +381,12 @@ pub struct RemoteCreateSummary {
     pub session_id: u32,
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct RemoteUpgradeProbeSummary {
+    pub selected_transport: DirectTransportKind,
+    pub probe: RemoteProbeSummary,
+}
+
 struct DirectRemoteClient {
     stream: std::net::TcpStream,
     host: String,
@@ -2071,6 +2077,25 @@ pub fn probe_remote_endpoint(
         server_identity_id: client.server_identity_id.clone(),
         heartbeat_rtt_ms,
     })
+}
+
+pub fn probe_selected_direct_transport(
+    transport: DirectTransportKind,
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+    expected_server_identity: Option<&str>,
+) -> Result<RemoteUpgradeProbeSummary, String> {
+    match transport {
+        DirectTransportKind::TcpDirect => Ok(RemoteUpgradeProbeSummary {
+            selected_transport: transport,
+            probe: probe_remote_endpoint(host, port, auth_key, expected_server_identity)?,
+        }),
+        DirectTransportKind::QuicDirect => Err(
+            "QUIC direct transport is not implemented yet; TCP fallback is required for now"
+                .to_string(),
+        ),
+    }
 }
 
 pub fn list_remote_daemon_sessions(
@@ -3869,6 +3894,19 @@ mod tests {
         let error = select_direct_transport(REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT, false)
             .expect_err("quic-only endpoint without migration-capable path should fail");
         assert!(error.contains("QUIC"));
+    }
+
+    #[test]
+    fn probe_selected_direct_transport_rejects_unimplemented_quic_backend() {
+        let error = probe_selected_direct_transport(
+            DirectTransportKind::QuicDirect,
+            "127.0.0.1",
+            7337,
+            None,
+            None,
+        )
+        .expect_err("quic direct probing should be rejected until the backend exists");
+        assert!(error.contains("QUIC direct transport is not implemented yet"));
     }
 
     #[test]

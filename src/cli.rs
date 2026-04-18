@@ -36,6 +36,12 @@ struct RemoteUpgradeTargetSummary {
     capabilities: Option<u32>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct RemoteUpgradeProbeCommandSummary {
+    target: RemoteUpgradeTargetSummary,
+    probe: crate::remote::RemoteUpgradeProbeSummary,
+}
+
 #[derive(Debug, Clone, clap::Args, Default)]
 pub struct GlobalArgs {
     #[arg(
@@ -185,6 +191,11 @@ pub enum Command {
     },
     /// Bootstrap a remote Boo host over SSH and report its canonical native remote endpoint
     RemoteUpgradeTarget,
+    /// Bootstrap a remote Boo host over SSH, resolve its canonical native endpoint, and probe the selected direct transport
+    RemoteUpgradeProbe {
+        #[arg(long = "auth-key")]
+        auth_key: Option<String>,
+    },
     /// Attach to a session on a Boo-native TCP remote daemon directly
     RemoteDaemonAttach {
         #[arg(long, default_value = "127.0.0.1")]
@@ -429,6 +440,78 @@ where
                     let _ = writeln!(stdout);
                     let _ = stdout.flush();
                     Outcome::Exit(0)
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    Outcome::Exit(1)
+                }
+            }
+        }
+        Command::RemoteUpgradeProbe { auth_key } => {
+            let Some(ssh_host) = cli
+                .global
+                .host
+                .as_deref()
+                .or(boo_config.remote_host.as_deref())
+            else {
+                eprintln!("remote upgrade probe requires --host or remote-host in config");
+                return Outcome::Exit(1);
+            };
+            if !require_server() {
+                return Outcome::Exit(1);
+            }
+            let client = control::Client::connect(socket_path);
+            match client.get_remote_clients() {
+                Ok(snapshot) => {
+                    let target = resolve_remote_upgrade_target(ssh_host, &snapshot);
+                    let Some(selected_transport) = target.selected_transport else {
+                        eprintln!(
+                            "{}",
+                            target
+                                .reason
+                                .clone()
+                                .unwrap_or_else(|| "remote upgrade target is not ready".to_string())
+                        );
+                        return Outcome::Exit(1);
+                    };
+                    let Some(direct_host) = target.direct_host.as_deref() else {
+                        eprintln!(
+                            "{}",
+                            target
+                                .reason
+                                .clone()
+                                .unwrap_or_else(|| "remote upgrade target has no direct host".to_string())
+                        );
+                        return Outcome::Exit(1);
+                    };
+                    let Some(port) = target.port else {
+                        eprintln!("remote upgrade target has no direct port");
+                        return Outcome::Exit(1);
+                    };
+                    match crate::remote::probe_selected_direct_transport(
+                        selected_transport,
+                        direct_host,
+                        port,
+                        auth_key.as_deref(),
+                        target.server_identity_id.as_deref(),
+                    ) {
+                        Ok(probe) => {
+                            let summary = RemoteUpgradeProbeCommandSummary { target, probe };
+                            let mut stdout = std::io::stdout().lock();
+                            use std::io::Write;
+                            if serde_json::to_writer_pretty(&mut stdout, &summary).is_err() {
+                                eprintln!("failed to serialize remote upgrade probe summary");
+                                return Outcome::Exit(1);
+                            }
+                            let _ = writeln!(stdout);
+                            let _ = stdout.flush();
+                            Outcome::Exit(0)
+                        }
+                        Err(error) => {
+                            eprintln!("{error}");
+                            Outcome::Exit(1)
+                        }
+                    }
                 }
                 Err(error) => {
                     eprintln!("{error}");
@@ -759,6 +842,22 @@ mod tests {
             cli.command,
             Some(super::Command::RemoteUpgradeTarget)
         ));
+    }
+
+    #[test]
+    fn parse_remote_upgrade_probe_subcommand() {
+        let cli = Cli::parse_from([
+            "boo",
+            "remote-upgrade-probe",
+            "--auth-key",
+            "secret",
+        ]);
+        match cli.command {
+            Some(super::Command::RemoteUpgradeProbe { auth_key }) => {
+                assert_eq!(auth_key.as_deref(), Some("secret"));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 
     #[test]
