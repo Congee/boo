@@ -2302,8 +2302,11 @@ pub fn create_remote_daemon_session_tls(
     create_summary_from_session(&mut client, port, cols, rows)
 }
 
-/// Default socket timeout for direct-client probes and RPCs.
-const DIRECT_CLIENT_SOCKET_TIMEOUT: Duration = Duration::from_secs(3);
+/// Default socket timeout for direct-client probes and RPCs. Generous enough to
+/// tolerate the extra scheduling latency seen in constrained environments like the
+/// Nix build sandbox on Darwin, where a 3-second timeout occasionally trips during
+/// the TLS handshake + HMAC round trip.
+const DIRECT_CLIENT_SOCKET_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl DirectTransportSession<std::net::TcpStream> {
     fn connect(
