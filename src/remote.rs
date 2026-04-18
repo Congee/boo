@@ -1753,8 +1753,7 @@ pub fn probe_remote_endpoint(
     stream
         .write_all(&encode_message(MessageType::Auth, &[]))
         .map_err(|error| format!("failed to send auth request to {host}:{port}: {error}"))?;
-    let (ty, auth_payload) = read_message(&mut stream)
-        .map_err(|error| format!("failed to read auth reply from {host}:{port}: {error}"))?;
+    let (ty, auth_payload) = read_probe_auth_reply(&mut stream, host, port)?;
 
     let (auth_required, auth_ok_payload) = match ty {
         MessageType::AuthOk => (false, auth_payload),
@@ -1860,6 +1859,39 @@ fn read_probe_reply(
     }
     Err(format!(
         "timed out waiting for {expected:?} from remote endpoint {host}:{port}"
+    ))
+}
+
+fn read_probe_auth_reply(
+    stream: &mut impl Read,
+    host: &str,
+    port: u16,
+) -> Result<(MessageType, Vec<u8>), String> {
+    for _ in 0..8 {
+        let (ty, payload) = read_message(stream)
+            .map_err(|error| format!("failed to read auth reply from {host}:{port}: {error}"))?;
+        match ty {
+            MessageType::AuthOk | MessageType::AuthChallenge | MessageType::AuthFail => {
+                return Ok((ty, payload));
+            }
+            MessageType::SessionList
+            | MessageType::FullState
+            | MessageType::Delta
+            | MessageType::Attached
+            | MessageType::Detached
+            | MessageType::UiRuntimeState
+            | MessageType::UiAppearance
+            | MessageType::UiPaneFullState
+            | MessageType::UiPaneDelta => continue,
+            other => {
+                return Err(format!(
+                    "unexpected auth reply from {host}:{port}: {other:?}"
+                ));
+            }
+        }
+    }
+    Err(format!(
+        "timed out waiting for auth reply from remote endpoint {host}:{port}"
     ))
 }
 
@@ -3045,6 +3077,24 @@ mod tests {
             OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
         }
         assert!(cmd_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn read_probe_auth_reply_skips_unsolicited_session_list() {
+        let mut frames = Vec::new();
+        frames.extend_from_slice(&encode_message(MessageType::SessionList, b"[]"));
+        frames.extend_from_slice(&encode_message(
+            MessageType::AuthOk,
+            &encode_auth_ok_payload("test-daemon", "test-instance"),
+        ));
+        let (ty, payload) = read_probe_auth_reply(
+            &mut std::io::Cursor::new(frames),
+            "127.0.0.1",
+            7359,
+        )
+        .expect("auth reply");
+        assert_eq!(ty, MessageType::AuthOk);
+        assert!(validate_auth_ok_payload(&payload, false).is_ok());
     }
 
     #[test]

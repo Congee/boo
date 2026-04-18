@@ -5,17 +5,28 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOCKET_PATH="${BOO_REMOTE_DIAG_SOCKET:-/tmp/boo-remote-daemon-diagnostics.sock}"
 PORT="${BOO_REMOTE_DIAG_PORT:-7359}"
 AUTH_KEY="${BOO_REMOTE_DIAG_AUTH_KEY:-boo-remote-diagnostics}"
+AUTHLESS_PORT="${BOO_REMOTE_DIAG_AUTHLESS_PORT:-7360}"
 LOG_PATH="${BOO_REMOTE_DIAG_LOG:-/tmp/boo-remote-daemon-diagnostics.log}"
+AUTHLESS_LOG_PATH="${BOO_REMOTE_DIAG_AUTHLESS_LOG:-/tmp/boo-remote-daemon-authless-diagnostics.log}"
 
 cleanup() {
-  local pid="${SERVER_PID:-}"
-  if [[ -n "$pid" ]]; then
-    kill "$pid" >/dev/null 2>&1 || true
-    wait "$pid" >/dev/null 2>&1 || true
-  fi
-  rm -f "$SOCKET_PATH"
+  for pid_var in SERVER_PID AUTHLESS_SERVER_PID; do
+    local pid="${!pid_var:-}"
+    if [[ -n "$pid" ]]; then
+      kill "$pid" >/dev/null 2>&1 || true
+      wait "$pid" >/dev/null 2>&1 || true
+    fi
+  done
+  for socket_var in SOCKET_PATH AUTHLESS_SOCKET_PATH; do
+    local socket_path="${!socket_var:-}"
+    if [[ -n "$socket_path" ]]; then
+      rm -f "$socket_path"
+    fi
+  done
 }
 trap cleanup EXIT
+
+AUTHLESS_SOCKET_PATH="${BOO_REMOTE_DIAG_AUTHLESS_SOCKET:-/tmp/boo-remote-daemon-authless-diagnostics.sock}"
 
 cd "$ROOT"
 
@@ -23,6 +34,9 @@ cargo build >/dev/null
 rm -f "$SOCKET_PATH"
 target/debug/boo server --socket "$SOCKET_PATH" --remote-port "$PORT" --remote-auth-key "$AUTH_KEY" >"$LOG_PATH" 2>&1 &
 SERVER_PID=$!
+rm -f "$AUTHLESS_SOCKET_PATH"
+target/debug/boo server --socket "$AUTHLESS_SOCKET_PATH" --remote-port "$AUTHLESS_PORT" >"$AUTHLESS_LOG_PATH" 2>&1 &
+AUTHLESS_SERVER_PID=$!
 sleep 1
 
 python3 - "$PORT" "$AUTH_KEY" "$SOCKET_PATH" <<'PY'
@@ -157,6 +171,24 @@ if not data.get("server_identity_id"):
     raise SystemExit("missing server_identity_id in probe summary")
 if not isinstance(data.get("heartbeat_rtt_ms"), int) or data["heartbeat_rtt_ms"] < 0:
     raise SystemExit(f"unexpected heartbeat_rtt_ms: {data.get('heartbeat_rtt_ms')!r}")
+PY
+
+authless_probe_json="$(./target/debug/boo probe-remote-daemon --host 127.0.0.1 --port "$AUTHLESS_PORT")"
+python3 - "$authless_probe_json" <<'PY'
+import json
+import sys
+
+data = json.loads(sys.argv[1])
+if data.get("auth_required") is not False:
+    raise SystemExit(f"expected auth_required false for authless probe, got {data.get('auth_required')!r}")
+if data.get("protocol_version") != 1:
+    raise SystemExit(f"unexpected authless protocol version: {data.get('protocol_version')!r}")
+if not data.get("build_id"):
+    raise SystemExit("missing build_id in authless probe summary")
+if not data.get("server_instance_id"):
+    raise SystemExit("missing server_instance_id in authless probe summary")
+if not data.get("server_identity_id"):
+    raise SystemExit("missing server_identity_id in authless probe summary")
 PY
 
 echo "remote daemon diagnostics validation passed"
