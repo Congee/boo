@@ -36,21 +36,70 @@ ssh example-mbp.local 'cd /Users/example/dev/boo && bash scripts/test-ios-remote
 This is the current source of truth for remote Mac validation while Darwin Nix
 packaging remains incomplete.
 
-## Remote Darwin Nix Helper
+## Remote Nix Helper (Portable, no-sudo)
 
-The repository includes a helper for remote Darwin package attempts:
+`scripts/nix-build-remote.sh` is a portable helper that offloads a Nix build to an
+SSH-reachable host. It works in both directions and needs no `/etc` edits or
+root SSH key setup:
 
 ```bash
-bash scripts/nix-build-remote-darwin.sh example-mbp.local .#packages.aarch64-darwin.default --dry-run --no-link
+# Linux → Mac (aarch64-darwin build offloaded to a Mac host):
+./scripts/nix-build-remote.sh example-mbp aarch64-darwin
+
+# Mac → Linux (x86_64-linux build offloaded to a Linux host):
+./scripts/nix-build-remote.sh blackbox x86_64-linux
+
+# Non-default flake attribute + extra flags:
+./scripts/nix-build-remote.sh example-mbp aarch64-darwin \
+  .#checks.aarch64-darwin.default --print-build-logs
 ```
 
-At the moment:
+Under the hood the script issues `nix build --eval-store auto --store
+ssh-ng://<user>@<host> ...`:
 
-- Linux Nix packaging works.
-- The split `libghostty-vt` package path is not yet healthy on Darwin.
-- Darwin still fails in Ghostty's Apple SDK discovery path under Nix.
+- **Evaluation runs locally** (so flake paths and local inputs resolve).
+- **The build runs on the remote host** under the calling user's SSH creds, in
+  the remote host's Nix store. No `nix-daemon` on the requester ever touches
+  SSH, so there is nothing to set up as root.
 
-So the helper is useful for visibility, but not yet the primary Mac build path.
+`scripts/nix-build-remote-darwin.sh` is kept as a thin backwards-compatible shim
+that forwards to `nix-build-remote.sh` with `aarch64-darwin` pre-filled.
+
+### Prerequisites
+
+- `ssh <ssh-host>` works non-interactively (key-based) as the calling user.
+- The calling user is a trusted Nix user on the remote host, i.e.
+  `nix store info --store ssh-ng://<ssh-host>` prints `Trusted: 1`.
+
+Both are true today for `example@example-mbp` and `example@blackbox`.
+
+### Where the build artifact ends up
+
+Because `--store ssh-ng://...` targets the remote store, the output lives in
+`/nix/store/...` on the remote host, not the requester. That fits the
+deploy workflow ("build on the Mac so the Mac has the binary"). If you
+specifically need the artifact back on the requester afterwards:
+
+```bash
+nix copy --from ssh-ng://<user>@<host> /nix/store/XXX-...
+```
+
+### Current state of the Darwin path
+
+- Linux Nix packaging works natively.
+- Linux → Mac trivial derivations (`nixpkgs#hello --system aarch64-darwin`)
+  succeed end-to-end via the helper.
+- Linux → Mac `boo` package: the Rust build completes cleanly; the
+  `cargoCheckHook` test phase fails on `@rpath/libghostty-vt.dylib` not
+  resolving inside the Nix sandbox. This is a package-level bug in
+  `flake.nix`'s Darwin derivation (missing `DYLD_LIBRARY_PATH` / rpath
+  setup around the cargo test invocation), not a remote-builder mechanism
+  issue.
+
+Until the Darwin flake derivation is patched, pass `--arg doCheck false`
+or add `--override-input` workarounds when exercising the Darwin package,
+or keep using direct `cargo build` on the Mac host for full-fidelity
+verification.
 
 ## Current Recommendation
 
