@@ -1478,6 +1478,40 @@ pub fn decode_auth_ok_payload(
     ))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn validate_auth_ok_payload(payload: &[u8], auth_required: bool) -> Result<(), String> {
+    let Some((version, capabilities, build_id, server_instance_id, server_identity_id)) =
+        decode_auth_ok_payload(payload)
+    else {
+        return Err("Remote handshake is malformed".to_string());
+    };
+    if version != REMOTE_PROTOCOL_VERSION {
+        return Err(format!("Unsupported remote protocol version: {version}"));
+    }
+    if auth_required && (capabilities & REMOTE_CAPABILITY_HMAC_AUTH) == 0 {
+        return Err("Remote server does not advertise HMAC authentication".to_string());
+    }
+    if (capabilities & REMOTE_CAPABILITY_HEARTBEAT) == 0 {
+        return Err("Remote server does not advertise heartbeat support".to_string());
+    }
+    if (capabilities & REMOTE_CAPABILITY_ATTACHMENT_RESUME) == 0 {
+        return Err("Remote server does not advertise attachment resume support".to_string());
+    }
+    if (capabilities & REMOTE_CAPABILITY_DAEMON_IDENTITY) == 0 {
+        return Err("Remote server does not advertise daemon identity support".to_string());
+    }
+    if build_id.as_deref().is_none_or(str::is_empty) {
+        return Err("Remote handshake is missing server build metadata".to_string());
+    }
+    if server_instance_id.as_deref().is_none_or(str::is_empty) {
+        return Err("Remote handshake is missing server instance metadata".to_string());
+    }
+    if server_identity_id.as_deref().is_none_or(str::is_empty) {
+        return Err("Remote handshake is missing server identity metadata".to_string());
+    }
+    Ok(())
+}
+
 fn send_direct_error(state: &Arc<Mutex<State>>, client_id: u64, message: &str) {
     send_direct_frame(
         state,
@@ -2359,6 +2393,32 @@ mod tests {
                 Some("deadbeefcafebabe".to_string()),
                 Some("daemon-identity-01".to_string()),
             ))
+        );
+    }
+
+    #[test]
+    fn validate_auth_ok_payload_accepts_current_handshake_contract() {
+        let payload = encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe");
+        assert_eq!(validate_auth_ok_payload(&payload, true), Ok(()));
+    }
+
+    #[test]
+    fn validate_auth_ok_payload_rejects_missing_resume_capability() {
+        let mut payload = encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe");
+        payload[2..6].copy_from_slice(&(REMOTE_CAPABILITIES & !REMOTE_CAPABILITY_ATTACHMENT_RESUME).to_le_bytes());
+        assert_eq!(
+            validate_auth_ok_payload(&payload, true),
+            Err("Remote server does not advertise attachment resume support".to_string())
+        );
+    }
+
+    #[test]
+    fn validate_auth_ok_payload_rejects_missing_daemon_identity_metadata() {
+        let mut payload = encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe");
+        payload.truncate(payload.len() - "daemon-identity-01".len());
+        assert_eq!(
+            validate_auth_ok_payload(&payload, true),
+            Err("Remote handshake is malformed".to_string())
         );
     }
 
