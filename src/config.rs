@@ -17,6 +17,7 @@ pub struct Config {
     pub remote_workdir: Option<String>,
     pub remote_socket: Option<String>,
     pub remote_binary: Option<String>,
+    pub remote_prefer_nix_profile_binary: bool,
     pub remote_port: Option<u16>,
     pub remote_bind_address: Option<String>,
     pub remote_auth_key: Option<String>,
@@ -142,6 +143,10 @@ impl Config {
                     if !value.is_empty() {
                         config.remote_binary = Some(value.to_string());
                     }
+                }
+                "remote-prefer-nix-profile-binary" => {
+                    config.remote_prefer_nix_profile_binary =
+                        parse_bool(value).unwrap_or(false);
                 }
                 "remote-port" => {
                     if let Ok(port) = value.parse::<u16>() {
@@ -277,6 +282,7 @@ impl Default for Config {
             remote_workdir: None,
             remote_socket: None,
             remote_binary: None,
+            remote_prefer_nix_profile_binary: false,
             remote_port: None,
             remote_bind_address: None,
             remote_auth_key: None,
@@ -490,6 +496,7 @@ cursor-blink-interval = 750ms
 prefix-key = ctrl+s
 control-socket = /tmp/boo.sock
 remote-port = 7337
+remote-prefer-nix-profile-binary = true
 remote-bind-address = 0.0.0.0
 remote-auth-key = "secret"
 remote-allow-insecure-no-auth = true
@@ -502,6 +509,7 @@ keybind = super+1 = goto_tab:1
         assert_eq!(config.prefix_key.as_deref(), Some("ctrl+s"));
         assert_eq!(config.control_socket.as_deref(), Some("/tmp/boo.sock"));
         assert_eq!(config.remote_port, Some(7337));
+        assert!(config.remote_prefer_nix_profile_binary);
         assert_eq!(config.remote_bind_address.as_deref(), Some("0.0.0.0"));
         assert_eq!(config.remote_auth_key.as_deref(), Some("secret"));
         assert!(config.remote_allow_insecure_no_auth);
@@ -542,6 +550,7 @@ remote-host = example-mbp.local
 remote-workdir = /Users/example/dev/boo
 remote-socket = /tmp/boo.sock
 remote-binary = /Users/example/dev/boo/target/debug/boo
+remote-prefer-nix-profile-binary = true
 "#;
         let config = Config::parse(content);
         assert_eq!(config.remote_host.as_deref(), Some("example-mbp.local"));
@@ -551,6 +560,7 @@ remote-binary = /Users/example/dev/boo/target/debug/boo
             config.remote_binary.as_deref(),
             Some("/Users/example/dev/boo/target/debug/boo")
         );
+        assert!(config.remote_prefer_nix_profile_binary);
     }
 
     #[test]

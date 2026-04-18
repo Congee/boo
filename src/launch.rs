@@ -14,6 +14,7 @@ static STARTUP_REMOTE_HOST: std::sync::OnceLock<String> = std::sync::OnceLock::n
 static STARTUP_REMOTE_WORKDIR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_SOCKET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_BINARY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static STARTUP_REMOTE_PREFER_NIX_PROFILE_BINARY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_BIND_ADDRESS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_AUTH_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -27,6 +28,7 @@ struct StartupOverrides {
     remote_workdir: Option<String>,
     remote_socket: Option<String>,
     remote_binary: Option<String>,
+    remote_prefer_nix_profile_binary: bool,
     remote_port: Option<u16>,
     remote_bind_address: Option<String>,
     remote_auth_key: Option<String>,
@@ -170,6 +172,9 @@ pub fn parse_startup_args(cli: &crate::cli::Cli) -> bool {
     if let Some(path) = cli.global.remote_binary.as_ref() {
         STARTUP_REMOTE_BINARY.set(path.clone()).ok();
     }
+    if cli.global.remote_prefer_nix_profile_binary {
+        STARTUP_REMOTE_PREFER_NIX_PROFILE_BINARY.set(true).ok();
+    }
     matches!(cli.command, Some(crate::cli::Command::Server))
 }
 
@@ -181,6 +186,10 @@ fn startup_overrides() -> StartupOverrides {
         remote_workdir: STARTUP_REMOTE_WORKDIR.get().cloned(),
         remote_socket: STARTUP_REMOTE_SOCKET.get().cloned(),
         remote_binary: STARTUP_REMOTE_BINARY.get().cloned(),
+        remote_prefer_nix_profile_binary: STARTUP_REMOTE_PREFER_NIX_PROFILE_BINARY
+            .get()
+            .copied()
+            .unwrap_or(false),
         remote_port: STARTUP_REMOTE_PORT.get().copied(),
         remote_bind_address: STARTUP_REMOTE_BIND_ADDRESS.get().cloned(),
         remote_auth_key: STARTUP_REMOTE_AUTH_KEY.get().cloned(),
@@ -210,6 +219,9 @@ fn apply_startup_overrides(
     }
     if let Some(path) = overrides.remote_binary.as_ref() {
         boo_config.remote_binary = Some(path.clone());
+    }
+    if overrides.remote_prefer_nix_profile_binary {
+        boo_config.remote_prefer_nix_profile_binary = true;
     }
     if let Some(port) = overrides.remote_port {
         boo_config.remote_port = Some(port);
@@ -622,14 +634,7 @@ fn resolve_remote_paths(
         .clone()
         .unwrap_or_else(control::default_socket_path),
     );
-    let binary_spec = RemotePathSpec::new(
-        boo_config
-        .remote_binary
-        .as_deref()
-        .filter(|value| !value.is_empty())
-        .unwrap_or("boo")
-        .to_string(),
-    );
+    let binary_spec = RemotePathSpec::new(select_remote_binary_candidate(boo_config));
     let workdir_spec = boo_config
         .remote_workdir
         .as_deref()
@@ -655,6 +660,20 @@ fn resolve_remote_paths(
             .map(|path| path.resolve(remote_home.as_deref()))
             .transpose()?,
     })
+}
+
+fn select_remote_binary_candidate(boo_config: &config::Config) -> String {
+    if let Some(binary) = boo_config
+        .remote_binary
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        return binary.to_string();
+    }
+    if boo_config.remote_prefer_nix_profile_binary {
+        return "~/.nix-profile/bin/boo".to_string();
+    }
+    "boo".to_string()
 }
 
 fn fetch_remote_home(host: &str) -> Result<String, String> {
@@ -1137,6 +1156,7 @@ mod tests {
         forwarded_stream_socket_healthy, format_remote_version_mismatch, merge_family_lists,
         parse_boo_version_output, parse_remote_path_parts,
         remote_binary_looks_like_path, remote_control_version_negotiation_unsupported,
+        select_remote_binary_candidate,
         remote_tunnel_healthy, sanitize_for_path, RemotePathPart, RemotePathSpec,
         StartupOverrides,
         REMOTE_BOOTSTRAP_MARKER, REMOTE_PREFLIGHT_MARKER,
@@ -1533,5 +1553,35 @@ mod tests {
             config.control_socket.as_deref(),
             Some("/tmp/boo-explicit.sock")
         );
+    }
+
+    #[test]
+    fn select_remote_binary_candidate_prefers_explicit_binary() {
+        let mut config = crate::config::Config::default();
+        config.remote_binary = Some("/opt/boo/bin/boo".to_string());
+        config.remote_prefer_nix_profile_binary = true;
+        assert_eq!(select_remote_binary_candidate(&config), "/opt/boo/bin/boo");
+    }
+
+    #[test]
+    fn select_remote_binary_candidate_uses_nix_profile_when_enabled() {
+        let mut config = crate::config::Config::default();
+        config.remote_prefer_nix_profile_binary = true;
+        assert_eq!(
+            select_remote_binary_candidate(&config),
+            "~/.nix-profile/bin/boo"
+        );
+    }
+
+    #[test]
+    fn startup_overrides_enable_nix_profile_remote_binary_preference() {
+        let config = apply_startup_overrides(
+            crate::config::Config::default(),
+            &StartupOverrides {
+                remote_prefer_nix_profile_binary: true,
+                ..StartupOverrides::default()
+            },
+        );
+        assert!(config.remote_prefer_nix_profile_binary);
     }
 }

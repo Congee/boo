@@ -707,6 +707,7 @@ mod tests {
             remote_workdir: None,
             remote_socket: None,
             remote_binary: None,
+            remote_prefer_nix_profile_binary: false,
             remote_port: None,
             remote_bind_address: None,
             remote_auth_key: None,

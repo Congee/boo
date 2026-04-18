@@ -95,6 +95,13 @@ pub struct GlobalArgs {
     pub remote_binary: Option<String>,
 
     #[arg(
+        long = "remote-prefer-nix-profile-binary",
+        global = true,
+        help = "Prefer ~/.nix-profile/bin/boo on the SSH host when --remote-binary is not set"
+    )]
+    pub remote_prefer_nix_profile_binary: bool,
+
+    #[arg(
         long = "remote-port",
         global = true,
         help = "Start the Boo-native TCP remote daemon on this port"
@@ -568,6 +575,7 @@ mod tests {
             "example-mbp.local",
             "--remote-binary",
             "/Users/example/dev/boo/target/debug/boo",
+            "--remote-prefer-nix-profile-binary",
             "ls",
         ]);
         assert_eq!(cli.global.host.as_deref(), Some("example-mbp.local"));
@@ -575,6 +583,7 @@ mod tests {
             cli.global.remote_binary.as_deref(),
             Some("/Users/example/dev/boo/target/debug/boo")
         );
+        assert!(cli.global.remote_prefer_nix_profile_binary);
         assert!(matches!(cli.command, Some(super::Command::Ls)));
     }
 
@@ -745,6 +754,7 @@ mod tests {
         assert!(long.contains("Boo-native TCP remote daemon"));
         assert!(long.contains("authless daemons default to 127.0.0.1"));
         assert!(long.contains("bind publicly without --remote-auth-key"));
+        assert!(long.contains("~/.nix-profile/bin/boo"));
     }
 
     #[test]

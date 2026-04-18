@@ -65,7 +65,8 @@ Goal:
 
 ### 3. Remote Bootstrap Integration
 
-- [ ] Prefer a Nix-built remote Boo binary over mutable `target/debug/boo` when configured
+- [x] Prefer a Nix-built remote Boo binary over mutable `target/debug/boo` when configured
+  - [x] `remote-prefer-nix-profile-binary = true` and `--remote-prefer-nix-profile-binary` prefer `~/.nix-profile/bin/boo` when no explicit `remote-binary` is set
 - [ ] Verify SSH bootstrap works against the Nix-produced remote binary
 - [x] Keep the SSH transport logic independent from the Nix build/deploy mechanism
 
