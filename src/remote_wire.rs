@@ -267,6 +267,9 @@ fn read_exact_retrying(
                     io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
                 ) =>
             {
+                if offset == 0 {
+                    return Err(error);
+                }
                 idle_errors += 1;
                 if idle_errors > max_idle_errors {
                     return Err(error);
@@ -423,8 +426,22 @@ pub(crate) fn read_probe_reply(
     expected: MessageType,
 ) -> Result<(MessageType, Vec<u8>), String> {
     for _ in 0..8 {
-        let (ty, payload) = read_message_retrying(stream, 2)
-            .map_err(|error| format!("failed to read probe reply from {host}:{port}: {error}"))?;
+        let (ty, payload) = match read_message_retrying(stream, 2) {
+            Ok(message) => message,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to read probe reply from {host}:{port}: {error}"
+                ));
+            }
+        };
         if ty == expected {
             return Ok((ty, payload));
         }
@@ -467,8 +484,22 @@ pub(crate) fn read_attach_bootstrap(
     let mut attached = None;
     let mut full_state = None;
     for _ in 0..12 {
-        let (ty, payload) = read_message_retrying(stream, 2)
-            .map_err(|error| format!("failed to read attach reply from {host}:{port}: {error}"))?;
+        let (ty, payload) = match read_message_retrying(stream, 2) {
+            Ok(message) => message,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to read attach reply from {host}:{port}: {error}"
+                ));
+            }
+        };
         match ty {
             MessageType::SessionList
             | MessageType::UiRuntimeState
@@ -523,8 +554,22 @@ pub(crate) fn read_probe_auth_reply(
     port: u16,
 ) -> Result<(MessageType, Vec<u8>), String> {
     for _ in 0..8 {
-        let (ty, payload) = read_message_retrying(stream, 2)
-            .map_err(|error| format!("failed to read auth reply from {host}:{port}: {error}"))?;
+        let (ty, payload) = match read_message_retrying(stream, 2) {
+            Ok(message) => message,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to read auth reply from {host}:{port}: {error}"
+                ));
+            }
+        };
         match ty {
             MessageType::AuthOk | MessageType::AuthChallenge | MessageType::AuthFail => {
                 return Ok((ty, payload));
