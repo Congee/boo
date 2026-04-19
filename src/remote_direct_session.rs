@@ -90,10 +90,14 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
                 stream.write_all(&encode_message(MessageType::Auth, &response)).map_err(
                     |error| format!("failed to send auth response to {host}:{port}: {error}"),
                 )?;
-                let (reply_ty, reply_payload) = crate::remote_wire::read_message(&mut stream)
-                    .map_err(|error| {
-                    format!("failed to read authenticated reply from {host}:{port}: {error}")
-                })?;
+                let (reply_ty, reply_payload) =
+                    crate::remote_wire::read_message_retrying(&mut stream, 2).map_err(
+                        |error| {
+                            format!(
+                                "failed to read authenticated reply from {host}:{port}: {error}"
+                            )
+                        },
+                    )?;
                 if reply_ty != MessageType::AuthOk {
                     return Err(format!(
                         "expected auth ok from {host}:{port}, got {reply_ty:?}"

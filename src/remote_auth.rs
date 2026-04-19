@@ -30,7 +30,7 @@ use crate::remote_state::{
 use crate::remote_wire::{
     MessageType, encode_auth_ok_payload, encode_message, parse_attach_request,
     parse_input_payload, parse_key_payload, parse_pane_id, parse_resize, parse_session_id,
-    random_challenge, read_message,
+    random_challenge, read_message, read_message_retrying,
 };
 
 type HmacSha256 = Hmac<Sha256>;
@@ -50,7 +50,7 @@ pub(crate) fn read_loop(
     loop {
         let mut scope =
             crate::profiling::scope("server.stream.read_message", crate::profiling::Kind::Io);
-        let (ty, payload) = match read_message(&mut stream) {
+        let (ty, payload) = match read_message_retrying(&mut stream, 10) {
             Ok(message) => message,
             Err(error)
                 if matches!(

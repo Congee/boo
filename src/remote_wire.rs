@@ -242,6 +242,64 @@ pub fn read_message(stream: &mut impl Read) -> io::Result<(MessageType, Vec<u8>)
     Ok((ty, payload))
 }
 
+fn read_exact_retrying(
+    stream: &mut impl Read,
+    buf: &mut [u8],
+    max_idle_errors: usize,
+) -> io::Result<()> {
+    let mut offset = 0usize;
+    let mut idle_errors = 0usize;
+    while offset < buf.len() {
+        match stream.read(&mut buf[offset..]) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "unexpected EOF while reading remote message",
+                ));
+            }
+            Ok(n) => {
+                offset += n;
+                idle_errors = 0;
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                ) =>
+            {
+                idle_errors += 1;
+                if idle_errors > max_idle_errors {
+                    return Err(error);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn read_message_retrying(
+    stream: &mut impl Read,
+    max_idle_errors: usize,
+) -> io::Result<(MessageType, Vec<u8>)> {
+    let mut header = [0u8; HEADER_LEN];
+    read_exact_retrying(stream, &mut header, max_idle_errors)?;
+    if header[..2] != MAGIC {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid remote magic",
+        ));
+    }
+    let ty = MessageType::try_from(header[2])
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "unknown remote message"))?;
+    let payload_len = u32::from_le_bytes([header[3], header[4], header[5], header[6]]) as usize;
+    let mut payload = vec![0u8; payload_len];
+    if payload_len > 0 {
+        read_exact_retrying(stream, &mut payload, max_idle_errors)?;
+    }
+    Ok((ty, payload))
+}
+
 pub(crate) fn encode_auth_ok_payload(
     server_identity_id: &str,
     server_instance_id: &str,
@@ -365,7 +423,7 @@ pub(crate) fn read_probe_reply(
     expected: MessageType,
 ) -> Result<(MessageType, Vec<u8>), String> {
     for _ in 0..8 {
-        let (ty, payload) = read_message(stream)
+        let (ty, payload) = read_message_retrying(stream, 2)
             .map_err(|error| format!("failed to read probe reply from {host}:{port}: {error}"))?;
         if ty == expected {
             return Ok((ty, payload));
@@ -409,7 +467,7 @@ pub(crate) fn read_attach_bootstrap(
     let mut attached = None;
     let mut full_state = None;
     for _ in 0..12 {
-        let (ty, payload) = read_message(stream)
+        let (ty, payload) = read_message_retrying(stream, 2)
             .map_err(|error| format!("failed to read attach reply from {host}:{port}: {error}"))?;
         match ty {
             MessageType::SessionList
@@ -465,7 +523,7 @@ pub(crate) fn read_probe_auth_reply(
     port: u16,
 ) -> Result<(MessageType, Vec<u8>), String> {
     for _ in 0..8 {
-        let (ty, payload) = read_message(stream)
+        let (ty, payload) = read_message_retrying(stream, 2)
             .map_err(|error| format!("failed to read auth reply from {host}:{port}: {error}"))?;
         match ty {
             MessageType::AuthOk | MessageType::AuthChallenge | MessageType::AuthFail => {
