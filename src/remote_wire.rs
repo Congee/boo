@@ -1096,3 +1096,527 @@ pub(crate) fn elapsed_ms(now: Instant, earlier: Instant) -> u64 {
 pub(crate) fn remaining_ms(now: Instant, deadline: Instant) -> u64 {
     deadline.saturating_duration_since(now).as_millis() as u64
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::remote_types::{
+        RemoteAttachedSummary, RemoteDirectSessionInfo, RemoteSessionInfo,
+    };
+
+    #[test]
+    fn session_list_encoding_matches_client_layout() {
+        let payload = encode_session_list(&[RemoteSessionInfo {
+            id: 7,
+            name: "Tab 1".to_string(),
+            title: "shell".to_string(),
+            pwd: "/tmp".to_string(),
+            attached: true,
+            child_exited: false,
+        }]);
+        assert_eq!(u32::from_le_bytes(payload[0..4].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(payload[4..8].try_into().unwrap()), 7);
+        assert_eq!(u16::from_le_bytes(payload[8..10].try_into().unwrap()), 5);
+        assert_eq!(&payload[10..15], b"Tab 1");
+        assert_eq!(*payload.last().unwrap(), 0x01);
+    }
+
+    #[test]
+    fn full_state_encoding_uses_12_byte_cells() {
+        let payload = encode_full_state(
+            &RemoteFullState {
+                rows: 1,
+                cols: 2,
+                cursor_x: 1,
+                cursor_y: 0,
+                cursor_visible: true,
+                cursor_blinking: true,
+                cursor_style: 5,
+                cells: vec![
+                    RemoteCell {
+                        codepoint: u32::from('A'),
+                        fg: [1, 2, 3],
+                        bg: [4, 5, 6],
+                        style_flags: 0x21,
+                        wide: false,
+                    },
+                    RemoteCell {
+                        codepoint: u32::from('好'),
+                        fg: [7, 8, 9],
+                        bg: [10, 11, 12],
+                        style_flags: 0x42,
+                        wide: true,
+                    },
+                ],
+            },
+            None,
+            false,
+        );
+        assert_eq!(
+            payload.len(),
+            REMOTE_FULL_STATE_HEADER_LEN + 2 * REMOTE_CELL_ENCODED_LEN
+        );
+        assert_eq!(u16::from_le_bytes(payload[0..2].try_into().unwrap()), 1);
+        assert_eq!(u16::from_le_bytes(payload[2..4].try_into().unwrap()), 2);
+        assert_eq!(
+            u32::from_le_bytes(
+                payload[REMOTE_FULL_STATE_HEADER_LEN..REMOTE_FULL_STATE_HEADER_LEN + 4]
+                    .try_into()
+                    .unwrap()
+            ),
+            u32::from('A')
+        );
+        let second_offset = REMOTE_FULL_STATE_HEADER_LEN + REMOTE_CELL_ENCODED_LEN;
+        assert_eq!(payload[REMOTE_FULL_STATE_HEADER_LEN + 10], 0x21);
+        assert_eq!(payload[REMOTE_FULL_STATE_HEADER_LEN + 11], 0);
+        assert_eq!(
+            u32::from_le_bytes(
+                payload[second_offset..second_offset + 4]
+                    .try_into()
+                    .unwrap()
+            ),
+            u32::from('好')
+        );
+        assert_eq!(payload[second_offset + 10], 0x42);
+        assert_eq!(payload[second_offset + 11], 1);
+    }
+
+    #[test]
+    fn local_full_state_encoding_prefixes_latest_input_seq() {
+        let payload = encode_full_state(
+            &RemoteFullState {
+                rows: 1,
+                cols: 1,
+                cursor_x: 0,
+                cursor_y: 0,
+                cursor_visible: true,
+                cursor_blinking: false,
+                cursor_style: 1,
+                cells: vec![RemoteCell {
+                    codepoint: u32::from('A'),
+                    fg: [1, 2, 3],
+                    bg: [4, 5, 6],
+                    style_flags: 0,
+                    wide: false,
+                }],
+            },
+            Some(42),
+            true,
+        );
+        assert_eq!(u64::from_le_bytes(payload[0..8].try_into().unwrap()), 42);
+        assert_eq!(u16::from_le_bytes(payload[8..10].try_into().unwrap()), 1);
+        assert_eq!(u16::from_le_bytes(payload[10..12].try_into().unwrap()), 1);
+    }
+
+    #[test]
+    fn auth_ok_payload_round_trips_protocol_version_and_capabilities() {
+        let frame = encode_message(
+            MessageType::AuthOk,
+            &encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe"),
+        );
+        let mut cursor = std::io::Cursor::new(frame);
+        let (ty, payload) = read_message(&mut cursor).expect("auth ok frame");
+        assert_eq!(ty, MessageType::AuthOk);
+        assert_eq!(
+            decode_auth_ok_payload(&payload),
+            Some((
+                REMOTE_PROTOCOL_VERSION,
+                REMOTE_CAPABILITIES,
+                Some(env!("CARGO_PKG_VERSION").to_string()),
+                Some("deadbeefcafebabe".to_string()),
+                Some("daemon-identity-01".to_string()),
+            ))
+        );
+    }
+
+    #[test]
+    fn logical_channel_mapping_matches_current_message_families() {
+        assert_eq!(logical_channel_for_message_type(MessageType::Auth), LogicalChannel::Control);
+        assert_eq!(
+            logical_channel_for_message_type(MessageType::SessionList),
+            LogicalChannel::Control
+        );
+        assert_eq!(
+            logical_channel_for_message_type(MessageType::Attach),
+            LogicalChannel::SessionStream
+        );
+        assert_eq!(
+            logical_channel_for_message_type(MessageType::Delta),
+            LogicalChannel::SessionStream
+        );
+        assert_eq!(
+            logical_channel_for_message_type(MessageType::UiPaneDelta),
+            LogicalChannel::SessionStream
+        );
+        assert_eq!(
+            logical_channel_for_message_type(MessageType::Input),
+            LogicalChannel::InputControl
+        );
+        assert_eq!(
+            logical_channel_for_message_type(MessageType::Scroll),
+            LogicalChannel::InputControl
+        );
+        assert_eq!(
+            logical_channel_for_message_type(MessageType::ExecuteCommand),
+            LogicalChannel::InputControl
+        );
+        assert_eq!(
+            logical_channel_for_message_type(MessageType::Heartbeat),
+            LogicalChannel::Health
+        );
+        assert_eq!(
+            logical_channel_for_message_type(MessageType::HeartbeatAck),
+            LogicalChannel::Health
+        );
+    }
+
+    #[test]
+    fn validate_auth_ok_payload_accepts_current_handshake_contract() {
+        let payload = encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe");
+        assert_eq!(validate_auth_ok_payload(&payload, true), Ok(()));
+    }
+
+    #[test]
+    fn validate_auth_ok_payload_rejects_missing_resume_capability() {
+        let mut payload = encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe");
+        payload[2..6].copy_from_slice(&(REMOTE_CAPABILITIES & !REMOTE_CAPABILITY_ATTACHMENT_RESUME).to_le_bytes());
+        assert_eq!(
+            validate_auth_ok_payload(&payload, true),
+            Err("Remote server does not advertise attachment resume support".to_string())
+        );
+    }
+
+    #[test]
+    fn validate_auth_ok_payload_rejects_missing_daemon_identity_metadata() {
+        let mut payload = encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe");
+        payload.truncate(payload.len() - "daemon-identity-01".len());
+        assert_eq!(
+            validate_auth_ok_payload(&payload, true),
+            Err("Remote handshake is malformed".to_string())
+        );
+    }
+
+    #[test]
+    fn validate_auth_ok_payload_rejects_missing_direct_transport_capability() {
+        let mut payload = encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe");
+        payload[2..6].copy_from_slice(
+            &(REMOTE_CAPABILITIES
+                & !(REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT | REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT))
+                .to_le_bytes(),
+        );
+        assert_eq!(
+            validate_auth_ok_payload(&payload, true),
+            Err("Remote server does not advertise a supported direct transport".to_string())
+        );
+    }
+
+    #[test]
+    fn read_probe_auth_reply_skips_unsolicited_session_list() {
+        let mut frames = Vec::new();
+        frames.extend_from_slice(&encode_message(MessageType::SessionList, b"[]"));
+        frames.extend_from_slice(&encode_message(
+            MessageType::AuthOk,
+            &encode_auth_ok_payload("test-daemon", "test-instance"),
+        ));
+        let (ty, payload) = read_probe_auth_reply(
+            &mut std::io::Cursor::new(frames),
+            "127.0.0.1",
+            7359,
+        )
+        .expect("auth reply");
+        assert_eq!(ty, MessageType::AuthOk);
+        assert!(validate_auth_ok_payload(&payload, false).is_ok());
+    }
+
+    #[test]
+    fn decode_session_list_payload_round_trips_encoded_sessions() {
+        let payload = encode_session_list(&[
+            RemoteSessionInfo {
+                id: 7,
+                name: "Tab 1".to_string(),
+                title: "shell".to_string(),
+                pwd: "/tmp".to_string(),
+                attached: true,
+                child_exited: false,
+            },
+            RemoteSessionInfo {
+                id: 8,
+                name: String::new(),
+                title: "logs".to_string(),
+                pwd: "/var/log".to_string(),
+                attached: false,
+                child_exited: true,
+            },
+        ]);
+
+        let decoded = decode_session_list_payload(&payload).expect("decode session list");
+        assert_eq!(
+            decoded,
+            vec![
+                RemoteDirectSessionInfo {
+                    id: 7,
+                    name: "Tab 1".to_string(),
+                    title: "shell".to_string(),
+                    pwd: "/tmp".to_string(),
+                    attached: true,
+                    child_exited: false,
+                },
+                RemoteDirectSessionInfo {
+                    id: 8,
+                    name: String::new(),
+                    title: "logs".to_string(),
+                    pwd: "/var/log".to_string(),
+                    attached: false,
+                    child_exited: true,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_attached_payload_accepts_legacy_and_resume_forms() {
+        let legacy = decode_attached_payload(&7_u32.to_le_bytes()).expect("legacy attached");
+        assert_eq!(legacy.session_id, 7);
+        assert_eq!(legacy.attachment_id, None);
+        assert_eq!(legacy.resume_token, None);
+
+        let mut resumed = 7_u32.to_le_bytes().to_vec();
+        resumed.extend_from_slice(&99_u64.to_le_bytes());
+        resumed.extend_from_slice(&1234_u64.to_le_bytes());
+        let resumed = decode_attached_payload(&resumed).expect("resumed attached");
+        assert_eq!(resumed.session_id, 7);
+        assert_eq!(resumed.attachment_id, Some(99));
+        assert_eq!(resumed.resume_token, Some(1234));
+    }
+
+    #[test]
+    fn decode_remote_full_state_payload_round_trips_encoded_state() {
+        let state = RemoteFullState {
+            rows: 1,
+            cols: 2,
+            cursor_x: 1,
+            cursor_y: 0,
+            cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 2,
+            cells: vec![
+                RemoteCell {
+                    codepoint: u32::from('A'),
+                    fg: [1, 2, 3],
+                    bg: [4, 5, 6],
+                    style_flags: STYLE_FLAG_BOLD,
+                    wide: false,
+                },
+                RemoteCell {
+                    codepoint: u32::from('B'),
+                    fg: [7, 8, 9],
+                    bg: [10, 11, 12],
+                    style_flags: STYLE_FLAG_ITALIC,
+                    wide: true,
+                },
+            ],
+        };
+        let payload = encode_full_state(&state, None, false);
+        let decoded = decode_remote_full_state_payload(&payload).expect("decode full state");
+        assert_eq!(decoded, state);
+    }
+
+    #[test]
+    fn parse_attach_request_supports_session_only_attachment_and_resume_token_forms() {
+        let session_only = 11_u32.to_le_bytes().to_vec();
+        assert_eq!(parse_attach_request(&session_only), Some((11, None, None)));
+
+        let mut with_attachment = session_only.clone();
+        with_attachment.extend_from_slice(&0xabc_u64.to_le_bytes());
+        assert_eq!(
+            parse_attach_request(&with_attachment),
+            Some((11, Some(0xabc), None))
+        );
+
+        let mut with_resume = with_attachment.clone();
+        with_resume.extend_from_slice(&0xdef_u64.to_le_bytes());
+        assert_eq!(
+            parse_attach_request(&with_resume),
+            Some((11, Some(0xabc), Some(0xdef)))
+        );
+    }
+
+#[test]
+    fn encode_delta_uses_scroll_delta_for_scrolling_output() {
+        let row = |ch: char| -> Vec<RemoteCell> {
+            vec![RemoteCell {
+                codepoint: u32::from(ch),
+                fg: [1, 2, 3],
+                bg: [0, 0, 0],
+                style_flags: 0,
+                wide: false,
+            }]
+        };
+        let previous = RemoteFullState {
+            rows: 3,
+            cols: 1,
+            cursor_x: 0,
+            cursor_y: 2,
+            cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 1,
+            cells: [row('a'), row('b'), row('c')].concat(),
+        };
+        let current = RemoteFullState {
+            rows: 3,
+            cols: 1,
+            cursor_x: 0,
+            cursor_y: 2,
+            cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 1,
+            cells: [row('b'), row('c'), row('d')].concat(),
+        };
+
+        let payload = encode_delta(&previous, &current, Some(7), false).expect("delta payload");
+        assert_eq!(u16::from_le_bytes(payload[0..2].try_into().unwrap()), 1);
+        assert_eq!(payload[8] & 0x01, 0x01);
+        assert_eq!(
+            i16::from_le_bytes(
+                payload[REMOTE_DELTA_HEADER_LEN..REMOTE_DELTA_HEADER_LEN + 2]
+                    .try_into()
+                    .unwrap()
+            ),
+            1
+        );
+        assert_eq!(
+            u16::from_le_bytes(
+                payload[REMOTE_DELTA_HEADER_LEN + 2..REMOTE_DELTA_HEADER_LEN + 4]
+                    .try_into()
+                    .unwrap()
+            ),
+            2
+        );
+    }
+
+    #[test]
+    fn encode_delta_skips_scroll_optimization_for_local_clients() {
+        let row = |ch: char| -> Vec<RemoteCell> {
+            vec![RemoteCell {
+                codepoint: u32::from(ch),
+                fg: [1, 2, 3],
+                bg: [0, 0, 0],
+                style_flags: 0,
+                wide: false,
+            }]
+        };
+        let previous = RemoteFullState {
+            rows: 4,
+            cols: 1,
+            cursor_x: 0,
+            cursor_y: 3,
+            cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 1,
+            cells: [row('a'), row('b'), row('c'), row('d')].concat(),
+        };
+        let current = RemoteFullState {
+            rows: 4,
+            cols: 1,
+            cursor_x: 0,
+            cursor_y: 3,
+            cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 1,
+            cells: [row('b'), row('c'), row('d'), row('e')].concat(),
+        };
+
+        assert!(encode_delta(&previous, &current, Some(9), true).is_none());
+    }
+
+    #[test]
+    fn encode_delta_trims_unchanged_prefix_and_suffix_within_row() {
+        let cell = |ch: char| RemoteCell {
+            codepoint: u32::from(ch),
+            fg: [1, 2, 3],
+            bg: [0, 0, 0],
+            style_flags: 0,
+            wide: false,
+        };
+        let previous = RemoteFullState {
+            rows: 1,
+            cols: 5,
+            cursor_x: 2,
+            cursor_y: 0,
+            cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 1,
+            cells: vec![cell('a'), cell('b'), cell('c'), cell('d'), cell('e')],
+        };
+        let current = RemoteFullState {
+            rows: 1,
+            cols: 5,
+            cursor_x: 2,
+            cursor_y: 0,
+            cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 1,
+            cells: vec![cell('a'), cell('b'), cell('X'), cell('d'), cell('e')],
+        };
+
+        let payload = encode_delta(&previous, &current, Some(5), true).expect("delta payload");
+        let row_offset = LOCAL_DELTA_HEADER_LEN;
+        assert_eq!(
+            u16::from_le_bytes(payload[row_offset..row_offset + 2].try_into().unwrap()),
+            0
+        );
+        assert_eq!(
+            u16::from_le_bytes(payload[row_offset + 2..row_offset + 4].try_into().unwrap()),
+            2
+        );
+        assert_eq!(
+            u16::from_le_bytes(payload[row_offset + 4..row_offset + 6].try_into().unwrap()),
+            1
+        );
+        assert_eq!(
+            u32::from_le_bytes(payload[row_offset + 6..row_offset + 10].try_into().unwrap()),
+            u32::from('X')
+        );
+    }
+
+    #[test]
+    fn longest_prefix_suffix_overlap_matches_scroll_overlap() {
+        assert_eq!(longest_prefix_suffix_overlap(&[2, 3, 4], &[1, 2, 3, 4]), 3);
+        assert_eq!(longest_prefix_suffix_overlap(&[1, 2, 3], &[1, 2, 3, 4]), 0);
+        assert_eq!(longest_prefix_suffix_overlap(&[7, 8], &[5, 6, 7, 8]), 2);
+    }
+
+    #[test]
+    fn detect_scroll_rows_handles_multi_row_scroll() {
+        let row = |ch: char| -> Vec<RemoteCell> {
+            vec![RemoteCell {
+                codepoint: u32::from(ch),
+                fg: [1, 2, 3],
+                bg: [0, 0, 0],
+                style_flags: 0,
+                wide: false,
+            }]
+        };
+        let previous = RemoteFullState {
+            rows: 5,
+            cols: 1,
+            cursor_x: 0,
+            cursor_y: 4,
+            cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 1,
+            cells: [row('a'), row('b'), row('c'), row('d'), row('e')].concat(),
+        };
+        let current = RemoteFullState {
+            rows: 5,
+            cols: 1,
+            cursor_x: 0,
+            cursor_y: 4,
+            cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 1,
+            cells: [row('c'), row('d'), row('e'), row('f'), row('g')].concat(),
+        };
+
+        assert_eq!(detect_scroll_rows(&previous, &current), Some(2));
+    }}
