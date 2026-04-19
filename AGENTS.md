@@ -1,5 +1,37 @@
 # Boo Agent Notes
 
+## Build
+
+```bash
+# Enter dev shell when you need the full repo toolchain
+nix develop
+
+# Build
+cargo build
+```
+
+## Architecture Snapshot
+
+- `libghostty-vt` is the shared terminal runtime on macOS and Linux
+- `boo --headless` runs the same VT/runtime stack without starting the GUI
+- `iced` owns window chrome, terminal rendering, overlays, and pane layout
+- macOS host code handles native view focus, text input/IME, clipboard, and notifications
+- Linux host code provides platform glue while sharing the same VT core
+
+## Project Structure
+
+- `src/ffi.rs` is the hand-written FFI boundary where Boo still talks to native APIs
+- `src/vt_backend_core.rs` is the shared VT pane/runtime core
+- `src/main.rs` is the `iced` application shell and shared app state
+- `src/platform/macos.rs` is the macOS host integration layer
+- `build.rs` links Boo against the native dependencies it needs
+
+## Conventions
+
+- No bindgen. Hand-write the relatively small FFI surface we actually use.
+- The shipped app depends on the published `libghostty-vt` crates, not the full Ghostty app runtime.
+- macOS and Linux share one VT architecture; platform code should stay thin.
+
 ## Visual Verification
 
 - When verifying Boo visually, use the repo's process-targeted screenshot workflow or helper script for the `boo` app/window.
