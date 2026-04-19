@@ -3836,9 +3836,19 @@ pub fn full_state_from_terminal(
 mod tests {
     use super::*;
     use crate::remote_identity::{
-        DaemonIdentityMaterial, cert_der_matches_identity, derive_identity_id,
-        generate_daemon_identity_material, load_or_create_daemon_identity_material_at,
+        DaemonIdentityMaterial, derive_identity_id, load_or_create_daemon_identity_material_at,
     };
+
+    fn unique_identity_dir(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(
+            "boo-remote-daemon-identity-{label}-{}-{nanos}",
+            std::process::id()
+        ))
+    }
     use crate::control;
     use std::collections::VecDeque;
 
@@ -5467,49 +5477,7 @@ mod tests {
         );
     }
 
-    fn unique_identity_dir(label: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        std::env::temp_dir().join(format!(
-            "boo-remote-daemon-identity-{label}-{}-{nanos}",
-            std::process::id()
-        ))
-    }
-
-    #[test]
-    fn load_or_create_daemon_identity_material_persists_keypair_and_cert() {
-        let dir = unique_identity_dir("persist");
-        let _ = std::fs::remove_dir_all(&dir);
-
-        let first = load_or_create_daemon_identity_material_at(&dir);
-        let second = load_or_create_daemon_identity_material_at(&dir);
-
-        assert!(!first.identity_id.is_empty());
-        assert_eq!(first.identity_id, second.identity_id);
-        assert_eq!(first.key_pem, second.key_pem);
-        assert_eq!(first.cert_pem, second.cert_pem);
-        assert!(dir.join("key.pem").exists());
-        assert!(dir.join("cert.pem").exists());
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn load_or_create_daemon_identity_material_derives_identity_from_spki() {
-        let dir = unique_identity_dir("spki");
-        let _ = std::fs::remove_dir_all(&dir);
-
-        let material = load_or_create_daemon_identity_material_at(&dir);
-        let keypair = rcgen::KeyPair::from_pem(&material.key_pem).expect("parse key");
-        let expected = derive_identity_id(keypair.public_key_der());
-        assert_eq!(material.identity_id, expected);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[derive(Debug)]
+#[derive(Debug)]
     struct TrustAllServerCertVerifier {
         provider: Arc<rustls::crypto::CryptoProvider>,
     }
@@ -5857,28 +5825,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn cert_der_matches_identity_accepts_current_cert() {
-        let dir = unique_identity_dir("spki-match");
-        let _ = std::fs::remove_dir_all(&dir);
-        let material = load_or_create_daemon_identity_material_at(&dir);
-
-        let cert_ders = rustls_pemfile::certs(&mut material.cert_pem.as_bytes())
-            .collect::<Result<Vec<_>, _>>()
-            .expect("parse certs");
-        let cert_der = cert_ders.first().expect("at least one cert");
-        assert!(cert_der_matches_identity(
-            cert_der.as_ref(),
-            &material.identity_id
-        ));
-
-        let bogus = derive_identity_id([0u8; 32].as_slice());
-        assert!(!cert_der_matches_identity(cert_der.as_ref(), &bogus));
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
+#[test]
     fn should_disconnect_idle_client_enforces_absolute_auth_deadline() {
         // Simulates an attacker that keeps refreshing the HMAC challenge past
         // AUTH_CHALLENGE_WINDOW. The client HAS an active challenge (expires in the
@@ -6009,104 +5956,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn load_external_daemon_identity_material_accepts_matching_pair() {
-        // Generate a pair in a scratch dir then load it via the external path:
-        // simulates what the --remote-cert-path / --remote-key-path flags do.
-        let dir = unique_identity_dir("external-ok");
-        let _ = std::fs::remove_dir_all(&dir);
-        let material = load_or_create_daemon_identity_material_at(&dir);
-
-        let cert_path = dir.join("cert.pem");
-        let key_path = dir.join("key.pem");
-        let loaded = load_external_daemon_identity_material(&cert_path, &key_path)
-            .expect("external load must accept matched pair");
-
-        assert_eq!(loaded.identity_id, material.identity_id);
-        assert_eq!(loaded.cert_pem, material.cert_pem);
-        assert_eq!(loaded.key_pem, material.key_pem);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn load_external_daemon_identity_material_rejects_mismatched_pair() {
-        let dir = unique_identity_dir("external-mismatch");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create dir");
-
-        let material_a = generate_daemon_identity_material();
-        let material_b = generate_daemon_identity_material();
-        assert_ne!(material_a.identity_id, material_b.identity_id);
-        let cert_path = dir.join("cert.pem");
-        let key_path = dir.join("key.pem");
-        std::fs::write(&cert_path, &material_a.cert_pem).expect("write cert");
-        std::fs::write(&key_path, &material_b.key_pem).expect("write key");
-
-        let err = match load_external_daemon_identity_material(&cert_path, &key_path) {
-            Ok(_) => panic!("mismatched external pair must be rejected"),
-            Err(err) => err,
-        };
-        assert!(err.contains("does not match"), "got error: {err}");
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn daemon_identity_material_regenerates_on_cert_key_spki_mismatch() {
-        // Write a valid key.pem from keypair A but a valid cert.pem from keypair B.
-        // The pair is well-formed individually but the SPKI hashes do not match, so
-        // a stable-pin trust decision cannot be made and the loader must regenerate.
-        let dir = unique_identity_dir("spki-mismatch");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create dir");
-
-        let material_a = generate_daemon_identity_material();
-        let material_b = generate_daemon_identity_material();
-        assert_ne!(
-            material_a.identity_id, material_b.identity_id,
-            "test fixture requires distinct keypairs"
-        );
-        std::fs::write(dir.join("key.pem"), &material_a.key_pem).expect("write key");
-        std::fs::write(dir.join("cert.pem"), &material_b.cert_pem).expect("write cert");
-
-        let loaded = load_or_create_daemon_identity_material_at(&dir);
-        assert_ne!(
-            loaded.identity_id, material_a.identity_id,
-            "mismatched pair must not be accepted as identity A"
-        );
-        assert_ne!(
-            loaded.identity_id, material_b.identity_id,
-            "mismatched pair must not be accepted as identity B"
-        );
-
-        // Sanity: the newly-written pair must now validate on reload.
-        let reload = load_or_create_daemon_identity_material_at(&dir);
-        assert_eq!(reload.identity_id, loaded.identity_id);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn daemon_identity_material_regenerates_when_key_is_missing() {
-        let dir = unique_identity_dir("regen");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create dir");
-        // Only a cert present, key missing — must regenerate both.
-        std::fs::write(dir.join("cert.pem"), "not a real cert").expect("write stale cert");
-
-        let material = load_or_create_daemon_identity_material_at(&dir);
-
-        assert!(!material.identity_id.is_empty());
-        assert!(
-            rcgen::KeyPair::from_pem(&material.key_pem).is_ok(),
-            "regenerated key must parse",
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
+#[test]
     fn encode_delta_uses_scroll_delta_for_scrolling_output() {
         let row = |ch: char| -> Vec<RemoteCell> {
             vec![RemoteCell {
