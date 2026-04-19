@@ -36,7 +36,8 @@ pub const REMOTE_CAPABILITIES: u32 = REMOTE_CAPABILITY_HMAC_AUTH
     | REMOTE_CAPABILITY_ATTACHMENT_RESUME
     | REMOTE_CAPABILITY_DAEMON_IDENTITY
     | REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT
-    | REMOTE_CAPABILITY_TCP_TLS_TRANSPORT;
+    | REMOTE_CAPABILITY_TCP_TLS_TRANSPORT
+    | REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT;
 
 /// First byte of a TLS 1.x record when the record carries a handshake (RFC 8446 §5.1).
 /// Distinguishes an incoming TLS ClientHello from Boo's plain-TCP wire format, whose
@@ -557,6 +558,10 @@ pub struct RemoteServer {
     local_socket_path: Option<PathBuf>,
     bind_address: Option<String>,
     port: Option<u16>,
+    /// Active QUIC listener. Kept alive as a field so the endpoint closes when
+    /// the server drops. `None` on local-stream servers or if QUIC bind failed
+    /// (TCP is the authoritative transport; QUIC is additive).
+    _quic_listener: Option<crate::remote_quic::QuicListener>,
 }
 
 struct ServiceAdvertiser {
@@ -600,6 +605,8 @@ impl RemoteServer {
         }));
         let state_for_listener = Arc::clone(&state);
         let (cmd_tx, cmd_rx) = mpsc::channel();
+        let cmd_tx_for_tcp = cmd_tx.clone();
+        let tls_config_for_tcp = Arc::clone(&tls_config);
         let listener_thread = std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else {
@@ -607,13 +614,23 @@ impl RemoteServer {
                 };
                 let _ = stream.set_read_timeout(Some(REMOTE_READ_TIMEOUT));
                 let state = Arc::clone(&state_for_listener);
-                let cmd_tx = cmd_tx.clone();
-                let tls_config = Arc::clone(&tls_config);
+                let cmd_tx = cmd_tx_for_tcp.clone();
+                let tls_config = Arc::clone(&tls_config_for_tcp);
                 std::thread::spawn(move || {
                     serve_incoming_tcp_client(stream, tls_config, state, cmd_tx);
                 });
             }
         });
+
+        // QUIC listener binds the same port number on UDP. Failure is non-fatal
+        // — TCP remains the authoritative transport and servers that cannot
+        // open the UDP port (permissions, port already bound by another
+        // process) just keep running without QUIC.
+        let quic_bind_addr: std::net::SocketAddr = format!("{bind_address}:{}", config.port)
+            .parse()
+            .map_err(io::Error::other)?;
+        let quic_listener =
+            spawn_quic_accept_loop(quic_bind_addr, tls_config, Arc::clone(&state), cmd_tx.clone());
 
         let advertiser = if config.should_advertise() {
             ServiceAdvertiser::spawn(&config.service_name, config.port)
@@ -642,6 +659,7 @@ impl RemoteServer {
                 local_socket_path: None,
                 bind_address: Some(bind_address),
                 port: Some(config.port),
+                _quic_listener: quic_listener,
             },
             cmd_rx,
         ))
@@ -736,6 +754,9 @@ impl RemoteServer {
                 local_socket_path: Some(socket_path),
                 bind_address: None,
                 port: None,
+                // Local Unix-socket servers never serve a network transport,
+                // so there is no QUIC listener to hold here.
+                _quic_listener: None,
             },
             cmd_rx,
         ))
@@ -3443,6 +3464,93 @@ fn write_and_fsync(path: &Path, data: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
+/// Bind a QUIC endpoint on `bind_addr` using the same rustls server config the
+/// TCP+TLS path uses, and spawn an async accept loop on the shared QUIC
+/// runtime. Returns the `QuicListener` so the caller can keep its lifetime
+/// tied to the surrounding `RemoteServer`. `None` on bind failure — QUIC is
+/// additive to TCP; if it cannot come up, the daemon still serves TCP.
+fn spawn_quic_accept_loop(
+    bind_addr: std::net::SocketAddr,
+    tls_config: Arc<rustls::ServerConfig>,
+    state: Arc<Mutex<State>>,
+    cmd_tx: mpsc::Sender<RemoteCmd>,
+) -> Option<crate::remote_quic::QuicListener> {
+    let server_config = match crate::remote_quic::build_quic_server_config(tls_config) {
+        Ok(cfg) => cfg,
+        Err(error) => {
+            log::warn!("remote quic: failed to build quinn server config: {error}");
+            return None;
+        }
+    };
+    let listener = match crate::remote_quic::bind_quic_listener(bind_addr, server_config) {
+        Ok(listener) => listener,
+        Err(error) => {
+            log::warn!("remote quic: failed to bind {bind_addr}: {error}");
+            return None;
+        }
+    };
+
+    let runtime = match crate::remote_quic::shared_quic_runtime() {
+        Ok(rt) => rt,
+        Err(error) => {
+            log::warn!("remote quic: shared runtime unavailable: {error}");
+            return None;
+        }
+    };
+
+    let endpoint = listener.endpoint();
+    runtime.spawn(async move {
+        while let Some(incoming) = endpoint.accept().await {
+            let state = Arc::clone(&state);
+            let cmd_tx = cmd_tx.clone();
+            tokio::spawn(async move {
+                handle_quic_incoming(incoming, state, cmd_tx).await;
+            });
+        }
+    });
+
+    Some(listener)
+}
+
+async fn handle_quic_incoming(
+    incoming: quinn::Incoming,
+    state: Arc<Mutex<State>>,
+    cmd_tx: mpsc::Sender<RemoteCmd>,
+) {
+    let connection = match incoming.await {
+        Ok(connection) => connection,
+        Err(error) => {
+            log::warn!("remote quic handshake failed: {error}");
+            return;
+        }
+    };
+    let remote_addr = connection.remote_address();
+    let (send_stream, recv_stream) = match connection.accept_bi().await {
+        Ok(pair) => pair,
+        Err(error) => {
+            log::warn!("remote quic accept_bi failed from {remote_addr}: {error}");
+            return;
+        }
+    };
+
+    let (inbound_tx, inbound_rx) = mpsc::channel::<io::Result<Vec<u8>>>();
+    let (outbound_tx, outbound_rx) =
+        tokio::sync::mpsc::channel::<Vec<u8>>(REMOTE_QUIC_OUTBOUND_CAPACITY);
+
+    tokio::spawn(crate::remote_quic::run_quic_recv_pump(recv_stream, inbound_tx));
+    tokio::spawn(crate::remote_quic::run_quic_send_pump(send_stream, outbound_rx));
+
+    // Hand the sync bridge halves to an OS thread so the existing blocking
+    // read_loop / writer_loop pair can drive the protocol exactly as it does
+    // for TCP and TLS clients. Keeping QUIC's async surface strictly at the
+    // transport boundary is the whole point of the bridge.
+    std::thread::spawn(move || {
+        let reader = crate::remote_quic::QuicBridgeReader::new(inbound_rx);
+        let writer = crate::remote_quic::QuicBridgeWriter::new(outbound_tx);
+        run_remote_client_session(reader, writer, state, cmd_tx, TRANSPORT_LABEL_QUIC);
+    });
+}
+
 fn serve_incoming_tcp_client(
     stream: std::net::TcpStream,
     tls_config: Arc<rustls::ServerConfig>,
@@ -3566,6 +3674,12 @@ fn run_remote_client_session<R, W>(
 
 const TRANSPORT_LABEL_TLS: &str = "tls";
 const TRANSPORT_LABEL_PLAIN: &str = "plain";
+const TRANSPORT_LABEL_QUIC: &str = "quic";
+
+/// Size of the outbound bounded channel between the sync writer and the async
+/// QUIC send pump. Mirrors the constant in `remote_quic.rs`; declared at the
+/// call site here so the capacity choice is visible alongside the usage.
+const REMOTE_QUIC_OUTBOUND_CAPACITY: usize = 32;
 
 /// DNS-like name presented by the server's self-signed cert. Used as the `ServerName`
 /// input to rustls on the client side. The pinning verifier ignores CA chain and hostname
@@ -6213,6 +6327,7 @@ mod tests {
             local_socket_path: None,
             bind_address: None,
             port: None,
+            _quic_listener: None,
         };
 
         server.send_attached(7, 11, None);
@@ -6271,6 +6386,7 @@ mod tests {
             local_socket_path: None,
             bind_address: None,
             port: None,
+            _quic_listener: None,
         };
 
         server.send_attached(7, 11, Some(0xabc));
@@ -6359,6 +6475,7 @@ mod tests {
             local_socket_path: None,
             bind_address: None,
             port: None,
+            _quic_listener: None,
         };
 
         server
@@ -6437,6 +6554,7 @@ mod tests {
             local_socket_path: None,
             bind_address: None,
             port: None,
+            _quic_listener: None,
         };
 
         let error = server
@@ -6493,6 +6611,7 @@ mod tests {
             local_socket_path: None,
             bind_address: None,
             port: None,
+            _quic_listener: None,
         };
 
         let error = server
@@ -6546,6 +6665,7 @@ mod tests {
             local_socket_path: None,
             bind_address: None,
             port: None,
+            _quic_listener: None,
         };
 
         let error = server
@@ -6598,6 +6718,7 @@ mod tests {
             local_socket_path: None,
             bind_address: None,
             port: None,
+            _quic_listener: None,
         };
 
         server
@@ -6670,6 +6791,7 @@ mod tests {
             local_socket_path: None,
             bind_address: None,
             port: None,
+            _quic_listener: None,
         };
 
         let snapshot = server.clients_snapshot();
@@ -6762,6 +6884,7 @@ mod tests {
             local_socket_path: None,
             bind_address: None,
             port: None,
+            _quic_listener: None,
         };
 
         let snapshot = server.clients_snapshot();
@@ -6824,6 +6947,7 @@ mod tests {
             local_socket_path: None,
             bind_address: None,
             port: None,
+            _quic_listener: None,
         };
 
         let snapshot = server.clients_snapshot();
@@ -6893,6 +7017,7 @@ mod tests {
             local_socket_path: None,
             bind_address: None,
             port: None,
+            _quic_listener: None,
         };
 
         let snapshot = server.clients_snapshot();
@@ -6951,6 +7076,7 @@ mod tests {
             local_socket_path: None,
             bind_address: None,
             port: None,
+            _quic_listener: None,
         };
 
         let stale_snapshot = server.clients_snapshot();
@@ -7034,6 +7160,7 @@ mod tests {
             local_socket_path: None,
             bind_address: None,
             port: None,
+            _quic_listener: None,
         };
         let ui_state = control::UiRuntimeState {
             active_tab: 0,
@@ -7095,6 +7222,7 @@ mod tests {
             local_socket_path: None,
             bind_address: None,
             port: None,
+            _quic_listener: None,
         };
         let ui_state = control::UiRuntimeState {
             active_tab: 0,
@@ -7157,6 +7285,7 @@ mod tests {
             local_socket_path: None,
             bind_address: None,
             port: None,
+            _quic_listener: None,
         };
         let sessions = vec![RemoteSessionInfo {
             id: 11,
@@ -7218,6 +7347,7 @@ mod tests {
             local_socket_path: None,
             bind_address: None,
             port: None,
+            _quic_listener: None,
         };
         let sessions = vec![RemoteSessionInfo {
             id: 11,
@@ -7281,6 +7411,7 @@ mod tests {
             local_socket_path: None,
             bind_address: None,
             port: None,
+            _quic_listener: None,
         };
 
         assert!(server.has_client(1));
@@ -7393,6 +7524,7 @@ mod tests {
             local_socket_path: None,
             bind_address: None,
             port: None,
+            _quic_listener: None,
         };
 
         server.retarget_local_attached_to_session(22);
@@ -7486,6 +7618,7 @@ mod tests {
             local_socket_path: None,
             bind_address: None,
             port: None,
+            _quic_listener: None,
         };
 
         server.retain_local_attached_pane_states(11, &[20]);

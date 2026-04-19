@@ -24,9 +24,12 @@
 //! inherits the same SPKI pinning semantics as the TCP+TLS path.
 
 use std::io::{self, Read, Write};
+use std::net::SocketAddr;
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::mpsc as std_mpsc;
 
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::runtime::Runtime;
 
 /// Name prefix for tokio worker threads spawned for QUIC work. Makes runtime
@@ -44,7 +47,7 @@ const QUIC_OUTBOUND_CHANNEL_CAPACITY: usize = 32;
 /// Lazily created so there is no tokio overhead in a build/run that never uses
 /// QUIC. A single shared runtime keeps thread counts predictable; every QUIC
 /// server and client task lives on it.
-fn shared_quic_runtime() -> io::Result<&'static Runtime> {
+pub(crate) fn shared_quic_runtime() -> io::Result<&'static Runtime> {
     static RUNTIME: OnceLock<io::Result<Runtime>> = OnceLock::new();
     RUNTIME
         .get_or_init(|| {
@@ -62,32 +65,137 @@ fn shared_quic_runtime() -> io::Result<&'static Runtime> {
         })
 }
 
-/// Sync-facing bridge over a single QUIC bidirectional stream.
+/// Largest recv-chunk size requested from `quinn::RecvStream::read`. Chunks
+/// larger than a caller's buffer are stashed in `QuicBridgeReader::pending_read`,
+/// so this only bounds the pump task's transient allocation.
+const QUIC_RECV_CHUNK_SIZE: usize = 64 * 1024;
+
+/// Drain a `quinn::RecvStream` into a sync `std::sync::mpsc::Sender`. On EOF or
+/// error the channel is closed (by dropping the sender when the task exits);
+/// `QuicBridgeReader::read` turns both into a `read -> Ok(0)` or an `io::Error`
+/// respectively.
+pub(crate) async fn run_quic_recv_pump(
+    mut recv: quinn::RecvStream,
+    inbound: std_mpsc::Sender<io::Result<Vec<u8>>>,
+) {
+    let mut buf = vec![0u8; QUIC_RECV_CHUNK_SIZE];
+    loop {
+        match recv.read(&mut buf).await {
+            Ok(None) => break,
+            Ok(Some(0)) => break,
+            Ok(Some(n)) => {
+                if inbound.send(Ok(buf[..n].to_vec())).is_err() {
+                    break;
+                }
+            }
+            Err(error) => {
+                let io_err = io::Error::other(format!("quic recv error: {error}"));
+                let _ = inbound.send(Err(io_err));
+                break;
+            }
+        }
+    }
+}
+
+/// Drain a `tokio::sync::mpsc::Receiver<Vec<u8>>` into a `quinn::SendStream`.
+/// The sender side (held by `QuicBridgeWriter`) closes the channel when the
+/// sync writer is dropped, which ends this loop and finishes the stream.
+pub(crate) async fn run_quic_send_pump(
+    mut send: quinn::SendStream,
+    mut outbound: tokio::sync::mpsc::Receiver<Vec<u8>>,
+) {
+    while let Some(chunk) = outbound.recv().await {
+        if let Err(error) = send.write_all(&chunk).await {
+            log::warn!("quic send error: {error}");
+            break;
+        }
+    }
+    let _ = send.finish();
+}
+
+/// Convert an existing rustls `ServerConfig` (the one produced from Phase 1's
+/// ed25519 cert) into a `quinn::ServerConfig`. The underlying crypto is
+/// identical — quinn just needs the config wrapped in its QUIC-specific
+/// adapter.
+pub(crate) fn build_quic_server_config(
+    tls_config: Arc<rustls::ServerConfig>,
+) -> io::Result<quinn::ServerConfig> {
+    let crypto = quinn::crypto::rustls::QuicServerConfig::try_from((*tls_config).clone())
+        .map_err(|error| io::Error::other(format!("build QUIC server crypto: {error}")))?;
+    Ok(quinn::ServerConfig::with_crypto(Arc::new(crypto)))
+}
+
+/// Build a `quinn::ClientConfig` backed by a pinning rustls `ClientConfig`.
+/// Callers pass in the full rustls config built via
+/// `remote::build_remote_client_tls_config` so the same
+/// `PinnedSpkiServerCertVerifier` guards QUIC handshakes as the TCP+TLS ones.
+pub(crate) fn build_quic_client_config(
+    tls_config: rustls::ClientConfig,
+) -> io::Result<quinn::ClientConfig> {
+    let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
+        .map_err(|error| io::Error::other(format!("build QUIC client crypto: {error}")))?;
+    Ok(quinn::ClientConfig::new(Arc::new(crypto)))
+}
+
+/// Listener handle for a running QUIC endpoint. Dropping the handle closes the
+/// endpoint's listening socket; in-flight connections continue until the async
+/// task observes the drop.
+pub(crate) struct QuicListener {
+    endpoint: quinn::Endpoint,
+    local_addr: SocketAddr,
+}
+
+impl QuicListener {
+    pub(crate) fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+
+    pub(crate) fn endpoint(&self) -> quinn::Endpoint {
+        self.endpoint.clone()
+    }
+}
+
+impl Drop for QuicListener {
+    fn drop(&mut self) {
+        self.endpoint.close(0u32.into(), b"shutting down");
+    }
+}
+
+/// Bind a QUIC endpoint on `bind_addr` using `server_config`. Returns the
+/// active listener (caller drives the accept loop against it).
+pub(crate) fn bind_quic_listener(
+    bind_addr: SocketAddr,
+    server_config: quinn::ServerConfig,
+) -> io::Result<QuicListener> {
+    let runtime = shared_quic_runtime()?;
+    let _guard = runtime.enter();
+    let endpoint = quinn::Endpoint::server(server_config, bind_addr)?;
+    let local_addr = endpoint.local_addr()?;
+    Ok(QuicListener {
+        endpoint,
+        local_addr,
+    })
+}
+
+/// Sync-facing read half of the QUIC bridge.
 ///
-/// Reads come from `inbound` (fed by an async recv loop), writes go into
-/// `outbound` (drained by an async send loop). The internal `pending_read`
-/// holds any bytes left over from a recv chunk that was larger than the
-/// caller's buffer.
-pub(crate) struct QuicBridgeStream {
+/// Reads come from `inbound` (fed by an async recv pump); `pending_read` holds
+/// leftover bytes when a recv chunk was larger than the caller's buffer.
+pub(crate) struct QuicBridgeReader {
     inbound: std_mpsc::Receiver<io::Result<Vec<u8>>>,
-    outbound: tokio::sync::mpsc::Sender<Vec<u8>>,
     pending_read: Vec<u8>,
 }
 
-impl QuicBridgeStream {
-    pub(crate) fn new(
-        inbound: std_mpsc::Receiver<io::Result<Vec<u8>>>,
-        outbound: tokio::sync::mpsc::Sender<Vec<u8>>,
-    ) -> Self {
+impl QuicBridgeReader {
+    pub(crate) fn new(inbound: std_mpsc::Receiver<io::Result<Vec<u8>>>) -> Self {
         Self {
             inbound,
-            outbound,
             pending_read: Vec::new(),
         }
     }
 }
 
-impl Read for QuicBridgeStream {
+impl Read for QuicBridgeReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if !self.pending_read.is_empty() {
             let take = buf.len().min(self.pending_read.len());
@@ -113,7 +221,24 @@ impl Read for QuicBridgeStream {
     }
 }
 
-impl Write for QuicBridgeStream {
+/// Sync-facing write half of the QUIC bridge.
+///
+/// Each `write` pushes a byte vector into the outbound tokio mpsc; the async
+/// send pump drains into `quinn::SendStream::write_all`. `Clone` is implemented
+/// because the caller (`DirectTransportSession::connect_over_stream`) plus
+/// writer loops occasionally want independent handles on the same transport.
+#[derive(Clone)]
+pub(crate) struct QuicBridgeWriter {
+    outbound: tokio::sync::mpsc::Sender<Vec<u8>>,
+}
+
+impl QuicBridgeWriter {
+    pub(crate) fn new(outbound: tokio::sync::mpsc::Sender<Vec<u8>>) -> Self {
+        Self { outbound }
+    }
+}
+
+impl Write for QuicBridgeWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -126,6 +251,43 @@ impl Write for QuicBridgeStream {
 
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+/// Unified `Read + Write` facade for callers that want one stream handle (the
+/// sync direct-client path passes a single value to
+/// `DirectTransportSession::connect_over_stream`). Internally delegates to the
+/// split reader/writer halves above.
+pub(crate) struct QuicBridgeStream {
+    reader: QuicBridgeReader,
+    writer: QuicBridgeWriter,
+}
+
+impl QuicBridgeStream {
+    pub(crate) fn new(
+        inbound: std_mpsc::Receiver<io::Result<Vec<u8>>>,
+        outbound: tokio::sync::mpsc::Sender<Vec<u8>>,
+    ) -> Self {
+        Self {
+            reader: QuicBridgeReader::new(inbound),
+            writer: QuicBridgeWriter::new(outbound),
+        }
+    }
+}
+
+impl Read for QuicBridgeStream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.reader.read(buf)
+    }
+}
+
+impl Write for QuicBridgeStream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.writer.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
     }
 }
 
