@@ -22,6 +22,7 @@ mod remote_identity;
 mod remote_quic;
 mod remote_transport;
 mod remote_types;
+mod remote_wire;
 mod runtime;
 mod runtime_copy;
 mod runtime_input;
