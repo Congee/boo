@@ -29,7 +29,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::mpsc as std_mpsc;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::runtime::Runtime;
 
 /// Name prefix for tokio worker threads spawned for QUIC work. Makes runtime
@@ -175,6 +175,117 @@ pub(crate) fn bind_quic_listener(
         endpoint,
         local_addr,
     })
+}
+
+/// Synchronously open a QUIC connection to `host:port`, complete the handshake,
+/// open a single bidirectional stream, and return a sync-facing
+/// `QuicBridgeStream` that the existing `DirectTransportSession::connect_over_stream`
+/// machinery can drive as if it were a TCP socket.
+///
+/// `client_config` should be built via `remote::build_remote_client_tls_config`
+/// so the same `PinnedSpkiServerCertVerifier` guards the QUIC handshake as the
+/// TCP+TLS one.
+pub(crate) fn connect_quic_client(
+    host: &str,
+    port: u16,
+    server_name: &str,
+    client_config: rustls::ClientConfig,
+) -> io::Result<QuicBridgeStream> {
+    use std::net::ToSocketAddrs;
+
+    let runtime = shared_quic_runtime()?;
+    let quic_config = build_quic_client_config(client_config)?;
+
+    let server_addr: SocketAddr = (host, port)
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| {
+            io::Error::other(format!("unable to resolve quic endpoint {host}:{port}"))
+        })?;
+
+    // Endpoint must bind on a local UDP address in the same family as the
+    // peer; IPv4 peers need 0.0.0.0:0, IPv6 peers need [::]:0.
+    let local_bind: SocketAddr = if server_addr.is_ipv4() {
+        "0.0.0.0:0".parse().expect("static ipv4 bind")
+    } else {
+        "[::]:0".parse().expect("static ipv6 bind")
+    };
+
+    let server_name_owned = server_name.to_string();
+    let host_for_error = host.to_string();
+
+    type BridgeHandles = (
+        std_mpsc::Receiver<io::Result<Vec<u8>>>,
+        tokio::sync::mpsc::Sender<Vec<u8>>,
+    );
+    let (init_tx, init_rx) = std_mpsc::channel::<io::Result<BridgeHandles>>();
+
+    runtime.spawn(async move {
+        let mut endpoint = match quinn::Endpoint::client(local_bind) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                let _ = init_tx.send(Err(error));
+                return;
+            }
+        };
+        endpoint.set_default_client_config(quic_config);
+
+        let connecting = match endpoint.connect(server_addr, &server_name_owned) {
+            Ok(c) => c,
+            Err(error) => {
+                let _ = init_tx.send(Err(io::Error::other(format!(
+                    "quic connect to {host_for_error}:{port}: {error}"
+                ))));
+                return;
+            }
+        };
+        let connection = match connecting.await {
+            Ok(c) => c,
+            Err(error) => {
+                let _ = init_tx.send(Err(io::Error::other(format!(
+                    "quic handshake with {host_for_error}:{port}: {error}"
+                ))));
+                return;
+            }
+        };
+        let (send_stream, recv_stream) = match connection.open_bi().await {
+            Ok(pair) => pair,
+            Err(error) => {
+                let _ = init_tx.send(Err(io::Error::other(format!(
+                    "quic open_bi with {host_for_error}:{port}: {error}"
+                ))));
+                return;
+            }
+        };
+
+        let (inbound_tx, inbound_rx) = std_mpsc::channel::<io::Result<Vec<u8>>>();
+        let (outbound_tx, outbound_rx) =
+            tokio::sync::mpsc::channel::<Vec<u8>>(QUIC_OUTBOUND_CHANNEL_CAPACITY);
+
+        // Hand the sync caller the bridge halves *before* spawning pumps so
+        // the caller can start driving the protocol as soon as streams are
+        // ready; the pumps then run in the background until the bridge
+        // channels close.
+        if init_tx.send(Ok((inbound_rx, outbound_tx))).is_err() {
+            return;
+        }
+
+        let recv = tokio::spawn(run_quic_recv_pump(recv_stream, inbound_tx));
+        let send = tokio::spawn(run_quic_send_pump(send_stream, outbound_rx));
+        let _ = tokio::join!(recv, send);
+
+        // Keep the endpoint + connection alive until pumps finish, then close
+        // gracefully. endpoint.wait_idle().await returns when all connections
+        // have fully drained.
+        drop(connection);
+        endpoint.wait_idle().await;
+    });
+
+    let (inbound_rx, outbound_tx) = init_rx
+        .recv()
+        .map_err(|_| io::Error::other("shared quic runtime shut down before connect completed"))?
+        ?;
+    Ok(QuicBridgeStream::new(inbound_rx, outbound_tx))
 }
 
 /// Sync-facing read half of the QUIC bridge.

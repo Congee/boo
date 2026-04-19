@@ -2362,6 +2362,38 @@ impl DirectTransportSession<std::net::TcpStream> {
 }
 
 type TlsClientStream = rustls::StreamOwned<rustls::ClientConnection, std::net::TcpStream>;
+type QuicClientStream = crate::remote_quic::QuicBridgeStream;
+
+impl DirectTransportSession<QuicClientStream> {
+    /// Connect to a remote daemon over QUIC with SPKI-pinned cert verification.
+    /// Identical trust model to `connect_tls` — same rustls
+    /// `PinnedSpkiServerCertVerifier` drives the handshake, just over quinn's
+    /// QUIC transport instead of TCP+TLS.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn connect_quic(
+        host: &str,
+        port: u16,
+        auth_key: Option<&str>,
+        expected_identity: &str,
+    ) -> Result<Self, String> {
+        let client_config = build_remote_client_tls_config(expected_identity)?;
+        let stream = crate::remote_quic::connect_quic_client(
+            host,
+            port,
+            REMOTE_DAEMON_SERVER_NAME,
+            client_config,
+        )
+        .map_err(|error| format!("quic connect to {host}:{port} failed: {error}"))?;
+
+        Self::connect_over_stream(
+            stream,
+            host.to_string(),
+            port,
+            auth_key,
+            Some(expected_identity),
+        )
+    }
+}
 
 impl DirectTransportSession<TlsClientStream> {
     /// Connect to a remote daemon with an SPKI-pinned TLS handshake. `expected_identity`
@@ -3684,7 +3716,7 @@ const REMOTE_QUIC_OUTBOUND_CAPACITY: usize = 32;
 /// DNS-like name presented by the server's self-signed cert. Used as the `ServerName`
 /// input to rustls on the client side. The pinning verifier ignores CA chain and hostname
 /// anyway, but rustls still requires a syntactically valid name to feed SNI.
-const REMOTE_DAEMON_SERVER_NAME: &str = "boo-remote-daemon";
+pub(crate) const REMOTE_DAEMON_SERVER_NAME: &str = "boo-remote-daemon";
 
 fn extract_cert_spki_der(cert_der: &[u8]) -> Result<Vec<u8>, String> {
     use x509_parser::prelude::*;
@@ -3768,8 +3800,7 @@ impl rustls::client::danger::ServerCertVerifier for PinnedSpkiServerCertVerifier
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-fn build_remote_client_tls_config(
+pub(crate) fn build_remote_client_tls_config(
     expected_identity: &str,
 ) -> Result<rustls::ClientConfig, String> {
     let verifier = Arc::new(PinnedSpkiServerCertVerifier::new(
@@ -5797,6 +5828,107 @@ mod tests {
 
         drop(session);
         let _ = server_handle.join();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn start_quic_test_server(
+        material: &DaemonIdentityMaterial,
+        auth_key: Option<&[u8]>,
+    ) -> (
+        std::net::SocketAddr,
+        crate::remote_quic::QuicListener,
+        mpsc::Receiver<RemoteCmd>,
+    ) {
+        let tls_config =
+            build_remote_server_tls_config(material).expect("build server tls config");
+        let server_config =
+            crate::remote_quic::build_quic_server_config(tls_config).expect("quic config");
+        let bind_addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let listener =
+            crate::remote_quic::bind_quic_listener(bind_addr, server_config).expect("bind quic");
+        let addr = listener.local_addr();
+
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::new(),
+            revivable_attachments: HashMap::new(),
+            auth_key: auth_key.map(<[u8]>::to_vec),
+            server_identity_id: material.identity_id.clone(),
+            server_instance_id: "test-instance".to_string(),
+            tls_clients: std::collections::HashSet::new(),
+        }));
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+
+        let endpoint = listener.endpoint();
+        let runtime = crate::remote_quic::shared_quic_runtime().expect("runtime");
+        runtime.spawn(async move {
+            while let Some(incoming) = endpoint.accept().await {
+                let state = Arc::clone(&state);
+                let cmd_tx = cmd_tx.clone();
+                tokio::spawn(async move {
+                    handle_quic_incoming(incoming, state, cmd_tx).await;
+                });
+            }
+        });
+
+        (addr, listener, cmd_rx)
+    }
+
+    #[test]
+    fn direct_quic_client_connects_with_matching_pin() {
+        let dir = unique_identity_dir("quic-pin-ok");
+        let _ = std::fs::remove_dir_all(&dir);
+        let material = load_or_create_daemon_identity_material_at(&dir);
+        let (addr, _listener, _cmd_rx) = start_quic_test_server(&material, None);
+
+        let session = DirectTransportSession::<QuicClientStream>::connect_quic(
+            &addr.ip().to_string(),
+            addr.port(),
+            None,
+            &material.identity_id,
+        )
+        .expect("quic connect");
+
+        assert!(!session.auth_required);
+        assert_eq!(
+            session.server_identity_id.as_deref(),
+            Some(material.identity_id.as_str())
+        );
+        assert_ne!(
+            session.capabilities & REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT,
+            0,
+            "server should advertise the QUIC transport capability"
+        );
+
+        drop(session);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn direct_quic_client_rejects_mismatched_pin() {
+        let dir = unique_identity_dir("quic-pin-mismatch");
+        let _ = std::fs::remove_dir_all(&dir);
+        let material = load_or_create_daemon_identity_material_at(&dir);
+        let (addr, _listener, _cmd_rx) = start_quic_test_server(&material, None);
+
+        let bogus_pin = derive_identity_id([0xCCu8; 32].as_slice());
+        assert_ne!(bogus_pin, material.identity_id);
+
+        let err = match DirectTransportSession::<QuicClientStream>::connect_quic(
+            &addr.ip().to_string(),
+            addr.port(),
+            None,
+            &bogus_pin,
+        ) {
+            Ok(_) => panic!("quic connect must fail on mismatched pin"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_lowercase().contains("quic")
+                || err.to_lowercase().contains("handshake")
+                || err.to_lowercase().contains("cert"),
+            "expected a TLS/QUIC handshake failure message, got: {err}"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
