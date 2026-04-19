@@ -145,6 +145,25 @@ fn parse_remote_path_parts(raw: &str) -> Vec<RemotePathPart> {
 
 const LOCAL_BOO_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// How long a locally-spawned `boo server` has to come up and answer a control
+/// RPC before we give up and report the spawn as failed.
+const LOCAL_SERVER_READY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Poll interval for the local-server readiness check.
+const LOCAL_SERVER_READY_POLL_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(50);
+
+/// How long the SSH-bootstrapped remote boo server has to become reachable
+/// over the forwarded control socket before we declare the bootstrap broken.
+/// Longer than the local deadline because SSH connection reuse + remote
+/// process spawn adds non-trivial latency.
+const REMOTE_SERVER_READY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// Poll interval for the remote-server readiness check. Slightly longer than
+/// the local one so a slow remote doesn't get hit too aggressively.
+const REMOTE_SERVER_READY_POLL_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(100);
+
 pub fn parse_startup_args(cli: &crate::cli::Cli) -> bool {
     if let Some(name) = cli.global.session.as_ref() {
         STARTUP_SESSION.set(name.clone()).ok();
@@ -495,12 +514,12 @@ pub fn ensure_server_running(socket_path: &str, boo_config: &config::Config) -> 
         return false;
     }
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let deadline = std::time::Instant::now() + LOCAL_SERVER_READY_DEADLINE;
     while std::time::Instant::now() < deadline {
         if server_ui_ready(&client) {
             return true;
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(LOCAL_SERVER_READY_POLL_INTERVAL);
     }
     log::warn!("boo server did not become ready at {socket_path}");
     false
@@ -575,12 +594,12 @@ fn ensure_remote_server_running(
         }
     }
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    let deadline = std::time::Instant::now() + REMOTE_SERVER_READY_DEADLINE;
     while std::time::Instant::now() < deadline {
         if server_ui_ready(&client) {
             return true;
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::thread::sleep(REMOTE_SERVER_READY_POLL_INTERVAL);
     }
     log::warn!("remote boo server did not become ready through {local_socket_path}");
     false

@@ -3689,7 +3689,9 @@ async fn handle_quic_incoming(
 
     let (inbound_tx, inbound_rx) = mpsc::channel::<io::Result<Vec<u8>>>();
     let (outbound_tx, outbound_rx) =
-        tokio::sync::mpsc::channel::<Vec<u8>>(REMOTE_QUIC_OUTBOUND_CAPACITY);
+        tokio::sync::mpsc::channel::<Vec<u8>>(
+            crate::remote_quic::QUIC_OUTBOUND_CHANNEL_CAPACITY,
+        );
 
     tokio::spawn(crate::remote_quic::run_quic_recv_pump(recv_stream, inbound_tx));
     tokio::spawn(crate::remote_quic::run_quic_send_pump(send_stream, outbound_rx));
@@ -3829,11 +3831,6 @@ fn run_remote_client_session<R, W>(
 const TRANSPORT_LABEL_TLS: &str = "tls";
 const TRANSPORT_LABEL_PLAIN: &str = "plain";
 const TRANSPORT_LABEL_QUIC: &str = "quic";
-
-/// Size of the outbound bounded channel between the sync writer and the async
-/// QUIC send pump. Mirrors the constant in `remote_quic.rs`; declared at the
-/// call site here so the capacity choice is visible alongside the usage.
-const REMOTE_QUIC_OUTBOUND_CAPACITY: usize = 32;
 
 /// DNS-like name presented by the server's self-signed cert. Used as the `ServerName`
 /// input to rustls on the client side. The pinning verifier ignores CA chain and hostname

@@ -37,11 +37,22 @@ use tokio::runtime::Runtime;
 /// threads Boo spawns.
 const QUIC_RUNTIME_THREAD_NAME: &str = "boo-quic";
 
+/// Worker thread count for the shared QUIC runtime. Two threads is enough to
+/// keep the accept loop unblocked while pumps, timers, and user tasks make
+/// progress, and small enough that an idle boo process with QUIC enabled does
+/// not pin extra hardware threads.
+const QUIC_RUNTIME_WORKER_THREADS: usize = 2;
+
 /// Size of the outbound bounded channel carrying write-request buffers from the
 /// sync writer into the async send loop. 32 hands out enough slack to let a
 /// burst of terminal output queue without the sync writer blocking, while
-/// keeping memory bounded under pathological backpressure.
-const QUIC_OUTBOUND_CHANNEL_CAPACITY: usize = 32;
+/// keeping memory bounded under pathological backpressure. Referenced from
+/// `remote.rs` via `pub(crate)` so server and client agree on one value.
+pub(crate) const QUIC_OUTBOUND_CHANNEL_CAPACITY: usize = 32;
+
+/// Application-level close code sent when `QuicListener` drops. 0 is the RFC 9000
+/// "no error" application error code — matches a graceful daemon shutdown.
+const QUIC_NORMAL_CLOSE_CODE: u32 = 0;
 
 /// Process-global tokio runtime used for all QUIC endpoints in this process.
 /// Lazily created so there is no tokio overhead in a build/run that never uses
@@ -52,7 +63,7 @@ pub(crate) fn shared_quic_runtime() -> io::Result<&'static Runtime> {
     RUNTIME
         .get_or_init(|| {
             tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
+                .worker_threads(QUIC_RUNTIME_WORKER_THREADS)
                 .thread_name(QUIC_RUNTIME_THREAD_NAME)
                 .enable_all()
                 .build()
@@ -157,7 +168,8 @@ impl QuicListener {
 
 impl Drop for QuicListener {
     fn drop(&mut self) {
-        self.endpoint.close(0u32.into(), b"shutting down");
+        self.endpoint
+            .close(QUIC_NORMAL_CLOSE_CODE.into(), b"shutting down");
     }
 }
 

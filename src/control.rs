@@ -21,6 +21,24 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
 use std::time::Duration;
 
+/// Read/write timeout for a one-shot control-socket RPC: connect, write the
+/// request, read the reply, hang up. Long enough to tolerate normal GUI
+/// scheduling latency; short enough that a stuck server surfaces quickly
+/// instead of hanging a CLI caller.
+const CONTROL_SOCKET_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Timeout waiting on an internal `mpsc::Receiver` for the GUI thread to
+/// produce a reply to a control-socket request. Same budget as the socket-level
+/// timeout above: the reply either arrives within this window or the caller
+/// gets a "timeout" error, not an indefinite hang.
+const CONTROL_REPLY_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Shorter reply timeout for clipboard fetches. The clipboard request can
+/// complete very quickly when the main thread is idle, but a 2s timeout would
+/// leave interactive terminal paste chains feeling sluggish if the GUI thread
+/// happens to be mid-frame.
+const CLIPBOARD_REPLY_TIMEOUT: Duration = Duration::from_millis(500);
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "kebab-case")]
 pub enum Request {
@@ -323,8 +341,8 @@ impl Client {
     pub fn request(&self, request: &Request) -> Result<Response, String> {
         let mut stream = UnixStream::connect(&self.socket_path)
             .map_err(|error| format!("connect {}: {}", self.socket_path, error))?;
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+        let _ = stream.set_read_timeout(Some(CONTROL_SOCKET_TIMEOUT));
+        let _ = stream.set_write_timeout(Some(CONTROL_SOCKET_TIMEOUT));
         serde_json::to_writer(&mut stream, request)
             .map_err(|error| format!("serialize request: {error}"))?;
         stream
@@ -456,7 +474,7 @@ fn register_status_click_subscription(source: String, stream: &UnixStream) -> Re
             error: "failed to clone subscriber stream".to_string(),
         };
     };
-    let _ = cloned.set_write_timeout(Some(Duration::from_secs(2)));
+    let _ = cloned.set_write_timeout(Some(CONTROL_SOCKET_TIMEOUT));
     let Ok(mut guard) = status_click_subscribers().lock() else {
         return Response::Error {
             error: "subscriber registry poisoned".to_string(),
@@ -531,7 +549,7 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
             let (reply_tx, reply_rx) = mpsc::channel();
             let _ = tx.send(ControlCmd::GetRemoteClients { reply: reply_tx });
             notify();
-            match reply_rx.recv_timeout(std::time::Duration::from_secs(2)) {
+            match reply_rx.recv_timeout(CONTROL_REPLY_TIMEOUT) {
                 Ok(resp) => resp,
                 Err(_) => Response::Error {
                     error: "timeout".into(),
@@ -597,7 +615,7 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
             let _ = tx.send(ControlCmd::GetClipboard { reply: reply_tx });
             notify();
             reply_rx
-                .recv_timeout(std::time::Duration::from_millis(500))
+                .recv_timeout(CLIPBOARD_REPLY_TIMEOUT)
                 .unwrap_or(Response::Error {
                     error: "clipboard request timed out".to_string(),
                 })
@@ -618,7 +636,7 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
             let (reply_tx, reply_rx) = mpsc::channel();
             let _ = tx.send(ControlCmd::ListSurfaces { reply: reply_tx });
             notify();
-            match reply_rx.recv_timeout(std::time::Duration::from_secs(2)) {
+            match reply_rx.recv_timeout(CONTROL_REPLY_TIMEOUT) {
                 Ok(resp) => resp,
                 Err(_) => Response::Error {
                     error: "timeout".into(),
@@ -629,7 +647,7 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
             let (reply_tx, reply_rx) = mpsc::channel();
             let _ = tx.send(ControlCmd::ListTabs { reply: reply_tx });
             notify();
-            match reply_rx.recv_timeout(std::time::Duration::from_secs(2)) {
+            match reply_rx.recv_timeout(CONTROL_REPLY_TIMEOUT) {
                 Ok(resp) => resp,
                 Err(_) => Response::Error {
                     error: "timeout".into(),
@@ -640,7 +658,7 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
             let (reply_tx, reply_rx) = mpsc::channel();
             let _ = tx.send(ControlCmd::GetUiSnapshot { reply: reply_tx });
             notify();
-            match reply_rx.recv_timeout(std::time::Duration::from_secs(2)) {
+            match reply_rx.recv_timeout(CONTROL_REPLY_TIMEOUT) {
                 Ok(resp) => resp,
                 Err(_) => Response::Error {
                     error: "timeout".into(),
