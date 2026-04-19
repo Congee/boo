@@ -26,7 +26,7 @@ mod tests {
     static TLS_TEST_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     fn lock_tls_test() -> MutexGuard<'static, ()> {
-        TLS_TEST_MUTEX.lock().expect("tls test mutex poisoned")
+        TLS_TEST_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     #[derive(Debug)]

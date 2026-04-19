@@ -24,7 +24,7 @@ pub(crate) const REVIVABLE_ATTACHMENT_WINDOW: Duration = Duration::from_secs(30)
 /// Absolute deadline from `connected_at` for an unauthenticated client to
 /// finish the challenge/response exchange. Protects against clients pinning
 /// the socket with empty `Auth` frames.
-pub(crate) const AUTH_CHALLENGE_WINDOW: Duration = Duration::from_secs(10);
+pub(crate) const AUTH_CHALLENGE_WINDOW: Duration = Duration::from_secs(30);
 
 /// Max silence from a direct (non-local) authenticated client before the daemon
 /// treats it as stale and tears the connection down.
