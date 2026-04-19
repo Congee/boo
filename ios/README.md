@@ -7,6 +7,7 @@ This directory contains the Boo iOS remote viewer app.
 - SwiftUI iOS app with bundle identifier `me.congee.boo`
 - Connects to the Boo remote daemon using the existing GSP-compatible wire protocol
 - Discovers Bonjour services on `_boo._tcp`
+- Connects to discovered Bonjour services via the resolved Network framework endpoint instead of degrading them to a guessed `host:port`
 - Supports:
   - manual connect
   - optional auth key
@@ -60,7 +61,7 @@ Run it with:
 bash scripts/test-ios-remote-view.sh
 ```
 
-In this environment, `xcodebuild` reaches full Swift compilation for the iOS app, but final linking still fails with an Xcode/linker environment issue during the last app-link step. The validation script treats that specific linker failure as environmental and still enforces the live Boo daemon protocol validation.
+The validation script currently completes the Rust daemon checks, the shared Swift protocol self-tests, and the iOS app build path in this repo environment.
 
 ## Remaining Manual Validation
 

@@ -1,6 +1,23 @@
 import SwiftUI
 import Network
 
+private func formatConnectionTarget(host: String, port: UInt16) -> String {
+    port == 7337 ? host : "\(host):\(port)"
+}
+
+private func endpointDisplayTarget(_ endpoint: NWEndpoint) -> (nodeName: String, host: String, port: UInt16) {
+    switch endpoint {
+    case .service(let name, _, _, _):
+        return (name, name, 7337)
+    case .hostPort(let host, let port):
+        let hostString = host.debugDescription
+        return (hostString, hostString, port.rawValue)
+    default:
+        let text = "\(endpoint)"
+        return (text, text, 7337)
+    }
+}
+
 struct BooRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var client = GSPClient()
@@ -214,7 +231,10 @@ struct ConnectScreen: View {
                                     title: node.name,
                                     subtitle: "\(node.host):\(node.port)"
                                 ) {
-                                    let historyId = store.recordConnection(nodeName: node.name, host: node.host)
+                                    let historyId = store.recordConnection(
+                                        nodeName: node.name,
+                                        host: formatConnectionTarget(host: node.host, port: node.port)
+                                    )
                                     monitor.connect(
                                         host: node.host,
                                         port: node.port,
@@ -265,22 +285,26 @@ struct ConnectScreen: View {
     private func connectManual() {
         guard !host.isEmpty else { return }
         let parsed = parseHost(host)
-        let historyId = store.recordConnection(nodeName: parsed.0, host: parsed.0)
+        let historyId = store.recordConnection(
+            nodeName: parsed.0,
+            host: formatConnectionTarget(host: parsed.0, port: parsed.1)
+        )
         monitor.connect(host: parsed.0, port: parsed.1, authKey: authKey, historyId: historyId)
     }
 
     private func connectToEndpoint(_ endpoint: NWEndpoint) {
-        switch endpoint {
-        case .service(let name, _, _, _):
-            let historyId = store.recordConnection(nodeName: name, host: name)
-            monitor.connect(host: name, port: 7337, authKey: authKey, historyId: historyId)
-        case .hostPort(let host, let port):
-            let hostString = host.debugDescription
-            let historyId = store.recordConnection(nodeName: hostString, host: hostString)
-            monitor.connect(host: hostString, port: port.rawValue, authKey: authKey, historyId: historyId)
-        default:
-            break
-        }
+        let display = endpointDisplayTarget(endpoint)
+        let historyId = store.recordConnection(
+            nodeName: display.nodeName,
+            host: formatConnectionTarget(host: display.host, port: display.port)
+        )
+        monitor.connect(
+            endpoint: endpoint,
+            displayHost: display.host,
+            displayPort: display.port,
+            authKey: authKey,
+            historyId: historyId
+        )
     }
 
     private func parseHost(_ raw: String) -> (String, UInt16) {

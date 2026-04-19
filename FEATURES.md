@@ -141,7 +141,7 @@ chrome, layout, and VT rendering path.
 - A native SwiftUI iOS app lives under [`ios/`](/Users/example/dev/boo/ios)
 - Bundle identifier: `me.congee.boo`
 - Connects to a compatible remote daemon using Boo's current native remote protocol
-- Browses `_boo._tcp` Bonjour services
+- Browses `_boo._tcp` Bonjour services and connects through the resolved Network framework endpoint
 - Includes manual host/auth-key entry, saved nodes, connection history, session listing, and a VT cell-grid viewer
 - Uses iOS local-network permissions via `NSLocalNetworkUsageDescription` and `NSBonjourServices`
 - Automated validation lives in [`scripts/test-ios-remote-view.sh`](/Users/example/dev/boo/scripts/test-ios-remote-view.sh) and covers discovery, auth, session listing, attach, resize, reconnect/resume, and terminal-state updates against a live Boo daemon

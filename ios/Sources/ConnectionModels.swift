@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import Network
 
 struct SavedNode: Identifiable, Codable {
     var id = UUID()
@@ -236,6 +237,7 @@ final class ConnectionMonitor: ObservableObject {
     private var reconnectAllowed = false
     private var reconnectAttempt = 0
 
+    private(set) var lastEndpoint: NWEndpoint?
     private(set) var lastHost: String?
     private(set) var lastPort: UInt16?
     private(set) var lastAuthKey: String?
@@ -307,6 +309,7 @@ final class ConnectionMonitor: ObservableObject {
     }
 
     func connect(host: String, port: UInt16, authKey: String = "", historyId: UUID? = nil, nodeId: UUID? = nil) {
+        lastEndpoint = nil
         lastHost = host
         lastPort = port
         lastAuthKey = authKey
@@ -317,6 +320,20 @@ final class ConnectionMonitor: ObservableObject {
         reconnectAllowed = true
         cancelReconnect()
         startClientConnection(host: host, port: port, authKey: authKey)
+    }
+
+    func connect(endpoint: NWEndpoint, displayHost: String, displayPort: UInt16, authKey: String = "", historyId: UUID? = nil, nodeId: UUID? = nil) {
+        lastEndpoint = endpoint
+        lastHost = displayHost
+        lastPort = displayPort
+        lastAuthKey = authKey
+        currentHistoryId = historyId
+        currentNodeId = nodeId
+        status = .connecting
+        transportHealth = .idle
+        reconnectAllowed = true
+        cancelReconnect()
+        startClientConnection(endpoint: endpoint, host: displayHost, port: displayPort, authKey: authKey)
     }
 
     private func startClientConnection(host: String, port: UInt16, authKey: String) {
@@ -331,7 +348,23 @@ final class ConnectionMonitor: ObservableObject {
         client.connect(host: host, port: port, authKey: authKey)
     }
 
+    private func startClientConnection(endpoint: NWEndpoint, host: String, port: UInt16, authKey: String) {
+        client.configureTrustedServerIdentity(store.trustedServerIdentity(host: host, port: port))
+        if let resume = store.resumeAttachment(host: host, port: port) {
+            client.configureResumeAttachment(
+                sessionId: resume.sessionId,
+                attachmentId: resume.attachmentId,
+                resumeToken: resume.resumeToken
+            )
+        }
+        client.connect(endpoint: endpoint, authKey: authKey)
+    }
+
     func reconnect() {
+        if let endpoint = lastEndpoint, let host = lastHost, let port = lastPort {
+            connect(endpoint: endpoint, displayHost: host, displayPort: port, authKey: lastAuthKey ?? "")
+            return
+        }
         guard let host = lastHost, let port = lastPort else { return }
         connect(host: host, port: port, authKey: lastAuthKey ?? "")
     }
@@ -343,6 +376,7 @@ final class ConnectionMonitor: ObservableObject {
         status = .disconnected
         transportHealth = .idle
         reconnectState = .idle
+        lastEndpoint = nil
         lastHost = nil
         lastPort = nil
         lastAuthKey = nil
@@ -448,11 +482,18 @@ final class ConnectionMonitor: ObservableObject {
         cancelReconnect()
         let workItem = DispatchWorkItem { [weak self] in
             guard let self,
-                  self.reconnectAllowed,
-                  let host = self.lastHost,
-                  let port = self.lastPort else { return }
+                  self.reconnectAllowed else { return }
             self.status = .connecting
-            self.startClientConnection(host: host, port: port, authKey: self.lastAuthKey ?? "")
+            if let endpoint = self.lastEndpoint,
+               let host = self.lastHost,
+               let port = self.lastPort
+            {
+                self.startClientConnection(endpoint: endpoint, host: host, port: port, authKey: self.lastAuthKey ?? "")
+            } else if let host = self.lastHost,
+                      let port = self.lastPort
+            {
+                self.startClientConnection(host: host, port: port, authKey: self.lastAuthKey ?? "")
+            }
         }
         reconnectWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.reconnectDelay, execute: workItem)

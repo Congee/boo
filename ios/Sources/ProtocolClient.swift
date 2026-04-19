@@ -228,40 +228,12 @@ final class GSPClient: ObservableObject {
 
     func connect(host: String, port: UInt16, authKey: String = "") {
         self.authKey = authKey.isEmpty ? nil : SymmetricKey(data: Data(authKey.utf8))
-        connectionGeneration &+= 1
-        connectionDebugGeneration = connectionGeneration
-        connectionAttemptCount &+= 1
-        if connectionAttemptCount > 1 {
-            reconnectAttemptCount &+= 1
-        }
-        connectStartedAt = Date()
+        prepareForConnectionAttempt()
         let generation = connectionGeneration
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
         connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: params)
-        connection?.stateUpdateHandler = { [weak self] state in
-            Task { @MainActor in
-                guard let self, self.connectionGeneration == generation else { return }
-                switch state {
-                case .ready:
-                    self.connected = true
-                    self.lastError = nil
-                    if let connectStartedAt = self.connectStartedAt {
-                        self.lastConnectLatencyMs = Date().timeIntervalSince(connectStartedAt) * 1000
-                        self.connectStartedAt = nil
-                    }
-                    self.readHeader(generation: generation)
-                    self.sendAuth()
-                case .failed(let error):
-                    self.protocolError("Connection failed: \(error)")
-                case .cancelled:
-                    self.stopHeartbeatLoop()
-                    self.connected = false
-                default:
-                    break
-                }
-            }
-        }
+        installStateHandler(generation: generation)
         connection?.start(queue: queue)
     }
 
@@ -420,6 +392,17 @@ final class GSPClient: ObservableObject {
         sendMessage(type: .auth, payload: Data())
     }
 
+    func connect(endpoint: NWEndpoint, authKey: String = "") {
+        self.authKey = authKey.isEmpty ? nil : SymmetricKey(data: Data(authKey.utf8))
+        prepareForConnectionAttempt()
+        let generation = connectionGeneration
+        let params = NWParameters.tcp
+        params.allowLocalEndpointReuse = true
+        connection = NWConnection(to: endpoint, using: params)
+        installStateHandler(generation: generation)
+        connection?.start(queue: queue)
+    }
+
     private func handleAuthChallenge(_ payload: Data) {
         guard payload.count == 32, let key = authKey else {
             lastError = "Authentication challenge failed"
@@ -444,6 +427,42 @@ final class GSPClient: ObservableObject {
                 self.lastError = "Send failed: \(error)"
             }
         })
+    }
+
+    private func prepareForConnectionAttempt() {
+        connectionGeneration &+= 1
+        connectionDebugGeneration = connectionGeneration
+        connectionAttemptCount &+= 1
+        if connectionAttemptCount > 1 {
+            reconnectAttemptCount &+= 1
+        }
+        connectStartedAt = Date()
+    }
+
+    private func installStateHandler(generation: UInt64) {
+        connection?.stateUpdateHandler = { [weak self] state in
+            Task { @MainActor in
+                guard let self, self.connectionGeneration == generation else { return }
+                switch state {
+                case .ready:
+                    self.connected = true
+                    self.lastError = nil
+                    if let connectStartedAt = self.connectStartedAt {
+                        self.lastConnectLatencyMs = Date().timeIntervalSince(connectStartedAt) * 1000
+                        self.connectStartedAt = nil
+                    }
+                    self.readHeader(generation: generation)
+                    self.sendAuth()
+                case .failed(let error):
+                    self.protocolError("Connection failed: \(error)")
+                case .cancelled:
+                    self.stopHeartbeatLoop()
+                    self.connected = false
+                default:
+                    break
+                }
+            }
+        }
     }
 
     private func readHeader(generation: UInt64) {
