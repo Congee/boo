@@ -375,3 +375,404 @@ pub fn create_remote_daemon_session_quic(
     )?;
     create_summary_from_session(&mut client, port, cols, rows)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::remote_types::RemoteSessionInfo;
+    use crate::remote_wire::{
+        MessageType, REMOTE_PROTOCOL_VERSION, RemoteCell, RemoteFullState, encode_auth_ok_payload,
+        encode_full_state, encode_message, encode_session_list, parse_attach_request, read_message,
+    };
+    use std::io::Write;
+
+    #[test]
+    fn select_direct_transport_prefers_quic_when_migration_path_is_available() {
+        let transport = select_direct_transport(
+            REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT | REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT,
+            true,
+        )
+        .expect("selected transport");
+        assert_eq!(transport, DirectTransportKind::QuicDirect);
+    }
+
+    #[test]
+    fn select_direct_transport_falls_back_to_tcp_when_udp_path_is_unavailable() {
+        let transport = select_direct_transport(
+            REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT | REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT,
+            false,
+        )
+        .expect("selected transport");
+        assert_eq!(transport, DirectTransportKind::TcpDirect);
+    }
+
+    #[test]
+    fn select_direct_transport_rejects_quic_only_endpoints_without_fallback() {
+        let error = select_direct_transport(REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT, false)
+            .expect_err("quic-only endpoint without migration-capable path should fail");
+        assert!(error.contains("QUIC"));
+    }
+
+    #[test]
+    fn probe_selected_direct_transport_requires_pin_for_quic() {
+        // QUIC is now implemented but requires an SPKI pin (expected_server_identity)
+        // because the QUIC handshake has no TOFU fallback. Without a pin the probe
+        // must refuse cleanly instead of silently attempting an un-pinned handshake.
+        let error = probe_selected_direct_transport(
+            DirectTransportKind::QuicDirect,
+            "127.0.0.1",
+            7337,
+            None,
+            None,
+        )
+        .expect_err("quic probing without a pin should be rejected");
+        assert!(
+            error.contains("QUIC direct transport requires an expected_server_identity pin"),
+            "expected pin-required error, got: {error}"
+        );
+    }
+
+    #[test]
+    fn probe_remote_endpoint_rejects_unsupported_protocol_version_over_socket() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
+        let port = listener.local_addr().expect("listener addr").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept probe client");
+            let (ty, payload) = read_message(&mut stream).expect("read auth request");
+            assert_eq!(ty, MessageType::Auth);
+            assert!(payload.is_empty());
+
+            let mut auth_ok = encode_auth_ok_payload("test-daemon", "test-instance");
+            auth_ok[0..2].copy_from_slice(&(REMOTE_PROTOCOL_VERSION + 1).to_le_bytes());
+            stream
+                .write_all(&encode_message(MessageType::AuthOk, &auth_ok))
+                .expect("write auth ok");
+        });
+
+        let error = probe_remote_endpoint("127.0.0.1", port, None, None)
+            .expect_err("probe should reject");
+        assert!(
+            error.contains("Unsupported remote protocol version"),
+            "unexpected error: {error}"
+        );
+
+        server.join().expect("probe server thread");
+    }
+
+    #[test]
+    fn list_remote_daemon_sessions_reuses_handshake_validation_over_socket() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
+        let port = listener.local_addr().expect("listener addr").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept list client");
+            let (ty, payload) = read_message(&mut stream).expect("read auth request");
+            assert_eq!(ty, MessageType::Auth);
+            assert!(payload.is_empty());
+
+            stream
+                .write_all(&encode_message(
+                    MessageType::AuthOk,
+                    &encode_auth_ok_payload("test-daemon", "test-instance"),
+                ))
+                .expect("write auth ok");
+
+            let (ty, payload) = read_message(&mut stream).expect("read heartbeat");
+            assert_eq!(ty, MessageType::Heartbeat);
+            stream
+                .write_all(&encode_message(MessageType::HeartbeatAck, &payload))
+                .expect("write heartbeat ack");
+
+            let (ty, payload) = read_message(&mut stream).expect("read list sessions");
+            assert_eq!(ty, MessageType::ListSessions);
+            assert!(payload.is_empty());
+            stream
+                .write_all(&encode_message(
+                    MessageType::SessionList,
+                    &encode_session_list(&[RemoteSessionInfo {
+                        id: 11,
+                        name: "dev".to_string(),
+                        title: "shell".to_string(),
+                        pwd: "/home/example/dev/boo".to_string(),
+                        attached: true,
+                        child_exited: false,
+                    }]),
+                ))
+                .expect("write session list");
+        });
+
+        let summary = list_remote_daemon_sessions("127.0.0.1", port, None, None)
+            .expect("list sessions summary");
+        assert_eq!(summary.protocol_version, REMOTE_PROTOCOL_VERSION);
+        assert_eq!(summary.server_identity_id.as_deref(), Some("test-daemon"));
+        assert_eq!(summary.server_instance_id.as_deref(), Some("test-instance"));
+        assert_eq!(summary.sessions.len(), 1);
+        assert_eq!(summary.sessions[0].id, 11);
+        assert_eq!(summary.sessions[0].name, "dev");
+        assert_eq!(summary.sessions[0].pwd, "/home/example/dev/boo");
+        assert!(summary.sessions[0].attached);
+
+        server.join().expect("list server thread");
+    }
+
+    #[test]
+    fn list_remote_daemon_sessions_rejects_unexpected_server_identity() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
+        let port = listener.local_addr().expect("listener addr").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept list client");
+            let (ty, payload) = read_message(&mut stream).expect("read auth request");
+            assert_eq!(ty, MessageType::Auth);
+            assert!(payload.is_empty());
+
+            stream
+                .write_all(&encode_message(
+                    MessageType::AuthOk,
+                    &encode_auth_ok_payload("actual-daemon", "test-instance"),
+                ))
+                .expect("write auth ok");
+        });
+
+        let error = list_remote_daemon_sessions(
+            "127.0.0.1",
+            port,
+            None,
+            Some("expected-daemon"),
+        )
+        .expect_err("unexpected daemon identity should fail");
+        assert!(
+            error.contains("expected"),
+            "unexpected error text: {error}"
+        );
+
+        server.join().expect("list server thread");
+    }
+
+    #[test]
+    fn attach_remote_daemon_session_reads_attached_and_initial_state_over_socket() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
+        let port = listener.local_addr().expect("listener addr").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept attach client");
+            let (ty, payload) = read_message(&mut stream).expect("read auth request");
+            assert_eq!(ty, MessageType::Auth);
+            assert!(payload.is_empty());
+
+            stream
+                .write_all(&encode_message(
+                    MessageType::AuthOk,
+                    &encode_auth_ok_payload("test-daemon", "test-instance"),
+                ))
+                .expect("write auth ok");
+
+            let (ty, payload) = read_message(&mut stream).expect("read heartbeat");
+            assert_eq!(ty, MessageType::Heartbeat);
+            stream
+                .write_all(&encode_message(MessageType::HeartbeatAck, &payload))
+                .expect("write heartbeat ack");
+
+            let (ty, payload) = read_message(&mut stream).expect("read attach");
+            assert_eq!(ty, MessageType::Attach);
+            let (session_id, attachment_id, resume_token) =
+                parse_attach_request(&payload).expect("decoded attach");
+            assert_eq!(session_id, 7);
+            assert_eq!(attachment_id, Some(99));
+            assert_eq!(resume_token, Some(1234));
+
+            let mut attached = 7_u32.to_le_bytes().to_vec();
+            attached.extend_from_slice(&99_u64.to_le_bytes());
+            attached.extend_from_slice(&1234_u64.to_le_bytes());
+            stream
+                .write_all(&encode_message(MessageType::Attached, &attached))
+                .expect("write attached");
+
+            let state = RemoteFullState {
+                rows: 1,
+                cols: 1,
+                cursor_x: 0,
+                cursor_y: 0,
+                cursor_visible: true,
+                cursor_blinking: true,
+                cursor_style: 1,
+                cells: vec![RemoteCell {
+                    codepoint: u32::from('Z'),
+                    fg: [1, 2, 3],
+                    bg: [4, 5, 6],
+                    style_flags: 0,
+                    wide: false,
+                }],
+            };
+            stream
+                .write_all(&encode_message(
+                    MessageType::FullState,
+                    &encode_full_state(&state, None, false),
+                ))
+                .expect("write full state");
+        });
+
+        let summary = attach_remote_daemon_session(
+            "127.0.0.1",
+            port,
+            None,
+            Some("test-daemon"),
+            7,
+            Some(99),
+            Some(1234),
+        )
+        .expect("attach summary");
+        assert_eq!(summary.protocol_version, REMOTE_PROTOCOL_VERSION);
+        assert_eq!(summary.server_identity_id.as_deref(), Some("test-daemon"));
+        assert_eq!(summary.server_instance_id.as_deref(), Some("test-instance"));
+        assert_eq!(summary.attached.session_id, 7);
+        assert_eq!(summary.attached.attachment_id, Some(99));
+        assert_eq!(summary.attached.resume_token, Some(1234));
+        assert_eq!(summary.rows, 1);
+        assert_eq!(summary.cols, 1);
+        assert_eq!(summary.cursor_style, 1);
+
+        server.join().expect("attach server thread");
+    }
+
+    #[test]
+    fn attach_remote_daemon_session_tolerates_cached_session_list_before_attach() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
+        let port = listener.local_addr().expect("listener addr").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept attach client");
+            let (ty, payload) = read_message(&mut stream).expect("read auth request");
+            assert_eq!(ty, MessageType::Auth);
+            assert!(payload.is_empty());
+
+            stream
+                .write_all(&encode_message(
+                    MessageType::AuthOk,
+                    &encode_auth_ok_payload("test-daemon", "test-instance"),
+                ))
+                .expect("write auth ok");
+
+            let (ty, payload) = read_message(&mut stream).expect("read heartbeat");
+            assert_eq!(ty, MessageType::Heartbeat);
+            stream
+                .write_all(&encode_message(MessageType::HeartbeatAck, &payload))
+                .expect("write heartbeat ack");
+
+            let (ty, payload) = read_message(&mut stream).expect("read attach");
+            assert_eq!(ty, MessageType::Attach);
+            let (session_id, attachment_id, resume_token) =
+                parse_attach_request(&payload).expect("decoded attach");
+            assert_eq!(session_id, 7);
+            assert_eq!(attachment_id, None);
+            assert_eq!(resume_token, None);
+
+            stream
+                .write_all(&encode_message(
+                    MessageType::SessionList,
+                    &encode_session_list(&[RemoteSessionInfo {
+                        id: 7,
+                        name: "Tab 7".to_string(),
+                        title: "shell".to_string(),
+                        pwd: "/tmp".to_string(),
+                        attached: true,
+                        child_exited: false,
+                    }]),
+                ))
+                .expect("write session list");
+
+            stream
+                .write_all(&encode_message(MessageType::Attached, &7_u32.to_le_bytes()))
+                .expect("write attached");
+
+            let state = RemoteFullState {
+                rows: 1,
+                cols: 1,
+                cursor_x: 0,
+                cursor_y: 0,
+                cursor_visible: true,
+                cursor_blinking: false,
+                cursor_style: 1,
+                cells: vec![RemoteCell {
+                    codepoint: u32::from('Q'),
+                    fg: [1, 2, 3],
+                    bg: [4, 5, 6],
+                    style_flags: 0,
+                    wide: false,
+                }],
+            };
+            stream
+                .write_all(&encode_message(
+                    MessageType::FullState,
+                    &encode_full_state(&state, None, false),
+                ))
+                .expect("write full state");
+        });
+
+        let summary = attach_remote_daemon_session("127.0.0.1", port, None, Some("test-daemon"), 7, None, None)
+            .expect("attach summary");
+        assert_eq!(summary.attached.session_id, 7);
+        assert_eq!(summary.rows, 1);
+        assert_eq!(summary.cols, 1);
+
+        server.join().expect("attach server thread");
+    }
+
+    #[test]
+    fn create_remote_daemon_session_uses_shared_handshake_and_create_path() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
+        let port = listener.local_addr().expect("listener addr").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept create client");
+            let (ty, payload) = read_message(&mut stream).expect("read auth request");
+            assert_eq!(ty, MessageType::Auth);
+            assert!(payload.is_empty());
+
+            stream
+                .write_all(&encode_message(
+                    MessageType::AuthOk,
+                    &encode_auth_ok_payload("test-daemon", "test-instance"),
+                ))
+                .expect("write auth ok");
+
+            let (ty, payload) = read_message(&mut stream).expect("read heartbeat");
+            assert_eq!(ty, MessageType::Heartbeat);
+            stream
+                .write_all(&encode_message(MessageType::HeartbeatAck, &payload))
+                .expect("write heartbeat ack");
+
+            let (ty, payload) = read_message(&mut stream).expect("read create");
+            assert_eq!(ty, MessageType::Create);
+            assert_eq!(payload, [132, 0, 48, 0]);
+            stream
+                .write_all(&encode_message(
+                    MessageType::SessionCreated,
+                    &77_u32.to_le_bytes(),
+                ))
+                .expect("write session created");
+        });
+
+        let summary = create_remote_daemon_session(
+            "127.0.0.1",
+            port,
+            None,
+            Some("test-daemon"),
+            132,
+            48,
+        )
+        .expect("create summary");
+        assert_eq!(summary.protocol_version, REMOTE_PROTOCOL_VERSION);
+        assert_eq!(summary.server_identity_id.as_deref(), Some("test-daemon"));
+        assert_eq!(summary.server_instance_id.as_deref(), Some("test-instance"));
+        assert_eq!(summary.session_id, 77);
+
+        server.join().expect("create server thread");
+    }}
