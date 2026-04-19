@@ -1,5 +1,12 @@
 # boo — Feature List & Architecture
 
+For the new documentation entrypoints, start with:
+
+- [README.md](./README.md)
+- [ARCHITECTURE.md](./ARCHITECTURE.md)
+- [ROADMAP.md](./ROADMAP.md)
+- [docs/index.md](./docs/index.md)
+
 boo is a Rust/iced terminal multiplexer built around a shared `libghostty-vt`
 runtime on both macOS and Linux. It provides tmux-like window management, copy
 mode, command-state tracking, and session persistence while Boo owns the app

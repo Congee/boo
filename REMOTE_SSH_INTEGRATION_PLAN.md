@@ -1,5 +1,9 @@
 # Remote Boo Over SSH
 
+Structured remote docs now live under [`docs/remote/`](./docs/remote). For the
+docs-tree entrypoint, start with
+[docs/remote/ssh-desktop.md](./docs/remote/ssh-desktop.md).
+
 Status: active milestone, partially implemented.
 
 This document tracks the current SSH-backed desktop remote design and the

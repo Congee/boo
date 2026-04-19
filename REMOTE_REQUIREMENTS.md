@@ -1,5 +1,10 @@
 # Boo Remote Requirements
 
+Structured remote docs now live under [`docs/remote/`](./docs/remote). This
+root file remains the detailed product contract; start with
+[docs/remote/requirements.md](./docs/remote/requirements.md) if you want the
+docs-tree entrypoint.
+
 Date: April 17, 2026
 
 This document defines the product requirements for remote Boo.

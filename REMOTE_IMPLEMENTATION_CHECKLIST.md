@@ -1,5 +1,9 @@
 # Boo Remote Implementation Checklist
 
+Structured remote docs now live under [`docs/remote/`](./docs/remote). For the
+docs-tree entrypoint, start with
+[docs/remote/implementation-checklist.md](./docs/remote/implementation-checklist.md).
+
 Date: April 17, 2026
 
 This checklist turns [REMOTE_REQUIREMENTS.md](./REMOTE_REQUIREMENTS.md) into concrete implementation work.

@@ -1,5 +1,9 @@
 # Remote Nix Builder Workflow
 
+Structured remote docs now live under [`docs/remote/`](./docs/remote). For the
+docs-tree entrypoint, start with
+[docs/remote/nix-builder.md](./docs/remote/nix-builder.md).
+
 This note documents the current Nix-oriented build and verification flow for Boo remote work.
 
 ## Local Linux

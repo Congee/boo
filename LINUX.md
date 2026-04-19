@@ -1,5 +1,9 @@
 # Linux Backend
 
+Structured architecture docs now live under [`docs/`](./docs). For the Linux
+platform layer entrypoint, start with
+[docs/architecture/platform-linux.md](./docs/architecture/platform-linux.md).
+
 Linux now uses the same shared `libghostty-vt` runtime model as macOS. Boo owns
 the PTY lifecycle, scrollback snapshots, input encoding, rendering, and layout;
 the old embedded Ghostty EGL readback path is no longer part of the app.

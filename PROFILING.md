@@ -1,5 +1,8 @@
 # Profiling Boo
 
+Structured development docs now live under [`docs/`](./docs). For the profiling
+entrypoint, start with [docs/development/profiling.md](./docs/development/profiling.md).
+
 This repo uses two complementary approaches:
 
 - profiling: external measurement to find where time goes
