@@ -2123,7 +2123,7 @@ pub fn probe_remote_endpoint(
     expected_server_identity: Option<&str>,
 ) -> Result<RemoteProbeSummary, String> {
     let mut client =
-        DirectRemoteClient::connect(host, port, auth_key, expected_server_identity)?;
+        connect_with(PlainTcpConnector, host, port, auth_key, expected_server_identity)?;
     probe_summary_from_session(&mut client, port)
 }
 
@@ -2136,11 +2136,12 @@ pub fn probe_remote_endpoint_tls(
     auth_key: Option<&str>,
     expected_identity: &str,
 ) -> Result<RemoteProbeSummary, String> {
-    let mut client = DirectTransportSession::<TlsClientStream>::connect_tls(
+    let mut client = connect_with(
+        PinnedTlsConnector { expected_identity },
         host,
         port,
         auth_key,
-        expected_identity,
+        Some(expected_identity),
     )?;
     probe_summary_from_session(&mut client, port)
 }
@@ -2155,11 +2156,12 @@ pub fn probe_remote_endpoint_quic(
     auth_key: Option<&str>,
     expected_identity: &str,
 ) -> Result<RemoteProbeSummary, String> {
-    let mut client = DirectTransportSession::<QuicClientStream>::connect_quic(
+    let mut client = connect_with(
+        PinnedQuicConnector { expected_identity },
         host,
         port,
         auth_key,
-        expected_identity,
+        Some(expected_identity),
     )?;
     probe_summary_from_session(&mut client, port)
 }
@@ -2241,7 +2243,7 @@ pub fn list_remote_daemon_sessions(
     expected_server_identity: Option<&str>,
 ) -> Result<RemoteSessionListSummary, String> {
     let mut client =
-        DirectRemoteClient::connect(host, port, auth_key, expected_server_identity)?;
+        connect_with(PlainTcpConnector, host, port, auth_key, expected_server_identity)?;
     list_summary_from_session(&mut client, port)
 }
 
@@ -2251,11 +2253,12 @@ pub fn list_remote_daemon_sessions_tls(
     auth_key: Option<&str>,
     expected_identity: &str,
 ) -> Result<RemoteSessionListSummary, String> {
-    let mut client = DirectTransportSession::<TlsClientStream>::connect_tls(
+    let mut client = connect_with(
+        PinnedTlsConnector { expected_identity },
         host,
         port,
         auth_key,
-        expected_identity,
+        Some(expected_identity),
     )?;
     list_summary_from_session(&mut client, port)
 }
@@ -2266,11 +2269,12 @@ pub fn list_remote_daemon_sessions_quic(
     auth_key: Option<&str>,
     expected_identity: &str,
 ) -> Result<RemoteSessionListSummary, String> {
-    let mut client = DirectTransportSession::<QuicClientStream>::connect_quic(
+    let mut client = connect_with(
+        PinnedQuicConnector { expected_identity },
         host,
         port,
         auth_key,
-        expected_identity,
+        Some(expected_identity),
     )?;
     list_summary_from_session(&mut client, port)
 }
@@ -2315,7 +2319,7 @@ pub fn attach_remote_daemon_session(
     resume_token: Option<u64>,
 ) -> Result<RemoteAttachSummary, String> {
     let mut client =
-        DirectRemoteClient::connect(host, port, auth_key, expected_server_identity)?;
+        connect_with(PlainTcpConnector, host, port, auth_key, expected_server_identity)?;
     attach_summary_from_session(&mut client, port, session_id, attachment_id, resume_token)
 }
 
@@ -2328,11 +2332,12 @@ pub fn attach_remote_daemon_session_tls(
     attachment_id: Option<u64>,
     resume_token: Option<u64>,
 ) -> Result<RemoteAttachSummary, String> {
-    let mut client = DirectTransportSession::<TlsClientStream>::connect_tls(
+    let mut client = connect_with(
+        PinnedTlsConnector { expected_identity },
         host,
         port,
         auth_key,
-        expected_identity,
+        Some(expected_identity),
     )?;
     attach_summary_from_session(&mut client, port, session_id, attachment_id, resume_token)
 }
@@ -2346,11 +2351,12 @@ pub fn attach_remote_daemon_session_quic(
     attachment_id: Option<u64>,
     resume_token: Option<u64>,
 ) -> Result<RemoteAttachSummary, String> {
-    let mut client = DirectTransportSession::<QuicClientStream>::connect_quic(
+    let mut client = connect_with(
+        PinnedQuicConnector { expected_identity },
         host,
         port,
         auth_key,
-        expected_identity,
+        Some(expected_identity),
     )?;
     attach_summary_from_session(&mut client, port, session_id, attachment_id, resume_token)
 }
@@ -2386,7 +2392,7 @@ pub fn create_remote_daemon_session(
     rows: u16,
 ) -> Result<RemoteCreateSummary, String> {
     let mut client =
-        DirectRemoteClient::connect(host, port, auth_key, expected_server_identity)?;
+        connect_with(PlainTcpConnector, host, port, auth_key, expected_server_identity)?;
     create_summary_from_session(&mut client, port, cols, rows)
 }
 
@@ -2398,11 +2404,12 @@ pub fn create_remote_daemon_session_tls(
     cols: u16,
     rows: u16,
 ) -> Result<RemoteCreateSummary, String> {
-    let mut client = DirectTransportSession::<TlsClientStream>::connect_tls(
+    let mut client = connect_with(
+        PinnedTlsConnector { expected_identity },
         host,
         port,
         auth_key,
-        expected_identity,
+        Some(expected_identity),
     )?;
     create_summary_from_session(&mut client, port, cols, rows)
 }
@@ -2415,11 +2422,12 @@ pub fn create_remote_daemon_session_quic(
     cols: u16,
     rows: u16,
 ) -> Result<RemoteCreateSummary, String> {
-    let mut client = DirectTransportSession::<QuicClientStream>::connect_quic(
+    let mut client = connect_with(
+        PinnedQuicConnector { expected_identity },
         host,
         port,
         auth_key,
-        expected_identity,
+        Some(expected_identity),
     )?;
     create_summary_from_session(&mut client, port, cols, rows)
 }
@@ -2430,16 +2438,34 @@ pub fn create_remote_daemon_session_quic(
 /// the TLS handshake + HMAC round trip.
 const DIRECT_CLIENT_SOCKET_TIMEOUT: Duration = Duration::from_secs(10);
 
-impl DirectTransportSession<std::net::TcpStream> {
-    fn connect(
-        host: &str,
-        port: u16,
-        auth_key: Option<&str>,
-        expected_server_identity: Option<&str>,
-    ) -> Result<Self, String> {
-        use std::net::TcpStream;
+type TlsClientStream = rustls::StreamOwned<rustls::ClientConnection, std::net::TcpStream>;
+type QuicClientStream = crate::remote_quic::QuicBridgeStream;
 
-        let stream = TcpStream::connect((host, port))
+/// Abstraction over "produce a handshake-ready sync stream to a remote Boo daemon."
+///
+/// Each transport (plain TCP, TCP+TLS with SPKI pinning, QUIC with SPKI pinning)
+/// implements this trait. The rest of the direct-client plumbing — auth, heartbeat,
+/// list/attach/create — only sees the finished `Read + Write` stream and stays
+/// transport-agnostic. Swapping quinn for another QUIC backend, adding an
+/// `async-agnostic` path, or adding a totally new transport is a single new
+/// `RemoteTransportConnector` impl.
+pub(crate) trait RemoteTransportConnector {
+    type Stream: DirectReadWrite + Send + 'static;
+
+    /// Open a connection to `host:port` and complete any transport-level
+    /// handshake. The returned stream carries application bytes only.
+    fn connect(self, host: &str, port: u16) -> Result<Self::Stream, String>;
+}
+
+/// Plain TCP, no transport security. The returned stream is raw bytes; any
+/// auth / identity verification happens at the application layer.
+pub(crate) struct PlainTcpConnector;
+
+impl RemoteTransportConnector for PlainTcpConnector {
+    type Stream = std::net::TcpStream;
+
+    fn connect(self, host: &str, port: u16) -> Result<Self::Stream, String> {
+        let stream = std::net::TcpStream::connect((host, port))
             .map_err(|error| format!("failed to connect to {host}:{port}: {error}"))?;
         stream
             .set_read_timeout(Some(DIRECT_CLIENT_SOCKET_TIMEOUT))
@@ -2451,63 +2477,22 @@ impl DirectTransportSession<std::net::TcpStream> {
             .map_err(|error| {
                 format!("failed to configure write timeout for {host}:{port}: {error}")
             })?;
-
-        Self::connect_over_stream(
-            stream,
-            host.to_string(),
-            port,
-            auth_key,
-            expected_server_identity,
-        )
+        Ok(stream)
     }
 }
 
-type TlsClientStream = rustls::StreamOwned<rustls::ClientConnection, std::net::TcpStream>;
-type QuicClientStream = crate::remote_quic::QuicBridgeStream;
-
-impl DirectTransportSession<QuicClientStream> {
-    /// Connect to a remote daemon over QUIC with SPKI-pinned cert verification.
-    /// Identical trust model to `connect_tls` — same rustls
-    /// `PinnedSpkiServerCertVerifier` drives the handshake, just over quinn's
-    /// QUIC transport instead of TCP+TLS.
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn connect_quic(
-        host: &str,
-        port: u16,
-        auth_key: Option<&str>,
-        expected_identity: &str,
-    ) -> Result<Self, String> {
-        let client_config = build_remote_client_tls_config(expected_identity)?;
-        let stream = crate::remote_quic::connect_quic_client(
-            host,
-            port,
-            REMOTE_DAEMON_SERVER_NAME,
-            client_config,
-        )
-        .map_err(|error| format!("quic connect to {host}:{port} failed: {error}"))?;
-
-        Self::connect_over_stream(
-            stream,
-            host.to_string(),
-            port,
-            auth_key,
-            Some(expected_identity),
-        )
-    }
+/// TCP+TLS with SPKI-pinned cert verification. `expected_identity` is the
+/// `base64url(sha256(SPKI))` of the server's ed25519 cert; the TLS handshake
+/// aborts before any application data if the presented cert's SPKI does not
+/// match.
+pub(crate) struct PinnedTlsConnector<'a> {
+    pub(crate) expected_identity: &'a str,
 }
 
-impl DirectTransportSession<TlsClientStream> {
-    /// Connect to a remote daemon with an SPKI-pinned TLS handshake. `expected_identity`
-    /// is the `daemon_identity` string the caller already trusts; it is the
-    /// `base64url(sha256(SPKI))` of the server's ed25519 cert and is checked inside the
-    /// TLS handshake before any application data is exchanged.
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn connect_tls(
-        host: &str,
-        port: u16,
-        auth_key: Option<&str>,
-        expected_identity: &str,
-    ) -> Result<Self, String> {
+impl<'a> RemoteTransportConnector for PinnedTlsConnector<'a> {
+    type Stream = TlsClientStream;
+
+    fn connect(self, host: &str, port: u16) -> Result<Self::Stream, String> {
         use std::net::TcpStream;
 
         let tcp = TcpStream::connect((host, port))
@@ -2521,7 +2506,7 @@ impl DirectTransportSession<TlsClientStream> {
                 format!("failed to configure write timeout for {host}:{port}: {error}")
             })?;
 
-        let client_config = build_remote_client_tls_config(expected_identity)?;
+        let client_config = build_remote_client_tls_config(self.expected_identity)?;
         let server_name = rustls::pki_types::ServerName::try_from(REMOTE_DAEMON_SERVER_NAME)
             .map_err(|error| format!("build remote server name: {error}"))?;
         let client_conn = rustls::ClientConnection::new(Arc::new(client_config), server_name)
@@ -2531,16 +2516,108 @@ impl DirectTransportSession<TlsClientStream> {
             .conn
             .complete_io(&mut tls_stream.sock)
             .map_err(|error| format!("tls handshake to {host}:{port} failed: {error}"))?;
+        Ok(tls_stream)
+    }
+}
 
-        Self::connect_over_stream(
-            tls_stream,
-            host.to_string(),
+/// QUIC with the same SPKI-pinned cert verification as `PinnedTlsConnector`.
+/// Under the hood, quinn wraps the same `rustls::ClientConfig` + pinning
+/// verifier, so the trust model is identical across TLS and QUIC.
+pub(crate) struct PinnedQuicConnector<'a> {
+    pub(crate) expected_identity: &'a str,
+}
+
+impl<'a> RemoteTransportConnector for PinnedQuicConnector<'a> {
+    type Stream = QuicClientStream;
+
+    fn connect(self, host: &str, port: u16) -> Result<Self::Stream, String> {
+        let client_config = build_remote_client_tls_config(self.expected_identity)?;
+        crate::remote_quic::connect_quic_client(
+            host,
+            port,
+            REMOTE_DAEMON_SERVER_NAME,
+            client_config,
+        )
+        .map_err(|error| format!("quic connect to {host}:{port} failed: {error}"))
+    }
+}
+
+/// Open a `DirectTransportSession` using any transport that implements
+/// `RemoteTransportConnector`. This is the single chokepoint that all four
+/// public RPCs (probe / list / attach / create) plus their `_tls` / `_quic`
+/// variants go through.
+fn connect_with<C>(
+    connector: C,
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+    expected_server_identity: Option<&str>,
+) -> Result<DirectTransportSession<C::Stream>, String>
+where
+    C: RemoteTransportConnector,
+{
+    let stream = connector.connect(host, port)?;
+    DirectTransportSession::<C::Stream>::connect_over_stream(
+        stream,
+        host.to_string(),
+        port,
+        auth_key,
+        expected_server_identity,
+    )
+}
+
+impl DirectTransportSession<std::net::TcpStream> {
+    /// Thin wrapper around `connect_with(PlainTcpConnector, ...)` for backwards
+    /// compatibility with tests and callers that already target the TCP type.
+    #[cfg(test)]
+    fn connect(
+        host: &str,
+        port: u16,
+        auth_key: Option<&str>,
+        expected_server_identity: Option<&str>,
+    ) -> Result<Self, String> {
+        connect_with(PlainTcpConnector, host, port, auth_key, expected_server_identity)
+    }
+}
+
+impl DirectTransportSession<QuicClientStream> {
+    /// Backwards-compatible entry point; delegates to `connect_with`.
+    #[cfg(test)]
+    fn connect_quic(
+        host: &str,
+        port: u16,
+        auth_key: Option<&str>,
+        expected_identity: &str,
+    ) -> Result<Self, String> {
+        connect_with(
+            PinnedQuicConnector { expected_identity },
+            host,
             port,
             auth_key,
             Some(expected_identity),
         )
     }
 }
+
+impl DirectTransportSession<TlsClientStream> {
+    /// Backwards-compatible entry point; delegates to `connect_with`.
+    #[cfg(test)]
+    fn connect_tls(
+        host: &str,
+        port: u16,
+        auth_key: Option<&str>,
+        expected_identity: &str,
+    ) -> Result<Self, String> {
+        connect_with(
+            PinnedTlsConnector { expected_identity },
+            host,
+            port,
+            auth_key,
+            Some(expected_identity),
+        )
+    }
+}
+
 
 impl<S: DirectReadWrite> DirectTransportSession<S> {
     fn connect_over_stream(
