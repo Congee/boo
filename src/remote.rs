@@ -2121,6 +2121,25 @@ pub fn probe_remote_endpoint_tls(
     probe_summary_from_session(&mut client, port)
 }
 
+/// SPKI-pinned QUIC variant of `probe_remote_endpoint`. Same SPKI pin semantics as
+/// `probe_remote_endpoint_tls` — QUIC inherits the exact rustls-based trust model and
+/// `PinnedSpkiServerCertVerifier` from the TCP+TLS path — the only difference is the
+/// wire transport.
+pub fn probe_remote_endpoint_quic(
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+    expected_identity: &str,
+) -> Result<RemoteProbeSummary, String> {
+    let mut client = DirectTransportSession::<QuicClientStream>::connect_quic(
+        host,
+        port,
+        auth_key,
+        expected_identity,
+    )?;
+    probe_summary_from_session(&mut client, port)
+}
+
 pub fn probe_selected_direct_transport(
     transport: DirectTransportKind,
     host: &str,
@@ -2133,10 +2152,18 @@ pub fn probe_selected_direct_transport(
             selected_transport: transport,
             probe: probe_remote_endpoint(host, port, auth_key, expected_server_identity)?,
         }),
-        DirectTransportKind::QuicDirect => Err(
-            "QUIC direct transport is not implemented yet; TCP fallback is required for now"
-                .to_string(),
-        ),
+        DirectTransportKind::QuicDirect => {
+            // QUIC always rides TLS, so a pin is not optional. Callers without a
+            // pin must go through probe_selected_direct_transport_tls or drop
+            // back to TcpDirect.
+            let identity = expected_server_identity.ok_or_else(|| {
+                "QUIC direct transport requires an expected_server_identity pin".to_string()
+            })?;
+            Ok(RemoteUpgradeProbeSummary {
+                selected_transport: transport,
+                probe: probe_remote_endpoint_quic(host, port, auth_key, identity)?,
+            })
+        }
     }
 }
 
@@ -2156,10 +2183,10 @@ pub fn probe_selected_direct_transport_tls(
             selected_transport: transport,
             probe: probe_remote_endpoint_tls(host, port, auth_key, expected_identity)?,
         }),
-        DirectTransportKind::QuicDirect => Err(
-            "QUIC direct transport is not implemented yet; TCP fallback is required for now"
-                .to_string(),
-        ),
+        DirectTransportKind::QuicDirect => Ok(RemoteUpgradeProbeSummary {
+            selected_transport: transport,
+            probe: probe_remote_endpoint_quic(host, port, auth_key, expected_identity)?,
+        }),
     }
 }
 
@@ -4666,7 +4693,10 @@ mod tests {
     }
 
     #[test]
-    fn probe_selected_direct_transport_rejects_unimplemented_quic_backend() {
+    fn probe_selected_direct_transport_requires_pin_for_quic() {
+        // QUIC is now implemented but requires an SPKI pin (expected_server_identity)
+        // because the QUIC handshake has no TOFU fallback. Without a pin the probe
+        // must refuse cleanly instead of silently attempting an un-pinned handshake.
         let error = probe_selected_direct_transport(
             DirectTransportKind::QuicDirect,
             "127.0.0.1",
@@ -4674,8 +4704,11 @@ mod tests {
             None,
             None,
         )
-        .expect_err("quic direct probing should be rejected until the backend exists");
-        assert!(error.contains("QUIC direct transport is not implemented yet"));
+        .expect_err("quic probing without a pin should be rejected");
+        assert!(
+            error.contains("QUIC direct transport requires an expected_server_identity pin"),
+            "expected pin-required error, got: {error}"
+        );
     }
 
     #[test]
@@ -5900,6 +5933,35 @@ mod tests {
         );
 
         drop(session);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn probe_selected_direct_transport_tls_dispatches_quic_over_quinn() {
+        let dir = unique_identity_dir("probe-quic");
+        let _ = std::fs::remove_dir_all(&dir);
+        let material = load_or_create_daemon_identity_material_at(&dir);
+        let (addr, _listener, _cmd_rx) = start_quic_test_server(&material, None);
+
+        let summary = probe_selected_direct_transport_tls(
+            DirectTransportKind::QuicDirect,
+            &addr.ip().to_string(),
+            addr.port(),
+            None,
+            &material.identity_id,
+        )
+        .expect("upgrade probe over QUIC");
+
+        assert_eq!(summary.selected_transport, DirectTransportKind::QuicDirect);
+        assert_eq!(
+            summary.probe.server_identity_id.as_deref(),
+            Some(material.identity_id.as_str())
+        );
+        assert_ne!(
+            summary.probe.capabilities & REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT,
+            0,
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
