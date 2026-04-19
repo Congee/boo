@@ -407,6 +407,10 @@ fn configured_font(family: Option<&'static str>) -> Font {
 
 fn main() {
     env_logger::init();
+    // Install the ring-based rustls crypto provider as the process-wide default
+    // before any rustls code path runs. See remote::install_default_crypto_provider
+    // for the full reasoning around future rustls 0.24+ behavior.
+    remote::install_default_crypto_provider();
 
     let cli = cli::Cli::parse_args();
     let server_mode = launch::parse_startup_args(&cli);

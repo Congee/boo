@@ -14,6 +14,31 @@ use std::time::{Duration, Instant};
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// Install the `ring` crypto provider as rustls's process-wide default.
+///
+/// Every `rustls::ServerConfig` / `ClientConfig` we build goes through
+/// `builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))`,
+/// which passes the provider explicitly. That covers today's rustls 0.23
+/// code paths. But rustls reserves the right to grow new call sites that
+/// look up the provider via `CryptoProvider::get_default()` instead of the
+/// embedded one, and those fall back to panicking with "no process-level
+/// CryptoProvider available" if nothing is installed. rustls 0.24+ is
+/// expected to tighten in that direction and may also flip the default
+/// from `ring` to `aws-lc-rs` (which has a C build dep we do not want).
+///
+/// This helper is the defense: one idempotent install at startup, plus
+/// defensive calls from `RemoteServer::start` and `connect_with` so any
+/// entry point that bypasses `fn main` (future library embedders, test
+/// harnesses, etc.) also gets it. `install_default()` returns Err if a
+/// provider is already installed; we swallow that via `.ok()`.
+pub fn install_default_crypto_provider() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 const MAGIC: [u8; 2] = [0x47, 0x53];
 const HEADER_LEN: usize = 7;
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
@@ -593,6 +618,11 @@ impl RemoteServer {
     }
 
     pub fn start(config: RemoteConfig) -> io::Result<(Self, mpsc::Receiver<RemoteCmd>)> {
+        // Defensive: ensure rustls's process default provider is installed before
+        // we build any server TLS config, in case a caller reached this entry
+        // point without going through fn main (library embedders, future test
+        // harnesses). Idempotent via the Once guard.
+        install_default_crypto_provider();
         if config.rejects_public_authless_bind() {
             return Err(io::Error::other(format!(
                 "refusing to start authless remote daemon on public bind address {}; configure --remote-auth-key or --remote-allow-insecure-no-auth",
@@ -2556,6 +2586,10 @@ fn connect_with<C>(
 where
     C: RemoteTransportConnector,
 {
+    // Defensive: covers direct-client entry points (boo probe-remote-daemon, etc.)
+    // whose CLI dispatch may land here before fn main has installed the
+    // process-wide crypto provider. Idempotent via the Once guard.
+    install_default_crypto_provider();
     let stream = connector.connect(host, port)?;
     DirectTransportSession::<C::Stream>::connect_over_stream(
         stream,
