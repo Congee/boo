@@ -144,18 +144,14 @@
           export LIBGHOSTTY_VT_SYS_LIBDIR="${libghosttyVtPackage}/lib"
           export LIBGHOSTTY_VT_SYS_INCLUDEDIR="${libghosttyVtPackage}/include"
         '';
-        # The TLS integration tests added to src/remote.rs flake intermittently
-        # inside the Darwin Nix sandbox because its CPU scheduling latency
-        # stretches the TLS handshake + HMAC round trip past even generous
-        # timeouts. `cargo test` on a dev machine is reliable, so we disable
-        # the sandboxed check and continue to rely on `cargo test` for
-        # verification.
-        doCheck = false;
-        # When doCheck is ever re-enabled on Darwin, preCheck needs this so
-        # cargoCheckHook's test binaries can resolve @rpath/libghostty-vt.dylib:
-        #   preCheck = lib.optionalString pkgs.stdenv.isDarwin ''
-        #     export DYLD_LIBRARY_PATH="${libghosttyVtPackage}/lib''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-        #   '';
+        # The test suite is local-only and sandbox-safe. The important Darwin
+        # requirement is making the store-provided libghostty-vt dylib visible
+        # to cargoCheckHook's test binaries inside the Nix sandbox.
+        preCheck = lib.optionalString pkgs.stdenv.isDarwin ''
+          export DYLD_LIBRARY_PATH="${libghosttyVtPackage}/lib''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+        '' + lib.optionalString pkgs.stdenv.isLinux ''
+          export LD_LIBRARY_PATH="${lib.makeLibraryPath [ libghosttyVtPackage ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        '';
         meta = with lib; {
           description = "Rust/iced terminal app built on libghostty-vt";
           mainProgram = "boo";

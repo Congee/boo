@@ -36,14 +36,14 @@ mod tests {
     fn remote_config_explicit_bind_address_overrides_defaults() {
         let config = RemoteConfig {
             port: 7337,
-            bind_address: Some("192.168.0.5".to_string()),
+            bind_address: Some("192.0.2.5".to_string()),
             auth_key: None,
             allow_insecure_no_auth: false,
             service_name: "boo".to_string(),
             cert_chain_path: None,
             cert_key_path: None,
         };
-        assert_eq!(config.effective_bind_address(), "192.168.0.5");
+        assert_eq!(config.effective_bind_address(), "192.0.2.5");
         assert!(config.should_advertise());
         assert!(config.rejects_public_authless_bind());
     }
@@ -52,14 +52,14 @@ mod tests {
     fn remote_config_allows_explicit_insecure_public_bind_when_acknowledged() {
         let config = RemoteConfig {
             port: 7337,
-            bind_address: Some("192.168.0.5".to_string()),
+            bind_address: Some("192.0.2.5".to_string()),
             auth_key: None,
             allow_insecure_no_auth: true,
             service_name: "boo".to_string(),
             cert_chain_path: None,
             cert_key_path: None,
         };
-        assert_eq!(config.effective_bind_address(), "192.168.0.5");
+        assert_eq!(config.effective_bind_address(), "192.0.2.5");
         assert!(config.should_advertise());
         assert!(!config.rejects_public_authless_bind());
     }
