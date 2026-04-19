@@ -20,8 +20,14 @@ mod tests {
     use std::io::Write;
     use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::path::PathBuf;
-    use std::sync::{Arc, Mutex, mpsc};
+    use std::sync::{Arc, LazyLock, Mutex, MutexGuard, mpsc};
     use std::time::{Duration, Instant};
+
+    static TLS_TEST_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    fn lock_tls_test() -> MutexGuard<'static, ()> {
+        TLS_TEST_MUTEX.lock().expect("tls test mutex poisoned")
+    }
 
     #[derive(Debug)]
     struct TrustAllServerCertVerifier {
@@ -163,6 +169,7 @@ mod tests {
 
     #[test]
     fn direct_tls_client_connects_with_matching_pin() {
+        let _guard = lock_tls_test();
         let dir = unique_identity_dir("tls-pin-ok");
         let _ = std::fs::remove_dir_all(&dir);
         let material = load_or_create_daemon_identity_material_at(&dir);
@@ -265,6 +272,7 @@ mod tests {
 
     #[test]
     fn direct_tls_client_succeeds_with_auth_key() {
+        let _guard = lock_tls_test();
         let dir = unique_identity_dir("tls-auth-ok");
         let _ = std::fs::remove_dir_all(&dir);
         let material = load_or_create_daemon_identity_material_at(&dir);
@@ -289,6 +297,7 @@ mod tests {
 
     #[test]
     fn direct_tls_client_rejects_wrong_auth_key() {
+        let _guard = lock_tls_test();
         let dir = unique_identity_dir("tls-auth-bad");
         let _ = std::fs::remove_dir_all(&dir);
         let material = load_or_create_daemon_identity_material_at(&dir);
@@ -313,6 +322,7 @@ mod tests {
 
     #[test]
     fn direct_tls_client_rejects_mismatched_pin() {
+        let _guard = lock_tls_test();
         let dir = unique_identity_dir("tls-pin-mismatch");
         let _ = std::fs::remove_dir_all(&dir);
         let material = load_or_create_daemon_identity_material_at(&dir);
@@ -386,6 +396,7 @@ mod tests {
 
     #[test]
     fn serve_incoming_tcp_client_completes_tls_handshake_and_auth() {
+        let _guard = lock_tls_test();
         let dir = unique_identity_dir("tls-serve");
         let _ = std::fs::remove_dir_all(&dir);
         let material = load_or_create_daemon_identity_material_at(&dir);
