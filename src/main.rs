@@ -17,6 +17,7 @@ mod pane;
 mod platform;
 mod profiling;
 mod remote;
+mod remote_quic;
 mod runtime;
 mod runtime_copy;
 mod runtime_input;

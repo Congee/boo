@@ -23,6 +23,8 @@ rcgen = { version = "0.13", default-features = false, features = ["pem", "crypto
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "logging", "tls12"] }
 rustls-pemfile = "2"
 x509-parser = { version = "0.16", default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros"] }
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 crossbeam-channel = "0.5"
 open = "5"
 ttf-parser = "0.25"
