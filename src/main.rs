@@ -22,6 +22,7 @@ mod remote_client;
 mod remote_full_state;
 mod remote_identity;
 mod remote_quic;
+mod remote_state;
 mod remote_transport;
 mod remote_types;
 mod remote_wire;
