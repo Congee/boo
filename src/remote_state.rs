@@ -17,6 +17,23 @@ use std::time::{Duration, Instant};
 use crate::remote_batcher::OutboundMessage;
 use crate::remote_wire::{MessageType, RemoteFullState, encode_message};
 
+/// How long a revived attachment stays in the state graph before it is pruned
+/// (remote client must reconnect + resume within this window).
+pub(crate) const REVIVABLE_ATTACHMENT_WINDOW: Duration = Duration::from_secs(30);
+
+/// Absolute deadline from `connected_at` for an unauthenticated client to
+/// finish the challenge/response exchange. Protects against clients pinning
+/// the socket with empty `Auth` frames.
+pub(crate) const AUTH_CHALLENGE_WINDOW: Duration = Duration::from_secs(10);
+
+/// Max silence from a direct (non-local) authenticated client before the daemon
+/// treats it as stale and tears the connection down.
+pub(crate) const DIRECT_CLIENT_HEARTBEAT_WINDOW: Duration = Duration::from_secs(20);
+
+/// Read timeout applied to the inbound TCP socket so the reader can poll the
+/// state mutex for disconnect reasons between reads.
+pub(crate) const REMOTE_READ_TIMEOUT: Duration = Duration::from_secs(1);
+
 pub(crate) struct ClientState {
     pub(crate) outbound: mpsc::Sender<OutboundMessage>,
     pub(crate) authenticated: bool,

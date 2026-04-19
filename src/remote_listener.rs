@@ -24,7 +24,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-use crate::remote::{RemoteCmd, read_loop};
+use crate::remote::RemoteCmd;
+use crate::remote_auth::read_loop;
 use crate::remote_batcher::writer_loop;
 use crate::remote_state::{ClientState, State};
 use crate::remote_wire::{PROTOCOL_PEEK_BYTES, TLS_HANDSHAKE_RECORD_TYPE};

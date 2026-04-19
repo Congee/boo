@@ -17,6 +17,7 @@ mod pane;
 mod platform;
 mod profiling;
 mod remote;
+mod remote_auth;
 mod remote_batcher;
 mod remote_client;
 mod remote_full_state;
