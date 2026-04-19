@@ -209,7 +209,23 @@ pub enum RemoteCmd {
     },
 }
 
-use crate::remote_state::{AuthChallengeState, ClientState, RevivableAttachment, State};
+use crate::remote_state::{
+    AuthChallengeState, ClientState, RevivableAttachment, State, prune_revivable_attachments,
+    send_direct_error, send_direct_frame,
+    should_disconnect_idle_client as should_disconnect_idle_client_inner,
+};
+
+/// Call-site shim that passes the file-local auth and heartbeat windows.
+/// Keeps callers inside remote.rs agnostic of which module owns the policy
+/// constants.
+fn should_disconnect_idle_client(state: &Arc<Mutex<State>>, client_id: u64) -> Option<&'static str> {
+    should_disconnect_idle_client_inner(
+        state,
+        client_id,
+        AUTH_CHALLENGE_WINDOW,
+        DIRECT_CLIENT_HEARTBEAT_WINDOW,
+    )
+}
 
 pub struct RemoteServer {
     state: Arc<Mutex<State>>,
@@ -236,13 +252,6 @@ impl Drop for ServiceAdvertiser {
 }
 
 impl RemoteServer {
-    fn prune_revivable_attachments(state: &mut State) {
-        let now = Instant::now();
-        state
-            .revivable_attachments
-            .retain(|_, attachment| attachment.expires_at > now);
-    }
-
     pub fn start(config: RemoteConfig) -> io::Result<(Self, mpsc::Receiver<RemoteCmd>)> {
         if config.rejects_public_authless_bind() {
             return Err(io::Error::other(format!(
@@ -669,7 +678,7 @@ impl RemoteServer {
         resume_token: Option<u64>,
     ) -> Result<(), &'static str> {
         let mut state = self.state.lock().expect("remote server state poisoned");
-        Self::prune_revivable_attachments(&mut state);
+        prune_revivable_attachments(&mut state);
         let Some(client) = state.clients.get(&client_id) else {
             return Err("unknown client");
         };
@@ -1134,34 +1143,6 @@ impl Drop for RemoteServer {
     }
 }
 
-fn should_disconnect_idle_client(state: &Arc<Mutex<State>>, client_id: u64) -> Option<&'static str> {
-    let state = state.lock().expect("remote server state poisoned");
-    let client = state.clients.get(&client_id)?;
-    let now = Instant::now();
-    if client.authenticated {
-        if client.is_local {
-            return None;
-        }
-        let last_liveness = client.last_heartbeat_at.or(client.authenticated_at)?;
-        if now.saturating_duration_since(last_liveness) > DIRECT_CLIENT_HEARTBEAT_WINDOW {
-            return Some("heartbeat-timeout");
-        }
-        return None;
-    }
-    // Absolute deadline from connect time. This runs even when a challenge is
-    // outstanding so a client cannot keep the socket pinned by sending empty `Auth`
-    // frames that refresh `challenge.expires_at` indefinitely.
-    if now.saturating_duration_since(client.connected_at) > AUTH_CHALLENGE_WINDOW {
-        return Some("auth-timeout");
-    }
-    if let Some(challenge) = client.challenge {
-        if now > challenge.expires_at {
-            return Some("challenge-timeout");
-        }
-    }
-    None
-}
-
 fn read_loop(
     mut stream: impl Read,
     client_id: u64,
@@ -1305,7 +1286,7 @@ fn read_loop(
 
     let mut state = state.lock().expect("remote server state poisoned");
     if let Some(client) = state.clients.remove(&client_id) {
-        RemoteServer::prune_revivable_attachments(&mut state);
+        prune_revivable_attachments(&mut state);
         if !client.is_local
             && let (Some(session_id), Some(attachment_id), Some(resume_token)) =
                 (client.attached_session, client.attachment_id, client.resume_token)
@@ -1628,29 +1609,6 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
                 self.host, self.port
             )
         })
-    }
-}
-
-fn send_direct_error(state: &Arc<Mutex<State>>, client_id: u64, message: &str) {
-    send_direct_frame(
-        state,
-        client_id,
-        MessageType::ErrorMsg,
-        message.as_bytes().to_vec(),
-    );
-}
-
-fn send_direct_frame(
-    state: &Arc<Mutex<State>>,
-    client_id: u64,
-    ty: MessageType,
-    payload: Vec<u8>,
-) {
-    let state = state.lock().expect("remote server state poisoned");
-    if let Some(client) = state.clients.get(&client_id) {
-        let _ = client
-            .outbound
-            .send(OutboundMessage::Frame(encode_message(ty, &payload)));
     }
 }
 

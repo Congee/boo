@@ -11,11 +11,11 @@
 //! no wire format — just the data the mutex is guarding.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, mpsc};
-use std::time::Instant;
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::{Duration, Instant};
 
 use crate::remote_batcher::OutboundMessage;
-use crate::remote_wire::RemoteFullState;
+use crate::remote_wire::{MessageType, RemoteFullState, encode_message};
 
 pub(crate) struct ClientState {
     pub(crate) outbound: mpsc::Sender<OutboundMessage>,
@@ -63,4 +63,67 @@ pub(crate) struct State {
     /// removal; diagnostics look up membership here to distinguish plain-TCP from
     /// TCP-TLS in `transport_kind`.
     pub(crate) tls_clients: HashSet<u64>,
+}
+
+pub(crate) fn prune_revivable_attachments(state: &mut State) {
+    let now = Instant::now();
+    state
+        .revivable_attachments
+        .retain(|_, attachment| attachment.expires_at > now);
+}
+
+pub(crate) fn should_disconnect_idle_client(
+    state: &Arc<Mutex<State>>,
+    client_id: u64,
+    auth_challenge_window: Duration,
+    heartbeat_window: Duration,
+) -> Option<&'static str> {
+    let state = state.lock().expect("remote server state poisoned");
+    let client = state.clients.get(&client_id)?;
+    let now = Instant::now();
+    if client.authenticated {
+        if client.is_local {
+            return None;
+        }
+        let last_liveness = client.last_heartbeat_at.or(client.authenticated_at)?;
+        if now.saturating_duration_since(last_liveness) > heartbeat_window {
+            return Some("heartbeat-timeout");
+        }
+        return None;
+    }
+    // Absolute deadline from connect time. This runs even when a challenge is
+    // outstanding so a client cannot keep the socket pinned by sending empty `Auth`
+    // frames that refresh `challenge.expires_at` indefinitely.
+    if now.saturating_duration_since(client.connected_at) > auth_challenge_window {
+        return Some("auth-timeout");
+    }
+    if let Some(challenge) = client.challenge {
+        if now > challenge.expires_at {
+            return Some("challenge-timeout");
+        }
+    }
+    None
+}
+
+pub(crate) fn send_direct_error(state: &Arc<Mutex<State>>, client_id: u64, message: &str) {
+    send_direct_frame(
+        state,
+        client_id,
+        MessageType::ErrorMsg,
+        message.as_bytes().to_vec(),
+    );
+}
+
+pub(crate) fn send_direct_frame(
+    state: &Arc<Mutex<State>>,
+    client_id: u64,
+    ty: MessageType,
+    payload: Vec<u8>,
+) {
+    let state = state.lock().expect("remote server state poisoned");
+    if let Some(client) = state.clients.get(&client_id) {
+        let _ = client
+            .outbound
+            .send(OutboundMessage::Frame(encode_message(ty, &payload)));
+    }
 }
