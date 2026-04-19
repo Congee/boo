@@ -117,6 +117,7 @@ chrome, layout, and VT rendering path.
 - `boo --host <ssh-host>` is the current remote desktop milestone
 - Boo bootstraps a remote `boo server`, forwards the remote control and `.stream` sockets over SSH, and attaches the local GUI/client to the forwarded local sockets
 - SSH is the current desktop bootstrap and trust boundary, not the final long-term transport contract
+- Remote desktop CLI/config plumbing now lives on the `clap`-based parser path instead of the older hand-rolled flag parser
 - Remote desktop verification is covered by the SSH verifier scripts under [`scripts/`](./scripts)
 
 ### Remote Daemon
@@ -128,6 +129,13 @@ chrome, layout, and VT rendering path.
 - Exposes daemon/client diagnostics through `boo remote-clients`
 - PTY ingest is event-driven: the worker blocks on typed PTY read/exit events and command events instead of polling on a timeout
 - PTY exit/reap now follows an explicit EOF/worker event path instead of periodic child-exit probes in the hot ingest loop
+- The old `src/remote.rs` monolith has been split into focused modules:
+  `remote_identity`, `remote_transport`, `remote_listener`, `remote_auth`,
+  `remote_wire`, `remote_state`, `remote_full_state`, `remote_batcher`,
+  `remote_server_attach`, `remote_server_control`, `remote_server_stream`,
+  `remote_server_broadcast`, `remote_server_diag`, `remote_server_targets`,
+  `remote_server_advertise`, and `remote_direct_session`
+- The current split keeps `src/remote.rs` as the high-level coordination layer while the extracted modules own transport, auth, attachment, broadcast, diagnostics, and direct-session concerns
 
 ### iOS Remote Viewer
 - A native SwiftUI iOS app lives under [`ios/`](/Users/example/dev/boo/ios)
@@ -259,9 +267,6 @@ nix develop
 - [ ] add remain-on-exit / respawn-pane style process lifecycle controls
 - [ ] add session/window rename and move/link semantics closer to tmux
 - [ ] add hooks, formats, `run-shell`, and `if-shell`
-
-### CLI Backlog
-- [ ] Replace the hand-rolled CLI arg parsing/completion plumbing with `clap` so global flags, subcommands, help text, and completions come from one typed source of truth
 
 ### Remote Backlog
 - [ ] Expand `remote-binary` and related remote path settings so `~` and `$HOME` work naturally before SSH bootstrap builds the remote command
