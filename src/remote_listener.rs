@@ -35,10 +35,11 @@ use crate::remote_wire::{PROTOCOL_PEEK_BYTES, TLS_HANDSHAKE_RECORD_TYPE};
 /// threads that serve it.
 pub(crate) static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Read timeout on the inner TCP socket for TLS-wrapped connections. Lower than
-/// the protocol read timeout so that the reader thread releases the TLS stream
-/// lock promptly and the writer thread does not stall on idle connections.
-const TLS_INNER_READ_TIMEOUT: Duration = Duration::from_millis(100);
+/// Read timeout on the inner TCP socket for TLS-wrapped connections. Keep it
+/// below the higher-level heartbeat/auth windows, but not so low that
+/// scheduling jitter in constrained environments turns an otherwise healthy TLS
+/// session into a stream of spurious WouldBlock errors.
+const TLS_INNER_READ_TIMEOUT: Duration = Duration::from_secs(1);
 
 const TRANSPORT_LABEL_TLS: &str = "tls";
 const TRANSPORT_LABEL_PLAIN: &str = "plain";
