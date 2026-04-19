@@ -20,6 +20,14 @@ If you are working on Linux-specific runtime behavior, also read
 cargo build
 ```
 
+If you are working through the flake entrypoints, these are the main commands:
+
+```bash
+nix build
+nix run
+nix develop
+```
+
 For profiling-oriented builds:
 
 ```bash
@@ -32,6 +40,12 @@ Baseline:
 
 ```bash
 cargo test
+```
+
+Nix validation:
+
+```bash
+nix build .#checks.$(nix eval --impure --raw --expr builtins.currentSystem).default --no-link
 ```
 
 Useful targeted checks:

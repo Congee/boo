@@ -166,8 +166,10 @@
       packages.libghostty-vt = libghosttyVtPackage;
       packages.default = booPackage;
 
-      apps.default = flake-utils.lib.mkApp {
-        drv = booPackage;
+      apps.default = {
+        type = "app";
+        program = "${booPackage}/bin/boo";
+        meta.description = "Run the Boo desktop app and CLI via `nix run`.";
       };
 
       checks.default = booPackage;

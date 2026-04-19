@@ -31,10 +31,22 @@ Build:
 cargo build
 ```
 
+Build with Nix:
+
+```bash
+nix build
+```
+
 Run the desktop app:
 
 ```bash
 cargo run
+```
+
+Run directly from the flake:
+
+```bash
+nix run
 ```
 
 Run the long-lived server explicitly:
@@ -55,12 +67,24 @@ Run desktop remote over SSH:
 cargo run -- --host my-host.local
 ```
 
+The same remote path works through the flake app:
+
+```bash
+nix run . -- --host my-host.local
+```
+
 ## Verification
 
 Core Rust tests:
 
 ```bash
 cargo test
+```
+
+Nix check:
+
+```bash
+nix build .#checks.$(nix eval --impure --raw --expr builtins.currentSystem).default --no-link
 ```
 
 High-value repo scripts:
