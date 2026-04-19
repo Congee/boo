@@ -14,8 +14,10 @@ mod tests {
     use crate::remote_transport::{QuicClientStream, TlsClientStream};
     use crate::remote_wire::{
         MessageType, REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT, REMOTE_CAPABILITY_TCP_TLS_TRANSPORT,
-        decode_auth_ok_payload, encode_message, read_message, validate_auth_ok_payload,
+        decode_auth_ok_payload, encode_auth_ok_payload, encode_message, read_message,
+        validate_auth_ok_payload,
     };
+    use hmac::Mac;
     use std::collections::HashMap;
     use std::io::Write;
     use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -129,6 +131,54 @@ mod tests {
             serve_incoming_tcp_client(stream, tls_config, state, cmd_tx);
         });
         std::mem::forget(cmd_rx);
+        (addr, handle)
+    }
+
+    fn start_scripted_tls_auth_server(
+        material: &DaemonIdentityMaterial,
+        tls_config: Arc<rustls::ServerConfig>,
+        auth_key: &'static [u8],
+    ) -> (SocketAddr, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let addr = listener.local_addr().expect("local addr");
+        let identity_id = material.identity_id.clone();
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
+            let tls_conn = rustls::ServerConnection::new(tls_config).expect("server tls");
+            let mut tls_stream = rustls::StreamOwned::new(tls_conn, stream);
+            tls_stream
+                .conn
+                .complete_io(&mut tls_stream.sock)
+                .expect("complete server tls handshake");
+
+            let (ty, payload) = read_message(&mut tls_stream).expect("read auth request");
+            assert_eq!(ty, MessageType::Auth);
+            assert!(payload.is_empty(), "expected empty initial auth frame");
+
+            let challenge = [0x5Au8; 32];
+            tls_stream
+                .write_all(&encode_message(MessageType::AuthChallenge, &challenge))
+                .expect("write auth challenge");
+
+            let (ty, payload) = read_message(&mut tls_stream).expect("read auth response");
+            assert_eq!(ty, MessageType::Auth);
+
+            let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(auth_key)
+                .expect("valid test hmac key");
+            mac.update(&challenge);
+            let valid = mac.verify_slice(&payload).is_ok();
+            let reply = if valid {
+                encode_message(
+                    MessageType::AuthOk,
+                    &encode_auth_ok_payload(&identity_id, "test-instance"),
+                )
+            } else {
+                encode_message(MessageType::AuthFail, &[])
+            };
+            tls_stream.write_all(&reply).expect("write auth reply");
+            tls_stream.flush().expect("flush auth reply");
+        });
         (addr, handle)
     }
 
@@ -278,7 +328,7 @@ mod tests {
         let material = load_or_create_daemon_identity_material_at(&dir);
         let tls_config = build_remote_server_tls_config(&material).expect("build server tls config");
         let (addr, server_handle) =
-            start_tls_test_server_with_auth(&material, tls_config, Some(b"test-secret"));
+            start_scripted_tls_auth_server(&material, tls_config, b"test-secret");
 
         let session = DirectTransportSession::<TlsClientStream>::connect_tls(
             &addr.ip().to_string(),
@@ -411,7 +461,7 @@ mod tests {
             server_instance_id: "test-instance".to_string(),
             tls_clients: std::collections::HashSet::new(),
         }));
-        let (cmd_tx, _cmd_rx) = mpsc::channel();
+        let (cmd_tx, cmd_rx) = mpsc::channel();
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
         let addr = listener.local_addr().expect("local addr");
@@ -448,10 +498,10 @@ mod tests {
         assert_eq!(server_identity_id.as_deref(), Some(expected_identity.as_str()));
         assert_ne!(capabilities & REMOTE_CAPABILITY_TCP_TLS_TRANSPORT, 0);
 
-        {
-            let state_guard = state.lock().expect("state lock");
-            assert_eq!(state_guard.tls_clients.len(), 1);
-        }
+        let connected = cmd_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("connected command");
+        assert!(matches!(connected, RemoteCmd::Connected { .. }));
 
         drop(tls_stream);
         let _ = server_handle.join();
