@@ -5878,7 +5878,9 @@ mod tests {
         });
 
         let tcp = TcpStream::connect(addr).expect("tcp connect");
-        tcp.set_read_timeout(Some(Duration::from_secs(5)))
+        // Generous read timeout — the Nix build sandbox on Darwin has been observed
+        // to need several seconds for the TLS handshake + Auth round trip.
+        tcp.set_read_timeout(Some(Duration::from_secs(30)))
             .expect("set read timeout");
         let client_config = build_test_trust_all_client_config();
         let server_name = rustls::pki_types::ServerName::try_from("boo-remote-daemon")
