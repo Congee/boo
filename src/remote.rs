@@ -2236,6 +2236,21 @@ pub fn list_remote_daemon_sessions_tls(
     list_summary_from_session(&mut client, port)
 }
 
+pub fn list_remote_daemon_sessions_quic(
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+    expected_identity: &str,
+) -> Result<RemoteSessionListSummary, String> {
+    let mut client = DirectTransportSession::<QuicClientStream>::connect_quic(
+        host,
+        port,
+        auth_key,
+        expected_identity,
+    )?;
+    list_summary_from_session(&mut client, port)
+}
+
 fn attach_summary_from_session<S: DirectReadWrite>(
     client: &mut DirectTransportSession<S>,
     port: u16,
@@ -2298,6 +2313,24 @@ pub fn attach_remote_daemon_session_tls(
     attach_summary_from_session(&mut client, port, session_id, attachment_id, resume_token)
 }
 
+pub fn attach_remote_daemon_session_quic(
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+    expected_identity: &str,
+    session_id: u32,
+    attachment_id: Option<u64>,
+    resume_token: Option<u64>,
+) -> Result<RemoteAttachSummary, String> {
+    let mut client = DirectTransportSession::<QuicClientStream>::connect_quic(
+        host,
+        port,
+        auth_key,
+        expected_identity,
+    )?;
+    attach_summary_from_session(&mut client, port, session_id, attachment_id, resume_token)
+}
+
 fn create_summary_from_session<S: DirectReadWrite>(
     client: &mut DirectTransportSession<S>,
     port: u16,
@@ -2342,6 +2375,23 @@ pub fn create_remote_daemon_session_tls(
     rows: u16,
 ) -> Result<RemoteCreateSummary, String> {
     let mut client = DirectTransportSession::<TlsClientStream>::connect_tls(
+        host,
+        port,
+        auth_key,
+        expected_identity,
+    )?;
+    create_summary_from_session(&mut client, port, cols, rows)
+}
+
+pub fn create_remote_daemon_session_quic(
+    host: &str,
+    port: u16,
+    auth_key: Option<&str>,
+    expected_identity: &str,
+    cols: u16,
+    rows: u16,
+) -> Result<RemoteCreateSummary, String> {
+    let mut client = DirectTransportSession::<QuicClientStream>::connect_quic(
         host,
         port,
         auth_key,
