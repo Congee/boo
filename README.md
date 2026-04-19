@@ -77,7 +77,7 @@ High-value repo scripts:
 - [CONTRIBUTING.md](./CONTRIBUTING.md): environment setup, workflow, tests, and contribution expectations
 - [ROADMAP.md](./ROADMAP.md): current product and engineering priorities
 - [docs/index.md](./docs/index.md): structured documentation hub
-- [FEATURES.md](./FEATURES.md): detailed feature and capability reference
+- [docs/reference/features.md](./docs/reference/features.md): detailed feature and capability reference
 
 ## Existing Specialized Docs
 

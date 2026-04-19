@@ -35,5 +35,3 @@ Linux testing should prefer:
 
 Video capture is useful for visual-only regressions, but not the primary proof
 for most Linux runtime work.
-
-See also [../../LINUX.md](../../LINUX.md).

@@ -33,6 +33,8 @@ RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile profiling
 - renderer draw
 - wait-heavy paths and cadence regressions
 
-## Canonical Detailed Guide
+## Related Docs
 
-The full profiling playbook still lives in [../../PROFILING.md](../../PROFILING.md).
+- [../development/testing.md](../development/testing.md)
+- [../modules/renderer.md](../modules/renderer.md)
+- [../modules/vt-backend-core.md](../modules/vt-backend-core.md)

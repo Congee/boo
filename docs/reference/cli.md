@@ -33,6 +33,6 @@ The CLI is defined in `src/cli.rs` and uses `clap`.
 
 For current behavior details, read:
 
-- [../../FEATURES.md](../../FEATURES.md)
+- [../reference/features.md](../reference/features.md)
 - [../remote/ssh-desktop.md](../remote/ssh-desktop.md)
 - [../modules/control-socket.md](../modules/control-socket.md)

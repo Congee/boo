@@ -1,8 +1,7 @@
 # Feature Reference
 
-This is the high-level feature reference for boo. The full backlog-style detail
-still lives in [../../FEATURES.md](../../FEATURES.md), but this page is the
-structured overview.
+This is the high-level feature reference for boo. It is the structured overview
+for the feature surface and current backlog themes.
 
 ## Core Product Areas
 
@@ -39,9 +38,27 @@ structured overview.
 - app-owned rendering and layout
 - platform-specific host integration kept thinner than the shared runtime
 
-## Detailed Sources
+## Backlog Themes
 
-- [../../FEATURES.md](../../FEATURES.md)
+### tmux Parity
+
+- remain-on-exit and respawn-pane style lifecycle controls
+- session/window rename and move/link behavior
+- hooks, formats, `run-shell`, and `if-shell`
+
+### Remote
+
+- remote path handling hardening for SSH desktop mode
+- stronger transport convergence between desktop and iOS
+
+### Performance
+
+- continue renderer and transport profiling on representative workloads
+- expand terminal-heavy regression coverage
+
+## Related Docs
+
 - [../architecture/remote.md](../architecture/remote.md)
 - [../modules/session-server.md](../modules/session-server.md)
 - [../modules/vt-backend-core.md](../modules/vt-backend-core.md)
+- [../development/profiling.md](../development/profiling.md)

@@ -9,6 +9,14 @@ Current practical stance:
 - keep direct `cargo build` on the Mac as the source of truth for full remote
   Mac verification until Darwin Nix packaging is fully healthy
 
-Detailed workflow:
+## Current Workflow
 
-- [../../REMOTE_NIX_BUILDER.md](../../REMOTE_NIX_BUILDER.md)
+- inspect flake outputs locally
+- build Linux packages locally with Nix
+- offload Darwin builds to a remote Mac when needed
+- use direct host-side `cargo build` and validation for the final truth on macOS
+
+## Related Docs
+
+- [./requirements.md](./requirements.md)
+- [./implementation-checklist.md](./implementation-checklist.md)

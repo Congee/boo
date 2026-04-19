@@ -24,6 +24,16 @@ desktop remote access through SSH.
 - tunnel lifecycle recovery
 - clearer mismatch and startup errors
 
-## Detailed Status Doc
+## Verification
 
-- [../../REMOTE_SSH_INTEGRATION_PLAN.md](../../REMOTE_SSH_INTEGRATION_PLAN.md)
+Prefer direct socket-level checks:
+
+- forwarded control socket health
+- `get-ui-snapshot` over the tunnel
+- session creation through the forwarded path
+- `.stream` attach/update behavior
+
+## Related Docs
+
+- [./requirements.md](./requirements.md)
+- [./implementation-checklist.md](./implementation-checklist.md)

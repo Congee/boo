@@ -42,8 +42,3 @@ This is the structured documentation hub for boo.
 - [remote/ssh-desktop.md](./remote/ssh-desktop.md)
 - [remote/implementation-checklist.md](./remote/implementation-checklist.md)
 - [remote/nix-builder.md](./remote/nix-builder.md)
-
-## Legacy Root Docs
-
-Some older root markdown files remain for compatibility and discoverability, but
-the structured `docs/` tree is now the preferred place for subsystem docs.

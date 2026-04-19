@@ -21,8 +21,16 @@ time, even though rollout and UX differ today.
 - keep desktop SSH practical without blocking on mobile-specific work
 - converge toward one shared remote protocol/session model
 
-## Current Canonical Product Doc
+## Verification Layers
 
-The full detailed product contract remains:
+The remote product should preserve three verification layers:
 
-- [../../REMOTE_REQUIREMENTS.md](../../REMOTE_REQUIREMENTS.md)
+1. protocol-level verification
+2. end-to-end transport verification
+3. manual UX verification
+
+## Related Docs
+
+- [./ssh-desktop.md](./ssh-desktop.md)
+- [./implementation-checklist.md](./implementation-checklist.md)
+- [../modules/remote-daemon.md](../modules/remote-daemon.md)

@@ -30,7 +30,7 @@ Config files can `include` other snippets. Later entries override earlier ones.
 - `src/config.rs`
 - `src/cli.rs`
 
-Detailed behavior is documented in:
+Related docs:
 
-- [../../FEATURES.md](../../FEATURES.md)
 - [../remote/ssh-desktop.md](../remote/ssh-desktop.md)
+- [../remote/requirements.md](../remote/requirements.md)

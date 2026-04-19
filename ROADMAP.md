@@ -65,7 +65,7 @@ prioritized roadmap, not a changelog.
 
 ## Related Docs
 
-- [REMOTE_REQUIREMENTS.md](./REMOTE_REQUIREMENTS.md)
+- [docs/remote/requirements.md](./docs/remote/requirements.md)
 - [docs/remote/ssh-desktop.md](./docs/remote/ssh-desktop.md)
-- [PROFILING.md](./PROFILING.md)
-- [FEATURES.md](./FEATURES.md)
+- [docs/development/profiling.md](./docs/development/profiling.md)
+- [docs/reference/features.md](./docs/reference/features.md)
