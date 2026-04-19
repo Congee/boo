@@ -17,6 +17,7 @@ mod pane;
 mod platform;
 mod profiling;
 mod remote;
+mod remote_client;
 mod remote_identity;
 mod remote_quic;
 mod remote_transport;
