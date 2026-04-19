@@ -19,7 +19,7 @@ here is to refine the direction rather than replace it.
 Boo already has two remote foundations:
 
 - SSH-backed remote desktop bootstrap and socket forwarding
-  - see [REMOTE_SSH_INTEGRATION_PLAN.md](./REMOTE_SSH_INTEGRATION_PLAN.md)
+  - see [REMOTE_SSH_INTEGRATION_PLAN.md](./REMOTE_SSH_INTEGRATION_PLAN.md) for the current SSH desktop milestone status and implementation notes
 - a Boo-native remote daemon and iOS client
   - see [FEATURES.md](./FEATURES.md)
   - see [ios/](./ios)
@@ -113,7 +113,7 @@ and gets a local native Boo UI attached to a remote Boo session owner.
 
 Desktop remote shall use SSH as the default transport and security boundary.
 
-The recommended first implementation remains:
+The current first-cut implementation remains:
 
 - bootstrap the remote Boo server over SSH
 - forward Boo's control socket

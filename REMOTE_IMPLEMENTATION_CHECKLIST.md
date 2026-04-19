@@ -387,7 +387,7 @@ Goal:
 
 - [x] Update `FEATURES.md` remote sections to match the canonical transport
 - [x] Keep `REMOTE_REQUIREMENTS.md` as the product contract
-- [x] Update `REMOTE_SSH_INTEGRATION_PLAN.md` to position SSH mode as:
+- [x] Keep `REMOTE_SSH_INTEGRATION_PLAN.md` aligned as the current SSH desktop milestone doc, positioning SSH mode as:
   - first milestone
   - bootstrap path
   - not the final unified transport contract
