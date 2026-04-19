@@ -79,6 +79,10 @@
         ];
         buildInputs = ghosttyBuildInputs ++ commonBuildInputs;
         dontConfigure = true;
+        # We only patch libghostty-vt packaging/integration, not Ghostty VT
+        # runtime logic. Boo's own Rust/Nix checks are the relevant gate for
+        # this repo, so we leave the vendored library package's upstream Zig
+        # tests off unless we choose to own a scoped test-lib-vt check here.
         doCheck = false;
         dontSetZigDefaultFlags = true;
         zigBuildFlags = [
