@@ -109,6 +109,13 @@
         '' + lib.optionalString pkgs.stdenv.isDarwin ''
           if [ -f "$out/lib/libghostty-vt.0.1.0.dylib" ]; then
             ln -sf libghostty-vt.0.1.0.dylib "$out/lib/libghostty-vt.dylib"
+            # The dylib ships with install_name = @rpath/libghostty-vt.dylib. Any
+            # binary that links against it then needs an LC_RPATH entry pointing
+            # at this store path, which rustc does not emit by default. Rewriting
+            # install_name to the absolute store path makes dependents (boo
+            # itself) resolve the library at runtime without any rpath dance.
+            install_name_tool -id "$out/lib/libghostty-vt.0.1.0.dylib" \
+              "$out/lib/libghostty-vt.0.1.0.dylib"
           fi
         '' + ''
           rm -rf "$out/share" "$out/Ghostty.app" "$out/boo.app"
