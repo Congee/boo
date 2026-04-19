@@ -162,6 +162,8 @@ impl State {
         remote_bind_address: Option<String>,
         remote_auth_key: Option<String>,
         remote_allow_insecure_no_auth: bool,
+        remote_cert_path: Option<std::path::PathBuf>,
+        remote_key_path: Option<std::path::PathBuf>,
     ) -> Self {
         let ctl_rx = control::start(control_socket.as_deref());
         let (remote_server, remote_rx) = if let Some(port) = remote_port {
@@ -171,6 +173,8 @@ impl State {
                 auth_key: remote_auth_key,
                 allow_insecure_no_auth: remote_allow_insecure_no_auth,
                 service_name: "boo".to_string(),
+                cert_chain_path: remote_cert_path,
+                cert_key_path: remote_key_path,
             }) {
                 Ok((server, rx)) => {
                     log::info!("remote daemon listening on tcp/{port}");

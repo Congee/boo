@@ -225,6 +225,15 @@ pub struct RemoteConfig {
     pub auth_key: Option<String>,
     pub allow_insecure_no_auth: bool,
     pub service_name: String,
+    /// Optional override for the daemon's TLS cert chain. When both this and
+    /// `cert_key_path` are provided, the daemon loads them instead of auto-
+    /// generating a self-signed ed25519 cert. Use this for deployments behind
+    /// an existing CA (ACME, internal PKI). `daemon_identity` still derives
+    /// from the SPKI of whatever key is loaded, so SPKI-pinning keeps working.
+    pub cert_chain_path: Option<PathBuf>,
+    /// Optional override for the daemon's TLS private key (PEM). Paired with
+    /// `cert_chain_path`.
+    pub cert_key_path: Option<PathBuf>,
 }
 
 impl RemoteConfig {
@@ -592,7 +601,22 @@ impl RemoteServer {
         }
         let bind_address = config.effective_bind_address().to_string();
         let listener = TcpListener::bind((bind_address.as_str(), config.port))?;
-        let identity_material = load_or_create_daemon_identity_material();
+        let identity_material = match (&config.cert_chain_path, &config.cert_key_path) {
+            (Some(cert), Some(key)) => {
+                log::info!(
+                    "remote tls: using caller-provided identity material cert={} key={}",
+                    cert.display(),
+                    key.display()
+                );
+                load_external_daemon_identity_material(cert, key).map_err(io::Error::other)?
+            }
+            (None, None) => load_or_create_daemon_identity_material(),
+            _ => {
+                return Err(io::Error::other(
+                    "remote tls: --remote-cert-path and --remote-key-path must be provided together",
+                ));
+            }
+        };
         let tls_config = build_remote_server_tls_config(&identity_material)
             .map_err(io::Error::other)?;
         let state = Arc::new(Mutex::new(State {
@@ -3487,6 +3511,27 @@ pub fn load_or_create_daemon_identity_material() -> DaemonIdentityMaterial {
     load_or_create_daemon_identity_material_at(&daemon_identity_dir())
 }
 
+/// Load daemon identity material from caller-provided cert/key paths.
+/// Validates that the cert's SPKI matches the key's SPKI before accepting —
+/// same contract as `try_load_validated_identity` — so mismatched files
+/// refuse cleanly instead of silently advertising a rotated identity.
+///
+/// This is the `--cert-path` / `--key-path` escape hatch for deployments
+/// behind external CAs (ACME, internal PKI, etc.). The generated-identity
+/// directory is untouched in this case.
+pub fn load_external_daemon_identity_material(
+    cert_chain_path: &Path,
+    key_path: &Path,
+) -> Result<DaemonIdentityMaterial, String> {
+    try_load_validated_identity(key_path, cert_chain_path).ok_or_else(|| {
+        format!(
+            "failed to load external daemon identity (cert {} + key {}): either the files are missing/unreadable, the key is not a valid PEM keypair, the cert.pem contains no certificate, or the cert's SubjectPublicKeyInfo does not match the key's",
+            cert_chain_path.display(),
+            key_path.display()
+        )
+    })
+}
+
 fn load_or_create_daemon_identity_material_at(dir: &Path) -> DaemonIdentityMaterial {
     let key_path = dir.join("key.pem");
     let cert_path = dir.join("cert.pem");
@@ -4162,6 +4207,8 @@ mod tests {
             auth_key: None,
             allow_insecure_no_auth: false,
             service_name: "boo".to_string(),
+            cert_chain_path: None,
+            cert_key_path: None,
         };
         assert_eq!(config.effective_bind_address(), "127.0.0.1");
         assert!(!config.should_advertise());
@@ -4175,6 +4222,8 @@ mod tests {
             auth_key: Some("secret".to_string()),
             allow_insecure_no_auth: false,
             service_name: "boo".to_string(),
+            cert_chain_path: None,
+            cert_key_path: None,
         };
         assert_eq!(config.effective_bind_address(), "0.0.0.0");
         assert!(config.should_advertise());
@@ -4188,6 +4237,8 @@ mod tests {
             auth_key: None,
             allow_insecure_no_auth: false,
             service_name: "boo".to_string(),
+            cert_chain_path: None,
+            cert_key_path: None,
         };
         assert_eq!(config.effective_bind_address(), "192.168.0.5");
         assert!(config.should_advertise());
@@ -4202,6 +4253,8 @@ mod tests {
             auth_key: None,
             allow_insecure_no_auth: true,
             service_name: "boo".to_string(),
+            cert_chain_path: None,
+            cert_key_path: None,
         };
         assert_eq!(config.effective_bind_address(), "192.168.0.5");
         assert!(config.should_advertise());
@@ -6281,6 +6334,49 @@ mod tests {
 
         drop(tls_stream);
         let _ = server_handle.join();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_external_daemon_identity_material_accepts_matching_pair() {
+        // Generate a pair in a scratch dir then load it via the external path:
+        // simulates what the --remote-cert-path / --remote-key-path flags do.
+        let dir = unique_identity_dir("external-ok");
+        let _ = std::fs::remove_dir_all(&dir);
+        let material = load_or_create_daemon_identity_material_at(&dir);
+
+        let cert_path = dir.join("cert.pem");
+        let key_path = dir.join("key.pem");
+        let loaded = load_external_daemon_identity_material(&cert_path, &key_path)
+            .expect("external load must accept matched pair");
+
+        assert_eq!(loaded.identity_id, material.identity_id);
+        assert_eq!(loaded.cert_pem, material.cert_pem);
+        assert_eq!(loaded.key_pem, material.key_pem);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_external_daemon_identity_material_rejects_mismatched_pair() {
+        let dir = unique_identity_dir("external-mismatch");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create dir");
+
+        let material_a = generate_daemon_identity_material();
+        let material_b = generate_daemon_identity_material();
+        assert_ne!(material_a.identity_id, material_b.identity_id);
+        let cert_path = dir.join("cert.pem");
+        let key_path = dir.join("key.pem");
+        std::fs::write(&cert_path, &material_a.cert_pem).expect("write cert");
+        std::fs::write(&key_path, &material_b.key_pem).expect("write key");
+
+        let err = match load_external_daemon_identity_material(&cert_path, &key_path) {
+            Ok(_) => panic!("mismatched external pair must be rejected"),
+            Err(err) => err,
+        };
+        assert!(err.contains("does not match"), "got error: {err}");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -135,6 +135,22 @@ pub struct GlobalArgs {
     )]
     pub remote_allow_insecure_no_auth: bool,
 
+    #[arg(
+        long = "remote-cert-path",
+        global = true,
+        requires = "remote_key_path",
+        help = "PEM cert chain for the remote daemon; bypasses the auto-generated identity"
+    )]
+    pub remote_cert_path: Option<std::path::PathBuf>,
+
+    #[arg(
+        long = "remote-key-path",
+        global = true,
+        requires = "remote_cert_path",
+        help = "PEM private key for the remote daemon (paired with --remote-cert-path)"
+    )]
+    pub remote_key_path: Option<std::path::PathBuf>,
+
     #[arg(long, global = true, help = "Session layout to load at startup")]
     pub session: Option<String>,
 }
