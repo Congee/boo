@@ -19,6 +19,7 @@ mod profiling;
 mod remote;
 mod remote_batcher;
 mod remote_client;
+mod remote_full_state;
 mod remote_identity;
 mod remote_quic;
 mod remote_transport;
