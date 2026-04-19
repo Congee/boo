@@ -305,7 +305,7 @@ pub(crate) fn handle_auth_message(
 mod tests {
     use super::*;
     use crate::remote_wire::validate_auth_ok_payload;
-    use std::collections::{HashMap, HashSet, VecDeque};
+    use std::collections::{HashMap, VecDeque};
 
     struct TimeoutScriptedReader {
         chunks: VecDeque<Result<Vec<u8>, io::ErrorKind>>,

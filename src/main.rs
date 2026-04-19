@@ -20,10 +20,24 @@ mod remote;
 mod remote_auth;
 mod remote_batcher;
 mod remote_client;
+#[cfg(test)]
+mod remote_config_tests;
+mod remote_direct_session;
 mod remote_full_state;
 mod remote_identity;
 mod remote_listener;
 mod remote_quic;
+mod remote_server_advertise;
+mod remote_server_attach;
+mod remote_server_broadcast;
+mod remote_server_control;
+mod remote_server_diag;
+mod remote_server_stream;
+mod remote_server_targets;
+#[cfg(test)]
+mod remote_session_tests;
+#[cfg(test)]
+mod remote_transport_tests;
 mod remote_state;
 mod remote_transport;
 mod remote_types;

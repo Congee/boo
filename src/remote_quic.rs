@@ -29,7 +29,6 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::mpsc as std_mpsc;
 
-use tokio::io::AsyncWriteExt;
 use tokio::runtime::Runtime;
 
 /// Name prefix for tokio worker threads spawned for QUIC work. Makes runtime
@@ -153,12 +152,14 @@ pub(crate) fn build_quic_client_config(
 /// task observes the drop.
 pub(crate) struct QuicListener {
     endpoint: quinn::Endpoint,
-    local_addr: SocketAddr,
 }
 
 impl QuicListener {
+    #[cfg(test)]
     pub(crate) fn local_addr(&self) -> SocketAddr {
-        self.local_addr
+        self.endpoint
+            .local_addr()
+            .expect("quic endpoint should retain a local addr while listener is alive")
     }
 
     pub(crate) fn endpoint(&self) -> quinn::Endpoint {
@@ -182,11 +183,7 @@ pub(crate) fn bind_quic_listener(
     let runtime = shared_quic_runtime()?;
     let _guard = runtime.enter();
     let endpoint = quinn::Endpoint::server(server_config, bind_addr)?;
-    let local_addr = endpoint.local_addr()?;
-    Ok(QuicListener {
-        endpoint,
-        local_addr,
-    })
+    Ok(QuicListener { endpoint })
 }
 
 /// Synchronously open a QUIC connection to `host:port`, complete the handshake,

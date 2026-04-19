@@ -1100,9 +1100,7 @@ pub(crate) fn remaining_ms(now: Instant, deadline: Instant) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::remote_types::{
-        RemoteAttachedSummary, RemoteDirectSessionInfo, RemoteSessionInfo,
-    };
+    use crate::remote_types::{RemoteDirectSessionInfo, RemoteSessionInfo};
 
     #[test]
     fn session_list_encoding_matches_client_layout() {
