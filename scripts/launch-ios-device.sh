@@ -13,7 +13,29 @@ fi
 
 bash "$ROOT/scripts/check-ios-device-state.sh" "$DEVICE_ID"
 
+LOG_FILE="$(mktemp -t boo-ios-launch.XXXXXX.log)"
+cleanup() {
+  rm -f "$LOG_FILE"
+}
+trap cleanup EXIT
+
+set +e
 xcrun devicectl device process launch \
   --device "$DEVICE_ID" \
   --terminate-existing \
-  "$BUNDLE_ID"
+  "$BUNDLE_ID" >"$LOG_FILE" 2>&1
+status=$?
+set -e
+
+cat "$LOG_FILE"
+
+if [[ $status -ne 0 ]]; then
+  if grep -q "profile has not been explicitly trusted by the user" "$LOG_FILE"; then
+    echo "" >&2
+    echo "launch blocked by iOS trust policy." >&2
+    echo "On the device, trust the Apple Development profile for this personal team," >&2
+    echo "then retry launch. On recent iOS versions this is typically under:" >&2
+    echo "Settings > General > VPN & Device Management" >&2
+  fi
+  exit "$status"
+fi

@@ -92,6 +92,9 @@ Notes:
   will be blocked until the device finishes the full enable-and-reboot flow
 - if the device is locked, `devicectl` cannot mount developer services for
   install or launch; unlock the device and retry
+- on a personal-team signed build, the first launch can still be blocked until
+  the device explicitly trusts the development profile in Settings; the launch
+  script now points at that step when iOS rejects the app for trust reasons
 
 ## Remaining Manual Validation
 
