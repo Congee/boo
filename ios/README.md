@@ -63,6 +63,27 @@ bash scripts/test-ios-remote-view.sh
 
 The validation script currently completes the Rust daemon checks, the shared Swift protocol self-tests, and the iOS app build path in this repo environment.
 
+## Real Device Workflow
+
+For a physical iPad or iPhone, the project needs a valid Apple development
+signing identity and a non-empty development team.
+
+Helpful commands:
+
+```bash
+bash scripts/list-ios-devices.sh
+BOO_IOS_TEAM_ID=<team-id> bash scripts/build-ios-device.sh
+BOO_IOS_TEAM_ID=<team-id> BOO_IOS_DEVICE_ID=<device-id> bash scripts/build-ios-device.sh
+```
+
+Notes:
+
+- the build script uses a repo-local derived-data path so it does not depend on
+  Xcode's default `~/Library/Developer/Xcode/DerivedData` location
+- if `security find-identity -p codesigning -v` reports zero valid identities,
+  device deployment will still be blocked until Xcode signing is configured on
+  this Mac
+
 ## Remaining Manual Validation
 
 Automated validation covers the remote protocol, reconnect/resume flow, auth failures, and state updates. Manual validation is still reserved for client UX that depends on the real iOS interaction model:

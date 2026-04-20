@@ -27,6 +27,8 @@ Remote:
 - `bash scripts/verify-remote-host.sh`
 - `bash scripts/verify-remote-mac.sh`
 - `bash scripts/test-ios-remote-view.sh`
+- `bash scripts/list-ios-devices.sh`
+- `BOO_IOS_TEAM_ID=<team-id> bash scripts/build-ios-device.sh`
 
 ## Testing Principles
 
