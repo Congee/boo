@@ -72,6 +72,7 @@ Helpful commands:
 
 ```bash
 bash scripts/list-ios-devices.sh
+bash scripts/check-ios-device-state.sh <device-id>
 bash scripts/build-ios-device.sh
 BOO_IOS_DEVICE_ID=<device-id> bash scripts/build-ios-device.sh
 BOO_IOS_DEVICE_ID=<device-id> bash scripts/install-ios-device.sh
@@ -85,10 +86,12 @@ Notes:
   Xcode's default `~/Library/Developer/Xcode/DerivedData` location
 - the build script auto-discovers the first provisioning team known to Xcode;
   override with `BOO_IOS_TEAM_ID` if needed
+- `check-ios-device-state.sh` reports whether the device is actually ready for
+  install and launch
 - if the attached device still reports Developer Mode disabled, installation
   will be blocked until the device finishes the full enable-and-reboot flow
-- if the device is locked, `devicectl` may fail to mount developer services for
-  install/launch operations; unlock the device and retry
+- if the device is locked, `devicectl` cannot mount developer services for
+  install or launch; unlock the device and retry
 
 ## Remaining Manual Validation
 

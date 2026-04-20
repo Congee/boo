@@ -18,4 +18,7 @@ if [[ ! -d "$APP_PATH" ]]; then
   exit 2
 fi
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+bash "$ROOT/scripts/check-ios-device-state.sh" "$DEVICE_ID"
+
 xcrun devicectl device install app --device "$DEVICE_ID" "$APP_PATH"

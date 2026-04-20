@@ -28,6 +28,7 @@ Remote:
 - `bash scripts/verify-remote-mac.sh`
 - `bash scripts/test-ios-remote-view.sh`
 - `bash scripts/list-ios-devices.sh`
+- `bash scripts/check-ios-device-state.sh <device-id>`
 - `bash scripts/build-ios-device.sh`
 - `BOO_IOS_DEVICE_ID=<device-id> bash scripts/install-ios-device.sh`
 - `BOO_IOS_DEVICE_ID=<device-id> bash scripts/launch-ios-device.sh`

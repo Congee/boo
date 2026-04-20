@@ -11,6 +11,7 @@ if [[ -z "$DEVICE_ID" ]]; then
 fi
 
 cd "$ROOT"
+BOO_IOS_DEVICE_ID="$DEVICE_ID" bash scripts/check-ios-device-state.sh
 bash scripts/build-ios-device.sh
 BOO_IOS_DEVICE_ID="$DEVICE_ID" bash scripts/install-ios-device.sh
 BOO_IOS_DEVICE_ID="$DEVICE_ID" bash scripts/launch-ios-device.sh

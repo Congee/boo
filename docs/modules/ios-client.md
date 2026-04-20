@@ -36,6 +36,7 @@ Primary automated lane:
 
 - [../../scripts/test-ios-remote-view.sh](../../scripts/test-ios-remote-view.sh)
 - [../../scripts/list-ios-devices.sh](../../scripts/list-ios-devices.sh)
+- [../../scripts/check-ios-device-state.sh](../../scripts/check-ios-device-state.sh)
 - [../../scripts/build-ios-device.sh](../../scripts/build-ios-device.sh)
 - [../../scripts/install-ios-device.sh](../../scripts/install-ios-device.sh)
 - [../../scripts/launch-ios-device.sh](../../scripts/launch-ios-device.sh)
