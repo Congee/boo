@@ -24,9 +24,7 @@ mod remote_client;
 mod remote_config_tests;
 mod remote_direct_session;
 mod remote_full_state;
-mod remote_identity;
 mod remote_listener;
-mod remote_quic;
 mod remote_server_advertise;
 mod remote_server_attach;
 mod remote_server_broadcast;
@@ -36,10 +34,7 @@ mod remote_server_stream;
 mod remote_server_targets;
 #[cfg(test)]
 mod remote_session_tests;
-#[cfg(test)]
-mod remote_transport_tests;
 mod remote_state;
-mod remote_transport;
 mod remote_types;
 mod remote_wire;
 mod runtime;
@@ -431,10 +426,6 @@ fn configured_font(family: Option<&'static str>) -> Font {
 
 fn main() {
     env_logger::init();
-    // Install the ring-based rustls crypto provider as the process-wide default
-    // before any rustls code path runs. See remote::install_default_crypto_provider
-    // for the full reasoning around future rustls 0.24+ behavior.
-    remote_identity::install_default_crypto_provider();
 
     let cli = cli::Cli::parse_args();
     let server_mode = launch::parse_startup_args(&cli);

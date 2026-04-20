@@ -7,11 +7,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Instant;
 
-use crate::remote_identity::{
-    build_remote_server_tls_config, load_external_daemon_identity_material,
-    load_or_create_daemon_identity, load_or_create_daemon_identity_material,
-};
-pub(crate) use crate::remote_direct_session::{DirectReadWrite, DirectTransportSession};
+pub(crate) use crate::remote_direct_session::DirectTransportSession;
 
 // Re-export the public data types so existing callers of
 // `crate::remote::RemoteProbeSummary` etc. keep working unchanged.
@@ -26,27 +22,20 @@ pub use crate::remote_types::{
 // Re-export the direct-client RPCs so existing callers of
 // `crate::remote::probe_remote_endpoint` etc. keep working unchanged.
 pub use crate::remote_client::{
-    attach_remote_daemon_session, attach_remote_daemon_session_quic,
-    attach_remote_daemon_session_tls, create_remote_daemon_session,
-    create_remote_daemon_session_quic, create_remote_daemon_session_tls,
-    list_remote_daemon_sessions, list_remote_daemon_sessions_quic, list_remote_daemon_sessions_tls,
-    probe_remote_endpoint, probe_remote_endpoint_quic, probe_remote_endpoint_tls,
-    probe_selected_direct_transport, probe_selected_direct_transport_tls, select_direct_transport,
+    attach_remote_daemon_session, create_remote_daemon_session, list_remote_daemon_sessions,
+    probe_remote_endpoint, probe_selected_direct_transport, select_direct_transport,
 };
 
 pub use crate::remote_full_state::{full_state_from_terminal, full_state_from_ui};
 
 
-use crate::remote_wire::{
-    random_instance_id, random_u64_nonzero,
-};
+use crate::remote_wire::{random_instance_id, random_u64_nonzero};
 // Re-export wire-level items so external callers that reach through
 // `crate::remote::` keep working.
 #[allow(unused_imports)]
 pub use crate::remote_wire::{
     MessageType, REMOTE_CAPABILITIES, REMOTE_CAPABILITY_ATTACHMENT_RESUME,
-    REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT, REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT,
-    REMOTE_CAPABILITY_TCP_TLS_TRANSPORT, REMOTE_PROTOCOL_VERSION, RemoteCell, RemoteFullState,
+    REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT, REMOTE_PROTOCOL_VERSION, RemoteCell, RemoteFullState,
     decode_auth_ok_payload, encode_full_state, encode_message, encode_session_list, read_message,
     validate_auth_ok_payload,
 };
@@ -57,15 +46,6 @@ pub struct RemoteConfig {
     pub port: u16,
     pub bind_address: Option<String>,
     pub service_name: String,
-    /// Optional override for the daemon's TLS cert chain. When both this and
-    /// `cert_key_path` are provided, the daemon loads them instead of auto-
-    /// generating a self-signed ed25519 cert. Use this for deployments behind
-    /// an existing CA (ACME, internal PKI). `daemon_identity` still derives
-    /// from the SPKI of whatever key is loaded, so SPKI-pinning keeps working.
-    pub cert_chain_path: Option<PathBuf>,
-    /// Optional override for the daemon's TLS private key (PEM). Paired with
-    /// `cert_chain_path`.
-    pub cert_key_path: Option<PathBuf>,
 }
 
 impl RemoteConfig {
@@ -142,7 +122,7 @@ pub enum RemoteCmd {
 }
 
 use crate::remote_auth::read_loop;
-use crate::remote_listener::{NEXT_CLIENT_ID, serve_incoming_tcp_client, spawn_quic_accept_loop};
+use crate::remote_listener::{NEXT_CLIENT_ID, serve_incoming_tcp_client};
 use crate::remote_server_advertise::ServiceAdvertiser;
 use crate::remote_server_attach::prepare_attachment as prepare_remote_attachment;
 use crate::remote_server_control::{
@@ -173,45 +153,21 @@ pub struct RemoteServer {
     local_socket_path: Option<PathBuf>,
     bind_address: Option<String>,
     port: Option<u16>,
-    /// Active QUIC listener. Kept alive as a field so the endpoint closes when
-    /// the server drops. `None` on local-stream servers or if QUIC bind failed
-    /// (TCP is the authoritative transport; QUIC is additive).
-    _quic_listener: Option<crate::remote_quic::QuicListener>,
 }
 
 impl RemoteServer {
     pub fn start(config: RemoteConfig) -> io::Result<(Self, mpsc::Receiver<RemoteCmd>)> {
         let bind_address = config.effective_bind_address().to_string();
         let listener = TcpListener::bind((bind_address.as_str(), config.port))?;
-        let identity_material = match (&config.cert_chain_path, &config.cert_key_path) {
-            (Some(cert), Some(key)) => {
-                log::info!(
-                    "remote tls: using caller-provided identity material cert={} key={}",
-                    cert.display(),
-                    key.display()
-                );
-                load_external_daemon_identity_material(cert, key).map_err(io::Error::other)?
-            }
-            (None, None) => load_or_create_daemon_identity_material(),
-            _ => {
-                return Err(io::Error::other(
-                    "remote tls: --remote-cert-path and --remote-key-path must be provided together",
-                ));
-            }
-        };
-        let tls_config = build_remote_server_tls_config(&identity_material)
-            .map_err(io::Error::other)?;
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::new(),
             revivable_attachments: HashMap::new(),
-            server_identity_id: identity_material.identity_id,
+            server_identity_id: random_instance_id(),
             server_instance_id: random_instance_id(),
-            tls_clients: std::collections::HashSet::new(),
         }));
         let state_for_listener = Arc::clone(&state);
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let cmd_tx_for_tcp = cmd_tx.clone();
-        let tls_config_for_tcp = Arc::clone(&tls_config);
         let listener_thread = std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else {
@@ -220,22 +176,11 @@ impl RemoteServer {
                 let _ = stream.set_read_timeout(Some(REMOTE_READ_TIMEOUT));
                 let state = Arc::clone(&state_for_listener);
                 let cmd_tx = cmd_tx_for_tcp.clone();
-                let tls_config = Arc::clone(&tls_config_for_tcp);
                 std::thread::spawn(move || {
-                    serve_incoming_tcp_client(stream, tls_config, state, cmd_tx);
+                    serve_incoming_tcp_client(stream, state, cmd_tx);
                 });
             }
         });
-
-        // QUIC listener binds the same port number on UDP. Failure is non-fatal
-        // — TCP remains the authoritative transport and servers that cannot
-        // open the UDP port (permissions, port already bound by another
-        // process) just keep running without QUIC.
-        let quic_bind_addr: std::net::SocketAddr = format!("{bind_address}:{}", config.port)
-            .parse()
-            .map_err(io::Error::other)?;
-        let quic_listener =
-            spawn_quic_accept_loop(quic_bind_addr, tls_config, Arc::clone(&state), cmd_tx.clone());
 
         let advertiser = if config.should_advertise() {
             ServiceAdvertiser::spawn(&config.service_name, config.port)
@@ -263,7 +208,6 @@ impl RemoteServer {
                 local_socket_path: None,
                 bind_address: Some(bind_address),
                 port: Some(config.port),
-                _quic_listener: quic_listener,
             },
             cmd_rx,
         ))
@@ -278,9 +222,8 @@ impl RemoteServer {
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::new(),
             revivable_attachments: HashMap::new(),
-            server_identity_id: load_or_create_daemon_identity(),
+            server_identity_id: random_instance_id(),
             server_instance_id: random_instance_id(),
-            tls_clients: std::collections::HashSet::new(),
         }));
         let state_for_listener = Arc::clone(&state);
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -356,9 +299,6 @@ impl RemoteServer {
                 local_socket_path: Some(socket_path),
                 bind_address: None,
                 port: None,
-                // Local Unix-socket servers never serve a network transport,
-                // so there is no QUIC listener to hold here.
-                _quic_listener: None,
             },
             cmd_rx,
         ))
@@ -404,7 +344,6 @@ impl RemoteServer {
             local_socket_path: None,
             bind_address: None,
             port: None,
-            _quic_listener: None,
         }
     }
 

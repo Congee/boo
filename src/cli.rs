@@ -120,22 +120,6 @@ pub struct GlobalArgs {
     )]
     pub remote_bind_address: Option<String>,
 
-    #[arg(
-        long = "remote-cert-path",
-        global = true,
-        requires = "remote_key_path",
-        help = "PEM cert chain for the remote daemon; bypasses the auto-generated identity"
-    )]
-    pub remote_cert_path: Option<std::path::PathBuf>,
-
-    #[arg(
-        long = "remote-key-path",
-        global = true,
-        requires = "remote_cert_path",
-        help = "PEM private key for the remote daemon (paired with --remote-cert-path)"
-    )]
-    pub remote_key_path: Option<std::path::PathBuf>,
-
     #[arg(long, global = true, help = "Session layout to load at startup")]
     pub session: Option<String>,
 }
@@ -161,14 +145,6 @@ pub enum Command {
         port: u16,
         #[arg(long = "expect-server-identity")]
         expect_server_identity: Option<String>,
-        /// Wrap the connection in TLS and pin the server via its daemon identity.
-        /// Requires --expect-server-identity.
-        #[arg(long, requires = "expect_server_identity", conflicts_with = "quic")]
-        tls: bool,
-        /// Connect over QUIC and pin the server via its daemon identity.
-        /// Requires --expect-server-identity; mutually exclusive with --tls.
-        #[arg(long, requires = "expect_server_identity")]
-        quic: bool,
     },
     /// List sessions from a Boo-native TCP remote daemon directly
     RemoteDaemonSessions {
@@ -178,14 +154,6 @@ pub enum Command {
         port: u16,
         #[arg(long = "expect-server-identity")]
         expect_server_identity: Option<String>,
-        /// Wrap the connection in TLS and pin the server via its daemon identity.
-        /// Requires --expect-server-identity.
-        #[arg(long, requires = "expect_server_identity", conflicts_with = "quic")]
-        tls: bool,
-        /// Connect over QUIC and pin the server via its daemon identity.
-        /// Requires --expect-server-identity; mutually exclusive with --tls.
-        #[arg(long, requires = "expect_server_identity")]
-        quic: bool,
     },
     /// Create a session on a Boo-native TCP remote daemon directly
     RemoteDaemonCreate {
@@ -199,30 +167,11 @@ pub enum Command {
         cols: u16,
         #[arg(long, default_value_t = 40)]
         rows: u16,
-        /// Wrap the connection in TLS and pin the server via its daemon identity.
-        /// Requires --expect-server-identity.
-        #[arg(long, requires = "expect_server_identity", conflicts_with = "quic")]
-        tls: bool,
-        /// Connect over QUIC and pin the server via its daemon identity.
-        /// Requires --expect-server-identity; mutually exclusive with --tls.
-        #[arg(long, requires = "expect_server_identity")]
-        quic: bool,
     },
     /// Bootstrap a remote Boo host over SSH and report its canonical native remote endpoint
     RemoteUpgradeTarget,
-    /// Bootstrap a remote Boo host over SSH, resolve its canonical native endpoint, and probe the selected direct transport
-    RemoteUpgradeProbe {
-        /// Wrap the direct connection in TLS using the SSH-discovered daemon identity
-        /// as the SPKI pin. Errors out if the SSH-bootstrapped target did not report an
-        /// identity.
-        #[arg(long, conflicts_with = "quic")]
-        tls: bool,
-        /// Connect directly over QUIC using the SSH-discovered daemon identity as the
-        /// SPKI pin. Errors out if the SSH-bootstrapped target did not report an
-        /// identity. Mutually exclusive with --tls.
-        #[arg(long)]
-        quic: bool,
-    },
+    /// Bootstrap a remote Boo host over SSH, resolve its canonical native endpoint, and probe the direct transport
+    RemoteUpgradeProbe,
     /// Attach to a session on a Boo-native TCP remote daemon directly
     RemoteDaemonAttach {
         #[arg(long, default_value = "127.0.0.1")]
@@ -237,14 +186,6 @@ pub enum Command {
         attachment_id: Option<u64>,
         #[arg(long = "resume-token")]
         resume_token: Option<u64>,
-        /// Wrap the connection in TLS and pin the server via its daemon identity.
-        /// Requires --expect-server-identity.
-        #[arg(long, requires = "expect_server_identity", conflicts_with = "quic")]
-        tls: bool,
-        /// Connect over QUIC and pin the server via its daemon identity.
-        /// Requires --expect-server-identity; mutually exclusive with --tls.
-        #[arg(long, requires = "expect_server_identity")]
-        quic: bool,
     },
     /// Show connected remote and local-stream client diagnostics
     RemoteClients,
@@ -277,78 +218,20 @@ impl Cli {
 }
 
 /// Transport choice resolved from CLI --tls / --quic flags. Plain carries through
-/// the original semantics (optional post-auth identity check). TLS and Quic both
-/// require a pin; clap already enforces --tls and --quic are mutually exclusive.
-enum DirectTransportChoice {
-    Plain,
-    Tls,
-    Quic,
-}
-
-fn resolve_direct_transport(tls: bool, quic: bool) -> DirectTransportChoice {
-    // Clap guarantees tls && quic is never both true — conflicts_with = "quic"
-    // on --tls and the shared requires="expect_server_identity" policy.
-    debug_assert!(!(tls && quic));
-    if quic {
-        DirectTransportChoice::Quic
-    } else if tls {
-        DirectTransportChoice::Tls
-    } else {
-        DirectTransportChoice::Plain
-    }
-}
-
-fn require_pin<'a>(
-    expected_identity: Option<&'a str>,
-    flag: &'static str,
-) -> Result<&'a str, String> {
-    expected_identity.ok_or_else(|| {
-        format!("{flag} requires --expect-server-identity for SPKI pinning")
-    })
-}
-
 fn probe_remote_daemon_dispatch(
     host: &str,
     port: u16,
     expected_identity: Option<&str>,
-    tls: bool,
-    quic: bool,
 ) -> Result<crate::remote::RemoteProbeSummary, String> {
-    match resolve_direct_transport(tls, quic) {
-        DirectTransportChoice::Quic => {
-            let identity = require_pin(expected_identity, "--quic")?;
-            crate::remote::probe_remote_endpoint_quic(host, port, identity)
-        }
-        DirectTransportChoice::Tls => {
-            let identity = require_pin(expected_identity, "--tls")?;
-            crate::remote::probe_remote_endpoint_tls(host, port, identity)
-        }
-        DirectTransportChoice::Plain => {
-            crate::remote::probe_remote_endpoint(host, port, expected_identity)
-        }
-    }
+    crate::remote::probe_remote_endpoint(host, port, expected_identity)
 }
 
 fn list_remote_daemon_sessions_dispatch(
     host: &str,
     port: u16,
     expected_identity: Option<&str>,
-    tls: bool,
-    quic: bool,
 ) -> Result<crate::remote::RemoteSessionListSummary, String> {
-    match resolve_direct_transport(tls, quic) {
-        DirectTransportChoice::Quic => {
-            let identity = require_pin(expected_identity, "--quic")?;
-            crate::remote::list_remote_daemon_sessions_quic(host, port, identity)
-        }
-        DirectTransportChoice::Tls => {
-            let identity = require_pin(expected_identity, "--tls")?;
-            crate::remote::list_remote_daemon_sessions_tls(host, port, identity)
-        }
-        DirectTransportChoice::Plain => {
-            crate::remote::list_remote_daemon_sessions(host, port, expected_identity)
-        }
-    }
+    crate::remote::list_remote_daemon_sessions(host, port, expected_identity)
 }
 
 fn create_remote_daemon_session_dispatch(
@@ -357,30 +240,8 @@ fn create_remote_daemon_session_dispatch(
     expected_identity: Option<&str>,
     cols: u16,
     rows: u16,
-    tls: bool,
-    quic: bool,
 ) -> Result<crate::remote::RemoteCreateSummary, String> {
-    match resolve_direct_transport(tls, quic) {
-        DirectTransportChoice::Quic => {
-            let identity = require_pin(expected_identity, "--quic")?;
-            crate::remote::create_remote_daemon_session_quic(
-                host, port, identity, cols, rows,
-            )
-        }
-        DirectTransportChoice::Tls => {
-            let identity = require_pin(expected_identity, "--tls")?;
-            crate::remote::create_remote_daemon_session_tls(
-                host, port, identity, cols, rows,
-            )
-        }
-        DirectTransportChoice::Plain => crate::remote::create_remote_daemon_session(
-            host,
-            port,
-            expected_identity,
-            cols,
-            rows,
-        ),
-    }
+    crate::remote::create_remote_daemon_session(host, port, expected_identity, cols, rows)
 }
 
 fn attach_remote_daemon_session_dispatch(
@@ -390,41 +251,15 @@ fn attach_remote_daemon_session_dispatch(
     session_id: u32,
     attachment_id: Option<u64>,
     resume_token: Option<u64>,
-    tls: bool,
-    quic: bool,
 ) -> Result<crate::remote::RemoteAttachSummary, String> {
-    match resolve_direct_transport(tls, quic) {
-        DirectTransportChoice::Quic => {
-            let identity = require_pin(expected_identity, "--quic")?;
-            crate::remote::attach_remote_daemon_session_quic(
-                host,
-                port,
-                    identity,
-                session_id,
-                attachment_id,
-                resume_token,
-            )
-        }
-        DirectTransportChoice::Tls => {
-            let identity = require_pin(expected_identity, "--tls")?;
-            crate::remote::attach_remote_daemon_session_tls(
-                host,
-                port,
-                    identity,
-                session_id,
-                attachment_id,
-                resume_token,
-            )
-        }
-        DirectTransportChoice::Plain => crate::remote::attach_remote_daemon_session(
-            host,
-            port,
-            expected_identity,
-            session_id,
-            attachment_id,
-            resume_token,
-        ),
-    }
+    crate::remote::attach_remote_daemon_session(
+        host,
+        port,
+        expected_identity,
+        session_id,
+        attachment_id,
+        resume_token,
+    )
 }
 
 fn print_completions<G: Generator>(generator: G) -> Result<(), String> {
@@ -517,14 +352,10 @@ where
             host,
             port,
             expect_server_identity,
-            tls,
-            quic,
         } => match probe_remote_daemon_dispatch(
             host,
             *port,
             expect_server_identity.as_deref(),
-            *tls,
-            *quic,
         ) {
             Ok(summary) => {
                 let mut stdout = std::io::stdout().lock();
@@ -546,14 +377,10 @@ where
             host,
             port,
             expect_server_identity,
-            tls,
-            quic,
         } => match list_remote_daemon_sessions_dispatch(
             host,
             *port,
             expect_server_identity.as_deref(),
-            *tls,
-            *quic,
         ) {
             Ok(summary) => {
                 let mut stdout = std::io::stdout().lock();
@@ -577,16 +404,12 @@ where
             expect_server_identity,
             cols,
             rows,
-            tls,
-            quic,
         } => match create_remote_daemon_session_dispatch(
             host,
             *port,
             expect_server_identity.as_deref(),
             *cols,
             *rows,
-            *tls,
-            *quic,
         ) {
             Ok(summary) => {
                 let mut stdout = std::io::stdout().lock();
@@ -637,10 +460,7 @@ where
                 }
             }
         }
-        Command::RemoteUpgradeProbe {
-            tls,
-            quic,
-        } => {
+        Command::RemoteUpgradeProbe => {
             let Some(ssh_host) = cli
                 .global
                 .host
@@ -681,43 +501,12 @@ where
                         eprintln!("remote upgrade target has no direct port");
                         return Outcome::Exit(1);
                     };
-                    let probe_result = if *quic {
-                        // --quic forces QuicDirect regardless of what
-                        // select_direct_transport picked for TcpDirect probing;
-                        // the SSH-discovered identity is the SPKI pin.
-                        match target.server_identity_id.as_deref() {
-                            Some(identity) => crate::remote::probe_selected_direct_transport_tls(
-                                crate::remote::DirectTransportKind::QuicDirect,
-                                direct_host,
-                                port,
-                                identity,
-                            ),
-                            None => Err(
-                                "--quic requires the SSH-bootstrapped target to report a daemon identity"
-                                    .to_string(),
-                            ),
-                        }
-                    } else if *tls {
-                        match target.server_identity_id.as_deref() {
-                            Some(identity) => crate::remote::probe_selected_direct_transport_tls(
-                                selected_transport,
-                                direct_host,
-                                port,
-                                identity,
-                            ),
-                            None => Err(
-                                "--tls requires the SSH-bootstrapped target to report a daemon identity"
-                                    .to_string(),
-                            ),
-                        }
-                    } else {
-                        crate::remote::probe_selected_direct_transport(
-                            selected_transport,
-                            direct_host,
-                            port,
-                            target.server_identity_id.as_deref(),
-                        )
-                    };
+                    let probe_result = crate::remote::probe_selected_direct_transport(
+                        selected_transport,
+                        direct_host,
+                        port,
+                        target.server_identity_id.as_deref(),
+                    );
                     match probe_result {
                         Ok(probe) => {
                             let summary = RemoteUpgradeProbeCommandSummary { target, probe };
@@ -750,8 +539,6 @@ where
             expect_server_identity,
             attachment_id,
             resume_token,
-            tls,
-            quic,
         } => match attach_remote_daemon_session_dispatch(
             host,
             *port,
@@ -759,8 +546,6 @@ where
             *session_id,
             *attachment_id,
             *resume_token,
-            *tls,
-            *quic,
         ) {
             Ok(summary) => {
                 let mut stdout = std::io::stdout().lock();
@@ -973,113 +758,10 @@ mod tests {
                 host,
                 port,
                     expect_server_identity,
-                tls,
-                quic,
             }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, 7337);
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
-                assert!(!tls);
-                assert!(!quic);
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn probe_remote_daemon_tls_requires_expect_server_identity() {
-        let result = super::Cli::try_parse_from([
-            "boo",
-            "probe-remote-daemon",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "7337",
-            "--tls",
-        ]);
-        assert!(
-            result.is_err(),
-            "--tls without --expect-server-identity must be rejected"
-        );
-    }
-
-    #[test]
-    fn probe_remote_daemon_quic_requires_expect_server_identity() {
-        let result = super::Cli::try_parse_from([
-            "boo",
-            "probe-remote-daemon",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "7337",
-            "--quic",
-        ]);
-        assert!(
-            result.is_err(),
-            "--quic without --expect-server-identity must be rejected"
-        );
-    }
-
-    #[test]
-    fn probe_remote_daemon_rejects_tls_and_quic_together() {
-        let result = super::Cli::try_parse_from([
-            "boo",
-            "probe-remote-daemon",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "7337",
-            "--expect-server-identity",
-            "daemon-01",
-            "--tls",
-            "--quic",
-        ]);
-        assert!(
-            result.is_err(),
-            "--tls and --quic must be mutually exclusive"
-        );
-    }
-
-    #[test]
-    fn probe_remote_daemon_quic_with_expect_server_identity_parses() {
-        let cli = super::Cli::try_parse_from([
-            "boo",
-            "probe-remote-daemon",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "7337",
-            "--expect-server-identity",
-            "daemon-01",
-            "--quic",
-        ])
-        .expect("parse cli");
-        match cli.command {
-            Some(super::Command::ProbeRemoteDaemon { tls, quic, .. }) => {
-                assert!(!tls);
-                assert!(quic, "--quic must be recorded on the Command");
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn probe_remote_daemon_tls_with_expect_server_identity_parses() {
-        let cli = super::Cli::try_parse_from([
-            "boo",
-            "probe-remote-daemon",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "7337",
-            "--expect-server-identity",
-            "daemon-01",
-            "--tls",
-        ])
-        .expect("parse cli");
-        match cli.command {
-            Some(super::Command::ProbeRemoteDaemon { tls, .. }) => {
-                assert!(tls, "--tls must be recorded on the Command");
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -1102,14 +784,10 @@ mod tests {
                 host,
                 port,
                     expect_server_identity,
-                tls,
-                quic,
             }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, 7337);
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
-                assert!(!tls);
-                assert!(!quic);
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -1141,8 +819,6 @@ mod tests {
                     expect_server_identity,
                 attachment_id,
                 resume_token,
-                tls,
-                quic,
             }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, 7337);
@@ -1150,8 +826,6 @@ mod tests {
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
                 assert_eq!(attachment_id, Some(99));
                 assert_eq!(resume_token, Some(1234));
-                assert!(!tls);
-                assert!(!quic);
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -1173,54 +847,10 @@ mod tests {
             "remote-upgrade-probe",
         ]);
         match cli.command {
-            Some(super::Command::RemoteUpgradeProbe {
-                    tls,
-                quic,
-            }) => {
-                assert!(!tls);
-                assert!(!quic);
+            Some(super::Command::RemoteUpgradeProbe) => {
             }
             other => panic!("unexpected command: {other:?}"),
         }
-    }
-
-    #[test]
-    fn parse_remote_upgrade_probe_with_tls() {
-        let cli = Cli::parse_from(["boo", "remote-upgrade-probe", "--tls"]);
-        match cli.command {
-            Some(super::Command::RemoteUpgradeProbe {
-                    tls,
-                quic,
-            }) => {
-                assert!(tls);
-                assert!(!quic);
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_remote_upgrade_probe_with_quic() {
-        let cli = Cli::parse_from(["boo", "remote-upgrade-probe", "--quic"]);
-        match cli.command {
-            Some(super::Command::RemoteUpgradeProbe {
-                    tls,
-                quic,
-            }) => {
-                assert!(quic);
-                assert!(!tls);
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn remote_upgrade_probe_rejects_tls_and_quic_together() {
-        let result = Cli::try_parse_from(["boo", "remote-upgrade-probe", "--tls", "--quic"]);
-        assert!(
-            result.is_err(),
-            "--tls and --quic must be mutually exclusive"
-        );
     }
 
     #[test]
@@ -1246,16 +876,12 @@ mod tests {
                     expect_server_identity,
                 cols,
                 rows,
-                tls,
-                quic,
             }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, 7337);
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
                 assert_eq!(cols, 132);
                 assert_eq!(rows, 48);
-                assert!(!tls);
-                assert!(!quic);
             }
             other => panic!("unexpected command: {other:?}"),
         }

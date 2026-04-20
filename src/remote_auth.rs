@@ -295,7 +295,6 @@ mod tests {
             revivable_attachments: HashMap::new(),
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
-            tls_clients: std::collections::HashSet::new(),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let mut frames = Vec::new();
@@ -336,7 +335,6 @@ mod tests {
             revivable_attachments: HashMap::new(),
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
-            tls_clients: std::collections::HashSet::new(),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let frame = encode_message(MessageType::Heartbeat, b"ping");
@@ -382,7 +380,6 @@ mod tests {
             revivable_attachments: HashMap::new(),
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
-            tls_clients: std::collections::HashSet::new(),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let reader = TimeoutScriptedReader::new([Err(io::ErrorKind::TimedOut)]);
@@ -436,7 +433,6 @@ mod tests {
             revivable_attachments: HashMap::new(),
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
-            tls_clients: std::collections::HashSet::new(),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let reader = TimeoutScriptedReader::new([Err(io::ErrorKind::TimedOut)]);

@@ -80,7 +80,7 @@ pub(crate) fn clients_snapshot(
 }
 
 fn client_info_for_client(
-    state: &State,
+    _state: &State,
     now: Instant,
     local_socket_path: Option<&Path>,
     client_id: &u64,
@@ -100,8 +100,6 @@ fn client_info_for_client(
         is_local: client.is_local,
         transport_kind: if client.is_local {
             "local".to_string()
-        } else if state.tls_clients.contains(client_id) {
-            "tcp-tls".to_string()
         } else {
             "tcp".to_string()
         },
@@ -134,7 +132,7 @@ mod tests {
         REVIVABLE_ATTACHMENT_WINDOW, RevivableAttachment, State,
     };
     use crate::remote_wire::{REMOTE_CAPABILITIES, REMOTE_PROTOCOL_VERSION, RemoteCell, RemoteFullState};
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
     use std::sync::{Arc, Mutex, mpsc};
     use std::time::{Duration, Instant};
 
@@ -144,7 +142,6 @@ mod tests {
             revivable_attachments: HashMap::new(),
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
-            tls_clients: HashSet::new(),
         }
     }
 

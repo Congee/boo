@@ -126,8 +126,6 @@ impl BooApp {
             boo_config.control_socket.clone(),
             boo_config.remote_port,
             boo_config.remote_bind_address.clone(),
-            boo_config.remote_cert_path.clone(),
-            boo_config.remote_key_path.clone(),
         );
         let bindings = bindings::Bindings::from_config(&boo_config);
         let appearance = Self::resolve_appearance_config(&boo_config);

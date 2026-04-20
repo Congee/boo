@@ -8,8 +8,6 @@ mod tests {
             port: 7337,
             bind_address: None,
             service_name: "boo".to_string(),
-            cert_chain_path: None,
-            cert_key_path: None,
         };
         assert_eq!(config.effective_bind_address(), "127.0.0.1");
         assert!(!config.should_advertise());
@@ -21,8 +19,6 @@ mod tests {
             port: 7337,
             bind_address: Some("192.0.2.5".to_string()),
             service_name: "boo".to_string(),
-            cert_chain_path: None,
-            cert_key_path: None,
         };
         assert_eq!(config.effective_bind_address(), "192.0.2.5");
         assert!(config.should_advertise());

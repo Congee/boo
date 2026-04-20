@@ -17,10 +17,8 @@ static STARTUP_REMOTE_BINARY: std::sync::OnceLock<String> = std::sync::OnceLock:
 static STARTUP_REMOTE_PREFER_NIX_PROFILE_BINARY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_BIND_ADDRESS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-static STARTUP_REMOTE_CERT_PATH: std::sync::OnceLock<std::path::PathBuf> =
-    std::sync::OnceLock::new();
-static STARTUP_REMOTE_KEY_PATH: std::sync::OnceLock<std::path::PathBuf> =
-    std::sync::OnceLock::new();
+
+
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct StartupOverrides {
@@ -33,8 +31,6 @@ struct StartupOverrides {
     remote_prefer_nix_profile_binary: bool,
     remote_port: Option<u16>,
     remote_bind_address: Option<String>,
-    remote_cert_path: Option<std::path::PathBuf>,
-    remote_key_path: Option<std::path::PathBuf>,
 }
 
 struct ResolvedRemotePaths {
@@ -178,12 +174,6 @@ pub fn parse_startup_args(cli: &crate::cli::Cli) -> bool {
             .set(bind_address.clone())
             .ok();
     }
-    if let Some(path) = cli.global.remote_cert_path.as_ref() {
-        STARTUP_REMOTE_CERT_PATH.set(path.clone()).ok();
-    }
-    if let Some(path) = cli.global.remote_key_path.as_ref() {
-        STARTUP_REMOTE_KEY_PATH.set(path.clone()).ok();
-    }
     if let Some(path) = cli.global.remote_workdir.as_ref() {
         STARTUP_REMOTE_WORKDIR.set(path.clone()).ok();
     }
@@ -213,8 +203,6 @@ fn startup_overrides() -> StartupOverrides {
             .unwrap_or(false),
         remote_port: STARTUP_REMOTE_PORT.get().copied(),
         remote_bind_address: STARTUP_REMOTE_BIND_ADDRESS.get().cloned(),
-        remote_cert_path: STARTUP_REMOTE_CERT_PATH.get().cloned(),
-        remote_key_path: STARTUP_REMOTE_KEY_PATH.get().cloned(),
     }
 }
 
@@ -246,12 +234,6 @@ fn apply_startup_overrides(
     }
     if let Some(bind_address) = overrides.remote_bind_address.as_ref() {
         boo_config.remote_bind_address = Some(bind_address.clone());
-    }
-    if let Some(path) = overrides.remote_cert_path.as_ref() {
-        boo_config.remote_cert_path = Some(path.clone());
-    }
-    if let Some(path) = overrides.remote_key_path.as_ref() {
-        boo_config.remote_key_path = Some(path.clone());
     }
     if boo_config.remote_host.is_some() && explicit_socket.is_none() {
         let host = boo_config

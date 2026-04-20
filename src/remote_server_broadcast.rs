@@ -7,7 +7,7 @@ mod tests {
     use crate::remote_batcher::OutboundMessage;
     use crate::remote_state::{ClientState, State};
     use crate::remote_wire::{MAGIC, MessageType, RemoteCell, RemoteFullState};
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
     use std::sync::{Arc, Mutex, mpsc};
     use std::time::Instant;
 
@@ -17,7 +17,6 @@ mod tests {
             revivable_attachments: HashMap::new(),
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
-            tls_clients: HashSet::new(),
         }
     }
 

@@ -10,7 +10,7 @@
 //! accessor methods). Keep the module tight: no I/O, no server lifecycle,
 //! no wire format — just the data the mutex is guarding.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -67,11 +67,6 @@ pub(crate) struct State {
     pub(crate) revivable_attachments: HashMap<u64, RevivableAttachment>,
     pub(crate) server_identity_id: String,
     pub(crate) server_instance_id: String,
-    /// client_ids whose underlying transport is TLS-wrapped TCP. Plain TCP and local
-    /// Unix-socket clients are absent. Populated at client registration and scrubbed on
-    /// removal; diagnostics look up membership here to distinguish plain-TCP from
-    /// TCP-TLS in `transport_kind`.
-    pub(crate) tls_clients: HashSet<u64>,
 }
 
 pub(crate) fn prune_revivable_attachments(state: &mut State) {
