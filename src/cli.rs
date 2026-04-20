@@ -29,7 +29,6 @@ struct RemoteUpgradeTargetSummary {
     selected_transport: Option<crate::remote::DirectTransportKind>,
     direct_host: Option<String>,
     port: Option<u16>,
-    auth_required: bool,
     server_identity_id: Option<String>,
     server_instance_id: Option<String>,
     build_id: Option<String>,
@@ -117,23 +116,9 @@ pub struct GlobalArgs {
     #[arg(
         long = "remote-bind-address",
         global = true,
-        help = "Bind address for the Boo-native TCP remote daemon; authless daemons default to 127.0.0.1"
+        help = "Bind address for the Boo-native TCP remote daemon; defaults to 127.0.0.1"
     )]
     pub remote_bind_address: Option<String>,
-
-    #[arg(
-        long = "remote-auth-key",
-        global = true,
-        help = "Shared secret for the Boo-native TCP remote daemon"
-    )]
-    pub remote_auth_key: Option<String>,
-
-    #[arg(
-        long = "remote-allow-insecure-no-auth",
-        global = true,
-        help = "Allow a Boo-native TCP remote daemon to bind publicly without --remote-auth-key"
-    )]
-    pub remote_allow_insecure_no_auth: bool,
 
     #[arg(
         long = "remote-cert-path",
@@ -174,8 +159,6 @@ pub enum Command {
         host: String,
         #[arg(long)]
         port: u16,
-        #[arg(long = "auth-key")]
-        auth_key: Option<String>,
         #[arg(long = "expect-server-identity")]
         expect_server_identity: Option<String>,
         /// Wrap the connection in TLS and pin the server via its daemon identity.
@@ -193,8 +176,6 @@ pub enum Command {
         host: String,
         #[arg(long)]
         port: u16,
-        #[arg(long = "auth-key")]
-        auth_key: Option<String>,
         #[arg(long = "expect-server-identity")]
         expect_server_identity: Option<String>,
         /// Wrap the connection in TLS and pin the server via its daemon identity.
@@ -212,8 +193,6 @@ pub enum Command {
         host: String,
         #[arg(long)]
         port: u16,
-        #[arg(long = "auth-key")]
-        auth_key: Option<String>,
         #[arg(long = "expect-server-identity")]
         expect_server_identity: Option<String>,
         #[arg(long, default_value_t = 120)]
@@ -233,8 +212,6 @@ pub enum Command {
     RemoteUpgradeTarget,
     /// Bootstrap a remote Boo host over SSH, resolve its canonical native endpoint, and probe the selected direct transport
     RemoteUpgradeProbe {
-        #[arg(long = "auth-key")]
-        auth_key: Option<String>,
         /// Wrap the direct connection in TLS using the SSH-discovered daemon identity
         /// as the SPKI pin. Errors out if the SSH-bootstrapped target did not report an
         /// identity.
@@ -254,8 +231,6 @@ pub enum Command {
         port: u16,
         #[arg(long = "session-id")]
         session_id: u32,
-        #[arg(long = "auth-key")]
-        auth_key: Option<String>,
         #[arg(long = "expect-server-identity")]
         expect_server_identity: Option<String>,
         #[arg(long = "attachment-id")]
@@ -335,7 +310,6 @@ fn require_pin<'a>(
 fn probe_remote_daemon_dispatch(
     host: &str,
     port: u16,
-    auth_key: Option<&str>,
     expected_identity: Option<&str>,
     tls: bool,
     quic: bool,
@@ -343,14 +317,14 @@ fn probe_remote_daemon_dispatch(
     match resolve_direct_transport(tls, quic) {
         DirectTransportChoice::Quic => {
             let identity = require_pin(expected_identity, "--quic")?;
-            crate::remote::probe_remote_endpoint_quic(host, port, auth_key, identity)
+            crate::remote::probe_remote_endpoint_quic(host, port, identity)
         }
         DirectTransportChoice::Tls => {
             let identity = require_pin(expected_identity, "--tls")?;
-            crate::remote::probe_remote_endpoint_tls(host, port, auth_key, identity)
+            crate::remote::probe_remote_endpoint_tls(host, port, identity)
         }
         DirectTransportChoice::Plain => {
-            crate::remote::probe_remote_endpoint(host, port, auth_key, expected_identity)
+            crate::remote::probe_remote_endpoint(host, port, expected_identity)
         }
     }
 }
@@ -358,7 +332,6 @@ fn probe_remote_daemon_dispatch(
 fn list_remote_daemon_sessions_dispatch(
     host: &str,
     port: u16,
-    auth_key: Option<&str>,
     expected_identity: Option<&str>,
     tls: bool,
     quic: bool,
@@ -366,14 +339,14 @@ fn list_remote_daemon_sessions_dispatch(
     match resolve_direct_transport(tls, quic) {
         DirectTransportChoice::Quic => {
             let identity = require_pin(expected_identity, "--quic")?;
-            crate::remote::list_remote_daemon_sessions_quic(host, port, auth_key, identity)
+            crate::remote::list_remote_daemon_sessions_quic(host, port, identity)
         }
         DirectTransportChoice::Tls => {
             let identity = require_pin(expected_identity, "--tls")?;
-            crate::remote::list_remote_daemon_sessions_tls(host, port, auth_key, identity)
+            crate::remote::list_remote_daemon_sessions_tls(host, port, identity)
         }
         DirectTransportChoice::Plain => {
-            crate::remote::list_remote_daemon_sessions(host, port, auth_key, expected_identity)
+            crate::remote::list_remote_daemon_sessions(host, port, expected_identity)
         }
     }
 }
@@ -381,7 +354,6 @@ fn list_remote_daemon_sessions_dispatch(
 fn create_remote_daemon_session_dispatch(
     host: &str,
     port: u16,
-    auth_key: Option<&str>,
     expected_identity: Option<&str>,
     cols: u16,
     rows: u16,
@@ -392,19 +364,18 @@ fn create_remote_daemon_session_dispatch(
         DirectTransportChoice::Quic => {
             let identity = require_pin(expected_identity, "--quic")?;
             crate::remote::create_remote_daemon_session_quic(
-                host, port, auth_key, identity, cols, rows,
+                host, port, identity, cols, rows,
             )
         }
         DirectTransportChoice::Tls => {
             let identity = require_pin(expected_identity, "--tls")?;
             crate::remote::create_remote_daemon_session_tls(
-                host, port, auth_key, identity, cols, rows,
+                host, port, identity, cols, rows,
             )
         }
         DirectTransportChoice::Plain => crate::remote::create_remote_daemon_session(
             host,
             port,
-            auth_key,
             expected_identity,
             cols,
             rows,
@@ -415,7 +386,6 @@ fn create_remote_daemon_session_dispatch(
 fn attach_remote_daemon_session_dispatch(
     host: &str,
     port: u16,
-    auth_key: Option<&str>,
     expected_identity: Option<&str>,
     session_id: u32,
     attachment_id: Option<u64>,
@@ -429,8 +399,7 @@ fn attach_remote_daemon_session_dispatch(
             crate::remote::attach_remote_daemon_session_quic(
                 host,
                 port,
-                auth_key,
-                identity,
+                    identity,
                 session_id,
                 attachment_id,
                 resume_token,
@@ -441,8 +410,7 @@ fn attach_remote_daemon_session_dispatch(
             crate::remote::attach_remote_daemon_session_tls(
                 host,
                 port,
-                auth_key,
-                identity,
+                    identity,
                 session_id,
                 attachment_id,
                 resume_token,
@@ -451,7 +419,6 @@ fn attach_remote_daemon_session_dispatch(
         DirectTransportChoice::Plain => crate::remote::attach_remote_daemon_session(
             host,
             port,
-            auth_key,
             expected_identity,
             session_id,
             attachment_id,
@@ -549,14 +516,12 @@ where
         Command::ProbeRemoteDaemon {
             host,
             port,
-            auth_key,
             expect_server_identity,
             tls,
             quic,
         } => match probe_remote_daemon_dispatch(
             host,
             *port,
-            auth_key.as_deref(),
             expect_server_identity.as_deref(),
             *tls,
             *quic,
@@ -580,14 +545,12 @@ where
         Command::RemoteDaemonSessions {
             host,
             port,
-            auth_key,
             expect_server_identity,
             tls,
             quic,
         } => match list_remote_daemon_sessions_dispatch(
             host,
             *port,
-            auth_key.as_deref(),
             expect_server_identity.as_deref(),
             *tls,
             *quic,
@@ -611,7 +574,6 @@ where
         Command::RemoteDaemonCreate {
             host,
             port,
-            auth_key,
             expect_server_identity,
             cols,
             rows,
@@ -620,7 +582,6 @@ where
         } => match create_remote_daemon_session_dispatch(
             host,
             *port,
-            auth_key.as_deref(),
             expect_server_identity.as_deref(),
             *cols,
             *rows,
@@ -677,7 +638,6 @@ where
             }
         }
         Command::RemoteUpgradeProbe {
-            auth_key,
             tls,
             quic,
         } => {
@@ -730,7 +690,6 @@ where
                                 crate::remote::DirectTransportKind::QuicDirect,
                                 direct_host,
                                 port,
-                                auth_key.as_deref(),
                                 identity,
                             ),
                             None => Err(
@@ -744,7 +703,6 @@ where
                                 selected_transport,
                                 direct_host,
                                 port,
-                                auth_key.as_deref(),
                                 identity,
                             ),
                             None => Err(
@@ -757,7 +715,6 @@ where
                             selected_transport,
                             direct_host,
                             port,
-                            auth_key.as_deref(),
                             target.server_identity_id.as_deref(),
                         )
                     };
@@ -790,7 +747,6 @@ where
             host,
             port,
             session_id,
-            auth_key,
             expect_server_identity,
             attachment_id,
             resume_token,
@@ -799,7 +755,6 @@ where
         } => match attach_remote_daemon_session_dispatch(
             host,
             *port,
-            auth_key.as_deref(),
             expect_server_identity.as_deref(),
             *session_id,
             *attachment_id,
@@ -884,7 +839,6 @@ fn resolve_remote_upgrade_target(
             selected_transport: None,
             direct_host: None,
             port: None,
-            auth_required: false,
             server_identity_id: None,
             server_instance_id: None,
             build_id: None,
@@ -899,7 +853,6 @@ fn resolve_remote_upgrade_target(
             selected_transport: None,
             direct_host: None,
             port: None,
-            auth_required: server.auth_required,
             server_identity_id: Some(server.server_identity_id.clone()),
             server_instance_id: Some(server.server_instance_id.clone()),
             build_id: Some(server.build_id.clone()),
@@ -937,7 +890,6 @@ fn resolve_remote_upgrade_target(
         selected_transport: transport_selection,
         direct_host,
         port: Some(port),
-        auth_required: server.auth_required,
         server_identity_id: Some(server.server_identity_id.clone()),
         server_instance_id: Some(server.server_instance_id.clone()),
         build_id: Some(server.build_id.clone()),
@@ -1013,8 +965,6 @@ mod tests {
             "127.0.0.1",
             "--port",
             "7337",
-            "--auth-key",
-            "secret",
             "--expect-server-identity",
             "daemon-01",
         ]);
@@ -1022,14 +972,12 @@ mod tests {
             Some(super::Command::ProbeRemoteDaemon {
                 host,
                 port,
-                auth_key,
-                expect_server_identity,
+                    expect_server_identity,
                 tls,
                 quic,
             }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, 7337);
-                assert_eq!(auth_key.as_deref(), Some("secret"));
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
                 assert!(!tls);
                 assert!(!quic);
@@ -1146,8 +1094,6 @@ mod tests {
             "127.0.0.1",
             "--port",
             "7337",
-            "--auth-key",
-            "secret",
             "--expect-server-identity",
             "daemon-01",
         ]);
@@ -1155,14 +1101,12 @@ mod tests {
             Some(super::Command::RemoteDaemonSessions {
                 host,
                 port,
-                auth_key,
-                expect_server_identity,
+                    expect_server_identity,
                 tls,
                 quic,
             }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, 7337);
-                assert_eq!(auth_key.as_deref(), Some("secret"));
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
                 assert!(!tls);
                 assert!(!quic);
@@ -1182,8 +1126,6 @@ mod tests {
             "7337",
             "--session-id",
             "42",
-            "--auth-key",
-            "secret",
             "--expect-server-identity",
             "daemon-01",
             "--attachment-id",
@@ -1196,8 +1138,7 @@ mod tests {
                 host,
                 port,
                 session_id,
-                auth_key,
-                expect_server_identity,
+                    expect_server_identity,
                 attachment_id,
                 resume_token,
                 tls,
@@ -1206,7 +1147,6 @@ mod tests {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, 7337);
                 assert_eq!(session_id, 42);
-                assert_eq!(auth_key.as_deref(), Some("secret"));
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
                 assert_eq!(attachment_id, Some(99));
                 assert_eq!(resume_token, Some(1234));
@@ -1231,16 +1171,12 @@ mod tests {
         let cli = Cli::parse_from([
             "boo",
             "remote-upgrade-probe",
-            "--auth-key",
-            "secret",
         ]);
         match cli.command {
             Some(super::Command::RemoteUpgradeProbe {
-                auth_key,
-                tls,
+                    tls,
                 quic,
             }) => {
-                assert_eq!(auth_key.as_deref(), Some("secret"));
                 assert!(!tls);
                 assert!(!quic);
             }
@@ -1253,13 +1189,11 @@ mod tests {
         let cli = Cli::parse_from(["boo", "remote-upgrade-probe", "--tls"]);
         match cli.command {
             Some(super::Command::RemoteUpgradeProbe {
-                auth_key,
-                tls,
+                    tls,
                 quic,
             }) => {
                 assert!(tls);
                 assert!(!quic);
-                assert!(auth_key.is_none());
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -1270,13 +1204,11 @@ mod tests {
         let cli = Cli::parse_from(["boo", "remote-upgrade-probe", "--quic"]);
         match cli.command {
             Some(super::Command::RemoteUpgradeProbe {
-                auth_key,
-                tls,
+                    tls,
                 quic,
             }) => {
                 assert!(quic);
                 assert!(!tls);
-                assert!(auth_key.is_none());
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -1300,8 +1232,6 @@ mod tests {
             "127.0.0.1",
             "--port",
             "7337",
-            "--auth-key",
-            "secret",
             "--expect-server-identity",
             "daemon-01",
             "--cols",
@@ -1313,8 +1243,7 @@ mod tests {
             Some(super::Command::RemoteDaemonCreate {
                 host,
                 port,
-                auth_key,
-                expect_server_identity,
+                    expect_server_identity,
                 cols,
                 rows,
                 tls,
@@ -1322,7 +1251,6 @@ mod tests {
             }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, 7337);
-                assert_eq!(auth_key.as_deref(), Some("secret"));
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
                 assert_eq!(cols, 132);
                 assert_eq!(rows, 48);
@@ -1370,8 +1298,6 @@ mod tests {
         assert!(long.contains("local forwarded socket"));
         assert!(long.contains("Remote Boo control socket path on the SSH host"));
         assert!(long.contains("Boo-native TCP remote daemon"));
-        assert!(long.contains("authless daemons default to 127.0.0.1"));
-        assert!(long.contains("bind publicly without --remote-auth-key"));
         assert!(long.contains("~/.nix-profile/bin/boo"));
     }
 
@@ -1402,7 +1328,6 @@ mod tests {
                     build_id: env!("CARGO_PKG_VERSION").to_string(),
                     server_instance_id: "test-instance".to_string(),
                     server_identity_id: "test-daemon".to_string(),
-                    auth_required: true,
                     auth_challenge_window_ms: 10_000,
                     heartbeat_window_ms: 20_000,
                     revive_window_ms: 30_000,
@@ -1438,8 +1363,7 @@ mod tests {
                     build_id: env!("CARGO_PKG_VERSION").to_string(),
                     server_instance_id: "test-instance".to_string(),
                     server_identity_id: "test-daemon".to_string(),
-                    auth_required: false,
-                    auth_challenge_window_ms: 10_000,
+                            auth_challenge_window_ms: 10_000,
                     heartbeat_window_ms: 20_000,
                     revive_window_ms: 30_000,
                     connected_clients: 0,

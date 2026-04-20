@@ -126,8 +126,6 @@ impl BooApp {
             boo_config.control_socket.clone(),
             boo_config.remote_port,
             boo_config.remote_bind_address.clone(),
-            boo_config.remote_auth_key.clone(),
-            boo_config.remote_allow_insecure_no_auth,
             boo_config.remote_cert_path.clone(),
             boo_config.remote_key_path.clone(),
         );

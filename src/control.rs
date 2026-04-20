@@ -1067,7 +1067,6 @@ mod tests {
                                 build_id: env!("CARGO_PKG_VERSION").to_string(),
                                 server_instance_id: "test-instance".to_string(),
                                 server_identity_id: "test-daemon".to_string(),
-                                auth_required: true,
                                 auth_challenge_window_ms: 10_000,
                                 heartbeat_window_ms: 20_000,
                                 revive_window_ms: 30_000,

@@ -37,7 +37,6 @@ pub(crate) const REMOTE_READ_TIMEOUT: Duration = Duration::from_secs(1);
 pub(crate) struct ClientState {
     pub(crate) outbound: mpsc::Sender<OutboundMessage>,
     pub(crate) authenticated: bool,
-    pub(crate) challenge: Option<AuthChallengeState>,
     pub(crate) connected_at: Instant,
     pub(crate) authenticated_at: Option<Instant>,
     pub(crate) last_heartbeat_at: Option<Instant>,
@@ -53,12 +52,6 @@ pub(crate) struct ClientState {
     pub(crate) is_local: bool,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct AuthChallengeState {
-    pub(crate) bytes: [u8; 32],
-    pub(crate) expires_at: Instant,
-}
-
 #[derive(Clone)]
 pub(crate) struct RevivableAttachment {
     pub(crate) session_id: u32,
@@ -72,7 +65,6 @@ pub(crate) struct RevivableAttachment {
 pub(crate) struct State {
     pub(crate) clients: HashMap<u64, ClientState>,
     pub(crate) revivable_attachments: HashMap<u64, RevivableAttachment>,
-    pub(crate) auth_key: Option<Vec<u8>>,
     pub(crate) server_identity_id: String,
     pub(crate) server_instance_id: String,
     /// client_ids whose underlying transport is TLS-wrapped TCP. Plain TCP and local
@@ -108,16 +100,9 @@ pub(crate) fn should_disconnect_idle_client(
         }
         return None;
     }
-    // Absolute deadline from connect time. This runs even when a challenge is
-    // outstanding so a client cannot keep the socket pinned by sending empty `Auth`
-    // frames that refresh `challenge.expires_at` indefinitely.
+    // Absolute deadline from connect time for the handshake to complete.
     if now.saturating_duration_since(client.connected_at) > auth_challenge_window {
         return Some("auth-timeout");
-    }
-    if let Some(challenge) = client.challenge {
-        if now > challenge.expires_at {
-            return Some("challenge-timeout");
-        }
     }
     None
 }

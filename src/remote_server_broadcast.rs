@@ -15,7 +15,6 @@ mod tests {
         State {
             clients: HashMap::new(),
             revivable_attachments: HashMap::new(),
-            auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
             tls_clients: HashSet::new(),
@@ -30,7 +29,6 @@ mod tests {
         ClientState {
             outbound,
             authenticated: true,
-            challenge: None,
             connected_at: Instant::now(),
             authenticated_at: Some(Instant::now()),
             last_heartbeat_at: None,

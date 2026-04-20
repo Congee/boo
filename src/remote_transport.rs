@@ -130,7 +130,6 @@ pub(crate) fn connect_with<C>(
     connector: C,
     host: &str,
     port: u16,
-    auth_key: Option<&str>,
     expected_server_identity: Option<&str>,
 ) -> Result<DirectTransportSession<C::Stream>, String>
 where
@@ -141,7 +140,6 @@ where
         stream,
         host.to_string(),
         port,
-        auth_key,
         expected_server_identity,
     )
 }

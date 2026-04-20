@@ -18,7 +18,6 @@ pub(crate) const MAGIC: [u8; 2] = [0x47, 0x53];
 pub(crate) const HEADER_LEN: usize = 7;
 
 pub const REMOTE_PROTOCOL_VERSION: u16 = 1;
-pub const REMOTE_CAPABILITY_HMAC_AUTH: u32 = 1 << 0;
 pub const REMOTE_CAPABILITY_SCREEN_DELTAS: u32 = 1 << 1;
 pub const REMOTE_CAPABILITY_UI_STATE: u32 = 1 << 2;
 pub const REMOTE_CAPABILITY_IMAGES: u32 = 1 << 3;
@@ -28,8 +27,7 @@ pub const REMOTE_CAPABILITY_DAEMON_IDENTITY: u32 = 1 << 6;
 pub const REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT: u32 = 1 << 7;
 pub const REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT: u32 = 1 << 8;
 pub const REMOTE_CAPABILITY_TCP_TLS_TRANSPORT: u32 = 1 << 9;
-pub const REMOTE_CAPABILITIES: u32 = REMOTE_CAPABILITY_HMAC_AUTH
-    | REMOTE_CAPABILITY_SCREEN_DELTAS
+pub const REMOTE_CAPABILITIES: u32 = REMOTE_CAPABILITY_SCREEN_DELTAS
     | REMOTE_CAPABILITY_UI_STATE
     | REMOTE_CAPABILITY_IMAGES
     | REMOTE_CAPABILITY_HEARTBEAT
@@ -380,7 +378,7 @@ pub fn decode_auth_ok_payload(
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-pub fn validate_auth_ok_payload(payload: &[u8], auth_required: bool) -> Result<(), String> {
+pub fn validate_auth_ok_payload(payload: &[u8]) -> Result<(), String> {
     let Some((version, capabilities, build_id, server_instance_id, server_identity_id)) =
         decode_auth_ok_payload(payload)
     else {
@@ -388,9 +386,6 @@ pub fn validate_auth_ok_payload(payload: &[u8], auth_required: bool) -> Result<(
     };
     if version != REMOTE_PROTOCOL_VERSION {
         return Err(format!("Unsupported remote protocol version: {version}"));
-    }
-    if auth_required && (capabilities & REMOTE_CAPABILITY_HMAC_AUTH) == 0 {
-        return Err("Remote server does not advertise HMAC authentication".to_string());
     }
     if (capabilities & REMOTE_CAPABILITY_HEARTBEAT) == 0 {
         return Err("Remote server does not advertise heartbeat support".to_string());
@@ -1374,7 +1369,7 @@ mod tests {
     #[test]
     fn validate_auth_ok_payload_accepts_current_handshake_contract() {
         let payload = encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe");
-        assert_eq!(validate_auth_ok_payload(&payload, true), Ok(()));
+        assert_eq!(validate_auth_ok_payload(&payload), Ok(()));
     }
 
     #[test]
@@ -1382,7 +1377,7 @@ mod tests {
         let mut payload = encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe");
         payload[2..6].copy_from_slice(&(REMOTE_CAPABILITIES & !REMOTE_CAPABILITY_ATTACHMENT_RESUME).to_le_bytes());
         assert_eq!(
-            validate_auth_ok_payload(&payload, true),
+            validate_auth_ok_payload(&payload),
             Err("Remote server does not advertise attachment resume support".to_string())
         );
     }
@@ -1392,7 +1387,7 @@ mod tests {
         let mut payload = encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe");
         payload.truncate(payload.len() - "daemon-identity-01".len());
         assert_eq!(
-            validate_auth_ok_payload(&payload, true),
+            validate_auth_ok_payload(&payload),
             Err("Remote handshake is malformed".to_string())
         );
     }
@@ -1406,7 +1401,7 @@ mod tests {
                 .to_le_bytes(),
         );
         assert_eq!(
-            validate_auth_ok_payload(&payload, true),
+            validate_auth_ok_payload(&payload),
             Err("Remote server does not advertise a supported direct transport".to_string())
         );
     }
@@ -1426,7 +1421,7 @@ mod tests {
         )
         .expect("auth reply");
         assert_eq!(ty, MessageType::AuthOk);
-        assert!(validate_auth_ok_payload(&payload, false).is_ok());
+        assert!(validate_auth_ok_payload(&payload).is_ok());
     }
 
     #[test]

@@ -160,8 +160,6 @@ impl State {
         control_socket: Option<String>,
         remote_port: Option<u16>,
         remote_bind_address: Option<String>,
-        remote_auth_key: Option<String>,
-        remote_allow_insecure_no_auth: bool,
         remote_cert_path: Option<std::path::PathBuf>,
         remote_key_path: Option<std::path::PathBuf>,
     ) -> Self {
@@ -170,8 +168,6 @@ impl State {
             match remote::RemoteServer::start(remote::RemoteConfig {
                 port,
                 bind_address: remote_bind_address,
-                auth_key: remote_auth_key,
-                allow_insecure_no_auth: remote_allow_insecure_no_auth,
                 service_name: "boo".to_string(),
                 cert_chain_path: remote_cert_path,
                 cert_key_path: remote_key_path,

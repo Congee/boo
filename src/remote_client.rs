@@ -49,7 +49,6 @@ fn probe_summary_from_session<S: DirectReadWrite>(
     Ok(RemoteProbeSummary {
         host: client.host.clone(),
         port,
-        auth_required: client.auth_required,
         protocol_version: client.protocol_version,
         capabilities: client.capabilities,
         build_id: client.build_id.clone(),
@@ -62,11 +61,10 @@ fn probe_summary_from_session<S: DirectReadWrite>(
 pub fn probe_remote_endpoint(
     host: &str,
     port: u16,
-    auth_key: Option<&str>,
     expected_server_identity: Option<&str>,
 ) -> Result<RemoteProbeSummary, String> {
     let mut client =
-        connect_with(PlainTcpConnector, host, port, auth_key, expected_server_identity)?;
+        connect_with(PlainTcpConnector, host, port, expected_server_identity)?;
     probe_summary_from_session(&mut client, port)
 }
 
@@ -76,14 +74,12 @@ pub fn probe_remote_endpoint(
 pub fn probe_remote_endpoint_tls(
     host: &str,
     port: u16,
-    auth_key: Option<&str>,
     expected_identity: &str,
 ) -> Result<RemoteProbeSummary, String> {
     let mut client = connect_with(
         PinnedTlsConnector { expected_identity },
         host,
         port,
-        auth_key,
         Some(expected_identity),
     )?;
     probe_summary_from_session(&mut client, port)
@@ -96,14 +92,12 @@ pub fn probe_remote_endpoint_tls(
 pub fn probe_remote_endpoint_quic(
     host: &str,
     port: u16,
-    auth_key: Option<&str>,
     expected_identity: &str,
 ) -> Result<RemoteProbeSummary, String> {
     let mut client = connect_with(
         PinnedQuicConnector { expected_identity },
         host,
         port,
-        auth_key,
         Some(expected_identity),
     )?;
     probe_summary_from_session(&mut client, port)
@@ -113,13 +107,12 @@ pub fn probe_selected_direct_transport(
     transport: DirectTransportKind,
     host: &str,
     port: u16,
-    auth_key: Option<&str>,
     expected_server_identity: Option<&str>,
 ) -> Result<RemoteUpgradeProbeSummary, String> {
     match transport {
         DirectTransportKind::TcpDirect => Ok(RemoteUpgradeProbeSummary {
             selected_transport: transport,
-            probe: probe_remote_endpoint(host, port, auth_key, expected_server_identity)?,
+            probe: probe_remote_endpoint(host, port, expected_server_identity)?,
         }),
         DirectTransportKind::QuicDirect => {
             // QUIC always rides TLS, so a pin is not optional. Callers without
@@ -130,7 +123,7 @@ pub fn probe_selected_direct_transport(
             })?;
             Ok(RemoteUpgradeProbeSummary {
                 selected_transport: transport,
-                probe: probe_remote_endpoint_quic(host, port, auth_key, identity)?,
+                probe: probe_remote_endpoint_quic(host, port, identity)?,
             })
         }
     }
@@ -145,17 +138,16 @@ pub fn probe_selected_direct_transport_tls(
     transport: DirectTransportKind,
     host: &str,
     port: u16,
-    auth_key: Option<&str>,
     expected_identity: &str,
 ) -> Result<RemoteUpgradeProbeSummary, String> {
     match transport {
         DirectTransportKind::TcpDirect => Ok(RemoteUpgradeProbeSummary {
             selected_transport: transport,
-            probe: probe_remote_endpoint_tls(host, port, auth_key, expected_identity)?,
+            probe: probe_remote_endpoint_tls(host, port, expected_identity)?,
         }),
         DirectTransportKind::QuicDirect => Ok(RemoteUpgradeProbeSummary {
             selected_transport: transport,
-            probe: probe_remote_endpoint_quic(host, port, auth_key, expected_identity)?,
+            probe: probe_remote_endpoint_quic(host, port, expected_identity)?,
         }),
     }
 }
@@ -169,7 +161,6 @@ fn list_summary_from_session<S: DirectReadWrite>(
     Ok(RemoteSessionListSummary {
         host: client.host.clone(),
         port,
-        auth_required: client.auth_required,
         protocol_version: client.protocol_version,
         capabilities: client.capabilities,
         build_id: client.build_id.clone(),
@@ -183,25 +174,22 @@ fn list_summary_from_session<S: DirectReadWrite>(
 pub fn list_remote_daemon_sessions(
     host: &str,
     port: u16,
-    auth_key: Option<&str>,
     expected_server_identity: Option<&str>,
 ) -> Result<RemoteSessionListSummary, String> {
     let mut client =
-        connect_with(PlainTcpConnector, host, port, auth_key, expected_server_identity)?;
+        connect_with(PlainTcpConnector, host, port, expected_server_identity)?;
     list_summary_from_session(&mut client, port)
 }
 
 pub fn list_remote_daemon_sessions_tls(
     host: &str,
     port: u16,
-    auth_key: Option<&str>,
     expected_identity: &str,
 ) -> Result<RemoteSessionListSummary, String> {
     let mut client = connect_with(
         PinnedTlsConnector { expected_identity },
         host,
         port,
-        auth_key,
         Some(expected_identity),
     )?;
     list_summary_from_session(&mut client, port)
@@ -210,14 +198,12 @@ pub fn list_remote_daemon_sessions_tls(
 pub fn list_remote_daemon_sessions_quic(
     host: &str,
     port: u16,
-    auth_key: Option<&str>,
     expected_identity: &str,
 ) -> Result<RemoteSessionListSummary, String> {
     let mut client = connect_with(
         PinnedQuicConnector { expected_identity },
         host,
         port,
-        auth_key,
         Some(expected_identity),
     )?;
     list_summary_from_session(&mut client, port)
@@ -235,7 +221,6 @@ fn attach_summary_from_session<S: DirectReadWrite>(
     Ok(RemoteAttachSummary {
         host: client.host.clone(),
         port,
-        auth_required: client.auth_required,
         protocol_version: client.protocol_version,
         capabilities: client.capabilities,
         build_id: client.build_id.clone(),
@@ -256,21 +241,19 @@ fn attach_summary_from_session<S: DirectReadWrite>(
 pub fn attach_remote_daemon_session(
     host: &str,
     port: u16,
-    auth_key: Option<&str>,
     expected_server_identity: Option<&str>,
     session_id: u32,
     attachment_id: Option<u64>,
     resume_token: Option<u64>,
 ) -> Result<RemoteAttachSummary, String> {
     let mut client =
-        connect_with(PlainTcpConnector, host, port, auth_key, expected_server_identity)?;
+        connect_with(PlainTcpConnector, host, port, expected_server_identity)?;
     attach_summary_from_session(&mut client, port, session_id, attachment_id, resume_token)
 }
 
 pub fn attach_remote_daemon_session_tls(
     host: &str,
     port: u16,
-    auth_key: Option<&str>,
     expected_identity: &str,
     session_id: u32,
     attachment_id: Option<u64>,
@@ -280,7 +263,6 @@ pub fn attach_remote_daemon_session_tls(
         PinnedTlsConnector { expected_identity },
         host,
         port,
-        auth_key,
         Some(expected_identity),
     )?;
     attach_summary_from_session(&mut client, port, session_id, attachment_id, resume_token)
@@ -289,7 +271,6 @@ pub fn attach_remote_daemon_session_tls(
 pub fn attach_remote_daemon_session_quic(
     host: &str,
     port: u16,
-    auth_key: Option<&str>,
     expected_identity: &str,
     session_id: u32,
     attachment_id: Option<u64>,
@@ -299,7 +280,6 @@ pub fn attach_remote_daemon_session_quic(
         PinnedQuicConnector { expected_identity },
         host,
         port,
-        auth_key,
         Some(expected_identity),
     )?;
     attach_summary_from_session(&mut client, port, session_id, attachment_id, resume_token)
@@ -316,7 +296,6 @@ fn create_summary_from_session<S: DirectReadWrite>(
     Ok(RemoteCreateSummary {
         host: client.host.clone(),
         port,
-        auth_required: client.auth_required,
         protocol_version: client.protocol_version,
         capabilities: client.capabilities,
         build_id: client.build_id.clone(),
@@ -330,20 +309,18 @@ fn create_summary_from_session<S: DirectReadWrite>(
 pub fn create_remote_daemon_session(
     host: &str,
     port: u16,
-    auth_key: Option<&str>,
     expected_server_identity: Option<&str>,
     cols: u16,
     rows: u16,
 ) -> Result<RemoteCreateSummary, String> {
     let mut client =
-        connect_with(PlainTcpConnector, host, port, auth_key, expected_server_identity)?;
+        connect_with(PlainTcpConnector, host, port, expected_server_identity)?;
     create_summary_from_session(&mut client, port, cols, rows)
 }
 
 pub fn create_remote_daemon_session_tls(
     host: &str,
     port: u16,
-    auth_key: Option<&str>,
     expected_identity: &str,
     cols: u16,
     rows: u16,
@@ -352,7 +329,6 @@ pub fn create_remote_daemon_session_tls(
         PinnedTlsConnector { expected_identity },
         host,
         port,
-        auth_key,
         Some(expected_identity),
     )?;
     create_summary_from_session(&mut client, port, cols, rows)
@@ -361,7 +337,6 @@ pub fn create_remote_daemon_session_tls(
 pub fn create_remote_daemon_session_quic(
     host: &str,
     port: u16,
-    auth_key: Option<&str>,
     expected_identity: &str,
     cols: u16,
     rows: u16,
@@ -370,7 +345,6 @@ pub fn create_remote_daemon_session_quic(
         PinnedQuicConnector { expected_identity },
         host,
         port,
-        auth_key,
         Some(expected_identity),
     )?;
     create_summary_from_session(&mut client, port, cols, rows)
@@ -423,7 +397,6 @@ mod tests {
             "127.0.0.1",
             7337,
             None,
-            None,
         )
         .expect_err("quic probing without a pin should be rejected");
         assert!(
@@ -451,7 +424,7 @@ mod tests {
                 .expect("write auth ok");
         });
 
-        let error = probe_remote_endpoint("127.0.0.1", port, None, None)
+        let error = probe_remote_endpoint("127.0.0.1", port, None)
             .expect_err("probe should reject");
         assert!(
             error.contains("Unsupported remote protocol version"),
@@ -504,7 +477,7 @@ mod tests {
                 .expect("write session list");
         });
 
-        let summary = list_remote_daemon_sessions("127.0.0.1", port, None, None)
+        let summary = list_remote_daemon_sessions("127.0.0.1", port, None)
             .expect("list sessions summary");
         assert_eq!(summary.protocol_version, REMOTE_PROTOCOL_VERSION);
         assert_eq!(summary.server_identity_id.as_deref(), Some("test-daemon"));
@@ -541,7 +514,6 @@ mod tests {
         let error = list_remote_daemon_sessions(
             "127.0.0.1",
             port,
-            None,
             Some("expected-daemon"),
         )
         .expect_err("unexpected daemon identity should fail");
@@ -620,7 +592,6 @@ mod tests {
         let summary = attach_remote_daemon_session(
             "127.0.0.1",
             port,
-            None,
             Some("test-daemon"),
             7,
             Some(99),
@@ -715,7 +686,7 @@ mod tests {
                 .expect("write full state");
         });
 
-        let summary = attach_remote_daemon_session("127.0.0.1", port, None, Some("test-daemon"), 7, None, None)
+        let summary = attach_remote_daemon_session("127.0.0.1", port, Some("test-daemon"), 7, None, None)
             .expect("attach summary");
         assert_eq!(summary.attached.session_id, 7);
         assert_eq!(summary.rows, 1);
@@ -763,7 +734,6 @@ mod tests {
         let summary = create_remote_daemon_session(
             "127.0.0.1",
             port,
-            None,
             Some("test-daemon"),
             132,
             48,

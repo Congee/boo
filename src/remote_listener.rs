@@ -204,19 +204,17 @@ pub(crate) fn run_remote_client_session<R, W>(
     W: Write + Send + 'static,
 {
     let is_tls_transport = transport_label == TRANSPORT_LABEL_TLS;
-    let (client_id, outbound_rx, authenticated) = {
+    let (client_id, outbound_rx) = {
         let mut state = state.lock().expect("remote server state poisoned");
         let client_id = NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
         let (outbound_tx, outbound_rx) = mpsc::channel();
-        let authenticated = state.auth_key.is_none();
         state.clients.insert(
             client_id,
             ClientState {
                 outbound: outbound_tx,
-                authenticated,
-                challenge: None,
+                authenticated: true,
                 connected_at: Instant::now(),
-                authenticated_at: authenticated.then(Instant::now),
+                authenticated_at: Some(Instant::now()),
                 last_heartbeat_at: None,
                 attached_session: None,
                 attachment_id: None,
@@ -233,15 +231,15 @@ pub(crate) fn run_remote_client_session<R, W>(
         if is_tls_transport {
             state.tls_clients.insert(client_id);
         }
-        (client_id, outbound_rx, authenticated)
+        (client_id, outbound_rx)
     };
     log::info!(
-        "remote tcp client connected: client_id={client_id} authenticated={authenticated} transport={transport_label}"
+        "remote tcp client connected: client_id={client_id} transport={transport_label}"
     );
 
     std::thread::spawn(move || writer_loop(writer, outbound_rx, true, true));
 
-    if authenticated {
+    {
         let _ = cmd_tx.send(RemoteCmd::Connected { client_id });
         crate::notify_headless_wakeup();
     }

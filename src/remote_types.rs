@@ -64,7 +64,6 @@ pub struct RemoteServerInfo {
     pub build_id: String,
     pub server_instance_id: String,
     pub server_identity_id: String,
-    pub auth_required: bool,
     pub auth_challenge_window_ms: u64,
     pub heartbeat_window_ms: u64,
     pub revive_window_ms: u64,
@@ -85,7 +84,6 @@ pub struct RemoteClientsSnapshot {
 pub struct RemoteProbeSummary {
     pub host: String,
     pub port: u16,
-    pub auth_required: bool,
     pub protocol_version: u16,
     pub capabilities: u32,
     pub build_id: Option<String>,
@@ -108,7 +106,6 @@ pub struct RemoteDirectSessionInfo {
 pub struct RemoteSessionListSummary {
     pub host: String,
     pub port: u16,
-    pub auth_required: bool,
     pub protocol_version: u16,
     pub capabilities: u32,
     pub build_id: Option<String>,
@@ -129,7 +126,6 @@ pub struct RemoteAttachedSummary {
 pub struct RemoteAttachSummary {
     pub host: String,
     pub port: u16,
-    pub auth_required: bool,
     pub protocol_version: u16,
     pub capabilities: u32,
     pub build_id: Option<String>,
@@ -150,7 +146,6 @@ pub struct RemoteAttachSummary {
 pub struct RemoteCreateSummary {
     pub host: String,
     pub port: u16,
-    pub auth_required: bool,
     pub protocol_version: u16,
     pub capabilities: u32,
     pub build_id: Option<String>,

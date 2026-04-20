@@ -56,8 +56,6 @@ use crate::remote_batcher::{OutboundMessage, writer_loop};
 pub struct RemoteConfig {
     pub port: u16,
     pub bind_address: Option<String>,
-    pub auth_key: Option<String>,
-    pub allow_insecure_no_auth: bool,
     pub service_name: String,
     /// Optional override for the daemon's TLS cert chain. When both this and
     /// `cert_key_path` are provided, the daemon loads them instead of auto-
@@ -72,21 +70,11 @@ pub struct RemoteConfig {
 
 impl RemoteConfig {
     pub(crate) fn effective_bind_address(&self) -> &str {
-        self.bind_address.as_deref().unwrap_or_else(|| {
-            if self.auth_key.is_some() {
-                "0.0.0.0"
-            } else {
-                "127.0.0.1"
-            }
-        })
+        self.bind_address.as_deref().unwrap_or("127.0.0.1")
     }
 
     pub(crate) fn should_advertise(&self) -> bool {
         !matches!(self.effective_bind_address(), "127.0.0.1" | "localhost" | "::1")
-    }
-
-    pub(crate) fn rejects_public_authless_bind(&self) -> bool {
-        self.auth_key.is_none() && self.should_advertise() && !self.allow_insecure_no_auth
     }
 }
 
@@ -193,12 +181,6 @@ pub struct RemoteServer {
 
 impl RemoteServer {
     pub fn start(config: RemoteConfig) -> io::Result<(Self, mpsc::Receiver<RemoteCmd>)> {
-        if config.rejects_public_authless_bind() {
-            return Err(io::Error::other(format!(
-                "refusing to start authless remote daemon on public bind address {}; configure --remote-auth-key or --remote-allow-insecure-no-auth",
-                config.effective_bind_address()
-            )));
-        }
         let bind_address = config.effective_bind_address().to_string();
         let listener = TcpListener::bind((bind_address.as_str(), config.port))?;
         let identity_material = match (&config.cert_chain_path, &config.cert_key_path) {
@@ -222,7 +204,6 @@ impl RemoteServer {
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::new(),
             revivable_attachments: HashMap::new(),
-            auth_key: config.auth_key.clone().map(|key| key.into_bytes()),
             server_identity_id: identity_material.identity_id,
             server_instance_id: random_instance_id(),
             tls_clients: std::collections::HashSet::new(),
@@ -264,10 +245,9 @@ impl RemoteServer {
         {
             let state = state.lock().expect("remote server state poisoned");
             log::info!(
-                "remote tcp server started: bind_address={} port={} auth_required={} protocol_version={} capabilities={} build_id={} server_identity_id={} server_instance_id={}",
+                "remote tcp server started: bind_address={} port={} protocol_version={} capabilities={} build_id={} server_identity_id={} server_instance_id={}",
                 bind_address,
                 config.port,
-                state.auth_key.is_some(),
                 REMOTE_PROTOCOL_VERSION,
                 REMOTE_CAPABILITIES,
                 env!("CARGO_PKG_VERSION"),
@@ -298,7 +278,6 @@ impl RemoteServer {
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::new(),
             revivable_attachments: HashMap::new(),
-            auth_key: None,
             server_identity_id: load_or_create_daemon_identity(),
             server_instance_id: random_instance_id(),
             tls_clients: std::collections::HashSet::new(),
@@ -321,7 +300,6 @@ impl RemoteServer {
                         ClientState {
                             outbound: outbound_tx,
                             authenticated: true,
-                            challenge: None,
                             connected_at: Instant::now(),
                             authenticated_at: Some(Instant::now()),
                             last_heartbeat_at: None,

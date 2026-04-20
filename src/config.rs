@@ -20,8 +20,6 @@ pub struct Config {
     pub remote_prefer_nix_profile_binary: bool,
     pub remote_port: Option<u16>,
     pub remote_bind_address: Option<String>,
-    pub remote_auth_key: Option<String>,
-    pub remote_allow_insecure_no_auth: bool,
     pub remote_cert_path: Option<std::path::PathBuf>,
     pub remote_key_path: Option<std::path::PathBuf>,
     pub keybinds: HashMap<String, String>,
@@ -160,14 +158,6 @@ impl Config {
                         config.remote_bind_address = Some(value.to_string());
                     }
                 }
-                "remote-auth-key" => {
-                    if !value.is_empty() {
-                        config.remote_auth_key = Some(value.to_string());
-                    }
-                }
-                "remote-allow-insecure-no-auth" => {
-                    config.remote_allow_insecure_no_auth = parse_bool(value).unwrap_or(false);
-                }
                 "font-family" => {
                     if value.is_empty() {
                         config.font_families.clear();
@@ -287,8 +277,6 @@ impl Default for Config {
             remote_prefer_nix_profile_binary: false,
             remote_port: None,
             remote_bind_address: None,
-            remote_auth_key: None,
-            remote_allow_insecure_no_auth: false,
             remote_cert_path: None,
             remote_key_path: None,
             keybinds: HashMap::new(),
@@ -515,8 +503,6 @@ keybind = super+1 = goto_tab:1
         assert_eq!(config.remote_port, Some(7337));
         assert!(config.remote_prefer_nix_profile_binary);
         assert_eq!(config.remote_bind_address.as_deref(), Some("0.0.0.0"));
-        assert_eq!(config.remote_auth_key.as_deref(), Some("secret"));
-        assert!(config.remote_allow_insecure_no_auth);
         assert_eq!(
             config.font_families,
             vec![

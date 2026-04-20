@@ -87,7 +87,6 @@ mod tests {
             client_stream,
             "unix-test".to_string(),
             0,
-            None,
             Some("unix-daemon"),
         )
         .expect("connect over unix stream");
@@ -114,7 +113,6 @@ mod tests {
                 ClientState {
                     outbound: outbound_tx,
                     authenticated: true,
-                    challenge: None,
                     connected_at: Instant::now()
                         - DIRECT_CLIENT_HEARTBEAT_WINDOW
                         - Duration::from_secs(2),
@@ -137,7 +135,6 @@ mod tests {
                 },
             )]),
             revivable_attachments: HashMap::new(),
-            auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
             tls_clients: std::collections::HashSet::new(),
@@ -181,7 +178,6 @@ mod tests {
                 ClientState {
                     outbound: outbound_tx,
                     authenticated: true,
-                    challenge: None,
                     connected_at: Instant::now()
                         - DIRECT_CLIENT_HEARTBEAT_WINDOW
                         - Duration::from_secs(2),
@@ -204,7 +200,6 @@ mod tests {
                 },
             )]),
             revivable_attachments: HashMap::new(),
-            auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
             tls_clients: std::collections::HashSet::new(),

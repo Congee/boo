@@ -30,7 +30,7 @@ pub(crate) fn clients_snapshot(
     let pending_auth_clients = state
         .clients
         .values()
-        .filter(|client| client.challenge.is_some())
+        .filter(|client| !client.authenticated)
         .count();
     let revivable_attachments = state.revivable_attachments.len();
     let servers = vec![RemoteServerInfo {
@@ -42,7 +42,6 @@ pub(crate) fn clients_snapshot(
         build_id: env!("CARGO_PKG_VERSION").to_string(),
         server_instance_id: state.server_instance_id.clone(),
         server_identity_id: state.server_identity_id.clone(),
-        auth_required: state.auth_key.is_some(),
         auth_challenge_window_ms: AUTH_CHALLENGE_WINDOW.as_millis() as u64,
         heartbeat_window_ms: DIRECT_CLIENT_HEARTBEAT_WINDOW.as_millis() as u64,
         revive_window_ms: REVIVABLE_ATTACHMENT_WINDOW.as_millis() as u64,
@@ -107,7 +106,7 @@ fn client_info_for_client(
             "tcp".to_string()
         },
         server_socket_path: local_socket_path.map(|path| path.display().to_string()),
-        challenge_pending: client.challenge.is_some(),
+        challenge_pending: false,
         attached_session: client.attached_session,
         attachment_id: client.attachment_id,
         resume_token_present: client.resume_token.is_some(),
@@ -123,9 +122,7 @@ fn client_info_for_client(
             .map(|last_heartbeat_at| elapsed_ms(now, last_heartbeat_at)),
         heartbeat_expires_in_ms: heartbeat_deadline.map(|deadline| remaining_ms(now, deadline)),
         heartbeat_overdue: heartbeat_deadline.is_some_and(|deadline| now >= deadline),
-        challenge_expires_in_ms: client
-            .challenge
-            .map(|challenge| remaining_ms(now, challenge.expires_at)),
+        challenge_expires_in_ms: None,
     }
 }
 
@@ -133,7 +130,7 @@ fn client_info_for_client(
 mod tests {
     use super::clients_snapshot;
     use crate::remote_state::{
-        AUTH_CHALLENGE_WINDOW, AuthChallengeState, ClientState, DIRECT_CLIENT_HEARTBEAT_WINDOW,
+        AUTH_CHALLENGE_WINDOW, ClientState, DIRECT_CLIENT_HEARTBEAT_WINDOW,
         REVIVABLE_ATTACHMENT_WINDOW, RevivableAttachment, State,
     };
     use crate::remote_wire::{REMOTE_CAPABILITIES, REMOTE_PROTOCOL_VERSION, RemoteCell, RemoteFullState};
@@ -145,7 +142,6 @@ mod tests {
         State {
             clients: HashMap::new(),
             revivable_attachments: HashMap::new(),
-            auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
             tls_clients: HashSet::new(),
@@ -161,7 +157,6 @@ mod tests {
             ClientState {
                 outbound: tx,
                 authenticated: true,
-                challenge: None,
                 connected_at: Instant::now(),
                 authenticated_at: Some(Instant::now()),
                 last_heartbeat_at: Some(Instant::now()),
@@ -213,7 +208,6 @@ mod tests {
         assert_eq!(server_info.build_id, env!("CARGO_PKG_VERSION"));
         assert_eq!(server_info.server_instance_id, "test-instance");
         assert_eq!(server_info.server_identity_id, "test-daemon");
-        assert!(!server_info.auth_required);
         assert_eq!(
             server_info.heartbeat_window_ms,
             DIRECT_CLIENT_HEARTBEAT_WINDOW.as_millis() as u64
@@ -303,61 +297,6 @@ mod tests {
     }
 
     #[test]
-    fn clients_snapshot_reports_challenge_and_heartbeat_diagnostics() {
-        let (tx, _rx) = mpsc::channel();
-        let mut state = empty_state();
-        state.auth_key = Some(b"test-key".to_vec());
-        state.clients.insert(
-            1,
-            ClientState {
-                outbound: tx,
-                authenticated: false,
-                challenge: Some(AuthChallengeState {
-                    bytes: [7; 32],
-                    expires_at: Instant::now() + Duration::from_secs(5),
-                }),
-                connected_at: Instant::now() - Duration::from_secs(2),
-                authenticated_at: None,
-                last_heartbeat_at: Some(Instant::now() - Duration::from_millis(750)),
-                attached_session: None,
-                attachment_id: None,
-                resume_token: None,
-                last_session_list_payload: None,
-                last_ui_runtime_state_payload: None,
-                last_ui_appearance_payload: None,
-                last_state: None,
-                pane_states: HashMap::new(),
-                latest_input_seq: None,
-                is_local: false,
-            },
-        );
-
-        let snapshot = clients_snapshot(&state, None, None, None);
-        assert_eq!(snapshot.servers.len(), 1);
-        assert!(snapshot.servers[0].auth_required);
-        assert_eq!(
-            snapshot.servers[0].auth_challenge_window_ms,
-            AUTH_CHALLENGE_WINDOW.as_millis() as u64
-        );
-        assert_eq!(snapshot.servers[0].connected_clients, 1);
-        assert_eq!(snapshot.servers[0].attached_clients, 0);
-        assert_eq!(snapshot.servers[0].pending_auth_clients, 1);
-        assert_eq!(snapshot.servers[0].revivable_attachments, 0);
-        assert_eq!(snapshot.clients.len(), 1);
-        let client = &snapshot.clients[0];
-        assert!(!client.authenticated);
-        assert_eq!(client.transport_kind, "tcp");
-        assert_eq!(client.server_socket_path, None);
-        assert!(client.challenge_pending);
-        assert!(client.connection_age_ms >= 2_000);
-        assert_eq!(client.authenticated_age_ms, None);
-        assert!(client.last_heartbeat_age_ms.is_some_and(|age| age >= 750));
-        assert_eq!(client.heartbeat_expires_in_ms, None);
-        assert!(!client.heartbeat_overdue);
-        assert!(client.challenge_expires_in_ms.is_some_and(|age| age > 0));
-    }
-
-    #[test]
     fn clients_snapshot_reports_overdue_direct_heartbeat() {
         let (tx, _rx) = mpsc::channel();
         let mut state = empty_state();
@@ -366,7 +305,6 @@ mod tests {
             ClientState {
                 outbound: tx,
                 authenticated: true,
-                challenge: None,
                 connected_at: Instant::now() - Duration::from_secs(30),
                 authenticated_at: Some(
                     Instant::now() - DIRECT_CLIENT_HEARTBEAT_WINDOW - Duration::from_secs(1),
@@ -410,7 +348,6 @@ mod tests {
             ClientState {
                 outbound: tx,
                 authenticated: true,
-                challenge: None,
                 connected_at: Instant::now() - Duration::from_secs(30),
                 authenticated_at: Some(
                     Instant::now() - DIRECT_CLIENT_HEARTBEAT_WINDOW - Duration::from_secs(1),

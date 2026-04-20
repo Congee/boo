@@ -17,8 +17,6 @@ static STARTUP_REMOTE_BINARY: std::sync::OnceLock<String> = std::sync::OnceLock:
 static STARTUP_REMOTE_PREFER_NIX_PROFILE_BINARY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_BIND_ADDRESS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-static STARTUP_REMOTE_AUTH_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-static STARTUP_REMOTE_ALLOW_INSECURE_NO_AUTH: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_CERT_PATH: std::sync::OnceLock<std::path::PathBuf> =
     std::sync::OnceLock::new();
 static STARTUP_REMOTE_KEY_PATH: std::sync::OnceLock<std::path::PathBuf> =
@@ -35,8 +33,6 @@ struct StartupOverrides {
     remote_prefer_nix_profile_binary: bool,
     remote_port: Option<u16>,
     remote_bind_address: Option<String>,
-    remote_auth_key: Option<String>,
-    remote_allow_insecure_no_auth: bool,
     remote_cert_path: Option<std::path::PathBuf>,
     remote_key_path: Option<std::path::PathBuf>,
 }
@@ -182,12 +178,6 @@ pub fn parse_startup_args(cli: &crate::cli::Cli) -> bool {
             .set(bind_address.clone())
             .ok();
     }
-    if let Some(key) = cli.global.remote_auth_key.as_ref() {
-        STARTUP_REMOTE_AUTH_KEY.set(key.clone()).ok();
-    }
-    if cli.global.remote_allow_insecure_no_auth {
-        STARTUP_REMOTE_ALLOW_INSECURE_NO_AUTH.set(true).ok();
-    }
     if let Some(path) = cli.global.remote_cert_path.as_ref() {
         STARTUP_REMOTE_CERT_PATH.set(path.clone()).ok();
     }
@@ -223,11 +213,6 @@ fn startup_overrides() -> StartupOverrides {
             .unwrap_or(false),
         remote_port: STARTUP_REMOTE_PORT.get().copied(),
         remote_bind_address: STARTUP_REMOTE_BIND_ADDRESS.get().cloned(),
-        remote_auth_key: STARTUP_REMOTE_AUTH_KEY.get().cloned(),
-        remote_allow_insecure_no_auth: STARTUP_REMOTE_ALLOW_INSECURE_NO_AUTH
-            .get()
-            .copied()
-            .unwrap_or(false),
         remote_cert_path: STARTUP_REMOTE_CERT_PATH.get().cloned(),
         remote_key_path: STARTUP_REMOTE_KEY_PATH.get().cloned(),
     }
@@ -261,12 +246,6 @@ fn apply_startup_overrides(
     }
     if let Some(bind_address) = overrides.remote_bind_address.as_ref() {
         boo_config.remote_bind_address = Some(bind_address.clone());
-    }
-    if let Some(key) = overrides.remote_auth_key.as_ref() {
-        boo_config.remote_auth_key = Some(key.clone());
-    }
-    if overrides.remote_allow_insecure_no_auth {
-        boo_config.remote_allow_insecure_no_auth = true;
     }
     if let Some(path) = overrides.remote_cert_path.as_ref() {
         boo_config.remote_cert_path = Some(path.clone());
@@ -499,9 +478,6 @@ pub fn ensure_server_running(socket_path: &str, boo_config: &config::Config) -> 
     command.arg("server").arg("--socket").arg(socket_path);
     if let Some(port) = boo_config.remote_port {
         command.arg("--remote-port").arg(port.to_string());
-    }
-    if let Some(key) = boo_config.remote_auth_key.as_deref() {
-        command.arg("--remote-auth-key").arg(key);
     }
     if let Some(name) = startup_session() {
         command.arg("--session").arg(name);

@@ -17,27 +17,21 @@ use std::io::{self, Read};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Instant;
 
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
-
 use crate::remote::RemoteCmd;
 use crate::remote_batcher::OutboundMessage;
 use crate::remote_state::{
-    AUTH_CHALLENGE_WINDOW, AuthChallengeState, DIRECT_CLIENT_HEARTBEAT_WINDOW,
-    REVIVABLE_ATTACHMENT_WINDOW, RevivableAttachment, State, prune_revivable_attachments,
-    send_direct_error, send_direct_frame, should_disconnect_idle_client,
+    AUTH_CHALLENGE_WINDOW, DIRECT_CLIENT_HEARTBEAT_WINDOW, REVIVABLE_ATTACHMENT_WINDOW,
+    RevivableAttachment, State, prune_revivable_attachments, send_direct_error, send_direct_frame,
+    should_disconnect_idle_client,
 };
 use crate::remote_wire::{
     MessageType, encode_auth_ok_payload, encode_message, parse_attach_request,
     parse_input_payload, parse_key_payload, parse_pane_id, parse_resize, parse_session_id,
-    random_challenge, read_message, read_message_retrying,
+    read_message_retrying,
 };
-
-type HmacSha256 = Hmac<Sha256>;
 
 pub(crate) enum AuthHandling {
     Authenticated,
-    Pending,
     Disconnect,
 }
 
@@ -95,7 +89,6 @@ pub(crate) fn read_loop(
                     let _ = cmd_tx.send(RemoteCmd::Connected { client_id });
                     crate::notify_headless_wakeup();
                 }
-                AuthHandling::Pending => {}
                 AuthHandling::Disconnect => break,
             }
             continue;
@@ -216,95 +209,29 @@ pub(crate) fn read_loop(
 
 pub(crate) fn handle_auth_message(
     client_id: u64,
-    payload: &[u8],
+    _payload: &[u8],
     state: &Arc<Mutex<State>>,
 ) -> AuthHandling {
     let mut state = state.lock().expect("remote server state poisoned");
-    let auth_key = state.auth_key.clone();
     let server_identity_id = state.server_identity_id.clone();
     let server_instance_id = state.server_instance_id.clone();
     let Some(client) = state.clients.get_mut(&client_id) else {
         return AuthHandling::Disconnect;
     };
-
-    if auth_key.is_none() {
-        client.authenticated = true;
-        client.authenticated_at = Some(Instant::now());
-        log::info!("remote auth bypassed: client_id={client_id} mode=authless");
-        let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
-            MessageType::AuthOk,
-            &encode_auth_ok_payload(&server_identity_id, &server_instance_id),
-        )));
-        return AuthHandling::Authenticated;
-    }
-
-    if payload.is_empty() {
-        let challenge = random_challenge();
-        client.challenge = Some(AuthChallengeState {
-            bytes: challenge,
-            expires_at: Instant::now() + AUTH_CHALLENGE_WINDOW,
-        });
-        let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
-            MessageType::AuthChallenge,
-            &challenge,
-        )));
-        log::info!("remote auth challenge issued: client_id={client_id}");
-        return AuthHandling::Pending;
-    }
-
-    let Some(challenge) = client.challenge.take() else {
-        log::warn!("remote auth failed: client_id={client_id} reason=missing-challenge");
-        let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
-            MessageType::AuthFail,
-            &[],
-        )));
-        return AuthHandling::Disconnect;
-    };
-    if Instant::now() > challenge.expires_at {
-        log::warn!("remote auth failed: client_id={client_id} reason=expired-challenge");
-        let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
-            MessageType::AuthFail,
-            &[],
-        )));
-        return AuthHandling::Disconnect;
-    }
-    let Some(key) = auth_key else {
-        log::warn!("remote auth failed: client_id={client_id} reason=missing-auth-key");
-        let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
-            MessageType::AuthFail,
-            &[],
-        )));
-        return AuthHandling::Disconnect;
-    };
-
-    let mut mac = HmacSha256::new_from_slice(&key).expect("valid HMAC key");
-    mac.update(&challenge.bytes);
-    match mac.verify_slice(payload) {
-        Ok(()) => {
-            client.authenticated = true;
-            client.authenticated_at = Some(Instant::now());
-            log::info!("remote auth succeeded: client_id={client_id}");
-            let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
-                MessageType::AuthOk,
-                &encode_auth_ok_payload(&server_identity_id, &server_instance_id),
-            )));
-            AuthHandling::Authenticated
-        }
-        Err(_) => {
-            log::warn!("remote auth failed: client_id={client_id} reason=invalid-hmac");
-            let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
-                MessageType::AuthFail,
-                &[],
-            )));
-            AuthHandling::Disconnect
-        }
-    }
+    client.authenticated = true;
+    client.authenticated_at = Some(Instant::now());
+    log::info!("remote client authenticated: client_id={client_id} mode=tailnet-trust");
+    let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
+        MessageType::AuthOk,
+        &encode_auth_ok_payload(&server_identity_id, &server_instance_id),
+    )));
+    AuthHandling::Authenticated
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::remote_wire::validate_auth_ok_payload;
+    use crate::remote_wire::{encode_message, read_message};
     use std::collections::{HashMap, VecDeque};
 
     struct TimeoutScriptedReader {
@@ -342,155 +269,6 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn handle_auth_message_accepts_valid_challenge_response_within_window() {
-        let (outbound_tx, outbound_rx) = mpsc::channel();
-        let state = Arc::new(Mutex::new(State {
-            clients: HashMap::from([(
-                1,
-                ClientState {
-                    outbound: outbound_tx,
-                    authenticated: false,
-                    challenge: None,
-                    connected_at: Instant::now(),
-                    authenticated_at: None,
-                    last_heartbeat_at: None,
-                    attached_session: None,
-                    attachment_id: None,
-                    resume_token: None,
-                    last_session_list_payload: None,
-                    last_ui_runtime_state_payload: None,
-                    last_ui_appearance_payload: None,
-                    last_state: None,
-                    pane_states: HashMap::new(),
-                    latest_input_seq: None,
-                    is_local: false,
-                },
-            )]),
-            revivable_attachments: HashMap::new(),
-            auth_key: Some(b"test-key".to_vec()),
-            server_identity_id: "test-daemon".to_string(),
-            server_instance_id: "test-instance".to_string(),
-            tls_clients: std::collections::HashSet::new(),
-        }));
-
-        assert!(matches!(
-            handle_auth_message(1, &[], &state),
-            AuthHandling::Pending
-        ));
-        let challenge = match outbound_rx.recv().expect("challenge frame") {
-            OutboundMessage::Frame(frame) => {
-                let mut cursor = std::io::Cursor::new(frame);
-                let (ty, payload) = read_message(&mut cursor).expect("decoded challenge");
-                assert_eq!(ty, MessageType::AuthChallenge);
-                payload
-            }
-            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
-        };
-        let mut mac =
-            HmacSha256::new_from_slice(b"test-key").expect("valid HMAC key for test");
-        mac.update(&challenge);
-        let response = mac.finalize().into_bytes().to_vec();
-
-        assert!(matches!(
-            handle_auth_message(1, &response, &state),
-            AuthHandling::Authenticated
-        ));
-        match outbound_rx.recv().expect("auth ok frame") {
-            OutboundMessage::Frame(frame) => {
-                let mut cursor = std::io::Cursor::new(frame);
-                let (ty, payload) = read_message(&mut cursor).expect("decoded auth ok");
-                assert_eq!(ty, MessageType::AuthOk);
-                assert!(validate_auth_ok_payload(&payload, true).is_ok());
-            }
-            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
-        }
-        assert!(
-            state
-                .lock()
-                .expect("remote server state poisoned")
-                .clients
-                .get(&1)
-                .expect("client state")
-                .authenticated
-        );
-    }
-
-    #[test]
-    fn handle_auth_message_rejects_expired_challenge_response() {
-        let (outbound_tx, outbound_rx) = mpsc::channel();
-        let state = Arc::new(Mutex::new(State {
-            clients: HashMap::from([(
-                1,
-                ClientState {
-                    outbound: outbound_tx,
-                    authenticated: false,
-                    challenge: None,
-                    connected_at: Instant::now(),
-                    authenticated_at: None,
-                    last_heartbeat_at: None,
-                    attached_session: None,
-                    attachment_id: None,
-                    resume_token: None,
-                    last_session_list_payload: None,
-                    last_ui_runtime_state_payload: None,
-                    last_ui_appearance_payload: None,
-                    last_state: None,
-                    pane_states: HashMap::new(),
-                    latest_input_seq: None,
-                    is_local: false,
-                },
-            )]),
-            revivable_attachments: HashMap::new(),
-            auth_key: Some(b"test-key".to_vec()),
-            server_identity_id: "test-daemon".to_string(),
-            server_instance_id: "test-instance".to_string(),
-            tls_clients: std::collections::HashSet::new(),
-        }));
-
-        assert!(matches!(
-            handle_auth_message(1, &[], &state),
-            AuthHandling::Pending
-        ));
-        let challenge = match outbound_rx.recv().expect("challenge frame") {
-            OutboundMessage::Frame(frame) => {
-                let mut cursor = std::io::Cursor::new(frame);
-                let (ty, payload) = read_message(&mut cursor).expect("decoded challenge");
-                assert_eq!(ty, MessageType::AuthChallenge);
-                payload
-            }
-            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
-        };
-        {
-            let mut guard = state.lock().expect("remote server state poisoned");
-            let client = guard.clients.get_mut(&1).expect("client state");
-            let auth_challenge = client.challenge.as_mut().expect("stored challenge");
-            auth_challenge.expires_at = Instant::now() - Duration::from_millis(1);
-        }
-        let mut mac =
-            HmacSha256::new_from_slice(b"test-key").expect("valid HMAC key for test");
-        mac.update(&challenge);
-        let response = mac.finalize().into_bytes().to_vec();
-
-        assert!(matches!(
-            handle_auth_message(1, &response, &state),
-            AuthHandling::Disconnect
-        ));
-        match outbound_rx.recv().expect("auth fail frame") {
-            OutboundMessage::Frame(frame) => {
-                let mut cursor = std::io::Cursor::new(frame);
-                let (ty, payload) = read_message(&mut cursor).expect("decoded auth fail");
-                assert_eq!(ty, MessageType::AuthFail);
-                assert!(payload.is_empty());
-            }
-            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
-        }
-        let guard = state.lock().expect("remote server state poisoned");
-        let client = guard.clients.get(&1).expect("client state");
-        assert!(!client.authenticated);
-        assert!(client.challenge.is_none());
-    }
-
-    #[test]
     fn read_loop_emits_list_sessions_for_authenticated_client() {
         let (outbound_tx, _outbound_rx) = mpsc::channel();
         let state = Arc::new(Mutex::new(State {
@@ -499,7 +277,6 @@ mod tests {
                 ClientState {
                     outbound: outbound_tx,
                     authenticated: true,
-                    challenge: None,
                     connected_at: Instant::now(),
                     authenticated_at: Some(Instant::now()),
                     last_heartbeat_at: None,
@@ -516,7 +293,6 @@ mod tests {
                 },
             )]),
             revivable_attachments: HashMap::new(),
-            auth_key: Some(b"test-key".to_vec()),
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
             tls_clients: std::collections::HashSet::new(),
@@ -542,7 +318,6 @@ mod tests {
                 ClientState {
                     outbound: outbound_tx,
                     authenticated: true,
-                    challenge: None,
                     connected_at: Instant::now(),
                     authenticated_at: Some(Instant::now()),
                     last_heartbeat_at: None,
@@ -559,7 +334,6 @@ mod tests {
                 },
             )]),
             revivable_attachments: HashMap::new(),
-            auth_key: Some(b"test-key".to_vec()),
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
             tls_clients: std::collections::HashSet::new(),
@@ -582,68 +356,6 @@ mod tests {
     }
 
     #[test]
-    fn read_loop_closes_connection_after_auth_failure() {
-        let (outbound_tx, outbound_rx) = mpsc::channel();
-        let state = Arc::new(Mutex::new(State {
-            clients: HashMap::from([(
-                1,
-                ClientState {
-                    outbound: outbound_tx,
-                    authenticated: false,
-                    challenge: None,
-                    connected_at: Instant::now(),
-                    authenticated_at: None,
-                    last_heartbeat_at: None,
-                    attached_session: None,
-                    attachment_id: None,
-                    resume_token: None,
-                    last_session_list_payload: None,
-                    last_ui_runtime_state_payload: None,
-                    last_ui_appearance_payload: None,
-                    last_state: None,
-                    pane_states: HashMap::new(),
-                    latest_input_seq: None,
-                    is_local: false,
-                },
-            )]),
-            revivable_attachments: HashMap::new(),
-            auth_key: Some(b"test-key".to_vec()),
-            server_identity_id: "test-daemon".to_string(),
-            server_instance_id: "test-instance".to_string(),
-            tls_clients: std::collections::HashSet::new(),
-        }));
-        let (cmd_tx, cmd_rx) = mpsc::channel();
-        let mut frames = Vec::new();
-        frames.extend_from_slice(&encode_message(MessageType::Auth, &[]));
-        frames.extend_from_slice(&encode_message(MessageType::Auth, b"definitely-wrong-hmac"));
-        frames.extend_from_slice(&encode_message(MessageType::ListSessions, &[]));
-
-        read_loop(std::io::Cursor::new(frames), 1, Arc::clone(&state), cmd_tx);
-
-        let mut saw_challenge = false;
-        let mut saw_fail = false;
-        while let Ok(message) = outbound_rx.try_recv() {
-            match message {
-                OutboundMessage::Frame(frame) => {
-                    let mut cursor = std::io::Cursor::new(frame);
-                    let (ty, _) = read_message(&mut cursor).expect("decoded outbound frame");
-                    if ty == MessageType::AuthChallenge {
-                        saw_challenge = true;
-                    } else if ty == MessageType::AuthFail {
-                        saw_fail = true;
-                    }
-                }
-                OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
-            }
-        }
-        assert!(saw_challenge);
-        assert!(saw_fail);
-        assert!(cmd_rx.try_recv().is_err());
-        let guard = state.lock().expect("remote server state poisoned");
-        assert!(!guard.clients.contains_key(&1));
-    }
-
-    #[test]
     fn read_loop_closes_idle_unauthenticated_connection_after_timeout() {
         let (outbound_tx, outbound_rx) = mpsc::channel();
         let state = Arc::new(Mutex::new(State {
@@ -652,7 +364,6 @@ mod tests {
                 ClientState {
                     outbound: outbound_tx,
                     authenticated: false,
-                    challenge: None,
                     connected_at: Instant::now() - AUTH_CHALLENGE_WINDOW - Duration::from_secs(1),
                     authenticated_at: None,
                     last_heartbeat_at: None,
@@ -669,60 +380,6 @@ mod tests {
                 },
             )]),
             revivable_attachments: HashMap::new(),
-            auth_key: Some(b"test-key".to_vec()),
-            server_identity_id: "test-daemon".to_string(),
-            server_instance_id: "test-instance".to_string(),
-            tls_clients: std::collections::HashSet::new(),
-        }));
-        let (cmd_tx, cmd_rx) = mpsc::channel();
-        let reader = TimeoutScriptedReader::new([Err(io::ErrorKind::TimedOut)]);
-
-        read_loop(reader, 1, Arc::clone(&state), cmd_tx);
-
-        match outbound_rx.recv().expect("auth fail frame") {
-            OutboundMessage::Frame(frame) => {
-                let mut cursor = std::io::Cursor::new(frame);
-                let (ty, payload) = read_message(&mut cursor).expect("decoded auth fail");
-                assert_eq!(ty, MessageType::AuthFail);
-                assert!(payload.is_empty());
-            }
-            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
-        }
-        assert!(cmd_rx.try_recv().is_err());
-        let guard = state.lock().expect("remote server state poisoned");
-        assert!(!guard.clients.contains_key(&1));
-    }
-
-    #[test]
-    fn read_loop_closes_expired_auth_challenge_after_timeout() {
-        let (outbound_tx, outbound_rx) = mpsc::channel();
-        let state = Arc::new(Mutex::new(State {
-            clients: HashMap::from([(
-                1,
-                ClientState {
-                    outbound: outbound_tx,
-                    authenticated: false,
-                    challenge: Some(AuthChallengeState {
-                        bytes: [5; 32],
-                        expires_at: Instant::now() - Duration::from_secs(1),
-                    }),
-                    connected_at: Instant::now(),
-                    authenticated_at: None,
-                    last_heartbeat_at: None,
-                    attached_session: None,
-                    attachment_id: None,
-                    resume_token: None,
-                    last_session_list_payload: None,
-                    last_ui_runtime_state_payload: None,
-                    last_ui_appearance_payload: None,
-                    last_state: None,
-                    pane_states: HashMap::new(),
-                    latest_input_seq: None,
-                    is_local: false,
-                },
-            )]),
-            revivable_attachments: HashMap::new(),
-            auth_key: Some(b"test-key".to_vec()),
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
             tls_clients: std::collections::HashSet::new(),
@@ -755,7 +412,6 @@ mod tests {
                 ClientState {
                     outbound: outbound_tx,
                     authenticated: true,
-                    challenge: None,
                     connected_at: Instant::now()
                         - DIRECT_CLIENT_HEARTBEAT_WINDOW
                         - Duration::from_secs(2),
@@ -778,7 +434,6 @@ mod tests {
                 },
             )]),
             revivable_attachments: HashMap::new(),
-            auth_key: None,
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
             tls_clients: std::collections::HashSet::new(),

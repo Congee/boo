@@ -1,7 +1,5 @@
 //! Sync direct-client session transport for remote daemon RPCs.
 
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
 use std::io::{Read, Write};
 
 #[cfg(test)]
@@ -14,8 +12,6 @@ use crate::remote_wire::{
     read_probe_reply, validate_auth_ok_payload,
 };
 
-type HmacSha256 = Hmac<Sha256>;
-
 pub(crate) trait DirectReadWrite: Read + Write {}
 impl<T: Read + Write> DirectReadWrite for T {}
 
@@ -23,7 +19,6 @@ pub(crate) struct DirectTransportSession<S: DirectReadWrite> {
     pub(crate) stream: S,
     pub(crate) host: String,
     pub(crate) port: u16,
-    pub(crate) auth_required: bool,
     pub(crate) protocol_version: u16,
     pub(crate) capabilities: u32,
     pub(crate) build_id: Option<String>,
@@ -36,14 +31,12 @@ impl DirectTransportSession<QuicClientStream> {
     pub(crate) fn connect_quic(
         host: &str,
         port: u16,
-        auth_key: Option<&str>,
         expected_identity: &str,
     ) -> Result<Self, String> {
         connect_with(
             PinnedQuicConnector { expected_identity },
             host,
             port,
-            auth_key,
             Some(expected_identity),
         )
     }
@@ -54,14 +47,12 @@ impl DirectTransportSession<TlsClientStream> {
     pub(crate) fn connect_tls(
         host: &str,
         port: u16,
-        auth_key: Option<&str>,
         expected_identity: &str,
     ) -> Result<Self, String> {
         connect_with(
             PinnedTlsConnector { expected_identity },
             host,
             port,
-            auth_key,
             Some(expected_identity),
         )
     }
@@ -72,49 +63,14 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
         mut stream: S,
         host: String,
         port: u16,
-        auth_key: Option<&str>,
         expected_server_identity: Option<&str>,
     ) -> Result<Self, String> {
         stream
             .write_all(&encode_message(MessageType::Auth, &[]))
             .map_err(|error| format!("failed to send auth request to {host}:{port}: {error}"))?;
-        let (ty, auth_payload) = read_probe_auth_reply(&mut stream, &host, port)?;
-        let (auth_required, auth_ok_payload) = match ty {
-            MessageType::AuthOk => (false, auth_payload),
-            MessageType::AuthChallenge => {
-                let key = auth_key
-                    .ok_or_else(|| format!("remote endpoint {host}:{port} requires --auth-key"))?;
-                let mut mac = HmacSha256::new_from_slice(key.as_bytes()).expect("valid HMAC key");
-                mac.update(&auth_payload);
-                let response = mac.finalize().into_bytes().to_vec();
-                stream.write_all(&encode_message(MessageType::Auth, &response)).map_err(
-                    |error| format!("failed to send auth response to {host}:{port}: {error}"),
-                )?;
-                let (reply_ty, reply_payload) = loop {
-                    match crate::remote_wire::read_message_retrying(&mut stream, 2) {
-                        Ok(message) => break message,
-                        Err(error)
-                            if matches!(
-                                error.kind(),
-                                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                            ) =>
-                        {
-                            continue;
-                        }
-                        Err(error) => {
-                            return Err(format!(
-                                "failed to read authenticated reply from {host}:{port}: {error}"
-                            ));
-                        }
-                    }
-                };
-                if reply_ty != MessageType::AuthOk {
-                    return Err(format!(
-                        "expected auth ok from {host}:{port}, got {reply_ty:?}"
-                    ));
-                }
-                (true, reply_payload)
-            }
+        let (ty, auth_ok_payload) = read_probe_auth_reply(&mut stream, &host, port)?;
+        match ty {
+            MessageType::AuthOk => {}
             MessageType::AuthFail => {
                 return Err(format!("authentication failed for remote endpoint {host}:{port}"));
             }
@@ -123,9 +79,9 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
                     "unexpected auth reply from {host}:{port}: {other:?}"
                 ));
             }
-        };
+        }
 
-        validate_auth_ok_payload(&auth_ok_payload, auth_required)?;
+        validate_auth_ok_payload(&auth_ok_payload)?;
         let (protocol_version, capabilities, build_id, server_instance_id, server_identity_id) =
             decode_auth_ok_payload(&auth_ok_payload).ok_or_else(|| {
                 format!("remote endpoint {host}:{port} returned malformed handshake metadata")
@@ -143,7 +99,6 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
             stream,
             host,
             port,
-            auth_required,
             protocol_version,
             capabilities,
             build_id,
