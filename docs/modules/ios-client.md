@@ -38,6 +38,8 @@ Primary automated lane:
 - [../../scripts/list-ios-devices.sh](../../scripts/list-ios-devices.sh)
 - [../../scripts/build-ios-device.sh](../../scripts/build-ios-device.sh)
 - [../../scripts/install-ios-device.sh](../../scripts/install-ios-device.sh)
+- [../../scripts/launch-ios-device.sh](../../scripts/launch-ios-device.sh)
+- [../../scripts/deploy-ios-device.sh](../../scripts/deploy-ios-device.sh)
 
 Primary high-level doc:
 

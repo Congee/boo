@@ -75,6 +75,8 @@ bash scripts/list-ios-devices.sh
 bash scripts/build-ios-device.sh
 BOO_IOS_DEVICE_ID=<device-id> bash scripts/build-ios-device.sh
 BOO_IOS_DEVICE_ID=<device-id> bash scripts/install-ios-device.sh
+BOO_IOS_DEVICE_ID=<device-id> bash scripts/launch-ios-device.sh
+BOO_IOS_DEVICE_ID=<device-id> bash scripts/deploy-ios-device.sh
 ```
 
 Notes:
@@ -85,6 +87,8 @@ Notes:
   override with `BOO_IOS_TEAM_ID` if needed
 - if the attached device still reports Developer Mode disabled, installation
   will be blocked until the device finishes the full enable-and-reboot flow
+- if the device is locked, `devicectl` may fail to mount developer services for
+  install/launch operations; unlock the device and retry
 
 ## Remaining Manual Validation
 

@@ -30,6 +30,8 @@ Remote:
 - `bash scripts/list-ios-devices.sh`
 - `bash scripts/build-ios-device.sh`
 - `BOO_IOS_DEVICE_ID=<device-id> bash scripts/install-ios-device.sh`
+- `BOO_IOS_DEVICE_ID=<device-id> bash scripts/launch-ios-device.sh`
+- `BOO_IOS_DEVICE_ID=<device-id> bash scripts/deploy-ios-device.sh`
 
 ## Testing Principles
 
