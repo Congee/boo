@@ -72,17 +72,19 @@ Helpful commands:
 
 ```bash
 bash scripts/list-ios-devices.sh
-BOO_IOS_TEAM_ID=<team-id> bash scripts/build-ios-device.sh
-BOO_IOS_TEAM_ID=<team-id> BOO_IOS_DEVICE_ID=<device-id> bash scripts/build-ios-device.sh
+bash scripts/build-ios-device.sh
+BOO_IOS_DEVICE_ID=<device-id> bash scripts/build-ios-device.sh
+BOO_IOS_DEVICE_ID=<device-id> bash scripts/install-ios-device.sh
 ```
 
 Notes:
 
 - the build script uses a repo-local derived-data path so it does not depend on
   Xcode's default `~/Library/Developer/Xcode/DerivedData` location
-- if `security find-identity -p codesigning -v` reports zero valid identities,
-  device deployment will still be blocked until Xcode signing is configured on
-  this Mac
+- the build script auto-discovers the first provisioning team known to Xcode;
+  override with `BOO_IOS_TEAM_ID` if needed
+- if the attached device still reports Developer Mode disabled, installation
+  will be blocked until the device finishes the full enable-and-reboot flow
 
 ## Remaining Manual Validation
 
