@@ -308,12 +308,24 @@ final class ConnectionStore: ObservableObject {
     private func loadNodes() {
         guard let data = UserDefaults.standard.data(forKey: nodesKey),
               let nodes = try? JSONDecoder().decode([SavedNode].self, from: data) else { return }
-        savedNodes = nodes
+        let filtered = UITestLaunchConfiguration.current() == nil
+            ? nodes.filter { !isLikelyUITestArtifactNode($0) }
+            : nodes
+        savedNodes = filtered
+        if filtered.count != nodes.count {
+            saveNodes()
+        }
     }
 
     private func saveNodes() {
         guard let data = try? JSONEncoder().encode(savedNodes) else { return }
         UserDefaults.standard.set(data, forKey: nodesKey)
+    }
+
+    private func isLikelyUITestArtifactNode(_ node: SavedNode) -> Bool {
+        guard node.authKey.isEmpty else { return false }
+        guard node.port != 7337 else { return false }
+        return node.name == "Local Boo" || node.name == "UI Test Node"
     }
 
     private func loadHistory() {

@@ -105,6 +105,24 @@ struct TailscalePeer: Identifiable, Hashable {
     let address: String?
     let os: String?
     let online: Bool
+    let lastSeen: Date?
+
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
+
+    var stateDescription: String {
+        if online {
+            return "online"
+        }
+        if let lastSeen {
+            let relative = Self.relativeFormatter.localizedString(for: lastSeen, relativeTo: Date())
+            return "offline, last seen \(relative)"
+        }
+        return "offline"
+    }
 }
 
 @MainActor
@@ -267,7 +285,8 @@ final class TailscalePeerBrowser: ObservableObject {
                     port: store.tailscaleDiscoverySettings.defaultPort,
                     address: $0.address,
                     os: $0.os,
-                    online: $0.online
+                    online: $0.online,
+                    lastSeen: nil
                 )
             }
             lastError = nil
@@ -339,17 +358,32 @@ final class TailscalePeerBrowser: ObservableObject {
         let parsed: [TailscalePeer] = deviceObjects.compactMap { device in
             let rawName = (device["name"] as? String)?.trimmingCharacters(in: CharacterSet(charactersIn: "."))
             let hostname = (device["hostname"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let displayName = hostname ?? rawName?.split(separator: ".").first.map(String.init)
+            let dnsName = (device["dnsName"] as? String)?.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            let machineName = nonEmptyString(
+                device["machineName"] as? String,
+                device["computedName"] as? String,
+                device["displayName"] as? String,
+                device["nodeName"] as? String
+            )
             let addresses = device["addresses"] as? [String] ?? []
             let preferredAddress = addresses.first(where: { $0.contains(".") }) ?? addresses.first
-            let connectHost = rawName ?? hostname ?? preferredAddress
-            guard let name = displayName, !name.isEmpty,
+            let cleanedDisplayName = nonLocalName(machineName)
+                ?? firstLabel(of: dnsName)
+                ?? nonLocalName(hostname)
+                ?? nonLocalName(rawName)
+                ?? preferredAddress
+            let connectHost = dnsName
+                ?? nonLocalName(rawName)
+                ?? nonLocalName(hostname)
+                ?? preferredAddress
+            guard let name = cleanedDisplayName, !name.isEmpty,
                   let host = connectHost, !host.isEmpty
             else {
                 return nil
             }
 
-            let online = (device["online"] as? Bool) ?? false
+            let lastSeen = parseTailscaleLastSeen(device)
+            let online = parseTailscaleOnline(device, lastSeen: lastSeen)
             let os = device["os"] as? String
             let idValue = device["id"] ?? device["nodeId"] ?? host
 
@@ -360,7 +394,8 @@ final class TailscalePeerBrowser: ObservableObject {
                 port: port,
                 address: preferredAddress,
                 os: os,
-                online: online
+                online: online,
+                lastSeen: lastSeen
             )
         }
 
@@ -370,6 +405,66 @@ final class TailscalePeerBrowser: ObservableObject {
             }
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
+    }
+
+    private func nonEmptyString(_ values: String?...) -> String? {
+        guard let value = values.first(where: { value in
+            guard let value else { return false }
+            return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }) ?? nil else {
+            return nil
+        }
+        return value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func firstLabel(of host: String?) -> String? {
+        guard let host = host?.trimmingCharacters(in: CharacterSet(charactersIn: ".")),
+              !host.isEmpty else {
+            return nil
+        }
+        return String(host.split(separator: ".").first ?? "")
+    }
+
+    private func nonLocalName(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: CharacterSet(charactersIn: ".")).trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        if trimmed.compare("localhost", options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
+            return nil
+        }
+        return firstLabel(of: trimmed)
+    }
+
+    private func parseTailscaleOnline(_ device: [String: Any], lastSeen: Date?) -> Bool {
+        for key in ["online", "Online", "isOnline", "connected"] {
+            if let value = device[key] as? Bool {
+                return value
+            }
+        }
+        if let lastSeen {
+            return Date().timeIntervalSince(lastSeen) < 300
+        }
+        return true
+    }
+
+    private func parseTailscaleLastSeen(_ device: [String: Any]) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        for key in ["lastSeen", "LastSeen"] {
+            if let value = device[key] as? String {
+                if let date = formatter.date(from: value) {
+                    return date
+                }
+                formatter.formatOptions = [.withInternetDateTime]
+                if let date = formatter.date(from: value) {
+                    return date
+                }
+                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            }
+        }
+        return nil
     }
 }
 

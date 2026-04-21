@@ -364,8 +364,7 @@ struct ConnectScreen: View {
                                 .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
                         }
                         ForEach(tailscaleBrowser.peers) { peer in
-                            let state = peer.online ? "online" : "offline"
-                            let detail = [peer.os, state, peer.address, "boo:\(peer.port)"].compactMap { $0 }.joined(separator: " · ")
+                            let detail = [peer.os, peer.stateDescription, peer.address, "boo:\(peer.port)"].compactMap { $0 }.joined(separator: " · ")
                             KineticCardRow(
                                 icon: "network",
                                 title: peer.name,
