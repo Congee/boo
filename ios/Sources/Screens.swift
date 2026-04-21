@@ -326,8 +326,8 @@ struct ConnectScreen: View {
                             ForEach(browser.daemons) { daemon in
                                 KineticCardRow(
                                     icon: "terminal",
-                                    title: daemon.name,
-                                    subtitle: "Bonjour service",
+                                    title: daemon.title,
+                                    subtitle: daemon.subtitle,
                                     onTap: {
                                         connectToEndpoint(daemon.endpoint)
                                     },

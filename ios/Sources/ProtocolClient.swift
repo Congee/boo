@@ -92,6 +92,8 @@ final class ScreenState: ObservableObject {
 struct DiscoveredDaemon: Identifiable, Hashable {
     let id: String
     let name: String
+    let title: String
+    let subtitle: String
     let endpoint: NWEndpoint
 }
 
@@ -182,7 +184,31 @@ final class BonjourBrowser: ObservableObject {
                     default:
                         name = id
                     }
-                    entries.append(DiscoveredDaemon(id: id, name: name, endpoint: result.endpoint))
+                    let cleanedName = name
+                        .replacingOccurrences(of: "boo on ", with: "")
+                        .replacingOccurrences(of: ".local", with: "")
+                    let title = cleanedName
+                        .replacingOccurrences(of: #" \((\d+)\)$"#, with: "", options: .regularExpression)
+                    let subtitle: String
+                    switch result.endpoint {
+                    case .service(_, _, _, let interface):
+                        if let interface {
+                            subtitle = "QUIC remote daemon · \(interface.debugDescription)"
+                        } else {
+                            subtitle = "QUIC remote daemon"
+                        }
+                    default:
+                        subtitle = "QUIC remote daemon"
+                    }
+                    entries.append(
+                        DiscoveredDaemon(
+                            id: id,
+                            name: name,
+                            title: title,
+                            subtitle: subtitle,
+                            endpoint: result.endpoint
+                        )
+                    )
                 }
             }
             daemons = entries.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
