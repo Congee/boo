@@ -260,19 +260,7 @@ final class ConnectionStore: ObservableObject {
     }
 
     func tailscaleAPIToken() -> String? {
-        do {
-            let token = try KeychainStringStore.load(service: tailscaleTokenService, account: tailscaleTokenAccount)
-            if token != nil, tailscaleTokenStatusMessage == "Tailscale token saved securely in Keychain." {
-                return token
-            }
-            if token == nil {
-                tailscaleTokenStatusMessage = nil
-            }
-            return token
-        } catch {
-            tailscaleTokenStatusMessage = error.localizedDescription
-            return nil
-        }
+        try? KeychainStringStore.load(service: tailscaleTokenService, account: tailscaleTokenAccount)
     }
 
     func updateTailscaleDiscovery(defaultPort: UInt16) {
