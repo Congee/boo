@@ -11,7 +11,6 @@ This directory contains the Boo iOS remote viewer app.
 - Connects to discovered Bonjour services via the resolved Network framework endpoint instead of degrading them to a guessed `host:port`
 - Supports:
   - manual connect
-  - optional auth key
   - saved nodes
   - connection history
   - trusted daemon identity pinning per endpoint
@@ -36,7 +35,6 @@ This directory contains the Boo iOS remote viewer app.
 
 - The iOS app is Boo-owned code. The older Ghostty iOS app was used only as a reference during implementation.
 - The Boo Rust app now exposes the matching TCP daemon when `remote-port` is configured, for example `boo --headless --remote-port 7337`.
-- Optional challenge/response auth is enabled by configuring `remote-auth-key` on the Boo daemon side and entering the same key in the iOS client.
 - iOS local-network discovery requires `NSLocalNetworkUsageDescription` and `NSBonjourServices`; both are configured in the Xcode project.
 - If Bonjour discovery reports that local network access is required, enable `boo` in `Settings > Privacy & Security > Local Network`.
 - Tailscale discovery is separate from Bonjour. It lists devices in the same tailnet through the Tailscale API, then connects to them on the configured Boo port.
@@ -54,7 +52,6 @@ The Swift app client and the validator now share the same wire-codec implementat
 It verifies:
 
 - Bonjour discovery on `_boo._udp`
-- HMAC auth against a live Boo daemon
 - session listing
 - create + attach
 - resize
@@ -117,7 +114,7 @@ Notes:
 
 ## Remaining Manual Validation
 
-Automated validation covers the remote protocol, reconnect/resume flow, auth failures, and state updates. Manual validation is still reserved for client UX that depends on the real iOS interaction model:
+Automated validation covers the remote protocol, reconnect/resume flow, and state updates. Manual validation is still reserved for client UX that depends on the real iOS interaction model:
 
 - keyboard accessory ergonomics on-device, especially modifier toggles and function-key reachability
 - swipe gesture feel for page navigation and left/right terminal movement

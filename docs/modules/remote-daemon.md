@@ -40,7 +40,6 @@ files own narrower responsibilities such as:
 
 - supports full-state and delta publishing
 - supports heartbeat and reconnect-oriented metadata
-- supports optional HMAC auth
 - supports daemon identity metadata
 - exposed diagnostics through `boo remote-clients`
 

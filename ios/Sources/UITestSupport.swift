@@ -13,7 +13,6 @@ struct UITestLaunchConfiguration {
     let nodeName: String?
     let host: String?
     let port: UInt16
-    let authKey: String
     let autoConnect: Bool
     let tailscalePort: UInt16?
     let tailscaleToken: String?
@@ -54,7 +53,6 @@ struct UITestLaunchConfiguration {
                 .flatMap(UInt16.init)
             ?? 7337
         let nodeName = argumentValue(prefix: "--boo-ui-test-node-name=", arguments: arguments) ?? env["BOO_UI_TEST_NODE_NAME"]
-        let authKey = argumentValue(prefix: "--boo-ui-test-auth-key=", arguments: arguments) ?? env["BOO_UI_TEST_AUTH_KEY"] ?? ""
         let autoConnect = arguments.contains("--boo-ui-test-auto-connect") || env["BOO_UI_TEST_AUTO_CONNECT"] == "1"
         let resetStorage = arguments.contains("--boo-ui-test-reset-storage") || env["BOO_UI_TEST_RESET_STORAGE"] == "1"
         let tailscalePort = argumentValue(prefix: "--boo-ui-test-tailscale-port=", arguments: arguments)
@@ -68,7 +66,6 @@ struct UITestLaunchConfiguration {
             nodeName: nodeName,
             host: host,
             port: port,
-            authKey: authKey,
             autoConnect: autoConnect,
             tailscalePort: tailscalePort,
             tailscaleToken: tailscaleToken,

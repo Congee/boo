@@ -1,6 +1,5 @@
 import Foundation
 import Network
-import CryptoKit
 
 private struct ValidationAuthOkMetadata {
     let protocolVersion: UInt16
@@ -10,7 +9,6 @@ private struct ValidationAuthOkMetadata {
     let serverIdentityId: String?
 }
 
-private let validationCapabilityHmacAuth: UInt32 = 1 << 0
 private let validationCapabilityHeartbeat: UInt32 = 1 << 4
 private let validationCapabilityAttachmentResume: UInt32 = 1 << 5
 private let validationCapabilityDaemonIdentity: UInt32 = 1 << 6
@@ -81,15 +79,12 @@ private func decodeValidationAuthOkMetadata(_ payload: Data) -> ValidationAuthOk
     )
 }
 
-private func validateValidationAuthOkMetadata(_ payload: Data, authRequired: Bool) -> String? {
+private func validateValidationAuthOkMetadata(_ payload: Data) -> String? {
     guard let metadata = decodeValidationAuthOkMetadata(payload) else {
         return "Remote handshake is malformed"
     }
     if metadata.protocolVersion != 1 {
         return "Unsupported remote protocol version: \(metadata.protocolVersion)"
-    }
-    if authRequired && (metadata.transportCapabilities & validationCapabilityHmacAuth) == 0 {
-        return "Remote server does not advertise HMAC authentication"
     }
     if (metadata.transportCapabilities & validationCapabilityHeartbeat) == 0 {
         return "Remote server does not advertise heartbeat support"
@@ -121,7 +116,6 @@ enum WireMessageType: UInt8 {
     case input = 0x06
     case resize = 0x07
     case destroy = 0x08
-    case authChallenge = 0x09
     case heartbeat = 0x11
 
     case authOk = 0x80
@@ -143,7 +137,6 @@ final class RemoteValidator {
     private let lock = NSLock()
 
     private var connection: NWConnection?
-    private var authKey: SymmetricKey?
 
     private var connected = false
     private var authenticated = false
@@ -170,9 +163,7 @@ final class RemoteValidator {
     private var connectedPort: UInt16?
     private var connectionGeneration: UInt64 = 0
 
-    init(authKey: String) {
-        self.authKey = authKey.isEmpty ? nil : SymmetricKey(data: Data(authKey.utf8))
-    }
+    init() {}
 
     func browse(serviceType: String = "_boo._udp", timeout: TimeInterval = 3.0) -> NWEndpoint? {
         let semaphore = DispatchSemaphore(value: 0)
@@ -204,25 +195,12 @@ final class RemoteValidator {
 
     func connect(host: String, port: UInt16) throws {
         try startConnection(host: host, port: port)
-        if authKey != nil {
-            sendMessage(type: .auth, payload: Data())
-            try waitUntil("authentication") { self.authenticated }
-        } else {
-            authenticated = true
-        }
+        sendMessage(type: .auth, payload: Data())
+        try waitUntil("authentication") { self.authenticated }
         heartbeatAckReceived = false
         expectedHeartbeatPayload = Data(withUnsafeBytes(of: UInt64(0x424f4f5f50494e47).littleEndian, Array.init))
         sendMessage(type: .heartbeat, payload: expectedHeartbeatPayload)
         try waitUntil("heartbeat acknowledgement") { self.heartbeatAckReceived }
-    }
-
-    func validateAuthenticationFailure(host: String, port: UInt16) throws {
-        guard authKey != nil else {
-            throw ValidationError("authentication-failure validation requires an auth key")
-        }
-        try startConnection(host: host, port: port)
-        sendMessage(type: .auth, payload: Data())
-        try waitUntilAnyError(["authentication failed", "connection closed"])
     }
 
     private func startConnection(host: String, port: UInt16) throws {
@@ -231,8 +209,7 @@ final class RemoteValidator {
         connectionGeneration &+= 1
         let generation = connectionGeneration
         let semaphore = DispatchSemaphore(value: 0)
-        let params = NWParameters.tcp
-        params.allowLocalEndpointReuse = true
+        let params = makeQUICParameters()
         let conn = NWConnection(
             host: NWEndpoint.Host(host),
             port: NWEndpoint.Port(rawValue: port)!,
@@ -260,6 +237,19 @@ final class RemoteValidator {
             throw ValidationError("timed out connecting to Boo daemon")
         }
         try throwIfError()
+    }
+
+    private func makeQUICParameters() -> NWParameters {
+        let options = NWProtocolQUIC.Options(alpn: ["boo-remote"])
+        options.direction = .bidirectional
+        options.idleTimeout = 5_000
+        sec_protocol_options_set_verify_block(options.securityProtocolOptions, { _, _, complete in
+            complete(true)
+        }, queue)
+        let params = NWParameters(quic: options)
+        params.allowLocalEndpointReuse = true
+        params.includePeerToPeer = true
+        return params
     }
 
     func validateRoundTrip() throws {
@@ -384,11 +374,16 @@ final class RemoteValidator {
         header.withUnsafeMutableBytes {
             $0.storeBytes(of: UInt32(payload.count).littleEndian, toByteOffset: 3, as: UInt32.self)
         }
-        connection?.send(content: header + payload, completion: .contentProcessed { [weak self] error in
-            if let error {
-                self?.setError("send failed: \(error)")
+        connection?.send(
+            content: header + payload,
+            contentContext: .defaultStream,
+            isComplete: false,
+            completion: .contentProcessed { [weak self] error in
+                if let error {
+                    self?.setError("send failed: \(error)")
+                }
             }
-        })
+        )
     }
 
     private func readHeader(generation: UInt64) {
@@ -450,15 +445,6 @@ final class RemoteValidator {
             messageTrace.removeFirst(messageTrace.count - 16)
         }
         switch message {
-        case .authChallenge:
-            guard payload.count == 32, let key = authKey else {
-                lastError = "authentication challenge invalid"
-                return
-            }
-            let mac = HMAC<SHA256>.authenticationCode(for: payload, using: key)
-            lock.unlock()
-            sendMessage(type: .auth, payload: Data(mac))
-            lock.lock()
         case .authOk:
             if let metadata = decodeValidationAuthOkMetadata(payload) {
                 protocolVersion = metadata.protocolVersion
@@ -467,7 +453,7 @@ final class RemoteValidator {
                 serverInstanceId = metadata.serverInstanceId
                 serverIdentityId = metadata.serverIdentityId
             }
-            if let error = validateValidationAuthOkMetadata(payload, authRequired: authKey != nil) {
+            if let error = validateValidationAuthOkMetadata(payload) {
                 lastError = error
                 return
             }
@@ -565,22 +551,6 @@ final class RemoteValidator {
         throw ValidationError("timed out waiting for expected remote error: \(expected)")
     }
 
-    private func waitUntilAnyError(_ expectedErrors: [String], timeout: TimeInterval = 5) throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            lock.lock()
-            let error = lastError
-            lock.unlock()
-            if let error, expectedErrors.contains(error) {
-                return
-            }
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-        throw ValidationError(
-            "timed out waiting for one of expected remote errors: \(expectedErrors.joined(separator: ", "))"
-        )
-    }
-
     private func clearLastError() {
         lock.lock()
         lastError = nil
@@ -599,12 +569,10 @@ struct ValidationError: Error, CustomStringConvertible {
     init(_ description: String) { self.description = description }
 }
 
-func resolveRemoteValidatorArgs() -> (host: String, port: UInt16, authKey: String, checkDiscovery: Bool, expectAuthFailure: Bool) {
+func resolveRemoteValidatorArgs() -> (host: String, port: UInt16, checkDiscovery: Bool) {
     var host = "127.0.0.1"
     var port: UInt16 = 7337
-    var authKey = ""
     var checkDiscovery = false
-    var expectAuthFailure = false
     var index = 1
     while index < CommandLine.arguments.count {
         switch CommandLine.arguments[index] {
@@ -614,17 +582,12 @@ func resolveRemoteValidatorArgs() -> (host: String, port: UInt16, authKey: Strin
         case "--port":
             index += 1
             port = UInt16(CommandLine.arguments[index]) ?? 7337
-        case "--auth-key":
-            index += 1
-            authKey = CommandLine.arguments[index]
         case "--check-discovery":
             checkDiscovery = true
-        case "--expect-auth-failure":
-            expectAuthFailure = true
         default:
             break
         }
         index += 1
     }
-    return (host, port, authKey, checkDiscovery, expectAuthFailure)
+    return (host, port, checkDiscovery)
 }

@@ -73,7 +73,7 @@ struct ProtocolCodecSelfTestMain {
         assertEqual(clientState.serverBuildId, buildId, "auth ok build id decode")
         assertEqual(clientState.serverInstanceId, serverInstanceId, "auth ok instance id decode")
         assertEqual(clientState.serverIdentityId, serverIdentityId, "auth ok identity id decode")
-        assertEqual(validateAuthOkMetadata(authOkPayload, authRequired: true), nil, "auth ok metadata validation")
+        assertEqual(validateAuthOkMetadata(authOkPayload), nil, "auth ok metadata validation")
 
         var missingBuildPayload = Data(count: 6)
         missingBuildPayload.withUnsafeMutableBytes { bytes in
@@ -81,7 +81,7 @@ struct ProtocolCodecSelfTestMain {
             bytes.storeBytes(of: UInt32(0x7f).littleEndian, toByteOffset: 2, as: UInt32.self)
         }
         assertEqual(
-            validateAuthOkMetadata(missingBuildPayload, authRequired: true),
+            validateAuthOkMetadata(missingBuildPayload),
             "Remote handshake is missing server build metadata",
             "missing build metadata rejected"
         )
@@ -91,7 +91,7 @@ struct ProtocolCodecSelfTestMain {
             bytes.storeBytes(of: UInt16(2).littleEndian, as: UInt16.self)
         }
         assertEqual(
-            validateAuthOkMetadata(wrongVersionPayload, authRequired: true),
+            validateAuthOkMetadata(wrongVersionPayload),
             "Unsupported remote protocol version: 2",
             "wrong protocol version rejected"
         )
@@ -101,7 +101,7 @@ struct ProtocolCodecSelfTestMain {
             bytes.storeBytes(of: UInt32(0x0f).littleEndian, toByteOffset: 2, as: UInt32.self)
         }
         assertEqual(
-            validateAuthOkMetadata(missingHeartbeatPayload, authRequired: true),
+            validateAuthOkMetadata(missingHeartbeatPayload),
             "Remote server does not advertise heartbeat support",
             "missing heartbeat capability rejected"
         )
@@ -111,7 +111,7 @@ struct ProtocolCodecSelfTestMain {
             bytes.storeBytes(of: UInt32(0x1f).littleEndian, toByteOffset: 2, as: UInt32.self)
         }
         assertEqual(
-            validateAuthOkMetadata(missingResumePayload, authRequired: true),
+            validateAuthOkMetadata(missingResumePayload),
             "Remote server does not advertise attachment resume support",
             "missing attachment resume capability rejected"
         )
@@ -121,7 +121,7 @@ struct ProtocolCodecSelfTestMain {
             bytes.storeBytes(of: UInt32(0x3f).littleEndian, toByteOffset: 2, as: UInt32.self)
         }
         assertEqual(
-            validateAuthOkMetadata(missingIdentityCapabilityPayload, authRequired: true),
+            validateAuthOkMetadata(missingIdentityCapabilityPayload),
             "Remote server does not advertise daemon identity support",
             "missing daemon identity capability rejected"
         )

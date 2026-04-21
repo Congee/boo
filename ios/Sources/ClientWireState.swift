@@ -28,7 +28,6 @@ struct AuthOkMetadata: Equatable {
 }
 
 private let expectedRemoteProtocolVersion: UInt16 = 1
-private let remoteCapabilityHmacAuth: UInt32 = 1 << 0
 private let remoteCapabilityHeartbeat: UInt32 = 1 << 4
 private let remoteCapabilityAttachmentResume: UInt32 = 1 << 5
 private let remoteCapabilityDaemonIdentity: UInt32 = 1 << 6
@@ -114,15 +113,12 @@ func decodeAuthOkMetadata(_ payload: Data) -> AuthOkMetadata? {
     )
 }
 
-func validateAuthOkMetadata(_ payload: Data, authRequired: Bool) -> String? {
+func validateAuthOkMetadata(_ payload: Data) -> String? {
     guard let metadata = decodeAuthOkMetadata(payload) else {
         return "Remote handshake is malformed"
     }
     if metadata.protocolVersion != expectedRemoteProtocolVersion {
         return "Unsupported remote protocol version: \(metadata.protocolVersion)"
-    }
-    if authRequired && (metadata.transportCapabilities & remoteCapabilityHmacAuth) == 0 {
-        return "Remote server does not advertise HMAC authentication"
     }
     if (metadata.transportCapabilities & remoteCapabilityHeartbeat) == 0 {
         return "Remote server does not advertise heartbeat support"

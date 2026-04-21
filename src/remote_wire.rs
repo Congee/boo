@@ -57,7 +57,6 @@ pub enum MessageType {
     Input = 0x06,
     Resize = 0x07,
     Destroy = 0x08,
-    AuthChallenge = 0x09,
     Scroll = 0x0a,
     Key = 0x0b,
     ExecuteCommand = 0x0c,
@@ -100,7 +99,6 @@ pub enum LogicalChannel {
 pub const fn logical_channel_for_message_type(message_type: MessageType) -> LogicalChannel {
     match message_type {
         MessageType::Auth
-        | MessageType::AuthChallenge
         | MessageType::AuthOk
         | MessageType::AuthFail
         | MessageType::ListSessions
@@ -148,7 +146,6 @@ impl TryFrom<u8> for MessageType {
             0x06 => Self::Input,
             0x07 => Self::Resize,
             0x08 => Self::Destroy,
-            0x09 => Self::AuthChallenge,
             0x0a => Self::Scroll,
             0x0b => Self::Key,
             0x0c => Self::ExecuteCommand,
@@ -553,7 +550,7 @@ pub(crate) fn read_probe_auth_reply(
             }
         };
         match ty {
-            MessageType::AuthOk | MessageType::AuthChallenge | MessageType::AuthFail => {
+            MessageType::AuthOk | MessageType::AuthFail => {
                 return Ok((ty, payload));
             }
             MessageType::SessionList

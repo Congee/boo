@@ -486,7 +486,6 @@ control-socket = /tmp/boo.sock
 remote-port = 7337
 remote-prefer-nix-profile-binary = true
 remote-bind-address = 0.0.0.0
-remote-auth-key = "secret"
 remote-allow-insecure-no-auth = true
 
 keybind = " = new_split:right

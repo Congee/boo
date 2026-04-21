@@ -265,7 +265,7 @@ struct BooRootView: View {
         else { return }
 
         let matchingNodeId = store.savedNodes.first {
-            $0.host == host && $0.port == config.port && $0.authKey == config.authKey
+            $0.host == host && $0.port == config.port
         }?.id
         let historyId = store.recordConnection(
             nodeName: config.nodeName ?? host,
@@ -274,7 +274,6 @@ struct BooRootView: View {
         activeMonitor.connect(
             host: host,
             port: config.port,
-            authKey: config.authKey,
             historyId: historyId,
             nodeId: matchingNodeId
         )
@@ -291,7 +290,6 @@ struct ConnectScreen: View {
     let serverIdentityWarning: String?
 
     @State private var host = ""
-    @State private var authKey = ""
     @State private var serviceResolver: BonjourServiceResolver?
     @State private var resolvingBonjourService = false
 
@@ -370,11 +368,6 @@ struct ConnectScreen: View {
                         Text("Connect directly to a LAN host, a Tailscale IP, or any other reachable Boo endpoint.")
                             .font(KineticFont.caption)
                             .foregroundStyle(KineticColor.onSurfaceVariant)
-                        KineticSectionLabel(text: "Shared Secret (Optional)")
-                        KineticInputField(placeholder: "optional shared secret", text: $authKey, secure: true, accessibilityIdentifier: "connect-authkey-input")
-                        Text("Use this only if the remote Boo server is configured with an auth key. It is a shared secret used for challenge-response authentication before the session opens.")
-                            .font(KineticFont.caption)
-                            .foregroundStyle(KineticColor.onSurfaceVariant)
                     }
 
                     if let error = displayedConnectError {
@@ -435,7 +428,6 @@ struct ConnectScreen: View {
                                         monitor.connect(
                                             host: node.host,
                                             port: node.port,
-                                            authKey: node.authKey,
                                             historyId: historyId,
                                             nodeId: node.id
                                         )
@@ -575,7 +567,6 @@ struct ConnectScreen: View {
             endpoint: endpoint,
             displayHost: display.host,
             displayPort: display.port,
-            authKey: authKey,
             historyId: historyId
         )
     }
@@ -585,7 +576,7 @@ struct ConnectScreen: View {
             nodeName: nodeName,
             host: formatConnectionTarget(host: host, port: port)
         )
-        monitor.connect(host: host, port: port, authKey: authKey, historyId: historyId)
+        monitor.connect(host: host, port: port, historyId: historyId)
     }
 
     private func parseHost(_ raw: String) -> (String, UInt16) {
@@ -1198,7 +1189,6 @@ struct SettingsScreen: View {
     @State private var nodeName = ""
     @State private var nodeHost = ""
     @State private var nodePort = "7337"
-    @State private var nodeAuthKey = ""
     @State private var tailscalePort = "7337"
     @State private var tailscaleToken = ""
 
@@ -1250,7 +1240,6 @@ struct SettingsScreen: View {
                         KineticInputField(placeholder: "Name", text: $nodeName, accessibilityIdentifier: "settings-node-name-input")
                         KineticInputField(placeholder: "Host", text: $nodeHost, accessibilityIdentifier: "settings-node-host-input")
                         KineticInputField(placeholder: "Port", text: $nodePort, keyboardType: .numberPad, accessibilityIdentifier: "settings-node-port-input")
-                        KineticInputField(placeholder: "Auth Key", text: $nodeAuthKey, secure: true, accessibilityIdentifier: "settings-node-authkey-input")
                         Button("Save Node") { saveNode() }
                             .buttonStyle(KineticPrimaryButtonStyle())
                             .accessibilityIdentifier("save-node-button")
@@ -1333,10 +1322,9 @@ struct SettingsScreen: View {
     private func saveNode() {
         guard !nodeName.isEmpty, !nodeHost.isEmpty else { return }
         let port = UInt16(nodePort) ?? 7337
-        store.addNode(SavedNode(name: nodeName, host: nodeHost, port: port, authKey: nodeAuthKey))
+        store.addNode(SavedNode(name: nodeName, host: nodeHost, port: port))
         nodeName = ""
         nodeHost = ""
         nodePort = "7337"
-        nodeAuthKey = ""
     }
 }

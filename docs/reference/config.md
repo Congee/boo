@@ -17,7 +17,6 @@ Primary config file:
 - `prefix-key`
 - `control-socket`
 - `remote-port`
-- `remote-auth-key`
 - `keybind`
 - terminal and color-related appearance keys
 

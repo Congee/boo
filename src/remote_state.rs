@@ -22,7 +22,7 @@ use crate::remote_wire::{MessageType, RemoteFullState, encode_message};
 pub(crate) const REVIVABLE_ATTACHMENT_WINDOW: Duration = Duration::from_secs(30);
 
 /// Absolute deadline from `connected_at` for an unauthenticated client to
-/// finish the challenge/response exchange. Protects against clients pinning
+/// finish the initial auth acknowledgement. Protects against clients pinning
 /// the socket with empty `Auth` frames.
 pub(crate) const AUTH_CHALLENGE_WINDOW: Duration = Duration::from_secs(30);
 

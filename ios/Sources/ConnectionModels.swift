@@ -8,7 +8,6 @@ struct SavedNode: Identifiable, Codable {
     var name: String
     var host: String
     var port: UInt16 = 7337
-    var authKey: String = ""
     var lastConnected: Date?
 }
 
@@ -323,7 +322,6 @@ final class ConnectionStore: ObservableObject {
     }
 
     private func isLikelyUITestArtifactNode(_ node: SavedNode) -> Bool {
-        guard node.authKey.isEmpty else { return false }
         guard node.port != 7337 else { return false }
         return node.name == "Local Boo" || node.name == "UI Test Node"
     }
@@ -399,8 +397,7 @@ final class ConnectionStore: ObservableObject {
         let node = SavedNode(
             name: config.nodeName ?? "UI Test Node",
             host: host,
-            port: config.port,
-            authKey: config.authKey
+            port: config.port
         )
         guard let data = try? JSONEncoder().encode([node]) else { return }
         UserDefaults.standard.set(data, forKey: nodesKey)
@@ -452,7 +449,6 @@ final class ConnectionMonitor: ObservableObject {
     private(set) var lastEndpoint: NWEndpoint?
     private(set) var lastHost: String?
     private(set) var lastPort: UInt16?
-    private(set) var lastAuthKey: String?
     private(set) var currentHistoryId: UUID?
     private(set) var currentNodeId: UUID?
 
@@ -520,35 +516,33 @@ final class ConnectionMonitor: ObservableObject {
             }
     }
 
-    func connect(host: String, port: UInt16, authKey: String = "", historyId: UUID? = nil, nodeId: UUID? = nil) {
+    func connect(host: String, port: UInt16, historyId: UUID? = nil, nodeId: UUID? = nil) {
         lastEndpoint = nil
         lastHost = host
         lastPort = port
-        lastAuthKey = authKey
         currentHistoryId = historyId
         currentNodeId = nodeId
         status = .connecting
         transportHealth = .idle
         reconnectAllowed = true
         cancelReconnect()
-        startClientConnection(host: host, port: port, authKey: authKey)
+        startClientConnection(host: host, port: port)
     }
 
-    func connect(endpoint: NWEndpoint, displayHost: String, displayPort: UInt16, authKey: String = "", historyId: UUID? = nil, nodeId: UUID? = nil) {
+    func connect(endpoint: NWEndpoint, displayHost: String, displayPort: UInt16, historyId: UUID? = nil, nodeId: UUID? = nil) {
         lastEndpoint = endpoint
         lastHost = displayHost
         lastPort = displayPort
-        lastAuthKey = authKey
         currentHistoryId = historyId
         currentNodeId = nodeId
         status = .connecting
         transportHealth = .idle
         reconnectAllowed = true
         cancelReconnect()
-        startClientConnection(endpoint: endpoint, host: displayHost, port: displayPort, authKey: authKey)
+        startClientConnection(endpoint: endpoint, host: displayHost, port: displayPort)
     }
 
-    private func startClientConnection(host: String, port: UInt16, authKey: String) {
+    private func startClientConnection(host: String, port: UInt16) {
         client.configureTrustedServerIdentity(store.trustedServerIdentity(host: host, port: port))
         if let resume = store.resumeAttachment(host: host, port: port) {
             client.configureResumeAttachment(
@@ -557,10 +551,10 @@ final class ConnectionMonitor: ObservableObject {
                 resumeToken: resume.resumeToken
             )
         }
-        client.connect(host: host, port: port, authKey: authKey)
+        client.connect(host: host, port: port)
     }
 
-    private func startClientConnection(endpoint: NWEndpoint, host: String, port: UInt16, authKey: String) {
+    private func startClientConnection(endpoint: NWEndpoint, host: String, port: UInt16) {
         client.configureTrustedServerIdentity(store.trustedServerIdentity(host: host, port: port))
         if let resume = store.resumeAttachment(host: host, port: port) {
             client.configureResumeAttachment(
@@ -569,16 +563,16 @@ final class ConnectionMonitor: ObservableObject {
                 resumeToken: resume.resumeToken
             )
         }
-        client.connect(endpoint: endpoint, authKey: authKey)
+        client.connect(endpoint: endpoint)
     }
 
     func reconnect() {
         if let endpoint = lastEndpoint, let host = lastHost, let port = lastPort {
-            connect(endpoint: endpoint, displayHost: host, displayPort: port, authKey: lastAuthKey ?? "")
+            connect(endpoint: endpoint, displayHost: host, displayPort: port)
             return
         }
         guard let host = lastHost, let port = lastPort else { return }
-        connect(host: host, port: port, authKey: lastAuthKey ?? "")
+        connect(host: host, port: port)
     }
 
     func disconnect() {
@@ -591,7 +585,6 @@ final class ConnectionMonitor: ObservableObject {
         lastEndpoint = nil
         lastHost = nil
         lastPort = nil
-        lastAuthKey = nil
         currentHistoryId = nil
         currentNodeId = nil
     }
@@ -700,11 +693,11 @@ final class ConnectionMonitor: ObservableObject {
                let host = self.lastHost,
                let port = self.lastPort
             {
-                self.startClientConnection(endpoint: endpoint, host: host, port: port, authKey: self.lastAuthKey ?? "")
+                self.startClientConnection(endpoint: endpoint, host: host, port: port)
             } else if let host = self.lastHost,
                       let port = self.lastPort
             {
-                self.startClientConnection(host: host, port: port, authKey: self.lastAuthKey ?? "")
+                self.startClientConnection(host: host, port: port)
             }
         }
         reconnectWorkItem = workItem

@@ -1,6 +1,5 @@
 import Foundation
 import Network
-import CryptoKit
 import Security
 import UIKit
 
@@ -13,7 +12,6 @@ enum GSPMessageType: UInt8 {
     case input = 0x06
     case resize = 0x07
     case destroy = 0x08
-    case authChallenge = 0x09
     case scroll = 0x0a
     case heartbeat = 0x11
 
@@ -501,7 +499,6 @@ final class GSPClient: ObservableObject {
     @Published var lastError: String?
 
     private var connection: NWConnection?
-    private var authKey: SymmetricKey?
     private let queue = DispatchQueue(label: "boo-gsp-client", qos: .userInteractive)
     private var heartbeatTimer: DispatchSourceTimer?
     private var connectionTimeoutTimer: DispatchSourceTimer?
@@ -551,8 +548,7 @@ final class GSPClient: ObservableObject {
         return base
     }
 
-    func connect(host: String, port: UInt16, authKey: String = "") {
-        self.authKey = authKey.isEmpty ? nil : SymmetricKey(data: Data(authKey.utf8))
+    func connect(host: String, port: UInt16) {
         prepareForConnectionAttempt()
         let generation = connectionGeneration
         let params = makeQUICParameters()
@@ -719,8 +715,7 @@ final class GSPClient: ObservableObject {
         sendMessage(type: .auth, payload: Data())
     }
 
-    func connect(endpoint: NWEndpoint, authKey: String = "") {
-        self.authKey = authKey.isEmpty ? nil : SymmetricKey(data: Data(authKey.utf8))
+    func connect(endpoint: NWEndpoint) {
         prepareForConnectionAttempt()
         let generation = connectionGeneration
         let params = makeQUICParameters()
@@ -740,15 +735,6 @@ final class GSPClient: ObservableObject {
         params.allowLocalEndpointReuse = true
         params.includePeerToPeer = true
         return params
-    }
-
-    private func handleAuthChallenge(_ payload: Data) {
-        guard payload.count == 32, let key = authKey else {
-            lastError = "Authentication challenge failed"
-            return
-        }
-        let hmac = HMAC<SHA256>.authenticationCode(for: payload, using: key)
-        sendMessage(type: .auth, payload: Data(hmac))
     }
 
     private func sendMessage(type: GSPMessageType, payload: Data) {
@@ -888,8 +874,6 @@ final class GSPClient: ObservableObject {
     private func handleMessage(type: UInt8, payload: Data) {
         guard let message = GSPMessageType(rawValue: type) else { return }
         switch message {
-        case .authChallenge:
-            handleAuthChallenge(payload)
         case .authOk:
             if let authRequestedAt {
                 lastAuthLatencyMs = Date().timeIntervalSince(authRequestedAt) * 1000
@@ -945,7 +929,7 @@ final class GSPClient: ObservableObject {
     }
 
     private func validateAuthOkPayload(_ payload: Data) -> String? {
-        validateAuthOkMetadata(payload, authRequired: authKey != nil)
+        validateAuthOkMetadata(payload)
     }
 
     private var shouldPreserveRemoteStateOnReconnect: Bool {

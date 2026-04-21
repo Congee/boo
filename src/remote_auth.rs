@@ -1,10 +1,8 @@
-//! Inbound message loop for the remote daemon: authentication + dispatch.
+//! Inbound message loop for the remote daemon: auth acknowledgement + dispatch.
 //!
 //! Two interacting pieces:
-//! * [`handle_auth_message`] — implements the HMAC challenge/response handshake.
-//!   On first `Auth(empty)` it mints a challenge; on the matching response it
-//!   verifies the HMAC-SHA256 MAC and flips `ClientState::authenticated`. Short-
-//!   circuits to a happy path when `auth_key.is_none()`.
+//! * [`handle_auth_message`] — accepts the protocol `Auth` message, flips
+//!   `ClientState::authenticated`, and emits `AuthOk` with handshake metadata.
 //! * [`read_loop`] — runs on the per-client reader thread. Pulls frames off the
 //!   socket, routes `Auth` / `Heartbeat` inline, translates every other message
 //!   into a `RemoteCmd`, and on exit parks the client's pane state into
