@@ -18,6 +18,29 @@ struct UITestLaunchConfiguration {
     let tailscaleToken: String?
     let mockTailscaleDevices: [MockTailscaleDevice]
 
+    private static func fileConfiguredHostAndPort() -> (host: String, port: UInt16)? {
+        let url = URL(fileURLWithPath: "/tmp/boo-ios-ui-tests.env")
+        guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+
+        var host: String?
+        var port: UInt16?
+        for line in raw.split(whereSeparator: \.isNewline) {
+            let parts = line.split(separator: "=", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            switch parts[0] {
+            case "BOO_UI_TEST_HOST":
+                host = parts[1]
+            case "BOO_UI_TEST_PORT":
+                port = UInt16(parts[1])
+            default:
+                break
+            }
+        }
+
+        guard let host, let port else { return nil }
+        return (host, port)
+    }
+
     private static func argumentValue(prefix: String, arguments: [String]) -> String? {
         arguments.first { $0.hasPrefix(prefix) }.map { String($0.dropFirst(prefix.count)) }
     }
@@ -43,15 +66,26 @@ struct UITestLaunchConfiguration {
     static func current() -> UITestLaunchConfiguration? {
         let env = ProcessInfo.processInfo.environment
         let arguments = ProcessInfo.processInfo.arguments
-        let modeEnabled = env["BOO_UI_TEST_MODE"] == "1" || arguments.contains("--boo-ui-test-mode")
+        let info = Bundle.main.infoDictionary
+        let fileConfigured = fileConfiguredHostAndPort()
+        let modeEnabled =
+            env["BOO_UI_TEST_MODE"] == "1" ||
+            arguments.contains("--boo-ui-test-mode") ||
+            (info?["BOO_UI_TEST_HOST"] as? String) != nil ||
+            (info?["BOO_UI_TEST_PORT"] != nil) ||
+            fileConfigured != nil
         guard modeEnabled else { return nil }
 
-        let host = argumentValue(prefix: "--boo-ui-test-host=", arguments: arguments) ?? env["BOO_UI_TEST_HOST"]
-        let port = argumentValue(prefix: "--boo-ui-test-port=", arguments: arguments)
-            .flatMap(UInt16.init)
-            ?? env["BOO_UI_TEST_PORT"]
-                .flatMap(UInt16.init)
-            ?? 7337
+        let hostFromArgs = argumentValue(prefix: "--boo-ui-test-host=", arguments: arguments)
+        let hostFromEnv = env["BOO_UI_TEST_HOST"]
+        let hostFromInfo = info?["BOO_UI_TEST_HOST"] as? String
+        let host = hostFromArgs ?? hostFromEnv ?? hostFromInfo ?? fileConfigured?.host
+
+        let portFromArgs = argumentValue(prefix: "--boo-ui-test-port=", arguments: arguments).flatMap(UInt16.init)
+        let portFromEnv = env["BOO_UI_TEST_PORT"].flatMap(UInt16.init)
+        let portFromInfoString = (info?["BOO_UI_TEST_PORT"] as? String).flatMap(UInt16.init)
+        let portFromInfoNumber = (info?["BOO_UI_TEST_PORT"] as? NSNumber)?.uint16Value
+        let port = portFromArgs ?? portFromEnv ?? portFromInfoString ?? portFromInfoNumber ?? fileConfigured?.port ?? 7337
         let nodeName = argumentValue(prefix: "--boo-ui-test-node-name=", arguments: arguments) ?? env["BOO_UI_TEST_NODE_NAME"]
         let autoConnect = arguments.contains("--boo-ui-test-auto-connect") || env["BOO_UI_TEST_AUTO_CONNECT"] == "1"
         let resetStorage = arguments.contains("--boo-ui-test-reset-storage") || env["BOO_UI_TEST_RESET_STORAGE"] == "1"

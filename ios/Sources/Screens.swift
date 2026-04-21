@@ -146,38 +146,34 @@ struct BooRootView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             Group {
-                if client.attachedSessionId != nil {
-                    TerminalSessionScreen(client: client, monitor: activeMonitor, selectedTab: $selectedTab, serverIdentityWarning: serverIdentityWarning)
-                } else {
-                    switch selectedTab {
-                    case .sessions:
-                        if client.connected && client.authenticated {
-                            SessionsScreen(client: client, monitor: activeMonitor, selectedTab: $selectedTab, serverIdentityWarning: serverIdentityWarning)
-                        } else {
-                            ConnectScreen(
-                                client: client,
-                                browser: browser,
-                                tailscaleBrowser: tailscaleBrowser,
-                                store: store,
-                                monitor: activeMonitor,
-                                selectedTab: $selectedTab,
-                                serverIdentityWarning: serverIdentityWarning
-                            )
-                        }
-                    case .history:
-                        HistoryScreen(store: store)
-                    case .settings:
-                        SettingsScreen(
+                switch selectedTab {
+                case .sessions:
+                    if client.connected && client.authenticated {
+                        TerminalSessionScreen(client: client, monitor: activeMonitor, serverIdentityWarning: serverIdentityWarning)
+                    } else {
+                        ConnectScreen(
                             client: client,
-                            store: store,
+                            browser: browser,
                             tailscaleBrowser: tailscaleBrowser,
+                            store: store,
                             monitor: activeMonitor,
-                            serverIdentityWarning: $serverIdentityWarning
+                            selectedTab: $selectedTab,
+                            serverIdentityWarning: serverIdentityWarning
                         )
                     }
+                case .history:
+                    HistoryScreen(store: store)
+                case .settings:
+                    SettingsScreen(
+                        client: client,
+                        store: store,
+                        tailscaleBrowser: tailscaleBrowser,
+                        monitor: activeMonitor,
+                        serverIdentityWarning: $serverIdentityWarning
+                    )
                 }
             }
-            if client.attachedSessionId == nil {
+            if !client.connected || !client.authenticated {
                 KineticTabBar(selectedTab: $selectedTab)
                     .padding(.bottom, KineticSpacing.md)
             }
@@ -292,6 +288,7 @@ struct ConnectScreen: View {
     @State private var host = ""
     @State private var serviceResolver: BonjourServiceResolver?
     @State private var resolvingBonjourService = false
+    @State private var didApplyUITestHostPrefill = false
 
     private var displayedConnectError: String? {
         guard let error = client.lastError else { return nil }
@@ -507,6 +504,7 @@ struct ConnectScreen: View {
             }
         }
         .onAppear {
+            applyUITestHostPrefillIfNeeded()
             store.refreshTailscaleTokenStatus()
             browser.startBrowsing()
             tailscaleBrowser.refresh(store: store)
@@ -524,6 +522,19 @@ struct ConnectScreen: View {
         guard !host.isEmpty else { return }
         let parsed = parseHost(host)
         connectToHost(parsed.0, port: parsed.1, nodeName: parsed.0)
+    }
+
+    private func applyUITestHostPrefillIfNeeded() {
+        guard !didApplyUITestHostPrefill else { return }
+        didApplyUITestHostPrefill = true
+        guard
+            host.isEmpty,
+            let config = UITestLaunchConfiguration.current(),
+            let configuredHost = config.host
+        else {
+            return
+        }
+        host = formatConnectionTarget(host: configuredHost, port: config.port)
     }
 
     private func connectToEndpoint(_ endpoint: NWEndpoint) {
@@ -591,385 +602,151 @@ struct ConnectScreen: View {
     }
 }
 
-struct SessionsScreen: View {
-    @ObservedObject var client: GSPClient
-    @ObservedObject var monitor: ConnectionMonitor
-    @Binding var selectedTab: BooTab
-    let serverIdentityWarning: String?
-
-    private var activeSessions: [SessionInfo] {
-        client.sessions.filter { !$0.childExited }
-    }
-
-    private var hasLiveSessionList: Bool {
-        guard client.connected, client.authenticated else { return false }
-        if case .lost = monitor.transportHealth {
-            return false
-        }
-        return true
-    }
-
-    private var visibleSessions: [SessionInfo] {
-        hasLiveSessionList ? activeSessions : []
-    }
-
-    private var emptyStateTitle: String {
-        hasLiveSessionList ? "No open sessions" : "Session list unavailable"
-    }
-
-    private var emptyStateSubtitle: String {
-        hasLiveSessionList
-            ? "Create a new session or reconnect to refresh the list."
-            : "Reconnect to the server to refresh reachable sessions."
-    }
-
-    private var connectionSummary: String? {
-        switch monitor.status {
-        case .attached:
-            return monitor.lastHost.map { "Connected to \($0)" } ?? "Connected"
-        case .authenticated, .connected:
-            return monitor.lastHost.map { "Connected to \($0)" } ?? "Connected"
-        case .connecting:
-            return monitor.lastHost.map { "Connecting to \($0)" } ?? "Connecting"
-        case .connectionLost:
-            return monitor.lastHost.map { "Connection lost to \($0)" } ?? "Connection lost"
-        case .disconnected:
-            return monitor.lastHost.map { "Disconnected from \($0)" } ?? "Disconnected"
-        }
-    }
-
-    private var connectionBannerText: String? {
-        if let serverIdentityWarning {
-            return serverIdentityWarning
-        }
-        switch monitor.transportHealth {
-        case .degraded(let reason):
-            return reason
-        case .lost(let reason):
-            return reason
-        case .idle, .healthy:
-            break
-        }
-        switch monitor.reconnectState {
-        case .waiting(let attempt, _):
-            return "Reconnecting (attempt \(attempt))"
-        case .failed(let reason):
-            return "Reconnect failed: \(reason)"
-        case .idle:
-            return nil
-        }
-    }
-
-    private var connectionBannerColor: Color {
-        if serverIdentityWarning != nil {
-            return KineticColor.error
-        }
-        switch monitor.transportHealth {
-        case .degraded:
-            return KineticColor.tertiary
-        case .lost:
-            return KineticColor.error
-        case .idle, .healthy:
-            break
-        }
-        switch monitor.reconnectState {
-        case .waiting:
-            return KineticColor.primary
-        case .failed:
-            return KineticColor.error
-        case .idle:
-            return KineticColor.tertiary
-        }
-    }
-
-    private func sessionTitle(_ session: SessionInfo) -> String {
-        if !session.name.isEmpty { return session.name }
-        if !session.title.isEmpty { return session.title }
-        return "Session \(session.id)"
-    }
-
-    private func sessionSubtitle(_ session: SessionInfo) -> String {
-        if !session.pwd.isEmpty { return session.pwd }
-        if !session.title.isEmpty { return session.title }
-        return "Ready"
-    }
-
-    private func sessionStatus(_ session: SessionInfo) -> String {
-        if client.pendingAttachedSessionId == session.id {
-            return "Opening"
-        }
-        if client.attachedSessionId == session.id {
-            return "Current"
-        }
-        if session.attached {
-            return "In Use"
-        }
-        return "Open"
-    }
-
-    private func sessionStatusColor(_ session: SessionInfo) -> Color {
-        if client.pendingAttachedSessionId == session.id {
-            return KineticColor.primary
-        }
-        if client.attachedSessionId == session.id {
-            return KineticColor.primary
-        }
-        if session.attached {
-            return KineticColor.tertiary
-        }
-        return KineticColor.onSurfaceVariant
-    }
-
-    @ViewBuilder
-    private func sessionRow(_ session: SessionInfo) -> some View {
-        Button {
-            client.attach(sessionId: session.id)
-        } label: {
-            HStack(spacing: KineticSpacing.md) {
-                Image(systemName: client.attachedSessionId == session.id ? "terminal.fill" : "terminal")
-                    .font(.system(size: 20))
-                    .foregroundStyle(KineticColor.primary)
-                    .frame(width: 40, height: 40)
-                    .background(KineticColor.surfaceContainerHighest)
-                    .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
-                VStack(alignment: .leading, spacing: KineticSpacing.xs) {
-                    Text(sessionTitle(session))
-                        .font(KineticFont.bodySmall)
-                        .fontWeight(.bold)
-                        .foregroundStyle(KineticColor.onSurface)
-                    Text(sessionSubtitle(session))
-                        .font(KineticFont.caption)
-                        .foregroundStyle(KineticColor.onSurfaceVariant)
-                }
-                Spacer()
-                Text(sessionStatus(session).uppercased())
-                    .font(KineticFont.sectionLabel)
-                    .tracking(1)
-                    .foregroundStyle(sessionStatusColor(session))
-            }
-            .padding(KineticSpacing.md)
-            .containerCard()
-        }
-        .buttonStyle(.plain)
-        .disabled(client.pendingAttachedSessionId != nil)
-        .accessibilityIdentifier("session-row-\(session.id)")
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            KineticTopBar(
-                title: "boo > Sessions",
-                subtitle: nil,
-                compact: true,
-                showBrand: false
-            )
-            if let connectionBannerText {
-                transportBanner(reason: connectionBannerText, color: connectionBannerColor)
-            }
-            ScrollView {
-                VStack(alignment: .leading, spacing: KineticSpacing.xl) {
-                    if hasLiveSessionList, !visibleSessions.isEmpty {
-                        KineticSectionLabel(text: "Open Tabs")
-                    }
-                    if visibleSessions.isEmpty {
-                        VStack(alignment: .leading, spacing: KineticSpacing.xs) {
-                            Text(emptyStateTitle)
-                                .font(KineticFont.body)
-                                .fontWeight(.bold)
-                                .foregroundStyle(KineticColor.onSurface)
-                            Text(emptyStateSubtitle)
-                                .font(KineticFont.caption)
-                                .foregroundStyle(KineticColor.onSurfaceVariant)
-                        }
-                        .padding(KineticSpacing.md)
-                        .containerCard()
-                    } else {
-                        ForEach(visibleSessions) { session in
-                            sessionRow(session)
-                        }
-                    }
-
-                    VStack(spacing: KineticSpacing.sm) {
-                        Button("Create New Session") {
-                            client.createSession()
-                        }
-                        .buttonStyle(KineticPrimaryButtonStyle())
-                        .disabled(!hasLiveSessionList)
-                        .accessibilityIdentifier("create-session-button")
-
-                        Button("Disconnect") {
-                            monitor.disconnect()
-                        }
-                        .buttonStyle(KineticSecondaryButtonStyle())
-                        .accessibilityIdentifier("sessions-disconnect-button")
-                    }
-
-                    Spacer().frame(height: 120)
-                }
-                .padding(.horizontal, KineticSpacing.md)
-            }
-        }
-        .onAppear {
-            if client.authenticated {
-                client.listSessions()
-            }
-        }
-    }
-
-    private var transportSummary: String? {
-        switch monitor.transportHealth {
-        case .idle:
-            return nil
-        case .healthy:
-            return "transport healthy"
-        case .degraded(let reason):
-            return "transport degraded: \(reason)"
-        case .lost(let reason):
-            return "transport lost: \(reason)"
-        }
-    }
-
-    private var reconnectSummary: String? {
-        switch monitor.reconnectState {
-        case .idle:
-            return nil
-        case .waiting(let attempt, _):
-            return "reconnecting (\(attempt))"
-        case .failed(let reason):
-            return "reconnect failed: \(reason)"
-        }
-    }
-
-    private func transportBanner(reason: String, color: Color) -> some View {
-        Text(reason)
-            .font(KineticFont.caption)
-            .foregroundStyle(color)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(KineticSpacing.md)
-            .background(color.opacity(0.1))
-    }
-}
-
 struct TerminalSessionScreen: View {
     @ObservedObject var client: GSPClient
     @ObservedObject var monitor: ConnectionMonitor
-    @Binding var selectedTab: BooTab
     let serverIdentityWarning: String?
 
     @State private var keyboardFocused = false
     @State private var ctrlActive = false
     @State private var altActive = false
     @State private var metaActive = false
+    @State private var requestedInitialSession = false
+
+    private var visibleSessions: [SessionInfo] {
+        client.sessions.filter { !$0.childExited }
+    }
 
     private var sessionHealth: AttachedSessionHealth {
         resolveAttachedSessionHealth(attachedSessionId: client.attachedSessionId, sessions: client.sessions)
-    }
-
-    private var attachedSession: SessionInfo? {
-        guard let sessionId = client.attachedSessionId else { return nil }
-        return client.sessions.first(where: { $0.id == sessionId })
     }
 
     private var sessionHealthIssue: String? {
         sessionHealth.issue
     }
 
-    private var sessionTitle: String {
-        guard let sessionId = client.attachedSessionId else { return "Session" }
-        if let session = attachedSession {
-            if !session.name.isEmpty { return session.name }
-            if !session.title.isEmpty { return session.title }
+    private var preferredSessionToAttach: SessionInfo? {
+        if let pendingId = client.pendingAttachedSessionId {
+            return visibleSessions.first(where: { $0.id == pendingId })
         }
-        return "Session \(sessionId)"
-    }
-
-    private var terminalHeaderTitle: String {
-        "boo > Sessions > \(sessionTitle)"
+        if let attachedSessionId = client.attachedSessionId {
+            return visibleSessions.first(where: { $0.id == attachedSessionId })
+        }
+        if let inUseSession = visibleSessions.first(where: { $0.attached }) {
+            return inUseSession
+        }
+        return visibleSessions.first
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            KineticTopBar(
-                title: terminalHeaderTitle,
-                subtitle: nil,
-                compact: true,
-                showBrand: false
-            )
-
-            if let serverIdentityWarning {
-                transportBanner(reason: serverIdentityWarning, color: KineticColor.error)
-            } else if let sessionHealthIssue {
-                transportBanner(reason: sessionHealthIssue, color: KineticColor.error)
-            } else if let lastError = client.lastError, !lastError.isEmpty {
-                transportBanner(reason: lastError, color: KineticColor.error)
-            } else if let disconnectReason {
-                transportBanner(reason: disconnectReason, color: KineticColor.error)
-            } else if case .degraded(let reason) = monitor.transportHealth {
-                transportBanner(reason: reason, color: KineticColor.tertiary)
+        terminalSessionBody
+            .background(KineticColor.surface)
+            .toolbar { terminalKeyboardToolbar }
+        .onAppear {
+            if client.authenticated {
+                client.listSessions()
             }
-
-            RemoteTerminalView(screen: client.screen) { cols, rows in
-                client.sendResize(cols: cols, rows: rows)
-            } onGestureAction: { action in
-                handleTerminalGesture(action)
-            }
-            .opacity(isDisconnected ? 0.5 : 1.0)
-            .accessibilityIdentifier("terminal-screen")
-            .accessibilityValue(client.screen.accessibilityTextSnapshot)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                guard !isDisconnected else { return }
+            autoAttachPreferredSessionIfNeeded()
+            guard !isDisconnected, client.attachedSessionId != nil else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 keyboardFocused = true
             }
-            .overlay {
-                TerminalKeyboardBridge(isFocused: $keyboardFocused) { text in
-                    sendTypedText(text)
-                } onBackspace: {
-                    client.sendInputBytes(Data([0x7f]))
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())
+        }
+        .onReceive(client.$sessions) { _ in
+            autoAttachPreferredSessionIfNeeded()
+        }
+        .onChange(of: client.authenticated) { _, authenticated in
+            if !authenticated {
+                requestedInitialSession = false
             }
         }
-        .background(KineticColor.surface)
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                accessoryButton("ESC") { sendSpecialKey([0x1b]) }
-                accessoryButton("CTRL", active: ctrlActive) { ctrlActive.toggle() }
-                accessoryButton("ALT", active: altActive) { altActive.toggle() }
-                accessoryButton("TAB") { sendSpecialKey([0x09]) }
-                accessoryButton("↑") { sendSpecialKey([0x1b, 0x5b, 0x41]) }
-                accessoryButton("↓") { sendSpecialKey([0x1b, 0x5b, 0x42]) }
-                accessoryButton("←") { sendSpecialKey([0x1b, 0x5b, 0x44]) }
-                accessoryButton("→") { sendSpecialKey([0x1b, 0x5b, 0x43]) }
-                Menu("More") {
-                    Button("META") { metaActive.toggle() }
-                    Button("HOME") { sendSpecialKey([0x1b, 0x5b, 0x48]) }
-                    Button("END") { sendSpecialKey([0x1b, 0x5b, 0x46]) }
-                    Button("Page Up") { sendSpecialKey([0x1b, 0x5b, 0x35, 0x7e]) }
-                    Button("Page Down") { sendSpecialKey([0x1b, 0x5b, 0x36, 0x7e]) }
-                    Button("F1") { sendSpecialKey([0x1b, 0x4f, 0x50]) }
-                    Button("F2") { sendSpecialKey([0x1b, 0x4f, 0x51]) }
-                    Button("F3") { sendSpecialKey([0x1b, 0x4f, 0x52]) }
-                    Button("F4") { sendSpecialKey([0x1b, 0x4f, 0x53]) }
-                }
-            }
-        }
-        .onAppear {
-            guard !isDisconnected else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+        .onChange(of: client.attachedSessionId) { _, attachedSessionId in
+            if attachedSessionId != nil {
+                requestedInitialSession = false
                 keyboardFocused = true
             }
         }
         .onChange(of: isDisconnected) { _, disconnected in
             if disconnected {
+                requestedInitialSession = false
                 keyboardFocused = false
-                client.detach()
-                selectedTab = .sessions
             }
         }
         .onDisappear {
             keyboardFocused = false
+        }
+    }
+
+    private var terminalSessionBody: some View {
+        VStack(spacing: 0) {
+            terminalBanner
+            terminalView
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var terminalKeyboardToolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .keyboard) {
+            accessoryButton("ESC") { sendSpecialKey([0x1b]) }
+            accessoryButton("CTRL", active: ctrlActive) { ctrlActive.toggle() }
+            accessoryButton("ALT", active: altActive) { altActive.toggle() }
+            accessoryButton("TAB") { sendSpecialKey([0x09]) }
+            accessoryButton("↑") { sendSpecialKey([0x1b, 0x5b, 0x41]) }
+            accessoryButton("↓") { sendSpecialKey([0x1b, 0x5b, 0x42]) }
+            accessoryButton("←") { sendSpecialKey([0x1b, 0x5b, 0x44]) }
+            accessoryButton("→") { sendSpecialKey([0x1b, 0x5b, 0x43]) }
+            Menu("More") {
+                Button("META") { metaActive.toggle() }
+                Button("HOME") { sendSpecialKey([0x1b, 0x5b, 0x48]) }
+                Button("END") { sendSpecialKey([0x1b, 0x5b, 0x46]) }
+                Button("Page Up") { sendSpecialKey([0x1b, 0x5b, 0x35, 0x7e]) }
+                Button("Page Down") { sendSpecialKey([0x1b, 0x5b, 0x36, 0x7e]) }
+                Button("F1") { sendSpecialKey([0x1b, 0x4f, 0x50]) }
+                Button("F2") { sendSpecialKey([0x1b, 0x4f, 0x51]) }
+                Button("F3") { sendSpecialKey([0x1b, 0x4f, 0x52]) }
+                Button("F4") { sendSpecialKey([0x1b, 0x4f, 0x53]) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var terminalBanner: some View {
+        if let serverIdentityWarning {
+            transportBanner(reason: serverIdentityWarning, color: KineticColor.error)
+        } else if let sessionHealthIssue {
+            transportBanner(reason: sessionHealthIssue, color: KineticColor.error)
+        } else if let lastError = client.lastError, !lastError.isEmpty {
+            transportBanner(reason: lastError, color: KineticColor.error)
+        } else if let disconnectReason {
+            transportBanner(reason: disconnectReason, color: KineticColor.error)
+        } else if case .degraded(let reason) = monitor.transportHealth {
+            transportBanner(reason: reason, color: KineticColor.tertiary)
+        }
+    }
+
+    private var terminalView: some View {
+        RemoteTerminalView(screen: client.screen) { cols, rows in
+            client.sendResize(cols: cols, rows: rows)
+        } onGestureAction: { action in
+            handleTerminalGesture(action)
+        }
+        .opacity(isDisconnected || client.attachedSessionId == nil ? 0.5 : 1.0)
+        .accessibilityIdentifier("terminal-screen")
+        .accessibilityLabel(client.attachedSessionId.map { "attached-\($0)" } ?? "detached")
+        .accessibilityValue(client.screen.accessibilityTextSnapshot)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard !isDisconnected, client.attachedSessionId != nil else { return }
+            keyboardFocused = true
+        }
+        .overlay {
+            TerminalKeyboardBridge(isFocused: $keyboardFocused) { text in
+                sendTypedText(text)
+            } onBackspace: {
+                client.sendInputBytes(Data([0x7f]))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
         }
     }
 
@@ -1000,6 +777,19 @@ struct TerminalSessionScreen: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(KineticSpacing.md)
             .background(color.opacity(0.1))
+    }
+
+    private func autoAttachPreferredSessionIfNeeded() {
+        guard client.connected, client.authenticated else { return }
+        guard client.attachedSessionId == nil, client.pendingAttachedSessionId == nil else { return }
+        if visibleSessions.isEmpty {
+            guard !requestedInitialSession else { return }
+            requestedInitialSession = true
+            client.createSession()
+            return
+        }
+        guard let session = preferredSessionToAttach else { return }
+        client.attach(sessionId: session.id)
     }
 
     private func accessoryButton(_ label: String, active: Bool = false, action: @escaping () -> Void) -> some View {

@@ -9,7 +9,6 @@ DERIVED_DATA="${BOO_IOS_UI_TEST_DERIVED_DATA:-$ROOT/ios/.derived-uitests}"
 HOST="${BOO_IOS_UI_TEST_HOST:-}"
 TEAM_ID="${BOO_IOS_TEAM_ID:-}"
 ONLY_TEST="${BOO_IOS_UI_TEST_ONLY:-}"
-GENERATED_CONFIG="$ROOT/ios/BooUITests/GeneratedUITestConfig.swift"
 HOST_PORT_FILE="/tmp/boo-ios-ui-tests.env"
 SKIP_DAEMON="${BOO_IOS_UI_TEST_SKIP_DAEMON:-0}"
 
@@ -46,31 +45,12 @@ cleanup() {
   fi
   rm -f "$SOCKET_PATH"
   rm -f "$HOST_PORT_FILE"
-  cat > "$GENERATED_CONFIG" <<'EOF'
-enum GeneratedUITestConfig {
-    static let host: String? = nil
-    static let port: UInt16 = 7351
-}
-EOF
 }
 trap cleanup EXIT
 
 cd "$ROOT"
-if [[ "$SKIP_DAEMON" == "1" ]]; then
-cat > "$GENERATED_CONFIG" <<'EOF'
-enum GeneratedUITestConfig {
-    static let host: String? = nil
-    static let port: UInt16 = 7337
-}
-EOF
-else
-cat > "$GENERATED_CONFIG" <<EOF
-enum GeneratedUITestConfig {
-    static let host: String? = $(printf '%s' "\"$HOST\"")
-    static let port: UInt16 = $PORT
-}
-EOF
-cat > "$HOST_PORT_FILE" <<EOF
+if [[ "$SKIP_DAEMON" != "1" ]]; then
+  cat > "$HOST_PORT_FILE" <<EOF
 BOO_UI_TEST_HOST=$HOST
 BOO_UI_TEST_PORT=$PORT
 EOF

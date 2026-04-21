@@ -170,12 +170,6 @@ final class BooAppLaunchTests: BooUITestCase {
 
         let title = app.staticTexts["screen-title"]
         XCTAssertTrue(title.waitForExistence(timeout: 5))
-        if isSessionsScreenTitle(title.label) {
-            let disconnectButton = app.buttons["sessions-disconnect-button"]
-            XCTAssertTrue(disconnectButton.waitForExistence(timeout: 5))
-            disconnectButton.tap()
-            XCTAssertTrue(title.waitForExistence(timeout: 5))
-        }
         XCTAssertTrue(isConnectScreenTitle(title.label))
 
         let discoveredRows = discoveredDaemonRows(in: app)
@@ -200,7 +194,6 @@ final class BooAppLaunchTests: BooUITestCase {
         app.tap()
 
         navigateToConnectScreen(app)
-        let title = app.staticTexts["screen-title"]
 
         let discoveredRows = discoveredDaemonRows(in: app)
         let firstRow = discoveredRows.firstMatch
@@ -209,7 +202,7 @@ final class BooAppLaunchTests: BooUITestCase {
 
         let deadline = Date().addingTimeInterval(12)
         while Date() < deadline {
-            if title.exists, isSessionsScreenTitle(title.label) {
+            if app.otherElements["terminal-screen"].exists {
                 return
             }
             let errorLabel = app.staticTexts["connect-error-label"]
@@ -231,7 +224,6 @@ final class BooAppLaunchTests: BooUITestCase {
         app.tap()
 
         navigateToConnectScreen(app)
-        let title = app.staticTexts["screen-title"]
 
         let tailscaleSection = app.staticTexts["TAILSCALE DEVICES"]
         scrollUntilExists(tailscaleSection, in: app)
@@ -242,7 +234,7 @@ final class BooAppLaunchTests: BooUITestCase {
 
         let deadline = Date().addingTimeInterval(15)
         while Date() < deadline {
-            if title.exists, isSessionsScreenTitle(title.label) {
+            if app.otherElements["terminal-screen"].exists {
                 return
             }
             let errorLabel = app.staticTexts["connect-error-label"]
@@ -281,34 +273,6 @@ final class BooAppLaunchTests: BooUITestCase {
         waitForExpectations(timeout: 10)
     }
 
-    func testCaptureActiveSessionsScreenshot() {
-        let app = makeApp(autoConnect: false, resetStorage: false)
-        _ = installSystemAlertHandler(for: app)
-        app.launch()
-        app.tap()
-
-        let title = app.staticTexts["screen-title"]
-        XCTAssertTrue(title.waitForExistence(timeout: 5))
-
-        if !isSessionsScreenTitle(title.label), let explicitHost {
-            let hostField = app.textFields["connect-host-input"]
-            XCTAssertTrue(hostField.waitForExistence(timeout: 5))
-            hostField.tap()
-            hostField.typeText("\(explicitHost):\(port)")
-
-            let connectButton = app.buttons["connect-button"]
-            XCTAssertTrue(connectButton.waitForExistence(timeout: 5))
-            connectButton.tap()
-            XCTAssertTrue(title.waitForExistence(timeout: 20))
-        }
-
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = "active-sessions"
-        attachment.lifetime = .keepAlways
-        add(attachment)
-        XCTAssertTrue(isSessionsScreenTitle(title.label))
-    }
-
     func testConnectScreenElementsAppear() {
         let app = makeApp()
         _ = installSystemAlertHandler(for: app)
@@ -317,19 +281,10 @@ final class BooAppLaunchTests: BooUITestCase {
 
         let title = app.staticTexts["screen-title"]
         XCTAssertTrue(title.waitForExistence(timeout: 5))
-        if isSessionsScreenTitle(title.label) {
-            let disconnectButton = app.buttons["sessions-disconnect-button"]
-            XCTAssertTrue(disconnectButton.waitForExistence(timeout: 5))
-            disconnectButton.tap()
-            XCTAssertTrue(title.waitForExistence(timeout: 5))
-        }
         XCTAssertTrue(isConnectScreenTitle(title.label))
         XCTAssertTrue(app.textFields["connect-host-input"].exists)
         XCTAssertTrue(app.buttons["connect-button"].exists)
         XCTAssertTrue(app.buttons["settings-button"].exists)
-        if explicitHost != nil {
-            XCTAssertTrue(app.buttons["saved-node-Local Boo"].exists)
-        }
     }
 
     func testAutoConnectCanCreateAndAttachSession() {
