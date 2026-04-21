@@ -885,18 +885,7 @@ struct TerminalSessionScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            KineticTopBar(
-                title: sessionTitle,
-                subtitle: nil,
-                compact: true,
-                showBrand: false,
-                trailingSystemImage: "rectangle.stack",
-                trailingAccessibilityLabel: "Sessions",
-                trailingAction: {
-                    client.detach()
-                    selectedTab = .sessions
-                }
-            )
+            terminalBreadcrumbBar
 
             if let serverIdentityWarning {
                 transportBanner(reason: serverIdentityWarning, color: KineticColor.error)
@@ -932,33 +921,31 @@ struct TerminalSessionScreen: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
             }
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: KineticSpacing.xs) {
-                    modifierButton("ESC") { sendSpecialKey([0x1b]) }
-                    modifierButton("CTRL", active: ctrlActive) { ctrlActive.toggle() }
-                    modifierButton("ALT", active: altActive) { altActive.toggle() }
-                    modifierButton("META", active: metaActive) { metaActive.toggle() }
-                    modifierButton("TAB") { sendSpecialKey([0x09]) }
-                    modifierButton("HOME") { sendSpecialKey([0x1b, 0x5b, 0x48]) }
-                    modifierButton("END") { sendSpecialKey([0x1b, 0x5b, 0x46]) }
-                    modifierButton("PG↑") { sendSpecialKey([0x1b, 0x5b, 0x35, 0x7e]) }
-                    modifierButton("PG↓") { sendSpecialKey([0x1b, 0x5b, 0x36, 0x7e]) }
-                    modifierButton("F1") { sendSpecialKey([0x1b, 0x4f, 0x50]) }
-                    modifierButton("F2") { sendSpecialKey([0x1b, 0x4f, 0x51]) }
-                    modifierButton("F3") { sendSpecialKey([0x1b, 0x4f, 0x52]) }
-                    modifierButton("F4") { sendSpecialKey([0x1b, 0x4f, 0x53]) }
-                    modifierButton("↑") { sendSpecialKey([0x1b, 0x5b, 0x41]) }
-                    modifierButton("↓") { sendSpecialKey([0x1b, 0x5b, 0x42]) }
-                    modifierButton("←") { sendSpecialKey([0x1b, 0x5b, 0x44]) }
-                    modifierButton("→") { sendSpecialKey([0x1b, 0x5b, 0x43]) }
-                }
-                .padding(.horizontal, KineticSpacing.xs)
-                .padding(.vertical, 4)
-            }
-            .background(KineticColor.surfaceContainerHigh.opacity(0.66))
         }
         .background(KineticColor.surface)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                accessoryButton("ESC") { sendSpecialKey([0x1b]) }
+                accessoryButton("CTRL", active: ctrlActive) { ctrlActive.toggle() }
+                accessoryButton("ALT", active: altActive) { altActive.toggle() }
+                accessoryButton("TAB") { sendSpecialKey([0x09]) }
+                accessoryButton("↑") { sendSpecialKey([0x1b, 0x5b, 0x41]) }
+                accessoryButton("↓") { sendSpecialKey([0x1b, 0x5b, 0x42]) }
+                accessoryButton("←") { sendSpecialKey([0x1b, 0x5b, 0x44]) }
+                accessoryButton("→") { sendSpecialKey([0x1b, 0x5b, 0x43]) }
+                Menu("More") {
+                    Button("META") { metaActive.toggle() }
+                    Button("HOME") { sendSpecialKey([0x1b, 0x5b, 0x48]) }
+                    Button("END") { sendSpecialKey([0x1b, 0x5b, 0x46]) }
+                    Button("Page Up") { sendSpecialKey([0x1b, 0x5b, 0x35, 0x7e]) }
+                    Button("Page Down") { sendSpecialKey([0x1b, 0x5b, 0x36, 0x7e]) }
+                    Button("F1") { sendSpecialKey([0x1b, 0x4f, 0x50]) }
+                    Button("F2") { sendSpecialKey([0x1b, 0x4f, 0x51]) }
+                    Button("F3") { sendSpecialKey([0x1b, 0x4f, 0x52]) }
+                    Button("F4") { sendSpecialKey([0x1b, 0x4f, 0x53]) }
+                }
+            }
+        }
         .onAppear {
             guard !isDisconnected else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -990,6 +977,56 @@ struct TerminalSessionScreen: View {
         return nil
     }
 
+    private var terminalBreadcrumbBar: some View {
+        HStack(spacing: 6) {
+            HStack(spacing: 6) {
+                Image("boo-logo-mark")
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 18, height: 18)
+                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    .accessibilityHidden(true)
+                Text("boo")
+                    .font(.system(size: 13, weight: .black, design: .monospaced))
+                    .foregroundStyle(KineticColor.primary)
+            }
+            .fixedSize()
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(KineticColor.onSurfaceVariant)
+                .accessibilityHidden(true)
+
+            Button {
+                client.detach()
+                selectedTab = .sessions
+            } label: {
+                Text("Sessions")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(KineticColor.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Sessions")
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(KineticColor.onSurfaceVariant)
+                .accessibilityHidden(true)
+
+            Text(sessionTitle)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(KineticColor.onSurface)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, KineticSpacing.md)
+        .padding(.top, KineticSpacing.sm)
+        .padding(.bottom, 6)
+        .accessibilityIdentifier("terminal-breadcrumb-bar")
+    }
+
     private func transportBanner(reason: String, color: Color) -> some View {
         Text(reason)
             .font(KineticFont.caption)
@@ -999,16 +1036,11 @@ struct TerminalSessionScreen: View {
             .background(color.opacity(0.1))
     }
 
-    private func modifierButton(_ label: String, active: Bool = false, action: @escaping () -> Void) -> some View {
+    private func accessoryButton(_ label: String, active: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .fontWeight(.bold)
-                .foregroundStyle(active ? KineticColor.surface : KineticColor.secondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(active ? KineticColor.primary : KineticColor.surfaceContainerHighest)
-                .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundStyle(active ? KineticColor.primary : KineticColor.secondary)
         }
     }
 
