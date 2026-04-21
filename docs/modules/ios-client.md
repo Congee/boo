@@ -41,6 +41,7 @@ Primary automated lane:
 - [../../scripts/install-ios-device.sh](../../scripts/install-ios-device.sh)
 - [../../scripts/launch-ios-device.sh](../../scripts/launch-ios-device.sh)
 - [../../scripts/deploy-ios-device.sh](../../scripts/deploy-ios-device.sh)
+- [../../scripts/test-ios-ui.sh](../../scripts/test-ios-ui.sh)
 
 Primary high-level doc:
 
@@ -54,3 +55,4 @@ Changes here can affect:
 - resume/reconnect UX
 - terminal decode correctness
 - Bonjour discovery and endpoint handling
+- XCUITest state setup for real-device validation

@@ -66,6 +66,7 @@ final class ConnectionStore: ObservableObject {
     private var resumeAttachments: [String: ResumeAttachmentMetadata] = [:]
 
     init() {
+        applyUITestConfiguration()
         loadNodes()
         loadHistory()
         loadTrustedServerIdentities()
@@ -192,6 +193,27 @@ final class ConnectionStore: ObservableObject {
     private func saveResumeAttachments() {
         guard let data = try? JSONEncoder().encode(resumeAttachments) else { return }
         UserDefaults.standard.set(data, forKey: resumeAttachmentsKey)
+    }
+
+    private func applyUITestConfiguration() {
+        guard let config = UITestLaunchConfiguration.current() else { return }
+
+        if config.resetStorage {
+            UserDefaults.standard.removeObject(forKey: nodesKey)
+            UserDefaults.standard.removeObject(forKey: historyKey)
+            UserDefaults.standard.removeObject(forKey: trustedIdentitiesKey)
+            UserDefaults.standard.removeObject(forKey: resumeAttachmentsKey)
+        }
+
+        guard let host = config.host else { return }
+        let node = SavedNode(
+            name: config.nodeName ?? "UI Test Node",
+            host: host,
+            port: config.port,
+            authKey: config.authKey
+        )
+        guard let data = try? JSONEncoder().encode([node]) else { return }
+        UserDefaults.standard.set(data, forKey: nodesKey)
     }
 }
 

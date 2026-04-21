@@ -78,6 +78,7 @@ BOO_IOS_DEVICE_ID=<device-id> bash scripts/build-ios-device.sh
 BOO_IOS_DEVICE_ID=<device-id> bash scripts/install-ios-device.sh
 BOO_IOS_DEVICE_ID=<device-id> bash scripts/launch-ios-device.sh
 BOO_IOS_DEVICE_ID=<device-id> bash scripts/deploy-ios-device.sh
+BOO_IOS_UI_TEST_DESTINATION='id=<device-id>' bash scripts/test-ios-ui.sh
 ```
 
 Notes:
@@ -95,6 +96,10 @@ Notes:
 - on a personal-team signed build, the first launch can still be blocked until
   the device explicitly trusts the development profile in Settings; the launch
   script now points at that step when iOS rejects the app for trust reasons
+- `scripts/test-ios-ui.sh` now runs XCUITests against either the simulator or a
+  real attached device; on a real device it starts a local Boo daemon, writes a
+  temporary UI-test host config for the test bundle, and exercises the visible
+  connect/session terminal flow end-to-end
 
 ## Remaining Manual Validation
 

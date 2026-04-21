@@ -26,6 +26,7 @@ struct BooRootView: View {
     @State private var selectedTab: BooTab = .sessions
     @State private var monitor: ConnectionMonitor?
     @State private var serverIdentityWarning: String?
+    @State private var didApplyUITestLaunchConfiguration = false
 
     private var activeMonitor: ConnectionMonitor {
         if let monitor { return monitor }
@@ -64,6 +65,7 @@ struct BooRootView: View {
             if monitor == nil {
                 monitor = ConnectionMonitor(client: client, store: store)
             }
+            applyUITestLaunchConfigurationIfNeeded()
         }
         .onChange(of: activeMonitor.status) { oldValue, newValue in
             handleStatusChange(from: oldValue, to: newValue)
@@ -128,6 +130,30 @@ struct BooRootView: View {
         default:
             break
         }
+    }
+
+    private func applyUITestLaunchConfigurationIfNeeded() {
+        guard !didApplyUITestLaunchConfiguration else { return }
+        didApplyUITestLaunchConfiguration = true
+        guard let config = UITestLaunchConfiguration.current(),
+              config.autoConnect,
+              let host = config.host
+        else { return }
+
+        let matchingNodeId = store.savedNodes.first {
+            $0.host == host && $0.port == config.port && $0.authKey == config.authKey
+        }?.id
+        let historyId = store.recordConnection(
+            nodeName: config.nodeName ?? host,
+            host: formatConnectionTarget(host: host, port: config.port)
+        )
+        activeMonitor.connect(
+            host: host,
+            port: config.port,
+            authKey: config.authKey,
+            historyId: historyId,
+            nodeId: matchingNodeId
+        )
     }
 }
 
@@ -198,9 +224,9 @@ struct ConnectScreen: View {
 
                     VStack(alignment: .leading, spacing: KineticSpacing.sm) {
                         KineticSectionLabel(text: "Machine Address")
-                        KineticInputField(placeholder: "hostname or ip:port", text: $host)
+                        KineticInputField(placeholder: "hostname or ip:port", text: $host, accessibilityIdentifier: "connect-host-input")
                         KineticSectionLabel(text: "Auth Key")
-                        KineticInputField(placeholder: "optional shared secret", text: $authKey, secure: true)
+                        KineticInputField(placeholder: "optional shared secret", text: $authKey, secure: true, accessibilityIdentifier: "connect-authkey-input")
                     }
 
                     if let error = client.lastError {
@@ -217,9 +243,11 @@ struct ConnectScreen: View {
                         Button("Connect") { connectManual() }
                             .buttonStyle(KineticPrimaryButtonStyle())
                             .disabled(host.isEmpty)
+                            .accessibilityIdentifier("connect-button")
 
                         Button("Settings") { selectedTab = .settings }
                             .buttonStyle(KineticSecondaryButtonStyle())
+                            .accessibilityIdentifier("settings-button")
                     }
 
                     if !store.savedNodes.isEmpty {
@@ -229,20 +257,22 @@ struct ConnectScreen: View {
                                 KineticCardRow(
                                     icon: "server.rack",
                                     title: node.name,
-                                    subtitle: "\(node.host):\(node.port)"
-                                ) {
-                                    let historyId = store.recordConnection(
-                                        nodeName: node.name,
-                                        host: formatConnectionTarget(host: node.host, port: node.port)
-                                    )
-                                    monitor.connect(
-                                        host: node.host,
-                                        port: node.port,
-                                        authKey: node.authKey,
-                                        historyId: historyId,
-                                        nodeId: node.id
-                                    )
-                                }
+                                    subtitle: "\(node.host):\(node.port)",
+                                    onTap: {
+                                        let historyId = store.recordConnection(
+                                            nodeName: node.name,
+                                            host: formatConnectionTarget(host: node.host, port: node.port)
+                                        )
+                                        monitor.connect(
+                                            host: node.host,
+                                            port: node.port,
+                                            authKey: node.authKey,
+                                            historyId: historyId,
+                                            nodeId: node.id
+                                        )
+                                    },
+                                    accessibilityIdentifier: "saved-node-\(node.name)"
+                                )
                             }
                         }
                     }
@@ -255,9 +285,15 @@ struct ConnectScreen: View {
                                     .tint(KineticColor.primary)
                             }
                             ForEach(browser.daemons) { daemon in
-                                KineticCardRow(icon: "terminal", title: daemon.name, subtitle: "Bonjour service") {
-                                    connectToEndpoint(daemon.endpoint)
-                                }
+                                KineticCardRow(
+                                    icon: "terminal",
+                                    title: daemon.name,
+                                    subtitle: "Bonjour service",
+                                    onTap: {
+                                        connectToEndpoint(daemon.endpoint)
+                                    },
+                                    accessibilityIdentifier: "discovered-daemon-\(daemon.name)"
+                                )
                             }
                         }
                     }
@@ -356,10 +392,12 @@ struct SessionsScreen: View {
                             KineticCardRow(
                                 icon: session.childExited ? "terminal" : "terminal.fill",
                                 title: session.name.isEmpty ? (session.title.isEmpty ? "Session \(session.id)" : session.title) : session.name,
-                                subtitle: session.pwd.isEmpty ? "PID \(session.id)" : session.pwd
-                            ) {
-                                client.attach(sessionId: session.id)
-                            }
+                                subtitle: session.pwd.isEmpty ? "PID \(session.id)" : session.pwd,
+                                onTap: {
+                                    client.attach(sessionId: session.id)
+                                },
+                                accessibilityIdentifier: "session-row-\(session.id)"
+                            )
                         }
                     }
 
@@ -368,11 +406,13 @@ struct SessionsScreen: View {
                             client.createSession()
                         }
                         .buttonStyle(KineticPrimaryButtonStyle())
+                        .accessibilityIdentifier("create-session-button")
 
                         Button("Disconnect") {
                             monitor.disconnect()
                         }
                         .buttonStyle(KineticSecondaryButtonStyle())
+                        .accessibilityIdentifier("sessions-disconnect-button")
                     }
 
                     Spacer().frame(height: 120)
@@ -458,6 +498,7 @@ struct TerminalSessionScreen: View {
                 handleTerminalGesture(action)
             }
             .opacity(isDisconnected ? 0.5 : 1.0)
+            .accessibilityIdentifier("terminal-screen")
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: KineticSpacing.sm) {
@@ -497,10 +538,12 @@ struct TerminalSessionScreen: View {
                     .clipShape(RoundedRectangle(cornerRadius: KineticRadius.container))
                     .disabled(isDisconnected)
                     .onSubmit { sendCommand() }
+                    .accessibilityIdentifier("terminal-input")
 
                 Button("Send") { sendCommand() }
                     .buttonStyle(KineticPrimaryButtonStyle())
                     .frame(width: 110)
+                    .accessibilityIdentifier("terminal-send-button")
             }
             .padding(KineticSpacing.md)
         }
@@ -732,12 +775,13 @@ struct SettingsScreen: View {
 
                     VStack(alignment: .leading, spacing: KineticSpacing.sm) {
                         KineticSectionLabel(text: "Save Node")
-                        KineticInputField(placeholder: "Name", text: $nodeName)
-                        KineticInputField(placeholder: "Host", text: $nodeHost)
-                        KineticInputField(placeholder: "Port", text: $nodePort, keyboardType: .numberPad)
-                        KineticInputField(placeholder: "Auth Key", text: $nodeAuthKey, secure: true)
+                        KineticInputField(placeholder: "Name", text: $nodeName, accessibilityIdentifier: "settings-node-name-input")
+                        KineticInputField(placeholder: "Host", text: $nodeHost, accessibilityIdentifier: "settings-node-host-input")
+                        KineticInputField(placeholder: "Port", text: $nodePort, keyboardType: .numberPad, accessibilityIdentifier: "settings-node-port-input")
+                        KineticInputField(placeholder: "Auth Key", text: $nodeAuthKey, secure: true, accessibilityIdentifier: "settings-node-authkey-input")
                         Button("Save Node") { saveNode() }
                             .buttonStyle(KineticPrimaryButtonStyle())
+                            .accessibilityIdentifier("save-node-button")
                     }
 
                     if !store.savedNodes.isEmpty {
@@ -747,7 +791,8 @@ struct SettingsScreen: View {
                                 KineticCardRow(
                                     icon: "server.rack",
                                     title: node.name,
-                                    subtitle: "\(node.host):\(node.port)"
+                                    subtitle: "\(node.host):\(node.port)",
+                                    accessibilityIdentifier: "settings-saved-node-\(node.name)"
                                 )
                             }
                         }
@@ -755,9 +800,11 @@ struct SettingsScreen: View {
 
                     Button("Disconnect") { monitor.disconnect() }
                         .buttonStyle(KineticSecondaryButtonStyle())
+                        .accessibilityIdentifier("settings-disconnect-button")
 
                     Button("Clear History") { store.clearHistory() }
                         .buttonStyle(KineticSecondaryButtonStyle())
+                        .accessibilityIdentifier("clear-history-button")
 
                     Spacer().frame(height: 120)
                 }

@@ -36,10 +36,12 @@ struct KineticTopBar: View {
             Text(title)
                 .font(KineticFont.headline)
                 .foregroundStyle(KineticColor.onSurface)
+                .accessibilityIdentifier("screen-title")
             if let subtitle {
                 Text(subtitle)
                     .font(KineticFont.caption)
                     .foregroundStyle(KineticColor.onSurfaceVariant)
+                    .accessibilityIdentifier("screen-subtitle")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -65,6 +67,7 @@ struct KineticTabBar: View {
                         .background(selectedTab == tab ? KineticColor.primary.opacity(0.15) : .clear)
                         .clipShape(Circle())
                 }
+                .accessibilityIdentifier("tab-\(tab.rawValue)")
             }
         }
         .padding(.vertical, KineticSpacing.sm)
@@ -79,16 +82,19 @@ struct KineticInputField: View {
     @Binding var text: String
     var keyboardType: UIKeyboardType = .default
     var secure = false
+    var accessibilityIdentifier: String? = nil
 
     var body: some View {
         Group {
             if secure {
                 SecureField(placeholder, text: $text)
+                    .accessibilityIdentifier(accessibilityIdentifier ?? placeholder)
             } else {
                 TextField(placeholder, text: $text)
                     .keyboardType(keyboardType)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
+                    .accessibilityIdentifier(accessibilityIdentifier ?? placeholder)
             }
         }
         .font(KineticFont.monoInput)
@@ -116,6 +122,7 @@ struct KineticCardRow: View {
     let title: String
     let subtitle: String
     var onTap: (() -> Void)? = nil
+    var accessibilityIdentifier: String? = nil
 
     var body: some View {
         Button {
@@ -145,6 +152,7 @@ struct KineticCardRow: View {
             .containerCard()
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier(accessibilityIdentifier ?? title)
     }
 }
 

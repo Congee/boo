@@ -33,6 +33,7 @@ Remote:
 - `BOO_IOS_DEVICE_ID=<device-id> bash scripts/install-ios-device.sh`
 - `BOO_IOS_DEVICE_ID=<device-id> bash scripts/launch-ios-device.sh`
 - `BOO_IOS_DEVICE_ID=<device-id> bash scripts/deploy-ios-device.sh`
+- `BOO_IOS_UI_TEST_DESTINATION='id=<device-id>' bash scripts/test-ios-ui.sh`
 
 ## Testing Principles
 
