@@ -758,8 +758,10 @@ struct SessionsScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             KineticTopBar(
-                title: "Active Sessions",
-                subtitle: connectionSummary
+                title: "Sessions",
+                subtitle: nil,
+                compact: true,
+                showBrand: false
             )
             if let connectionBannerText {
                 transportBanner(reason: connectionBannerText, color: connectionBannerColor)
@@ -887,6 +889,7 @@ struct TerminalSessionScreen: View {
                 title: sessionTitle,
                 subtitle: nil,
                 compact: true,
+                showBrand: false,
                 trailingSystemImage: "rectangle.stack",
                 trailingAccessibilityLabel: "Sessions",
                 trailingAction: {
@@ -950,10 +953,10 @@ struct TerminalSessionScreen: View {
                     modifierButton("←") { sendSpecialKey([0x1b, 0x5b, 0x44]) }
                     modifierButton("→") { sendSpecialKey([0x1b, 0x5b, 0x43]) }
                 }
-                .padding(.horizontal, KineticSpacing.sm)
-                .padding(.vertical, KineticSpacing.xs)
+                .padding(.horizontal, KineticSpacing.xs)
+                .padding(.vertical, 4)
             }
-            .background(KineticColor.surfaceContainerHigh.opacity(0.72))
+            .background(KineticColor.surfaceContainerHigh.opacity(0.66))
         }
         .background(KineticColor.surface)
         .onAppear {
@@ -999,11 +1002,11 @@ struct TerminalSessionScreen: View {
     private func modifierButton(_ label: String, active: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .fontWeight(.bold)
                 .foregroundStyle(active ? KineticColor.surface : KineticColor.secondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
                 .background(active ? KineticColor.primary : KineticColor.surfaceContainerHighest)
                 .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
         }

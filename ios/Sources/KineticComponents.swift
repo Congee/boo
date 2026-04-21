@@ -26,6 +26,7 @@ struct KineticTopBar: View {
     let title: String
     let subtitle: String?
     var compact = false
+    var showBrand = true
     var trailingSystemImage: String? = nil
     var trailingAccessibilityLabel: String? = nil
     var trailingAction: (() -> Void)? = nil
@@ -33,21 +34,23 @@ struct KineticTopBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: KineticSpacing.xs) {
             HStack {
-                HStack(spacing: KineticSpacing.sm) {
-                    Image("boo-logo-mark")
-                        .resizable()
-                        .interpolation(.high)
-                        .frame(width: 28, height: 28)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(KineticColor.primary.opacity(0.35), lineWidth: 1)
-                        )
-                        .shadow(color: .black.opacity(0.18), radius: 10, x: 0, y: 3)
-                        .accessibilityHidden(true)
-                    Text("boo")
-                        .font(.system(size: 20, weight: .black, design: .monospaced))
-                        .foregroundStyle(KineticColor.primary)
+                if showBrand {
+                    HStack(spacing: KineticSpacing.sm) {
+                        Image("boo-logo-mark")
+                            .resizable()
+                            .interpolation(.high)
+                            .frame(width: 28, height: 28)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(KineticColor.primary.opacity(0.35), lineWidth: 1)
+                            )
+                            .shadow(color: .black.opacity(0.18), radius: 10, x: 0, y: 3)
+                            .accessibilityHidden(true)
+                        Text("boo")
+                            .font(.system(size: 20, weight: .black, design: .monospaced))
+                            .foregroundStyle(KineticColor.primary)
+                    }
                 }
                 Spacer()
                 if let trailingSystemImage, let trailingAction {
@@ -63,7 +66,7 @@ struct KineticTopBar: View {
                 }
             }
             Text(title)
-                .font(KineticFont.headline)
+                .font(compact ? .system(size: 18, weight: .semibold) : KineticFont.headline)
                 .foregroundStyle(KineticColor.onSurface)
                 .accessibilityIdentifier("screen-title")
             if let subtitle {
@@ -75,8 +78,8 @@ struct KineticTopBar: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, KineticSpacing.md)
-        .padding(.top, compact ? KineticSpacing.md : KineticSpacing.lg)
-        .padding(.bottom, compact ? KineticSpacing.sm : KineticSpacing.md)
+        .padding(.top, compact ? KineticSpacing.sm : KineticSpacing.lg)
+        .padding(.bottom, compact ? KineticSpacing.xs : KineticSpacing.md)
     }
 }
 
