@@ -5,8 +5,8 @@ mod tests {
     use crate::remote_batcher::OutboundMessage;
     use crate::remote_state::{ClientState, DIRECT_CLIENT_HEARTBEAT_WINDOW, State};
     use crate::remote_wire::{
-        MessageType, RemoteCell, RemoteFullState, encode_auth_ok_payload, encode_message,
-        encode_session_list, read_message,
+        MessageType, RemoteCell, RemoteErrorCode, RemoteFullState, decode_error_payload,
+        encode_auth_ok_payload, encode_message, encode_session_list, read_message,
     };
     use std::collections::{HashMap, VecDeque};
     use std::io::{self, Read, Write};
@@ -212,7 +212,9 @@ mod tests {
                 let mut cursor = std::io::Cursor::new(frame);
                 let (ty, payload) = read_message(&mut cursor).expect("decoded error frame");
                 assert_eq!(ty, MessageType::ErrorMsg);
-                assert_eq!(String::from_utf8(payload).expect("utf8"), "heartbeat timeout");
+                let (code, message) = decode_error_payload(&payload).expect("decode error payload");
+                assert_eq!(code, RemoteErrorCode::HeartbeatTimeout);
+                assert_eq!(message, "heartbeat timeout");
             }
             OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
         }

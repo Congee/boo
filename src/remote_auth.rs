@@ -23,7 +23,7 @@ use crate::remote_state::{
     should_disconnect_idle_client,
 };
 use crate::remote_wire::{
-    MessageType, encode_auth_ok_payload, encode_message, parse_attach_request,
+    MessageType, RemoteErrorCode, encode_auth_ok_payload, encode_message, parse_attach_request,
     parse_input_payload, parse_key_payload, parse_pane_id, parse_resize, parse_session_id,
     read_message_retrying,
 };
@@ -60,7 +60,12 @@ pub(crate) fn read_loop(
                         log::warn!(
                             "remote direct client disconnected: client_id={client_id} reason={reason}"
                         );
-                        send_direct_error(&state, client_id, "heartbeat timeout");
+                        send_direct_error(
+                            &state,
+                            client_id,
+                            RemoteErrorCode::HeartbeatTimeout,
+                            RemoteErrorCode::HeartbeatTimeout.default_message(),
+                        );
                     } else {
                         log::warn!("remote auth failed: client_id={client_id} reason={reason}");
                         send_direct_frame(&state, client_id, MessageType::AuthFail, Vec::new());
@@ -93,7 +98,12 @@ pub(crate) fn read_loop(
         }
 
         if !authenticated {
-            send_direct_error(&state, client_id, "authentication required");
+            send_direct_error(
+                &state,
+                client_id,
+                RemoteErrorCode::AuthenticationFailed,
+                "authentication required",
+            );
             continue;
         }
 
@@ -174,7 +184,12 @@ pub(crate) fn read_loop(
             }
             crate::notify_headless_wakeup();
         } else {
-            send_direct_error(&state, client_id, "invalid payload");
+            send_direct_error(
+                &state,
+                client_id,
+                RemoteErrorCode::Unknown,
+                "invalid payload",
+            );
         }
     }
 
@@ -442,7 +457,10 @@ mod tests {
                 let mut cursor = std::io::Cursor::new(frame);
                 let (ty, payload) = read_message(&mut cursor).expect("decoded error frame");
                 assert_eq!(ty, MessageType::ErrorMsg);
-                assert_eq!(String::from_utf8(payload).expect("utf8"), "heartbeat timeout");
+                let (code, message) =
+                    crate::remote_wire::decode_error_payload(&payload).expect("decode error payload");
+                assert_eq!(code, RemoteErrorCode::HeartbeatTimeout);
+                assert_eq!(message, "heartbeat timeout");
             }
             OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
         }

@@ -13,10 +13,63 @@ enum ClientWireMessageType {
     case errorMsg
 }
 
+enum ClientWireErrorCode: UInt16, Equatable {
+    case unknown = 0
+    case authenticationFailed = 1
+    case unknownSession = 2
+    case failedCreateSession = 3
+    case notAttached = 4
+    case cannotDestroyLastSession = 5
+    case attachmentAlreadyActive = 6
+    case attachmentBelongsToDifferentSession = 7
+    case attachmentResumeTokenMismatch = 8
+    case attachmentResumeWindowExpired = 9
+    case invalidResumeToken = 10
+    case heartbeatTimeout = 11
+}
+
 enum ClientWireEffect: Equatable {
     case none
     case listSessions
     case attach(UInt32)
+}
+
+enum ClientWireErrorKind: Equatable {
+    case authenticationFailed
+    case attachmentResumeUnsupported
+    case attachmentResumeWindowExpired
+    case attachmentResumeTokenMismatch
+    case invalidResumeToken
+    case remote(String)
+
+    var message: String {
+        switch self {
+        case .authenticationFailed:
+            return "Authentication failed"
+        case .attachmentResumeUnsupported:
+            return "Remote server does not advertise attachment resume support"
+        case .attachmentResumeWindowExpired:
+            return "attachment resume window expired"
+        case .attachmentResumeTokenMismatch:
+            return "attachment resume token mismatch"
+        case .invalidResumeToken:
+            return "invalid resume token"
+        case .remote(let message):
+            return message
+        }
+    }
+
+    var invalidatesResumeAttachment: Bool {
+        switch self {
+        case .attachmentResumeUnsupported,
+                .attachmentResumeWindowExpired,
+                .attachmentResumeTokenMismatch,
+                .invalidResumeToken:
+            return true
+        case .authenticationFailed, .remote:
+            return false
+        }
+    }
 }
 
 struct AuthOkMetadata: Equatable {
@@ -44,7 +97,37 @@ struct ClientWireState: Equatable {
     var attachedSessionId: UInt32?
     var attachmentId: UInt64?
     var resumeToken: UInt64?
+    var lastErrorKind: ClientWireErrorKind?
     var lastError: String?
+}
+
+func decodeClientWireError(_ payload: Data) -> ClientWireErrorKind {
+    guard payload.count >= 2 else { return .remote("Remote error") }
+    let rawCode = payload.withUnsafeBytes {
+        UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt16.self))
+    }
+    let message = String(data: payload.dropFirst(2), encoding: .utf8) ?? "Remote error"
+    guard let code = ClientWireErrorCode(rawValue: rawCode) else {
+        return .remote(message)
+    }
+    switch code {
+    case .unknown:
+        return .remote(message)
+    case .authenticationFailed:
+        return .authenticationFailed
+    case .unknownSession, .failedCreateSession, .notAttached, .cannotDestroyLastSession:
+        return .remote(message)
+    case .attachmentAlreadyActive, .attachmentBelongsToDifferentSession:
+        return .remote(message)
+    case .attachmentResumeTokenMismatch:
+        return .attachmentResumeTokenMismatch
+    case .attachmentResumeWindowExpired:
+        return .attachmentResumeWindowExpired
+    case .invalidResumeToken:
+        return .invalidResumeToken
+    case .heartbeatTimeout:
+        return .remote(message)
+    }
 }
 
 func decodeAuthOkMetadata(_ payload: Data) -> AuthOkMetadata? {
@@ -161,10 +244,12 @@ enum ClientWireReducer {
                 state.serverInstanceId = metadata.serverInstanceId
                 state.serverIdentityId = metadata.serverIdentityId
             }
+            state.lastErrorKind = nil
             state.lastError = nil
             return .listSessions
         case .authFail:
-            state.lastError = "Authentication failed"
+            state.lastErrorKind = .authenticationFailed
+            state.lastError = ClientWireErrorKind.authenticationFailed.message
             return .none
         case .sessionList:
             state.sessions = WireCodec.decodeSessionList(payload)
@@ -206,7 +291,9 @@ enum ClientWireReducer {
             state.screen = screen
             return .none
         case .errorMsg:
-            state.lastError = String(data: payload, encoding: .utf8) ?? "Remote error"
+            let kind = decodeClientWireError(payload)
+            state.lastErrorKind = kind
+            state.lastError = kind.message
             return .none
         }
     }

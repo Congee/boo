@@ -4,6 +4,7 @@
 //! server sends `Attached` frames to remote clients.
 
 use crate::remote_state::{State, prune_revivable_attachments};
+use crate::remote_wire::RemoteErrorCode;
 
 pub(crate) fn prepare_attachment(
     state: &mut State,
@@ -11,10 +12,10 @@ pub(crate) fn prepare_attachment(
     session_id: u32,
     attachment_id: Option<u64>,
     resume_token: Option<u64>,
-) -> Result<(), &'static str> {
+) -> Result<(), RemoteErrorCode> {
     prune_revivable_attachments(state);
     let Some(client) = state.clients.get(&client_id) else {
-        return Err("unknown client");
+        return Err(RemoteErrorCode::Unknown);
     };
     if client.is_local || attachment_id.is_none() {
         return Ok(());
@@ -29,7 +30,7 @@ pub(crate) fn prepare_attachment(
         log::warn!(
             "remote revive rejected: client_id={client_id} attachment_id={attachment_id} reason=already-active"
         );
-        return Err("attachment already active");
+        return Err(RemoteErrorCode::AttachmentAlreadyActive);
     }
     let revive = state.revivable_attachments.get(&attachment_id).cloned();
     if let Some(revive) = revive {
@@ -38,17 +39,17 @@ pub(crate) fn prepare_attachment(
                 "remote revive rejected: client_id={client_id} attachment_id={attachment_id} reason=session-mismatch expected={} actual={session_id}",
                 revive.session_id
             );
-            return Err("attachment belongs to different session");
+            return Err(RemoteErrorCode::AttachmentBelongsToDifferentSession);
         }
         if resume_token != Some(revive.resume_token) {
             log::warn!(
                 "remote revive rejected: client_id={client_id} attachment_id={attachment_id} reason=resume-token-mismatch"
             );
-            return Err("attachment resume token mismatch");
+            return Err(RemoteErrorCode::AttachmentResumeTokenMismatch);
         }
         let _ = state.revivable_attachments.remove(&attachment_id);
         let Some(client) = state.clients.get_mut(&client_id) else {
-            return Err("unknown client");
+            return Err(RemoteErrorCode::Unknown);
         };
         client.attached_session = Some(session_id);
         client.attachment_id = Some(attachment_id);
@@ -64,10 +65,10 @@ pub(crate) fn prepare_attachment(
             log::warn!(
                 "remote revive rejected: client_id={client_id} attachment_id={attachment_id} reason=revive-window-expired"
             );
-            return Err("attachment resume window expired");
+            return Err(RemoteErrorCode::AttachmentResumeWindowExpired);
         }
         let Some(client) = state.clients.get_mut(&client_id) else {
-            return Err("unknown client");
+            return Err(RemoteErrorCode::Unknown);
         };
         client.resume_token = None;
         log::info!(
@@ -83,7 +84,7 @@ mod tests {
     use crate::remote::RemoteServer;
     use crate::remote_batcher::OutboundMessage;
     use crate::remote_state::{ClientState, REVIVABLE_ATTACHMENT_WINDOW, RevivableAttachment, State};
-    use crate::remote_wire::{MAGIC, MessageType, RemoteCell, RemoteFullState, read_message};
+    use crate::remote_wire::{MAGIC, MessageType, RemoteCell, RemoteErrorCode, RemoteFullState, read_message};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex, mpsc};
     use std::time::Instant;
@@ -182,7 +183,7 @@ mod tests {
 
         let error = prepare_attachment(&mut state, 2, 11, Some(0xabc), Some(0xdef))
             .expect_err("duplicate active attachment should fail");
-        assert_eq!(error, "attachment already active");
+        assert_eq!(error, RemoteErrorCode::AttachmentAlreadyActive);
     }
 
     #[test]
@@ -204,7 +205,7 @@ mod tests {
 
         let error = prepare_attachment(&mut state, 1, 11, Some(0xabc), Some(0x123))
             .expect_err("wrong resume token should fail");
-        assert_eq!(error, "attachment resume token mismatch");
+        assert_eq!(error, RemoteErrorCode::AttachmentResumeTokenMismatch);
         assert!(state.revivable_attachments.contains_key(&0xabc));
     }
 
@@ -216,7 +217,7 @@ mod tests {
 
         let error = prepare_attachment(&mut state, 1, 11, Some(0xabc), Some(0xdef))
             .expect_err("expired resume attempt should fail");
-        assert_eq!(error, "attachment resume window expired");
+        assert_eq!(error, RemoteErrorCode::AttachmentResumeWindowExpired);
 
         let client = state.clients.get(&1).expect("client state");
         assert!(client.attached_session.is_none());

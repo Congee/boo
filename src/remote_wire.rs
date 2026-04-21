@@ -86,6 +86,88 @@ pub enum MessageType {
     HeartbeatAck = 0x92,
 }
 
+#[repr(u16)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemoteErrorCode {
+    Unknown = 0,
+    AuthenticationFailed = 1,
+    UnknownSession = 2,
+    FailedCreateSession = 3,
+    NotAttached = 4,
+    CannotDestroyLastSession = 5,
+    AttachmentAlreadyActive = 6,
+    AttachmentBelongsToDifferentSession = 7,
+    AttachmentResumeTokenMismatch = 8,
+    AttachmentResumeWindowExpired = 9,
+    InvalidResumeToken = 10,
+    HeartbeatTimeout = 11,
+}
+
+impl TryFrom<u16> for RemoteErrorCode {
+    type Error = ();
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        let code = match value {
+            0 => Self::Unknown,
+            1 => Self::AuthenticationFailed,
+            2 => Self::UnknownSession,
+            3 => Self::FailedCreateSession,
+            4 => Self::NotAttached,
+            5 => Self::CannotDestroyLastSession,
+            6 => Self::AttachmentAlreadyActive,
+            7 => Self::AttachmentBelongsToDifferentSession,
+            8 => Self::AttachmentResumeTokenMismatch,
+            9 => Self::AttachmentResumeWindowExpired,
+            10 => Self::InvalidResumeToken,
+            11 => Self::HeartbeatTimeout,
+            _ => return Err(()),
+        };
+        Ok(code)
+    }
+}
+
+impl RemoteErrorCode {
+    pub const fn default_message(self) -> &'static str {
+        match self {
+            Self::Unknown => "remote error",
+            Self::AuthenticationFailed => "Authentication failed",
+            Self::UnknownSession => "unknown session",
+            Self::FailedCreateSession => "failed to create session",
+            Self::NotAttached => "not attached",
+            Self::CannotDestroyLastSession => "cannot destroy last session",
+            Self::AttachmentAlreadyActive => "attachment already active",
+            Self::AttachmentBelongsToDifferentSession => "attachment belongs to different session",
+            Self::AttachmentResumeTokenMismatch => "attachment resume token mismatch",
+            Self::AttachmentResumeWindowExpired => "attachment resume window expired",
+            Self::InvalidResumeToken => "invalid resume token",
+            Self::HeartbeatTimeout => "heartbeat timeout",
+        }
+    }
+}
+
+pub fn encode_error_payload(code: RemoteErrorCode, message: &str) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(2 + message.len());
+    payload.extend_from_slice(&(code as u16).to_le_bytes());
+    payload.extend_from_slice(message.as_bytes());
+    payload
+}
+
+pub fn decode_error_payload(payload: &[u8]) -> Result<(RemoteErrorCode, String), String> {
+    if payload.len() < 2 {
+        return Err("payload too short".to_string());
+    }
+    let raw = u16::from_le_bytes(
+        payload[..2]
+            .try_into()
+            .map_err(|_| "invalid error code".to_string())?,
+    );
+    let code = RemoteErrorCode::try_from(raw).unwrap_or(RemoteErrorCode::Unknown);
+    let message = std::str::from_utf8(&payload[2..])
+        .map_err(|_| "invalid utf-8".to_string())?
+        .to_string();
+    Ok((code, message))
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogicalChannel {
@@ -438,7 +520,8 @@ pub(crate) fn read_probe_reply(
                 return Err(format!("authentication failed for remote endpoint {host}:{port}"));
             }
             MessageType::ErrorMsg => {
-                let message = String::from_utf8_lossy(&payload);
+                let (_, message) = decode_error_payload(&payload)
+                    .unwrap_or((RemoteErrorCode::Unknown, "remote error".to_string()));
                 return Err(format!(
                     "remote endpoint {host}:{port} reported probe error: {message}"
                 ));
@@ -502,7 +585,8 @@ pub(crate) fn read_attach_bootstrap(
                 return Err(format!("authentication failed for remote endpoint {host}:{port}"));
             }
             MessageType::ErrorMsg => {
-                let message = String::from_utf8_lossy(&payload);
+                let (_, message) = decode_error_payload(&payload)
+                    .unwrap_or((RemoteErrorCode::Unknown, "remote error".to_string()));
                 return Err(format!(
                     "remote endpoint {host}:{port} reported attach error: {message}"
                 ));

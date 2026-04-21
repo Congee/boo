@@ -28,13 +28,14 @@ pub use crate::remote_client::{
 pub use crate::remote_full_state::{full_state_from_terminal, full_state_from_ui};
 
 
-use crate::remote_wire::{random_instance_id, random_u64_nonzero};
+use crate::remote_wire::{encode_error_payload, random_instance_id, random_u64_nonzero};
 // Re-export wire-level items so external callers that reach through
 // `crate::remote::` keep working.
 #[allow(unused_imports)]
 pub use crate::remote_wire::{
     MessageType, REMOTE_CAPABILITIES, REMOTE_CAPABILITY_ATTACHMENT_RESUME,
     REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT, REMOTE_PROTOCOL_VERSION, RemoteCell,
+    RemoteErrorCode,
     RemoteFullState,
     decode_auth_ok_payload, encode_full_state, encode_message, encode_session_list, read_message,
     validate_auth_ok_payload,
@@ -410,7 +411,7 @@ impl RemoteServer {
         session_id: u32,
         attachment_id: Option<u64>,
         resume_token: Option<u64>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), RemoteErrorCode> {
         let mut state = self.state.lock().expect("remote server state poisoned");
         prepare_remote_attachment(&mut state, client_id, session_id, attachment_id, resume_token)
     }
@@ -436,11 +437,11 @@ impl RemoteServer {
         );
     }
 
-    pub fn send_error(&self, client_id: u64, message: &str) {
+    pub fn send_error(&self, client_id: u64, code: RemoteErrorCode, message: &str) {
         self.send_to_client(
             client_id,
             MessageType::ErrorMsg,
-            message.as_bytes().to_vec(),
+            encode_error_payload(code, message),
         );
     }
 

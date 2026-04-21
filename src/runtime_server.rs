@@ -1,4 +1,5 @@
 use super::*;
+use crate::remote::RemoteErrorCode;
 use std::time::Instant;
 
 fn latency_debug_enabled() -> bool {
@@ -402,7 +403,7 @@ impl BooApp {
                                 resume_token,
                             )
                         {
-                            server.send_error(client_id, message);
+                            server.send_error(client_id, message, message.default_message());
                             return;
                         }
                         if bootstrap_local {
@@ -417,7 +418,7 @@ impl BooApp {
                     .or(self.server.local_gui_server.as_ref())
                     .or(self.server.remote_server.as_ref())
                 {
-                    server.send_error(client_id, "unknown session");
+                    server.send_error(client_id, RemoteErrorCode::UnknownSession, "unknown session");
                 }
             }
             server::Command::RemoteDetach { client_id } => {
@@ -442,7 +443,11 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_error(client_id, "failed to create session");
+                        server.send_error(
+                            client_id,
+                            RemoteErrorCode::FailedCreateSession,
+                            "failed to create session",
+                        );
                     }
                     return;
                 };
@@ -474,7 +479,7 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_error(client_id, "not attached");
+                        server.send_error(client_id, RemoteErrorCode::NotAttached, "not attached");
                     }
                     return;
                 };
@@ -513,7 +518,7 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_error(client_id, "not attached");
+                        server.send_error(client_id, RemoteErrorCode::NotAttached, "not attached");
                     }
                     return;
                 };
@@ -554,7 +559,7 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_error(client_id, "not attached");
+                        server.send_error(client_id, RemoteErrorCode::NotAttached, "not attached");
                     }
                     return;
                 };
@@ -601,7 +606,7 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_error(client_id, "not attached");
+                        server.send_error(client_id, RemoteErrorCode::NotAttached, "not attached");
                     }
                     return;
                 };
@@ -654,7 +659,7 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_error(client_id, "not attached");
+                        server.send_error(client_id, RemoteErrorCode::NotAttached, "not attached");
                     }
                     return;
                 };
@@ -718,7 +723,7 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_error(client_id, "not attached");
+                        server.send_error(client_id, RemoteErrorCode::NotAttached, "not attached");
                     }
                     return;
                 };
@@ -769,7 +774,7 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_error(client_id, "unknown session");
+                        server.send_error(client_id, RemoteErrorCode::UnknownSession, "unknown session");
                     }
                     return;
                 };
@@ -789,7 +794,11 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_error(client_id, "cannot destroy last session");
+                        server.send_error(
+                            client_id,
+                            RemoteErrorCode::CannotDestroyLastSession,
+                            "cannot destroy last session",
+                        );
                     }
                     return;
                 }

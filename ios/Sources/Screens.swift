@@ -160,7 +160,7 @@ struct BooRootView: View {
                             serverIdentityWarning: serverIdentityWarning
                         )
                         .navigationDestination(isPresented: $showingConnectedTerminal) {
-                            TerminalSessionScreen(client: client, monitor: activeMonitor, serverIdentityWarning: serverIdentityWarning)
+                            TerminalSessionScreen(client: client, monitor: activeMonitor, store: store, serverIdentityWarning: serverIdentityWarning)
                         }
                     }
                 case .history:
@@ -202,6 +202,14 @@ struct BooRootView: View {
             tailscaleBrowser.refresh(store: store)
             guard activeMonitor.lastHost != nil, !client.connected else { return }
             activeMonitor.reconnect()
+        }
+        .onChange(of: client.lastError) { _, newValue in
+            guard client.lastErrorKind?.invalidatesResumeAttachment == true,
+                  newValue != nil,
+                  let host = activeMonitor.lastHost,
+                  let port = activeMonitor.lastPort
+            else { return }
+            store.clearResumeAttachment(host: host, port: port)
         }
     }
 
@@ -619,6 +627,7 @@ struct TerminalSessionScreen: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var client: GSPClient
     @ObservedObject var monitor: ConnectionMonitor
+    @ObservedObject var store: ConnectionStore
     let serverIdentityWarning: String?
 
     @State private var keyboardFocused = false
@@ -801,13 +810,65 @@ struct TerminalSessionScreen: View {
         return nil
     }
 
+    private var activeErrorMessage: String? {
+        if let serverIdentityWarning { return serverIdentityWarning }
+        if let sessionHealthIssue { return sessionHealthIssue }
+        if let lastError = client.lastError, !lastError.isEmpty { return lastError }
+        if let disconnectReason { return disconnectReason }
+        return nil
+    }
+
+    private var hasResumeFailure: Bool {
+        client.lastErrorKind?.invalidatesResumeAttachment == true
+    }
+
     private func transportBanner(reason: String, color: Color) -> some View {
-        Text(reason)
-            .font(KineticFont.caption)
-            .foregroundStyle(color)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(KineticSpacing.md)
-            .background(color.opacity(0.1))
+        VStack(alignment: .leading, spacing: KineticSpacing.sm) {
+            Text(reason)
+                .font(KineticFont.caption)
+                .foregroundStyle(color)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: KineticSpacing.sm) {
+                if hasResumeFailure {
+                    Button("Forget Resume") {
+                        forgetResumeAttachment()
+                    }
+                    .buttonStyle(KineticSecondaryButtonStyle())
+                }
+
+                if let attachedSessionId = client.attachedSessionId {
+                    Button("Close Session") {
+                        client.destroySession(sessionId: attachedSessionId)
+                        client.detach()
+                        client.listSessions()
+                    }
+                    .buttonStyle(KineticSecondaryButtonStyle())
+                }
+
+                Button("New Session") {
+                    forgetResumeAttachment()
+                    client.createSession()
+                }
+                .buttonStyle(KineticSecondaryButtonStyle())
+
+                Button("Disconnect") {
+                    monitor.disconnect()
+                    dismiss()
+                }
+                .buttonStyle(KineticSecondaryButtonStyle())
+            }
+        }
+        .padding(KineticSpacing.md)
+        .background(color.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+    }
+
+    private func forgetResumeAttachment() {
+        client.clearResumeAttachmentState()
+        if let host = monitor.lastHost, let port = monitor.lastPort {
+            store.clearResumeAttachment(host: host, port: port)
+        }
     }
 
     private func autoAttachPreferredSessionIfNeeded() {

@@ -545,6 +545,7 @@ final class GSPClient: ObservableObject {
     @Published var attachmentId: UInt64?
     @Published var resumeToken: UInt64?
     @Published var pendingAttachedSessionId: UInt32?
+    @Published var lastErrorKind: ClientWireErrorKind?
     @Published var lastError: String?
 
     private var connection: NWConnection?
@@ -652,6 +653,14 @@ final class GSPClient: ObservableObject {
         sendMessage(type: .create, payload: payload)
     }
 
+    func destroySession(sessionId: UInt32) {
+        var payload = Data(count: 4)
+        payload.withUnsafeMutableBytes { buf in
+            buf.storeBytes(of: sessionId.littleEndian, as: UInt32.self)
+        }
+        sendMessage(type: .destroy, payload: payload)
+    }
+
     func attach(sessionId: UInt32) {
         let newAttachmentId = generateAttachmentId()
         desiredAttachedSessionId = sessionId
@@ -667,6 +676,15 @@ final class GSPClient: ObservableObject {
         desiredAttachmentId = attachmentId
         desiredResumeToken = resumeToken
         pendingAttachedSessionId = sessionId
+    }
+
+    func clearResumeAttachmentState() {
+        attachmentId = nil
+        resumeToken = nil
+        pendingAttachedSessionId = nil
+        desiredAttachedSessionId = nil
+        desiredAttachmentId = nil
+        desiredResumeToken = nil
     }
 
     func configureTrustedServerIdentity(_ identityId: String?) {
@@ -1020,6 +1038,7 @@ final class GSPClient: ObservableObject {
             screen = ScreenState()
         }
         lastError = message
+        lastErrorKind = .remote(message)
         stopHeartbeatLoop()
     }
 
@@ -1102,6 +1121,7 @@ final class GSPClient: ObservableObject {
             attachedSessionId: attachedSessionId,
             attachmentId: attachmentId,
             resumeToken: resumeToken,
+            lastErrorKind: lastErrorKind,
             lastError: lastError
         )
         let wasAuthenticated = authenticated
@@ -1121,7 +1141,11 @@ final class GSPClient: ObservableObject {
         if let serverIdentityId = state.serverIdentityId, !serverIdentityId.isEmpty {
             lastSeenServerIdentityId = serverIdentityId
         }
+        lastErrorKind = state.lastErrorKind
         lastError = state.lastError
+        if state.lastErrorKind?.invalidatesResumeAttachment == true {
+            clearResumeAttachmentState()
+        }
         attachedSessionId = state.attachedSessionId
         attachmentId = state.attachmentId
         resumeToken = state.resumeToken

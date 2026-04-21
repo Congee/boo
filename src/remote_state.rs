@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::remote_batcher::OutboundMessage;
-use crate::remote_wire::{MessageType, RemoteFullState, encode_message};
+use crate::remote_wire::{MessageType, RemoteErrorCode, RemoteFullState, encode_error_payload, encode_message};
 
 /// How long a revived attachment stays in the state graph before it is pruned
 /// (remote client must reconnect + resume within this window).
@@ -98,12 +98,17 @@ pub(crate) fn should_disconnect_idle_client(
     None
 }
 
-pub(crate) fn send_direct_error(state: &Arc<Mutex<State>>, client_id: u64, message: &str) {
+pub(crate) fn send_direct_error(
+    state: &Arc<Mutex<State>>,
+    client_id: u64,
+    code: RemoteErrorCode,
+    message: &str,
+) {
     send_direct_frame(
         state,
         client_id,
         MessageType::ErrorMsg,
-        message.as_bytes().to_vec(),
+        encode_error_payload(code, message),
     );
 }
 
