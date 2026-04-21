@@ -15,6 +15,8 @@ struct UITestLaunchConfiguration {
     let port: UInt16
     let authKey: String
     let autoConnect: Bool
+    let tailscalePort: UInt16?
+    let tailscaleToken: String?
     let mockTailscaleDevices: [MockTailscaleDevice]
 
     private static func argumentValue(prefix: String, arguments: [String]) -> String? {
@@ -55,6 +57,11 @@ struct UITestLaunchConfiguration {
         let authKey = argumentValue(prefix: "--boo-ui-test-auth-key=", arguments: arguments) ?? env["BOO_UI_TEST_AUTH_KEY"] ?? ""
         let autoConnect = arguments.contains("--boo-ui-test-auto-connect") || env["BOO_UI_TEST_AUTO_CONNECT"] == "1"
         let resetStorage = arguments.contains("--boo-ui-test-reset-storage") || env["BOO_UI_TEST_RESET_STORAGE"] == "1"
+        let tailscalePort = argumentValue(prefix: "--boo-ui-test-tailscale-port=", arguments: arguments)
+            .flatMap(UInt16.init)
+            ?? env["BOO_UI_TEST_TAILSCALE_PORT"].flatMap(UInt16.init)
+        let tailscaleToken = argumentValue(prefix: "--boo-ui-test-tailscale-token=", arguments: arguments)
+            ?? env["BOO_UI_TEST_TAILSCALE_TOKEN"]
 
         return UITestLaunchConfiguration(
             resetStorage: resetStorage,
@@ -63,6 +70,8 @@ struct UITestLaunchConfiguration {
             port: port,
             authKey: authKey,
             autoConnect: autoConnect,
+            tailscalePort: tailscalePort,
+            tailscaleToken: tailscaleToken,
             mockTailscaleDevices: parseMockTailscaleDevices(arguments: arguments, env: env)
         )
     }

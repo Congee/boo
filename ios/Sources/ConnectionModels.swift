@@ -300,6 +300,17 @@ final class ConnectionStore: ObservableObject {
             KeychainStringStore.delete(service: tailscaleTokenService, account: tailscaleTokenAccount)
         }
 
+        if let tailscalePort = config.tailscalePort {
+            tailscaleDiscoverySettings.defaultPort = tailscalePort
+            saveTailscaleSettings()
+        }
+
+        if let tailscaleToken = config.tailscaleToken?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !tailscaleToken.isEmpty
+        {
+            KeychainStringStore.save(tailscaleToken, service: tailscaleTokenService, account: tailscaleTokenAccount)
+        }
+
         guard let host = config.host else { return }
         let node = SavedNode(
             name: config.nodeName ?? "UI Test Node",

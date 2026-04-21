@@ -53,7 +53,13 @@ class BooUITestCase: XCTestCase {
         }
     }
 
-    func makeApp(autoConnect: Bool = false, resetStorage: Bool = true, mockTailscaleDevices: String? = nil) -> XCUIApplication {
+    func makeApp(
+        autoConnect: Bool = false,
+        resetStorage: Bool = true,
+        mockTailscaleDevices: String? = nil,
+        tailscaleToken: String? = nil,
+        tailscalePort: UInt16? = nil
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-ApplePersistenceIgnoreState", "YES", "--boo-ui-test-mode"]
         app.launchEnvironment["BOO_UI_TEST_MODE"] = "1"
@@ -72,6 +78,12 @@ class BooUITestCase: XCTestCase {
         }
         if let mockTailscaleDevices {
             app.launchArguments.append("--boo-ui-test-tailscale-devices=\(mockTailscaleDevices)")
+        }
+        if let tailscaleToken {
+            app.launchArguments.append("--boo-ui-test-tailscale-token=\(tailscaleToken)")
+        }
+        if let tailscalePort {
+            app.launchArguments.append("--boo-ui-test-tailscale-port=\(tailscalePort)")
         }
         app.launchEnvironment["BOO_UI_TEST_AUTO_CONNECT"] = autoConnect ? "1" : "0"
         return app
@@ -132,5 +144,20 @@ class BooUITestCase: XCTestCase {
             XCTAssertTrue(title.waitForExistence(timeout: 5), file: file, line: line)
         }
         XCTAssertEqual(title.label, "Connect to Server", file: file, line: line)
+    }
+
+    func waitForAnyTailscaleResult(in app: XCUIApplication, timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line) {
+        let deadline = Date().addingTimeInterval(timeout)
+        let peerButtons = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "tailscale-peer-"))
+        let errorTexts = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Tailscale API"))
+
+        while Date() < deadline {
+            if peerButtons.count > 0 || errorTexts.count > 0 {
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+
+        XCTAssertTrue(peerButtons.count > 0 || errorTexts.count > 0, "Expected Tailscale devices or an API error to appear", file: file, line: line)
     }
 }

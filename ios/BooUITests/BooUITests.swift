@@ -94,6 +94,46 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTAssertFalse(cleared.buttons["clear-tailscale-token-button"].exists)
     }
 
+    func testLiveTailscaleDevicesAppearWhenTokenIsSaved() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let liveToken = env["BOO_IOS_UI_TEST_TAILSCALE_TOKEN"],
+              !liveToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw XCTSkip("Set BOO_IOS_UI_TEST_TAILSCALE_TOKEN to run the live Tailscale discovery smoke test.")
+        }
+        let livePort = env["BOO_IOS_UI_TEST_TAILSCALE_PORT"].flatMap(UInt16.init)
+        let app = makeApp(
+            autoConnect: false,
+            resetStorage: true,
+            tailscaleToken: liveToken,
+            tailscalePort: livePort
+        )
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        let settingsButton = app.buttons["settings-button"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 5))
+        settingsButton.tap()
+
+        let title = app.staticTexts["screen-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertEqual(title.label, "Settings")
+
+        let savedLabel = app.staticTexts["API access token saved securely in the iOS Keychain."]
+        XCTAssertTrue(savedLabel.waitForExistence(timeout: 5))
+
+        let sessionsTab = app.buttons["tab-sessions"]
+        XCTAssertTrue(sessionsTab.waitForExistence(timeout: 5))
+        sessionsTab.tap()
+
+        navigateToConnectScreen(app)
+
+        let tailscaleSection = app.staticTexts["TAILSCALE DEVICES"]
+        scrollUntilExists(tailscaleSection, in: app)
+        waitForAnyTailscaleResult(in: app, timeout: 12)
+    }
+
     func testConnectScreenShowsDiscoveredDaemon() {
         let app = makeApp(autoConnect: false)
         _ = installSystemAlertHandler(for: app)
