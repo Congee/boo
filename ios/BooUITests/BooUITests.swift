@@ -163,7 +163,7 @@ final class BooAppLaunchTests: BooUITestCase {
     }
 
     func testConnectScreenShowsDiscoveredDaemon() {
-        let app = makeApp(autoConnect: false)
+        let app = makeApp(autoConnect: false, includeConfiguredHost: false)
         _ = installSystemAlertHandler(for: app)
         app.launch()
         app.tap()
@@ -194,7 +194,7 @@ final class BooAppLaunchTests: BooUITestCase {
     }
 
     func testTappingDiscoveredDaemonConnects() {
-        let app = makeApp(autoConnect: false, resetStorage: true)
+        let app = makeApp(autoConnect: false, resetStorage: true, includeConfiguredHost: false)
         _ = installSystemAlertHandler(for: app)
         app.launch()
         app.tap()

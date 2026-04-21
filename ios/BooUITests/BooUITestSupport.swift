@@ -83,7 +83,8 @@ class BooUITestCase: XCTestCase {
         resetStorage: Bool = true,
         mockTailscaleDevices: String? = nil,
         tailscaleToken: String? = nil,
-        tailscalePort: UInt16? = nil
+        tailscalePort: UInt16? = nil,
+        includeConfiguredHost: Bool = true
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-ApplePersistenceIgnoreState", "YES", "--boo-ui-test-mode"]
@@ -91,8 +92,10 @@ class BooUITestCase: XCTestCase {
         if resetStorage {
             app.launchArguments.append("--boo-ui-test-reset-storage")
         }
-        app.launchArguments.append("--boo-ui-test-node-name=Local Boo")
-        if let explicitHost {
+        if includeConfiguredHost {
+            app.launchArguments.append("--boo-ui-test-node-name=Local Boo")
+        }
+        if includeConfiguredHost, let explicitHost {
             app.launchArguments.append("--boo-ui-test-host=\(explicitHost)")
             app.launchArguments.append("--boo-ui-test-port=\(port)")
             app.launchEnvironment["BOO_UI_TEST_HOST"] = explicitHost

@@ -11,6 +11,7 @@ TEAM_ID="${BOO_IOS_TEAM_ID:-}"
 ONLY_TEST="${BOO_IOS_UI_TEST_ONLY:-}"
 GENERATED_CONFIG="$ROOT/ios/BooUITests/GeneratedUITestConfig.swift"
 HOST_PORT_FILE="/tmp/boo-ios-ui-tests.env"
+SKIP_DAEMON="${BOO_IOS_UI_TEST_SKIP_DAEMON:-0}"
 
 if [[ -z "$HOST" ]]; then
   if [[ "$DESTINATION" == *"platform=iOS Simulator"* ]]; then
@@ -34,6 +35,11 @@ if [[ -z "$PORT" ]]; then
 fi
 
 cleanup() {
+  if [[ -n "${PORT:-}" ]]; then
+    pgrep -f "dns-sd -R boo on .* (${PORT}) _boo._udp local ${PORT}" | while read -r pid; do
+      kill "$pid" >/dev/null 2>&1 || true
+    done
+  fi
   if [[ -n "${SERVER_PID:-}" ]]; then
     kill "$SERVER_PID" >/dev/null 2>&1 || true
     wait "$SERVER_PID" >/dev/null 2>&1 || true
@@ -50,6 +56,14 @@ EOF
 trap cleanup EXIT
 
 cd "$ROOT"
+if [[ "$SKIP_DAEMON" == "1" ]]; then
+cat > "$GENERATED_CONFIG" <<'EOF'
+enum GeneratedUITestConfig {
+    static let host: String? = nil
+    static let port: UInt16 = 7337
+}
+EOF
+else
 cat > "$GENERATED_CONFIG" <<EOF
 enum GeneratedUITestConfig {
     static let host: String? = $(printf '%s' "\"$HOST\"")
@@ -60,14 +74,17 @@ cat > "$HOST_PORT_FILE" <<EOF
 BOO_UI_TEST_HOST=$HOST
 BOO_UI_TEST_PORT=$PORT
 EOF
+fi
 cargo build >/dev/null
-rm -f "$SOCKET_PATH"
-target/debug/boo server --socket "$SOCKET_PATH" --remote-port "$PORT" --remote-bind-address "$BIND_ADDRESS" >/tmp/boo-ios-ui-tests.log 2>&1 &
-SERVER_PID=$!
-sleep 1
-if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
-  cat /tmp/boo-ios-ui-tests.log >&2
-  exit 1
+if [[ "$SKIP_DAEMON" != "1" ]]; then
+  rm -f "$SOCKET_PATH"
+  target/debug/boo server --socket "$SOCKET_PATH" --remote-port "$PORT" --remote-bind-address "$BIND_ADDRESS" >/tmp/boo-ios-ui-tests.log 2>&1 &
+  SERVER_PID=$!
+  sleep 1
+  if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
+    cat /tmp/boo-ios-ui-tests.log >&2
+    exit 1
+  fi
 fi
 
 TEST_ARGS=()
