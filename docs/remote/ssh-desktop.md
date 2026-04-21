@@ -23,6 +23,10 @@ desktop remote access through SSH.
 - remote path expansion hardening
 - tunnel lifecycle recovery
 - clearer mismatch and startup errors
+- settle the SSH auth boundary:
+  use `authorized_keys`-style public-key verification on the server and
+  platform keychain or agent-backed keys on the client, without storing
+  private keys inside Boo
 
 ## Verification
 

@@ -32,6 +32,9 @@ prioritized roadmap, not a changelog.
 - Keep desktop SSH as the supported milestone
 - Continue converging desktop and iOS on one canonical Boo-native remote model
 - Improve channel framing, resume behavior, and diagnostic surfaces
+- Replace Boo-native shared-secret auth ideas with SSH-style public-key trust:
+  server-side `~/.ssh/authorized_keys` verification, client-side platform
+  keychain or agent usage, and no private-key storage inside Boo
 
 ### UX Hardening
 

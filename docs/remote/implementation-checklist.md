@@ -15,6 +15,9 @@ This page tracks concrete remote deliverables and sequencing.
 - tunnel lifecycle recovery
 - version mismatch detection
 - end-to-end verification around forwarded control and `.stream`
+- define the SSH key trust model:
+  server verifies authorized public keys, client uses platform keychain or
+  agent access, and Boo never persists reusable private keys itself
 
 ## Phase 2: Canonical Native Transport
 

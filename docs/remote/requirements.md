@@ -20,6 +20,10 @@ time, even though rollout and UX differ today.
 - preserve deterministic verification paths
 - keep desktop SSH practical without blocking on mobile-specific work
 - converge toward one shared remote protocol/session model
+- do not rely on Boo-managed shared secrets for remote auth
+- if key-based auth is added, verify public keys server-side in an
+  `authorized_keys`-style model and use platform keychain or agent integration
+  client-side rather than storing private keys inside Boo
 
 ## Verification Layers
 
