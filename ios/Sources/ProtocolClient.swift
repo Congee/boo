@@ -281,7 +281,7 @@ final class TailscalePeerBrowser: ObservableObject {
                 TailscalePeer(
                     id: "\($0.name)-\($0.host)",
                     name: $0.name,
-                    host: $0.host,
+                    host: $0.address ?? $0.host,
                     port: store.tailscaleDiscoverySettings.defaultPort,
                     address: $0.address,
                     os: $0.os,
@@ -372,10 +372,10 @@ final class TailscalePeerBrowser: ObservableObject {
                 ?? nonLocalName(hostname)
                 ?? nonLocalName(rawName)
                 ?? preferredAddress
-            let connectHost = dnsName
+            let connectHost = preferredAddress
+                ?? dnsName
                 ?? nonLocalName(rawName)
                 ?? nonLocalName(hostname)
-                ?? preferredAddress
             guard let name = cleanedDisplayName, !name.isEmpty,
                   let host = connectHost, !host.isEmpty
             else {
@@ -472,6 +472,7 @@ final class TailscalePeerBrowser: ObservableObject {
 final class GSPClient: ObservableObject {
     private static let heartbeatInterval: TimeInterval = 5
     private static let heartbeatTimeout: TimeInterval = 12
+    private static let connectionTimeout: TimeInterval = 10
 
     @Published var connected = false
     @Published var authenticated = false
@@ -503,6 +504,7 @@ final class GSPClient: ObservableObject {
     private var authKey: SymmetricKey?
     private let queue = DispatchQueue(label: "boo-gsp-client", qos: .userInteractive)
     private var heartbeatTimer: DispatchSourceTimer?
+    private var connectionTimeoutTimer: DispatchSourceTimer?
     private var lastHeartbeatSent: Date?
     private var pendingHeartbeatToken: UInt64?
     private var desiredAttachedSessionId: UInt32?
@@ -562,6 +564,7 @@ final class GSPClient: ObservableObject {
     func disconnect() {
         connection?.cancel()
         connection = nil
+        stopConnectionTimeout()
         connectionGeneration &+= 1
         connected = false
         authenticated = false
@@ -778,6 +781,26 @@ final class GSPClient: ObservableObject {
             reconnectAttemptCount &+= 1
         }
         connectStartedAt = Date()
+        startConnectionTimeout(for: connectionGeneration)
+    }
+
+    private func startConnectionTimeout(for generation: UInt64) {
+        stopConnectionTimeout()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + Self.connectionTimeout)
+        timer.setEventHandler { [weak self] in
+            Task { @MainActor in
+                guard let self, self.connectionGeneration == generation, !self.connected else { return }
+                self.protocolError("Connection timed out")
+            }
+        }
+        connectionTimeoutTimer = timer
+        timer.resume()
+    }
+
+    private func stopConnectionTimeout() {
+        connectionTimeoutTimer?.cancel()
+        connectionTimeoutTimer = nil
     }
 
     private func installStateHandler(generation: UInt64) {
@@ -787,6 +810,7 @@ final class GSPClient: ObservableObject {
                 print("[boo-ios] connection state = \(state)")
                 switch state {
                 case .ready:
+                    self.stopConnectionTimeout()
                     self.connected = true
                     self.lastError = nil
                     if let connectStartedAt = self.connectStartedAt {
@@ -799,8 +823,10 @@ final class GSPClient: ObservableObject {
                     self.connected = false
                     self.lastError = "Connection waiting: \(error)"
                 case .failed(let error):
+                    self.stopConnectionTimeout()
                     self.protocolError("Connection failed: \(error)")
                 case .cancelled:
+                    self.stopConnectionTimeout()
                     self.stopHeartbeatLoop()
                     self.connected = false
                 default:
@@ -929,6 +955,7 @@ final class GSPClient: ObservableObject {
     private func protocolError(_ message: String) {
         connection?.cancel()
         connection = nil
+        stopConnectionTimeout()
         connectionGeneration &+= 1
         connected = false
         authenticated = false

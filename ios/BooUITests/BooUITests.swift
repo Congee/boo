@@ -223,6 +223,41 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTFail("discovered daemon tap never left connect screen; status='\(banner)'")
     }
 
+    func testTappingTailscaleDeviceConnects() {
+        let mockDevices = "example-mbp|example-mbp.tailnet.ts.net|100.76.250.75|macOS|1"
+        let app = makeApp(autoConnect: false, resetStorage: true, mockTailscaleDevices: mockDevices)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        navigateToConnectScreen(app)
+        let title = app.staticTexts["screen-title"]
+
+        let tailscaleSection = app.staticTexts["TAILSCALE DEVICES"]
+        scrollUntilExists(tailscaleSection, in: app)
+
+        let mbpRow = app.buttons["tailscale-peer-example-mbp"]
+        scrollUntilExists(mbpRow, in: app)
+        mbpRow.tap()
+
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline {
+            if title.exists, title.label == "Active Sessions" {
+                return
+            }
+            let errorLabel = app.staticTexts["connect-error-label"]
+            if errorLabel.exists, !errorLabel.label.isEmpty {
+                XCTAssertFalse(errorLabel.label.contains("NoSuchRecord"), "tailscale device should not fail on DNS lookup: \(errorLabel.label)")
+                XCTAssertEqual(errorLabel.label, "Connection timed out")
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+
+        let banner = app.staticTexts["connect-status-banner"].label
+        XCTFail("tailscale device tap neither connected nor surfaced a timeout; status='\(banner)'")
+    }
+
     func testTapTab1FromActiveSessionsAndType() {
         let app = makeApp(autoConnect: false, resetStorage: false)
         _ = installSystemAlertHandler(for: app)
