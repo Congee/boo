@@ -166,6 +166,9 @@ final class BooAppLaunchTests: BooUITestCase {
             add(attachment)
             XCTFail("expected discovered daemon row; browserError='\(browserError)'")
         }
+
+        sleep(2)
+        XCTAssertEqual(discoveredRows.count, 1, "expected exactly one discovered daemon row after dedupe")
     }
 
     func testTapTab1FromActiveSessionsAndType() {

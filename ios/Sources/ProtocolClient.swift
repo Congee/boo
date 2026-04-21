@@ -117,6 +117,40 @@ final class BonjourBrowser: ObservableObject {
     private let queue = DispatchQueue(label: "boo-bonjour-browser")
     private let serviceTypes = ["_boo._udp"]
 
+    private func stripBonjourConflictSuffix(_ name: String) -> String {
+        guard
+            let regex = try? NSRegularExpression(pattern: #"^(.*?)(?: \((\d+)\))$"#),
+            let match = regex.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)),
+            match.numberOfRanges == 3,
+            let baseRange = Range(match.range(at: 1), in: name)
+        else {
+            return name
+        }
+
+        let base = String(name[baseRange])
+        if base == "boo" || base.starts(with: "boo on ") || base.contains(" (") {
+            return base
+        }
+        return name
+    }
+
+    private func normalizedServiceName(for endpoint: NWEndpoint) -> String {
+        switch endpoint {
+        case .service(let name, _, _, _):
+            return stripBonjourConflictSuffix(name)
+        default:
+            return "\(endpoint)"
+        }
+    }
+
+    private func displayTitle(for serviceName: String) -> String {
+        let cleanedName = serviceName
+            .replacingOccurrences(of: "boo on ", with: "")
+            .replacingOccurrences(of: ".local", with: "")
+        return cleanedName
+            .replacingOccurrences(of: #" \((\d+)\)$"#, with: "", options: .regularExpression)
+    }
+
     private func describeBrowserError(_ error: NWError) -> String {
         let raw = "\(error)"
         if raw.contains("NoAuth") {
@@ -175,20 +209,16 @@ final class BonjourBrowser: ObservableObject {
             var entries: [DiscoveredDaemon] = []
             for browser in browsers {
                 for result in browser.browseResults {
-                    let id = "\(result.endpoint)"
+                    let id = normalizedServiceName(for: result.endpoint)
                     guard seen.insert(id).inserted else { continue }
                     let name: String
                     switch result.endpoint {
                     case .service(let n, _, _, _):
-                        name = n
+                        name = stripBonjourConflictSuffix(n)
                     default:
                         name = id
                     }
-                    let cleanedName = name
-                        .replacingOccurrences(of: "boo on ", with: "")
-                        .replacingOccurrences(of: ".local", with: "")
-                    let title = cleanedName
-                        .replacingOccurrences(of: #" \((\d+)\)$"#, with: "", options: .regularExpression)
+                    let title = displayTitle(for: name)
                     let subtitle: String
                     switch result.endpoint {
                     case .service(_, _, _, let interface):
