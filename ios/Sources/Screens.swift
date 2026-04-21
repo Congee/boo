@@ -132,6 +132,7 @@ struct BooRootView: View {
     @StateObject private var tailscaleBrowser = TailscalePeerBrowser()
     @StateObject private var store = ConnectionStore()
     @State private var selectedTab: BooTab = .sessions
+    @State private var showingConnectedTerminal = false
     @State private var monitor: ConnectionMonitor?
     @State private var serverIdentityWarning: String?
     @State private var didApplyUITestLaunchConfiguration = false
@@ -148,9 +149,7 @@ struct BooRootView: View {
             Group {
                 switch selectedTab {
                 case .sessions:
-                    if client.connected && client.authenticated {
-                        TerminalSessionScreen(client: client, monitor: activeMonitor, serverIdentityWarning: serverIdentityWarning)
-                    } else {
+                    NavigationStack {
                         ConnectScreen(
                             client: client,
                             browser: browser,
@@ -160,6 +159,10 @@ struct BooRootView: View {
                             selectedTab: $selectedTab,
                             serverIdentityWarning: serverIdentityWarning
                         )
+                        .navigationDestination(isPresented: $showingConnectedTerminal) {
+                            TerminalSessionScreen(client: client, monitor: activeMonitor, serverIdentityWarning: serverIdentityWarning)
+                                .toolbar(.hidden, for: .navigationBar)
+                        }
                     }
                 case .history:
                     HistoryScreen(store: store)
@@ -173,7 +176,7 @@ struct BooRootView: View {
                     )
                 }
             }
-            if !client.connected || !client.authenticated {
+            if !(selectedTab == .sessions && showingConnectedTerminal) {
                 KineticTabBar(selectedTab: $selectedTab)
                     .padding(.bottom, KineticSpacing.md)
             }
@@ -187,6 +190,12 @@ struct BooRootView: View {
         }
         .onChange(of: activeMonitor.status) { oldValue, newValue in
             handleStatusChange(from: oldValue, to: newValue)
+        }
+        .onChange(of: showingConnectedTerminal) { oldValue, newValue in
+            guard oldValue, !newValue else { return }
+            if client.connected || client.authenticated {
+                activeMonitor.disconnect()
+            }
         }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else { return }
@@ -208,6 +217,9 @@ struct BooRootView: View {
         }()
         switch newValue {
         case .authenticated, .attached:
+            if selectedTab == .sessions {
+                showingConnectedTerminal = true
+            }
             if let nodeId = activeMonitor.currentNodeId {
                 store.updateNodeLastConnected(nodeId)
             }
@@ -235,11 +247,13 @@ struct BooRootView: View {
                 }
             }
         case .connectionLost:
+            showingConnectedTerminal = false
             if let historyId = activeMonitor.currentHistoryId {
                 store.endConnection(id: historyId, status: .timedOut)
                 activeMonitor.clearTrackedConnection()
             }
         case .disconnected:
+            showingConnectedTerminal = false
             if let host = activeMonitor.lastHost, let port = activeMonitor.lastPort {
                 store.clearResumeAttachment(host: host, port: port)
             }
