@@ -885,7 +885,14 @@ struct TerminalSessionScreen: View {
         VStack(spacing: 0) {
             KineticTopBar(
                 title: sessionTitle,
-                subtitle: statusSubtitle
+                subtitle: nil,
+                compact: true,
+                trailingSystemImage: "rectangle.stack",
+                trailingAccessibilityLabel: "Sessions",
+                trailingAction: {
+                    client.detach()
+                    selectedTab = .sessions
+                }
             )
 
             if let serverIdentityWarning {
@@ -923,29 +930,8 @@ struct TerminalSessionScreen: View {
                 .contentShape(Rectangle())
             }
 
-            HStack {
-                Button {
-                    client.detach()
-                    selectedTab = .sessions
-                } label: {
-                    Label("Sessions", systemImage: "sidebar.left")
-                        .font(KineticFont.caption)
-                        .fontWeight(.bold)
-                        .foregroundStyle(KineticColor.secondary)
-                        .padding(.horizontal, KineticSpacing.md)
-                        .padding(.vertical, KineticSpacing.sm)
-                        .background(KineticColor.surfaceContainerHighest)
-                        .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
-                }
-                Spacer()
-            }
-            .padding(.horizontal, KineticSpacing.md)
-            .padding(.top, KineticSpacing.sm)
-            .padding(.bottom, KineticSpacing.xs)
-            .background(KineticColor.surfaceContainerHigh.opacity(0.45))
-
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: KineticSpacing.sm) {
+                HStack(spacing: KineticSpacing.xs) {
                     modifierButton("ESC") { sendSpecialKey([0x1b]) }
                     modifierButton("CTRL", active: ctrlActive) { ctrlActive.toggle() }
                     modifierButton("ALT", active: altActive) { altActive.toggle() }
@@ -964,10 +950,10 @@ struct TerminalSessionScreen: View {
                     modifierButton("←") { sendSpecialKey([0x1b, 0x5b, 0x44]) }
                     modifierButton("→") { sendSpecialKey([0x1b, 0x5b, 0x43]) }
                 }
-                .padding(.horizontal, KineticSpacing.md)
-                .padding(.vertical, KineticSpacing.sm)
+                .padding(.horizontal, KineticSpacing.sm)
+                .padding(.vertical, KineticSpacing.xs)
             }
-            .background(KineticColor.surfaceContainerHigh.opacity(0.8))
+            .background(KineticColor.surfaceContainerHigh.opacity(0.72))
         }
         .background(KineticColor.surface)
         .onAppear {
@@ -988,15 +974,6 @@ struct TerminalSessionScreen: View {
         return false
     }
 
-    private var statusSubtitle: String? {
-        let base = monitor.lastHost.map { "Attached to \($0)" }
-        let session = sessionStatusSummary
-        let transport = transportSummary
-        let reconnect = reconnectSummary
-        let joined = [base, session, client.handshakeSummary, transport, reconnect].compactMap { $0 }.joined(separator: " · ")
-        return joined.isEmpty ? nil : joined
-    }
-
     private var disconnectReason: String? {
         if let sessionHealthIssue {
             return sessionHealthIssue
@@ -1008,37 +985,6 @@ struct TerminalSessionScreen: View {
             return reason
         }
         return nil
-    }
-
-    private var transportSummary: String? {
-        if !sessionHealth.allowsTransportSummary {
-            return nil
-        }
-        switch monitor.transportHealth {
-        case .idle:
-            return nil
-        case .healthy:
-            return "transport healthy"
-        case .degraded(let reason):
-            return "transport degraded: \(reason)"
-        case .lost(let reason):
-            return "transport lost: \(reason)"
-        }
-    }
-
-    private var sessionStatusSummary: String? {
-        sessionHealth.statusSummary
-    }
-
-    private var reconnectSummary: String? {
-        switch monitor.reconnectState {
-        case .idle:
-            return nil
-        case .waiting(let attempt, _):
-            return "reconnecting (\(attempt))"
-        case .failed(let reason):
-            return "reconnect failed: \(reason)"
-        }
     }
 
     private func transportBanner(reason: String, color: Color) -> some View {
@@ -1053,11 +999,11 @@ struct TerminalSessionScreen: View {
     private func modifierButton(_ label: String, active: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
-                .font(KineticFont.caption)
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .fontWeight(.bold)
                 .foregroundStyle(active ? KineticColor.surface : KineticColor.secondary)
-                .padding(.horizontal, KineticSpacing.md)
-                .padding(.vertical, KineticSpacing.sm)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
                 .background(active ? KineticColor.primary : KineticColor.surfaceContainerHighest)
                 .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
         }

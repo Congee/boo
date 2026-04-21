@@ -25,6 +25,10 @@ enum RemoteTerminalGestureAction {
 struct KineticTopBar: View {
     let title: String
     let subtitle: String?
+    var compact = false
+    var trailingSystemImage: String? = nil
+    var trailingAccessibilityLabel: String? = nil
+    var trailingAction: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: KineticSpacing.xs) {
@@ -46,6 +50,17 @@ struct KineticTopBar: View {
                         .foregroundStyle(KineticColor.primary)
                 }
                 Spacer()
+                if let trailingSystemImage, let trailingAction {
+                    Button(action: trailingAction) {
+                        Image(systemName: trailingSystemImage)
+                            .font(.system(size: compact ? 18 : 20, weight: .semibold))
+                            .foregroundStyle(KineticColor.secondary)
+                            .frame(width: compact ? 36 : 40, height: compact ? 36 : 40)
+                            .background(KineticColor.surfaceContainerHighest)
+                            .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+                    }
+                    .accessibilityLabel(trailingAccessibilityLabel ?? trailingSystemImage)
+                }
             }
             Text(title)
                 .font(KineticFont.headline)
@@ -60,8 +75,8 @@ struct KineticTopBar: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, KineticSpacing.md)
-        .padding(.top, KineticSpacing.lg)
-        .padding(.bottom, KineticSpacing.md)
+        .padding(.top, compact ? KineticSpacing.md : KineticSpacing.lg)
+        .padding(.bottom, compact ? KineticSpacing.sm : KineticSpacing.md)
     }
 }
 
