@@ -29,9 +29,22 @@ struct KineticTopBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: KineticSpacing.xs) {
             HStack {
-                Text("boo")
-                    .font(.system(size: 20, weight: .black, design: .monospaced))
-                    .foregroundStyle(KineticColor.primary)
+                HStack(spacing: KineticSpacing.sm) {
+                    Image("boo-logo-mark")
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: 28, height: 28)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(KineticColor.primary.opacity(0.35), lineWidth: 1)
+                        )
+                        .shadow(color: .black.opacity(0.18), radius: 10, x: 0, y: 3)
+                        .accessibilityHidden(true)
+                    Text("boo")
+                        .font(.system(size: 20, weight: .black, design: .monospaced))
+                        .foregroundStyle(KineticColor.primary)
+                }
                 Spacer()
             }
             Text(title)
