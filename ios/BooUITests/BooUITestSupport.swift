@@ -94,4 +94,8 @@ class BooUITestCase: XCTestCase {
         }
         return app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'keyboard' OR identifier CONTAINS[c] 'keyboard'")).firstMatch
     }
+
+    func discoveredDaemonRows(in app: XCUIApplication) -> XCUIElementQuery {
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "discovered-daemon-"))
+    }
 }

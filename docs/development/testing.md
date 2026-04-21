@@ -41,3 +41,6 @@ Remote:
 - use visual/manual validation for UX and input behavior that cannot be proven
   well through protocol checks alone
 - keep high-risk subsystem docs updated when behavior changes
+- when adding third-party discovery paths such as Tailscale, separate
+  peer-list validation from actual Boo service reachability; device discovery
+  alone does not prove the remote daemon is listening

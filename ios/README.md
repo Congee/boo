@@ -7,6 +7,7 @@ This directory contains the Boo iOS remote viewer app.
 - SwiftUI iOS app with bundle identifier `me.congee.boo`
 - Connects to the Boo remote daemon using the existing GSP-compatible wire protocol
 - Discovers Bonjour services on `_boo._tcp`
+- Lists Tailscale peers through the Tailscale API when configured in Settings
 - Connects to discovered Bonjour services via the resolved Network framework endpoint instead of degrading them to a guessed `host:port`
 - Supports:
   - manual connect
@@ -37,6 +38,9 @@ This directory contains the Boo iOS remote viewer app.
 - The Boo Rust app now exposes the matching TCP daemon when `remote-port` is configured, for example `boo --headless --remote-port 7337`.
 - Optional challenge/response auth is enabled by configuring `remote-auth-key` on the Boo daemon side and entering the same key in the iOS client.
 - iOS local-network discovery requires `NSLocalNetworkUsageDescription` and `NSBonjourServices`; both are configured in the Xcode project.
+- Tailscale discovery is separate from Bonjour. It lists devices in the same tailnet through the Tailscale API, then connects to them on the configured Boo port.
+- The Tailscale section currently discovers peers, not Boo services. It assumes Boo is listening on the configured remote port, which defaults to `7337`.
+- Tailscale discovery requires a Tailscale API token configured in the iOS app Settings screen.
 
 ## Verification
 
@@ -54,6 +58,10 @@ It verifies:
 - terminal-state publishing with a real shell command round-trip
 - wire-codec decoding for full-state and delta updates with a standalone Swift self-test
 - client message-state transitions for auth, attach, detach, session creation, and delta application
+
+The automated validation lane currently covers Bonjour. Tailscale peer discovery
+is app-integrated, but it is not yet covered by an automated repo-side test
+because it depends on a real tailnet API token and live peer inventory.
 
 Run it with:
 

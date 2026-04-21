@@ -1,6 +1,27 @@
 import XCTest
 
 final class BooAppLaunchTests: BooUITestCase {
+    func testConnectScreenShowsDiscoveredDaemon() {
+        let app = makeApp(autoConnect: false)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        let title = app.staticTexts["screen-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        if title.label == "Active Sessions" {
+            let disconnectButton = app.buttons["sessions-disconnect-button"]
+            XCTAssertTrue(disconnectButton.waitForExistence(timeout: 5))
+            disconnectButton.tap()
+            XCTAssertTrue(title.waitForExistence(timeout: 5))
+        }
+        XCTAssertEqual(title.label, "Connect to Server")
+
+        let discoveredRows = discoveredDaemonRows(in: app)
+        let firstRow = discoveredRows.firstMatch
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 12))
+    }
+
     func testTapTab1FromActiveSessionsAndType() {
         let app = makeApp(autoConnect: false, resetStorage: false)
         _ = installSystemAlertHandler(for: app)

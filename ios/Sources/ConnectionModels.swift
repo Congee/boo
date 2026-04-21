@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import Network
+import Security
 
 struct SavedNode: Identifiable, Codable {
     var id = UUID()
@@ -52,15 +53,71 @@ struct ResumeAttachmentMetadata: Codable, Equatable {
     var recordedAt: Date
 }
 
+struct TailscaleDiscoverySettings: Codable, Equatable {
+    var defaultPort: UInt16 = 7337
+}
+
+private enum KeychainStringStore {
+    static func load(service: String, account: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess,
+              let data = item as? Data,
+              let string = String(data: data, encoding: .utf8)
+        else {
+            return nil
+        }
+        return string
+    }
+
+    static func save(_ value: String, service: String, account: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        let data = Data(value.utf8)
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+        ]
+        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if updateStatus == errSecItemNotFound {
+            var insert = query
+            insert[kSecValueData as String] = data
+            SecItemAdd(insert as CFDictionary, nil)
+        }
+    }
+
+    static func delete(service: String, account: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+}
+
 @MainActor
 final class ConnectionStore: ObservableObject {
     @Published var savedNodes: [SavedNode] = []
     @Published var history: [ConnectionHistoryEntry] = []
+    @Published var tailscaleDiscoverySettings = TailscaleDiscoverySettings()
 
     private let nodesKey = "boo.remote.savedNodes"
     private let historyKey = "boo.remote.connectionHistory"
     private let trustedIdentitiesKey = "boo.remote.trustedServerIdentities"
     private let resumeAttachmentsKey = "boo.remote.resumeAttachments"
+    private let tailscaleSettingsKey = "boo.remote.tailscale.discovery"
+    private let tailscaleTokenService = "me.congee.boo.tailscale"
+    private let tailscaleTokenAccount = "api-token"
     private let maxHistory = 50
     private var trustedServerIdentities: [String: String] = [:]
     private var resumeAttachments: [String: ResumeAttachmentMetadata] = [:]
@@ -71,6 +128,7 @@ final class ConnectionStore: ObservableObject {
         loadHistory()
         loadTrustedServerIdentities()
         loadResumeAttachments()
+        loadTailscaleSettings()
     }
 
     func addNode(_ node: SavedNode) {
@@ -151,6 +209,26 @@ final class ConnectionStore: ObservableObject {
         saveResumeAttachments()
     }
 
+    var hasTailscaleAPIToken: Bool {
+        guard let token = tailscaleAPIToken() else { return false }
+        return !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func tailscaleAPIToken() -> String? {
+        KeychainStringStore.load(service: tailscaleTokenService, account: tailscaleTokenAccount)
+    }
+
+    func updateTailscaleDiscovery(defaultPort: UInt16, apiToken: String) {
+        tailscaleDiscoverySettings.defaultPort = defaultPort
+        saveTailscaleSettings()
+        let trimmed = apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            KeychainStringStore.delete(service: tailscaleTokenService, account: tailscaleTokenAccount)
+        } else {
+            KeychainStringStore.save(trimmed, service: tailscaleTokenService, account: tailscaleTokenAccount)
+        }
+    }
+
     private func loadNodes() {
         guard let data = UserDefaults.standard.data(forKey: nodesKey),
               let nodes = try? JSONDecoder().decode([SavedNode].self, from: data) else { return }
@@ -195,6 +273,17 @@ final class ConnectionStore: ObservableObject {
         UserDefaults.standard.set(data, forKey: resumeAttachmentsKey)
     }
 
+    private func loadTailscaleSettings() {
+        guard let data = UserDefaults.standard.data(forKey: tailscaleSettingsKey),
+              let settings = try? JSONDecoder().decode(TailscaleDiscoverySettings.self, from: data) else { return }
+        tailscaleDiscoverySettings = settings
+    }
+
+    private func saveTailscaleSettings() {
+        guard let data = try? JSONEncoder().encode(tailscaleDiscoverySettings) else { return }
+        UserDefaults.standard.set(data, forKey: tailscaleSettingsKey)
+    }
+
     private func applyUITestConfiguration() {
         guard let config = UITestLaunchConfiguration.current() else { return }
 
@@ -203,6 +292,8 @@ final class ConnectionStore: ObservableObject {
             UserDefaults.standard.removeObject(forKey: historyKey)
             UserDefaults.standard.removeObject(forKey: trustedIdentitiesKey)
             UserDefaults.standard.removeObject(forKey: resumeAttachmentsKey)
+            UserDefaults.standard.removeObject(forKey: tailscaleSettingsKey)
+            KeychainStringStore.delete(service: tailscaleTokenService, account: tailscaleTokenAccount)
         }
 
         guard let host = config.host else { return }

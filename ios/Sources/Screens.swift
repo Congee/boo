@@ -22,6 +22,7 @@ struct BooRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var client = GSPClient()
     @StateObject private var browser = BonjourBrowser()
+    @StateObject private var tailscaleBrowser = TailscalePeerBrowser()
     @StateObject private var store = ConnectionStore()
     @State private var selectedTab: BooTab = .sessions
     @State private var monitor: ConnectionMonitor?
@@ -46,12 +47,26 @@ struct BooRootView: View {
                         if client.connected && client.authenticated {
                             SessionsScreen(client: client, monitor: activeMonitor, selectedTab: $selectedTab, serverIdentityWarning: serverIdentityWarning)
                         } else {
-                            ConnectScreen(client: client, browser: browser, store: store, monitor: activeMonitor, selectedTab: $selectedTab, serverIdentityWarning: serverIdentityWarning)
+                            ConnectScreen(
+                                client: client,
+                                browser: browser,
+                                tailscaleBrowser: tailscaleBrowser,
+                                store: store,
+                                monitor: activeMonitor,
+                                selectedTab: $selectedTab,
+                                serverIdentityWarning: serverIdentityWarning
+                            )
                         }
                     case .history:
                         HistoryScreen(store: store)
                     case .settings:
-                        SettingsScreen(client: client, store: store, monitor: activeMonitor, serverIdentityWarning: $serverIdentityWarning)
+                        SettingsScreen(
+                            client: client,
+                            store: store,
+                            tailscaleBrowser: tailscaleBrowser,
+                            monitor: activeMonitor,
+                            serverIdentityWarning: $serverIdentityWarning
+                        )
                     }
                 }
             }
@@ -160,6 +175,7 @@ struct BooRootView: View {
 struct ConnectScreen: View {
     @ObservedObject var client: GSPClient
     @ObservedObject var browser: BonjourBrowser
+    @ObservedObject var tailscaleBrowser: TailscalePeerBrowser
     @ObservedObject var store: ConnectionStore
     @ObservedObject var monitor: ConnectionMonitor
     @Binding var selectedTab: BooTab
@@ -298,6 +314,38 @@ struct ConnectScreen: View {
                         }
                     }
 
+                    if store.hasTailscaleAPIToken || tailscaleBrowser.isLoading || !tailscaleBrowser.peers.isEmpty || tailscaleBrowser.lastError != nil {
+                        VStack(alignment: .leading, spacing: KineticSpacing.sm) {
+                            KineticSectionLabel(text: "Tailscale Peers")
+                            if tailscaleBrowser.isLoading {
+                                ProgressView()
+                                    .tint(KineticColor.primary)
+                            }
+                            if let error = tailscaleBrowser.lastError {
+                                Text(error)
+                                    .font(KineticFont.caption)
+                                    .foregroundStyle(KineticColor.error)
+                                    .padding(KineticSpacing.md)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(KineticColor.error.opacity(0.1))
+                                    .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+                            }
+                            ForEach(tailscaleBrowser.peers) { peer in
+                                let state = peer.online ? "online" : "offline"
+                                let detail = [peer.os, state, peer.address].compactMap { $0 }.joined(separator: " · ")
+                                KineticCardRow(
+                                    icon: "network",
+                                    title: peer.name,
+                                    subtitle: detail,
+                                    onTap: {
+                                        connectToHost(peer.host, port: peer.port, nodeName: peer.name)
+                                    },
+                                    accessibilityIdentifier: "tailscale-peer-\(peer.name)"
+                                )
+                            }
+                        }
+                    }
+
                     if !store.history.isEmpty {
                         VStack(alignment: .leading, spacing: KineticSpacing.sm) {
                             KineticSectionLabel(text: "Recent Connections")
@@ -314,18 +362,23 @@ struct ConnectScreen: View {
                 .padding(.horizontal, KineticSpacing.md)
             }
         }
-        .onAppear { browser.startBrowsing() }
-        .onDisappear { browser.stopBrowsing() }
+        .onAppear {
+            browser.startBrowsing()
+            tailscaleBrowser.refresh(store: store)
+        }
+        .onDisappear {
+            browser.stopBrowsing()
+            tailscaleBrowser.stop()
+        }
+        .onChange(of: store.tailscaleDiscoverySettings) { _, _ in
+            tailscaleBrowser.refresh(store: store)
+        }
     }
 
     private func connectManual() {
         guard !host.isEmpty else { return }
         let parsed = parseHost(host)
-        let historyId = store.recordConnection(
-            nodeName: parsed.0,
-            host: formatConnectionTarget(host: parsed.0, port: parsed.1)
-        )
-        monitor.connect(host: parsed.0, port: parsed.1, authKey: authKey, historyId: historyId)
+        connectToHost(parsed.0, port: parsed.1, nodeName: parsed.0)
     }
 
     private func connectToEndpoint(_ endpoint: NWEndpoint) {
@@ -341,6 +394,14 @@ struct ConnectScreen: View {
             authKey: authKey,
             historyId: historyId
         )
+    }
+
+    private func connectToHost(_ host: String, port: UInt16, nodeName: String) {
+        let historyId = store.recordConnection(
+            nodeName: nodeName,
+            host: formatConnectionTarget(host: host, port: port)
+        )
+        monitor.connect(host: host, port: port, authKey: authKey, historyId: historyId)
     }
 
     private func parseHost(_ raw: String) -> (String, UInt16) {
@@ -931,6 +992,7 @@ struct HistoryScreen: View {
 struct SettingsScreen: View {
     @ObservedObject var client: GSPClient
     @ObservedObject var store: ConnectionStore
+    @ObservedObject var tailscaleBrowser: TailscalePeerBrowser
     @ObservedObject var monitor: ConnectionMonitor
     @Binding var serverIdentityWarning: String?
 
@@ -938,6 +1000,8 @@ struct SettingsScreen: View {
     @State private var nodeHost = ""
     @State private var nodePort = "7337"
     @State private var nodeAuthKey = ""
+    @State private var tailscalePort = "7337"
+    @State private var tailscaleToken = ""
 
     private var trustedIdentityRow: (current: String, trusted: String?)? {
         guard let host = monitor.lastHost,
@@ -993,6 +1057,22 @@ struct SettingsScreen: View {
                             .accessibilityIdentifier("save-node-button")
                     }
 
+                    VStack(alignment: .leading, spacing: KineticSpacing.sm) {
+                        KineticSectionLabel(text: "Tailscale Discovery")
+                        Text("List tailnet peers through the Tailscale API. This is separate from Bonjour and works across the tailnet, not just the local LAN.")
+                            .font(KineticFont.caption)
+                            .foregroundStyle(KineticColor.onSurfaceVariant)
+                        KineticInputField(placeholder: "Default Boo Port", text: $tailscalePort, keyboardType: .numberPad, accessibilityIdentifier: "settings-tailscale-port-input")
+                        KineticInputField(placeholder: "Tailscale API Token", text: $tailscaleToken, secure: true, accessibilityIdentifier: "settings-tailscale-token-input")
+                        Button("Save Tailscale Settings") {
+                            let port = UInt16(tailscalePort) ?? 7337
+                            store.updateTailscaleDiscovery(defaultPort: port, apiToken: tailscaleToken)
+                            tailscaleBrowser.refresh(store: store)
+                        }
+                        .buttonStyle(KineticPrimaryButtonStyle())
+                        .accessibilityIdentifier("save-tailscale-settings-button")
+                    }
+
                     if !store.savedNodes.isEmpty {
                         VStack(alignment: .leading, spacing: KineticSpacing.sm) {
                             KineticSectionLabel(text: "Saved Nodes")
@@ -1019,6 +1099,10 @@ struct SettingsScreen: View {
                 }
                 .padding(.horizontal, KineticSpacing.md)
             }
+        }
+        .onAppear {
+            tailscalePort = "\(store.tailscaleDiscoverySettings.defaultPort)"
+            tailscaleToken = store.tailscaleAPIToken() ?? ""
         }
     }
 

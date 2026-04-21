@@ -94,6 +94,16 @@ struct DiscoveredDaemon: Identifiable, Hashable {
     let endpoint: NWEndpoint
 }
 
+struct TailscalePeer: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let host: String
+    let port: UInt16
+    let address: String?
+    let os: String?
+    let online: Bool
+}
+
 @MainActor
 final class BonjourBrowser: ObservableObject {
     @Published var daemons: [DiscoveredDaemon] = []
@@ -154,6 +164,115 @@ final class BonjourBrowser: ObservableObject {
             }
             daemons = entries.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             isSearching = !browsers.isEmpty
+        }
+    }
+}
+
+@MainActor
+final class TailscalePeerBrowser: ObservableObject {
+    @Published var peers: [TailscalePeer] = []
+    @Published var isLoading = false
+    @Published var lastError: String?
+
+    private var refreshTask: Task<Void, Never>?
+
+    func refresh(store: ConnectionStore) {
+        refreshTask?.cancel()
+
+        guard let token = store.tailscaleAPIToken(),
+              !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            peers = []
+            lastError = nil
+            isLoading = false
+            return
+        }
+
+        let port = store.tailscaleDiscoverySettings.defaultPort
+        isLoading = true
+        lastError = nil
+
+        refreshTask = Task {
+            do {
+                let fetched = try await fetchPeers(token: token, port: port)
+                guard !Task.isCancelled else { return }
+                peers = fetched
+                lastError = nil
+                isLoading = false
+            } catch {
+                guard !Task.isCancelled else { return }
+                peers = []
+                lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                isLoading = false
+            }
+        }
+    }
+
+    func stop() {
+        refreshTask?.cancel()
+        refreshTask = nil
+        isLoading = false
+    }
+
+    private func fetchPeers(token: String, port: UInt16) async throws -> [TailscalePeer] {
+        var request = URLRequest(url: URL(string: "https://api.tailscale.com/api/v2/tailnet/-/devices")!)
+        let credential = Data("\(token):".utf8).base64EncodedString()
+        request.setValue("Basic \(credential)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw NSError(domain: "BooTailscale", code: -1, userInfo: [NSLocalizedDescriptionKey: "Tailscale API returned no HTTP response"])
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
+            throw NSError(domain: "BooTailscale", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Tailscale API error: \(body)"])
+        }
+        return try parseTailscalePeers(data: data, port: port)
+    }
+
+    private func parseTailscalePeers(data: Data, port: UInt16) throws -> [TailscalePeer] {
+        let object = try JSONSerialization.jsonObject(with: data)
+        let deviceObjects: [[String: Any]]
+        if let dict = object as? [String: Any], let devices = dict["devices"] as? [[String: Any]] {
+            deviceObjects = devices
+        } else if let devices = object as? [[String: Any]] {
+            deviceObjects = devices
+        } else {
+            throw NSError(domain: "BooTailscale", code: -2, userInfo: [NSLocalizedDescriptionKey: "Unexpected Tailscale devices payload"])
+        }
+
+        let parsed: [TailscalePeer] = deviceObjects.compactMap { device in
+            let rawName = (device["name"] as? String)?.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            let hostname = (device["hostname"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let displayName = hostname ?? rawName?.split(separator: ".").first.map(String.init)
+            let addresses = device["addresses"] as? [String] ?? []
+            let preferredAddress = addresses.first(where: { $0.contains(".") }) ?? addresses.first
+            let connectHost = rawName ?? hostname ?? preferredAddress
+            guard let name = displayName, !name.isEmpty,
+                  let host = connectHost, !host.isEmpty
+            else {
+                return nil
+            }
+
+            let online = (device["online"] as? Bool) ?? false
+            let os = device["os"] as? String
+            let idValue = device["id"] ?? device["nodeId"] ?? host
+
+            return TailscalePeer(
+                id: String(describing: idValue),
+                name: name,
+                host: host,
+                port: port,
+                address: preferredAddress,
+                os: os,
+                online: online
+            )
+        }
+
+        return parsed.sorted { lhs, rhs in
+            if lhs.online != rhs.online {
+                return lhs.online && !rhs.online
+            }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
     }
 }
