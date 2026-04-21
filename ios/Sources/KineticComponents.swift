@@ -88,8 +88,12 @@ struct KineticInputField: View {
     var body: some View {
         Group {
             if secure {
-                SecureField(placeholder, text: $text)
-                    .accessibilityIdentifier(accessibilityIdentifier ?? placeholder)
+                SecureUIKitTextField(
+                    placeholder: placeholder,
+                    text: $text,
+                    keyboardType: keyboardType,
+                    accessibilityIdentifier: accessibilityIdentifier ?? placeholder
+                )
             } else {
                 TextField(placeholder, text: $text)
                     .keyboardType(keyboardType)
@@ -103,6 +107,68 @@ struct KineticInputField: View {
         .padding(KineticSpacing.md)
         .background(KineticColor.surfaceContainerLowest)
         .clipShape(RoundedRectangle(cornerRadius: KineticRadius.container))
+    }
+}
+
+private struct SecureUIKitTextField: UIViewRepresentable {
+    let placeholder: String
+    @Binding var text: String
+    let keyboardType: UIKeyboardType
+    let accessibilityIdentifier: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    func makeUIView(context: Context) -> UITextField {
+        let field = UITextField(frame: .zero)
+        field.delegate = context.coordinator
+        field.addTarget(context.coordinator, action: #selector(Coordinator.editingChanged(_:)), for: .editingChanged)
+        field.placeholder = placeholder
+        field.isSecureTextEntry = true
+        field.keyboardType = keyboardType
+        field.autocorrectionType = .no
+        field.autocapitalizationType = .none
+        field.smartInsertDeleteType = .no
+        field.smartDashesType = .no
+        field.smartQuotesType = .no
+        field.textContentType = .password
+        field.borderStyle = .none
+        field.backgroundColor = .clear
+        field.textColor = UIColor(KineticColor.secondary)
+        field.font = UIFont.monospacedSystemFont(ofSize: 16, weight: .regular)
+        field.accessibilityIdentifier = accessibilityIdentifier
+        return field
+    }
+
+    func updateUIView(_ uiView: UITextField, context: Context) {
+        if uiView.text != text {
+            uiView.text = text
+        }
+        uiView.placeholder = placeholder
+        uiView.keyboardType = keyboardType
+        uiView.accessibilityIdentifier = accessibilityIdentifier
+    }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        private var text: Binding<String>
+
+        init(text: Binding<String>) {
+            self.text = text
+        }
+
+        @objc func editingChanged(_ sender: UITextField) {
+            text.wrappedValue = sender.text ?? ""
+        }
+
+        func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
+            guard let current = textField.text,
+                  let stringRange = Range(range, in: current) else {
+                return true
+            }
+            text.wrappedValue = current.replacingCharacters(in: stringRange, with: string)
+            return true
+        }
     }
 }
 
