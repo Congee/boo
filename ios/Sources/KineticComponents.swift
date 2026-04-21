@@ -326,12 +326,6 @@ struct RemoteTerminalView: View {
                             } else if dy >= gestureThreshold {
                                 onGestureAction(.pageDown)
                             }
-                        } else {
-                            if dx <= -gestureThreshold {
-                                onGestureAction(.arrowLeft)
-                            } else if dx >= gestureThreshold {
-                                onGestureAction(.arrowRight)
-                            }
                         }
                     }
             )

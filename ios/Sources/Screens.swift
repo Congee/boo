@@ -161,7 +161,6 @@ struct BooRootView: View {
                         )
                         .navigationDestination(isPresented: $showingConnectedTerminal) {
                             TerminalSessionScreen(client: client, monitor: activeMonitor, serverIdentityWarning: serverIdentityWarning)
-                                .toolbar(.hidden, for: .navigationBar)
                         }
                     }
                 case .history:
@@ -617,6 +616,7 @@ struct ConnectScreen: View {
 }
 
 struct TerminalSessionScreen: View {
+    @Environment(\.dismiss) private var dismiss
     @ObservedObject var client: GSPClient
     @ObservedObject var monitor: ConnectionMonitor
     let serverIdentityWarning: String?
@@ -656,6 +656,23 @@ struct TerminalSessionScreen: View {
         terminalSessionBody
             .background(KineticColor.surface)
             .toolbar { terminalKeyboardToolbar }
+            .overlay(alignment: .leading) {
+                GeometryReader { geo in
+                    Color.clear
+                        .frame(width: min(max(geo.size.width * 0.12, 44), 96))
+                        .contentShape(Rectangle())
+                        .accessibilityIdentifier("terminal-back-swipe-zone")
+                        .gesture(
+                            DragGesture(minimumDistance: 20)
+                                .onEnded { drag in
+                                    let dx = drag.translation.width
+                                    let dy = drag.translation.height
+                                    guard dx >= 64, abs(dx) > abs(dy) else { return }
+                                    dismiss()
+                                }
+                        )
+                }
+            }
         .onAppear {
             if client.authenticated {
                 client.listSessions()

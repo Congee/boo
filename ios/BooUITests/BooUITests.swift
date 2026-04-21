@@ -273,6 +273,34 @@ final class BooAppLaunchTests: BooUITestCase {
         waitForExpectations(timeout: 10)
     }
 
+    func testSwipeBackFromTerminalReturnsToConnectScreen() {
+        let app = makeApp(autoConnect: false, resetStorage: false)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        openLiveTerminal(app)
+
+        let terminal = app.otherElements["terminal-screen"]
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10))
+        let backZone = app.otherElements["terminal-back-swipe-zone"]
+        XCTAssertTrue(backZone.waitForExistence(timeout: 5))
+        let start = backZone.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
+        let finish = app.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: finish)
+
+        let title = app.staticTexts["screen-title"]
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            if title.exists, isConnectScreenTitle(title.label) {
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+
+        XCTFail("expected swipe-back to return to the connect screen")
+    }
+
     func testConnectScreenElementsAppear() {
         let app = makeApp()
         _ = installSystemAlertHandler(for: app)
