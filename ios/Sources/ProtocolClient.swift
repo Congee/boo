@@ -133,6 +133,11 @@ final class BonjourBrowser: ObservableObject {
     private let queue = DispatchQueue(label: "boo-bonjour-browser")
     private let serviceTypes = ["_boo._udp"]
 
+    private struct RankedDiscoveredDaemon {
+        let daemon: DiscoveredDaemon
+        let advertisedPort: UInt16?
+    }
+
     private func stripBonjourConflictSuffix(_ name: String) -> String {
         guard
             let regex = try? NSRegularExpression(pattern: #"^(.*?)(?: \((\d+)\))$"#),
@@ -167,12 +172,32 @@ final class BonjourBrowser: ObservableObject {
             .replacingOccurrences(of: #" \((\d+)\)$"#, with: "", options: .regularExpression)
     }
 
-    private func describeBrowserError(_ error: NWError) -> String {
+    private func advertisedPort(for serviceName: String) -> UInt16? {
+        guard
+            let regex = try? NSRegularExpression(pattern: #"^boo on .+ \((\d+)\)$"#),
+            let match = regex.firstMatch(in: serviceName, range: NSRange(serviceName.startIndex..., in: serviceName)),
+            match.numberOfRanges == 2,
+            let portRange = Range(match.range(at: 1), in: serviceName)
+        else {
+            return nil
+        }
+        return UInt16(serviceName[portRange])
+    }
+
+    private enum BrowserErrorDisposition {
+        case ignore
+        case show(String)
+    }
+
+    private func browserErrorDisposition(for error: NWError) -> BrowserErrorDisposition {
         let raw = "\(error)"
         if raw.contains("NoAuth") {
-            return "Local network access is required for Bonjour discovery. Enable boo in Settings > Privacy & Security > Local Network."
+            return .show("Local network access is required for Bonjour discovery. Enable boo in Settings > Privacy & Security > Local Network.")
         }
-        return "Bonjour browse failed: \(error)"
+        if raw.contains("DefunctConnection") {
+            return .ignore
+        }
+        return .show("Bonjour browse failed: \(error)")
     }
 
     func startBrowsing() {
@@ -188,10 +213,24 @@ final class BonjourBrowser: ObservableObject {
                 Task { @MainActor in
                     switch state {
                     case .failed(let error):
-                        self?.isSearching = false
-                        self?.lastError = self?.describeBrowserError(error)
+                        switch self?.browserErrorDisposition(for: error) {
+                        case .ignore:
+                            self?.lastError = nil
+                        case .show(let message):
+                            self?.isSearching = false
+                            self?.lastError = message
+                        case .none:
+                            break
+                        }
                     case .waiting(let error):
-                        self?.lastError = self?.describeBrowserError(error)
+                        switch self?.browserErrorDisposition(for: error) {
+                        case .ignore:
+                            self?.lastError = nil
+                        case .show(let message):
+                            self?.lastError = message
+                        case .none:
+                            break
+                        }
                     case .ready:
                         self?.lastError = nil
                     case .cancelled:
@@ -221,12 +260,10 @@ final class BonjourBrowser: ObservableObject {
 
     private func refreshDiscoveredDaemons() {
         Task { @MainActor in
-            var seen = Set<String>()
-            var entries: [DiscoveredDaemon] = []
+            var entriesByTitle: [String: RankedDiscoveredDaemon] = [:]
             for browser in browsers {
                 for result in browser.browseResults {
                     let id = normalizedServiceName(for: result.endpoint)
-                    guard seen.insert(id).inserted else { continue }
                     let name: String
                     switch result.endpoint {
                     case .service(let n, _, _, _):
@@ -246,18 +283,30 @@ final class BonjourBrowser: ObservableObject {
                     default:
                         subtitle = "QUIC remote daemon"
                     }
-                    entries.append(
-                        DiscoveredDaemon(
+                    let ranked = RankedDiscoveredDaemon(
+                        daemon: DiscoveredDaemon(
                             id: id,
                             name: name,
                             title: title,
                             subtitle: subtitle,
                             endpoint: result.endpoint
-                        )
+                        ),
+                        advertisedPort: advertisedPort(for: name)
                     )
+                    if let existing = entriesByTitle[title] {
+                        let existingScore = existing.advertisedPort == 7337 ? 1 : 0
+                        let candidateScore = ranked.advertisedPort == 7337 ? 1 : 0
+                        if candidateScore > existingScore {
+                            entriesByTitle[title] = ranked
+                        }
+                    } else {
+                        entriesByTitle[title] = ranked
+                    }
                 }
             }
-            daemons = entries.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            daemons = entriesByTitle.values
+                .map(\.daemon)
+                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             isSearching = !browsers.isEmpty
         }
     }
@@ -807,7 +856,13 @@ final class GSPClient: ObservableObject {
                     self.sendAuth()
                 case .waiting(let error):
                     self.connected = false
-                    self.lastError = "Connection waiting: \(error)"
+                    let raw = "\(error)"
+                    if raw.contains("rawValue: 61") || raw.contains("Connection refused") {
+                        self.stopConnectionTimeout()
+                        self.protocolError("Connection refused")
+                    } else {
+                        self.lastError = "Connection waiting: \(error)"
+                    }
                 case .failed(let error):
                     self.stopConnectionTimeout()
                     self.protocolError("Connection failed: \(error)")
