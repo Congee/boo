@@ -1,6 +1,107 @@
 import XCTest
 
 final class BooAppLaunchTests: BooUITestCase {
+    private func uiStateSnapshot(_ app: XCUIApplication) -> String {
+        let title = app.staticTexts["screen-title"].exists ? app.staticTexts["screen-title"].label : "<none>"
+        let connectStatus = app.staticTexts["connect-status-banner"].exists ? app.staticTexts["connect-status-banner"].label : "<none>"
+        let connectError = app.staticTexts["connect-error-label"].exists ? app.staticTexts["connect-error-label"].label : "<none>"
+        let bonjourError = app.staticTexts["bonjour-error-label"].exists ? app.staticTexts["bonjour-error-label"].label : "<none>"
+        let terminal = app.otherElements["terminal-screen"]
+        let terminalExists = terminal.exists
+        let terminalLabel = terminalExists ? terminal.label : "<none>"
+        let terminalValue = terminalExists ? String(describing: terminal.value ?? "<nil>") : "<none>"
+        let floatingBack = app.buttons["floating-back-button"].exists
+        return """
+        title=\(title)
+        connectStatus=\(connectStatus)
+        connectError=\(connectError)
+        bonjourError=\(bonjourError)
+        terminalExists=\(terminalExists)
+        terminalLabel=\(terminalLabel)
+        terminalValuePrefix=\(terminalValue.prefix(200))
+        floatingBack=\(floatingBack)
+        """
+    }
+
+    private func attachStateSnapshot(_ app: XCUIApplication) -> String {
+        let terminal = app.otherElements["terminal-screen"]
+        let label = terminal.exists ? terminal.label : "<no terminal>"
+        let value = terminal.exists ? String(describing: terminal.value ?? "<nil>") : "<no terminal>"
+        return "terminalLabel=\(label) terminalValuePrefix=\(value.prefix(200))"
+    }
+
+    private func waitForConnectScreen(_ app: XCUIApplication, timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line) {
+        let title = app.staticTexts["screen-title"]
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if title.exists, isConnectScreenTitle(title.label) {
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "connect-screen-timeout"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTFail("expected connect screen, got:\n\(uiStateSnapshot(app))", file: file, line: line)
+    }
+
+    private func waitForTerminalScreen(_ app: XCUIApplication, timeout: TimeInterval = 12, file: StaticString = #filePath, line: UInt = #line) {
+        let terminal = app.otherElements["terminal-screen"]
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if terminal.exists {
+                return
+            }
+            let errorLabel = app.staticTexts["connect-error-label"]
+            if errorLabel.exists, !errorLabel.label.isEmpty {
+                let attachment = XCTAttachment(screenshot: app.screenshot())
+                attachment.name = "terminal-connect-error"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                XCTFail("connect did not reach terminal: \(errorLabel.label)\n\(uiStateSnapshot(app))", file: file, line: line)
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "terminal-timeout"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTFail("expected terminal screen, got:\n\(uiStateSnapshot(app))", file: file, line: line)
+    }
+
+    private func assertTerminalCanType(_ app: XCUIApplication, marker: String, file: StaticString = #filePath, line: UInt = #line) {
+        let terminal = app.otherElements["terminal-screen"]
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10), file: file, line: line)
+        terminal.tap()
+
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5), file: file, line: line)
+        let proxy = app.textViews["terminal-text-proxy"]
+        XCTAssertTrue(proxy.waitForExistence(timeout: 5), file: file, line: line)
+        proxy.tap()
+        proxy.typeText("echo \(marker)\r")
+
+        let outputExpectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value CONTAINS %@", marker),
+            object: terminal
+        )
+        let result = XCTWaiter.wait(for: [outputExpectation], timeout: 10)
+        XCTAssertEqual(
+            result,
+            .completed,
+            "typed text did not appear in terminal: \(attachStateSnapshot(app))\n\(uiStateSnapshot(app))",
+            file: file,
+            line: line
+        )
+
+        let attachedPrefix = NSPredicate(format: "label BEGINSWITH %@", "attached-")
+        XCTAssertTrue(attachedPrefix.evaluate(with: terminal), "terminal lost attachment after typing: \(attachStateSnapshot(app))", file: file, line: line)
+    }
+
     func testConnectScreenShowsMockTailscaleDevices() {
         let mockDevices = "Mac mini|mini.tailnet.ts.net|100.64.0.10|macOS|1;Offline box|offline.ts.net|100.64.0.11|Linux|0"
         let app = makeApp(autoConnect: false, resetStorage: true, mockTailscaleDevices: mockDevices)
@@ -257,20 +358,7 @@ final class BooAppLaunchTests: BooUITestCase {
         app.tap()
 
         openLiveTerminal(app)
-
-        let terminal = app.otherElements["terminal-screen"]
-        terminal.tap()
-
-        let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
-        let proxy = app.textViews["terminal-text-proxy"]
-        XCTAssertTrue(proxy.waitForExistence(timeout: 5))
-        proxy.tap()
-        proxy.typeText("echo BOO_UI_TYPED\r")
-
-        let outputExpectation = NSPredicate(format: "value CONTAINS %@", "BOO_UI_TYPED")
-        expectation(for: outputExpectation, evaluatedWith: terminal)
-        waitForExpectations(timeout: 10)
+        assertTerminalCanType(app, marker: "BOO_UI_TYPED")
     }
 
     func testSwipeBackFromTerminalReturnsToConnectScreen() {
@@ -301,6 +389,71 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTFail("expected swipe-back to return to the connect screen")
     }
 
+    func testFloatingBackButtonReturnsToConnectScreen() {
+        let app = makeApp(autoConnect: false, resetStorage: false)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        openLiveTerminal(app)
+
+        let floatingBackButton = app.buttons["floating-back-button"]
+        XCTAssertTrue(floatingBackButton.waitForExistence(timeout: 5))
+        floatingBackButton.tap()
+
+        let title = app.staticTexts["screen-title"]
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            if title.exists, isConnectScreenTitle(title.label) {
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+
+        XCTFail("expected floating back button to return to the connect screen")
+    }
+
+    func testReconnectAndTypeAgainAfterBackNavigation() {
+        let app = makeApp(autoConnect: false, resetStorage: false)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        openLiveTerminal(app)
+        assertTerminalCanType(app, marker: "BOO_UI_TYPED_1")
+
+        let floatingBackButton = app.buttons["floating-back-button"]
+        XCTAssertTrue(floatingBackButton.waitForExistence(timeout: 5))
+        floatingBackButton.tap()
+
+        waitForConnectScreen(app)
+
+        openLiveTerminal(app)
+        waitForTerminalScreen(app)
+        assertTerminalCanType(app, marker: "BOO_UI_TYPED_2")
+    }
+
+    func testKeyboardDismissAndRefocusStillTypes() {
+        let app = makeApp(autoConnect: false, resetStorage: false)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        openLiveTerminal(app)
+
+        let terminal = app.otherElements["terminal-screen"]
+        terminal.tap()
+
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        let dismissButton = keyboardDismissButton(in: app)
+        XCTAssertTrue(dismissButton.waitForExistence(timeout: 5))
+        dismissButton.tap()
+        XCTAssertFalse(keyboard.waitForExistence(timeout: 2))
+
+        assertTerminalCanType(app, marker: "BOO_UI_TYPED_REFOCUS")
+    }
+
     func testConnectScreenElementsAppear() {
         let app = makeApp()
         _ = installSystemAlertHandler(for: app)
@@ -322,20 +475,9 @@ final class BooAppLaunchTests: BooUITestCase {
         app.tap()
 
         openLiveTerminal(app)
-
-        let terminal = app.otherElements["terminal-screen"]
-        let proxy = app.textViews["terminal-text-proxy"]
-        XCTAssertTrue(proxy.waitForExistence(timeout: 5))
-        proxy.tap()
+        assertTerminalCanType(app, marker: "BOO_UI_TYPED")
 
         let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
-        proxy.typeText("echo BOO_UI_TYPED\r")
-
-        let outputExpectation = NSPredicate(format: "value CONTAINS %@", "BOO_UI_TYPED")
-        expectation(for: outputExpectation, evaluatedWith: terminal)
-        waitForExpectations(timeout: 10)
-
         let dismissButton = keyboardDismissButton(in: app)
         XCTAssertTrue(dismissButton.waitForExistence(timeout: 5))
         dismissButton.tap()

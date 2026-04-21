@@ -662,37 +662,37 @@ struct TerminalSessionScreen: View {
     }
 
     var body: some View {
-        terminalSessionBody
-            .background(KineticColor.surface)
-            .toolbar { terminalKeyboardToolbar }
-            .navigationBarBackButtonHidden(true)
-            .toolbar(.hidden, for: .navigationBar)
-            .overlay(alignment: .leading) {
-                GeometryReader { geo in
-                    Color.clear
-                        .frame(width: min(max(geo.size.width * 0.12, 44), 96))
-                        .contentShape(Rectangle())
-                        .accessibilityIdentifier("terminal-back-swipe-zone")
-                        .gesture(
-                            DragGesture(minimumDistance: 20)
-                                .onEnded { drag in
-                                    let dx = drag.translation.width
-                                    let dy = drag.translation.height
-                                    guard dx >= 64, abs(dx) > abs(dy) else { return }
-                                    dismiss()
-                                }
-                        )
-                }
+        ZStack(alignment: .topLeading) {
+            terminalSessionBody
+                .background(KineticColor.surface)
+                .toolbar { terminalKeyboardToolbar }
+                .navigationBarBackButtonHidden(true)
+                .toolbar(.hidden, for: .navigationBar)
+
+            GeometryReader { geo in
+                Color.clear
+                    .frame(width: min(max(geo.size.width * 0.14, 56), 104))
+                    .contentShape(Rectangle())
+                    .accessibilityIdentifier("terminal-back-swipe-zone")
+                    .highPriorityGesture(
+                        DragGesture(minimumDistance: 20)
+                            .onEnded { drag in
+                                let dx = drag.translation.width
+                                let dy = drag.translation.height
+                                guard dx >= 64, abs(dx) > abs(dy) else { return }
+                                dismiss()
+                            }
+                    )
             }
-            .overlay(alignment: .topLeading) {
-                if store.terminalDisplaySettings.showFloatingBackButton {
-                    GeometryReader { geo in
-                        floatingBackButton
-                            .padding(.top, max(geo.safeAreaInsets.top, 12))
-                            .padding(.leading, KineticSpacing.md)
-                    }
-                }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+
+            if store.terminalDisplaySettings.showFloatingBackButton {
+                floatingBackButton
+                    .padding(.leading, KineticSpacing.md)
+                    .padding(.top, 14)
+                    .zIndex(10)
             }
+        }
         .onAppear {
             if client.authenticated {
                 client.listSessions()
@@ -907,7 +907,7 @@ struct TerminalSessionScreen: View {
                     Circle()
                         .stroke(Color.white.opacity(0.30), lineWidth: 0.8)
                 )
-                .shadow(color: .black.opacity(0.16), radius: 16, x: 0, y: 8)
+                .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 8)
         }
         .buttonStyle(.plain)
         .contentShape(Circle())

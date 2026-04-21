@@ -501,6 +501,7 @@ impl BooApp {
                 } else {
                     let _ = self.backend.write_input(pane, &bytes);
                 }
+                self.mark_remote_session_dirty(session_id);
                 log_server_latency("remote_input_applied", started_at);
             }
             server::Command::RemoteKey {
@@ -543,6 +544,7 @@ impl BooApp {
                     server.record_input_seq(client_id, input_seq);
                 }
                 self.inject_key(&keyspec);
+                self.mark_remote_session_dirty(session_id);
                 log_server_latency("remote_key_applied", started_at);
             }
             server::Command::RemoteResize {
