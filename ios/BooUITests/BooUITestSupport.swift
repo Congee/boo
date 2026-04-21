@@ -88,7 +88,8 @@ class BooUITestCase: XCTestCase {
         mockTailscaleDevices: String? = nil,
         tailscaleToken: String? = nil,
         tailscalePort: UInt16? = nil,
-        includeConfiguredHost: Bool = true
+        includeConfiguredHost: Bool = true,
+        forcedTerminalErrorKind: String? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-ApplePersistenceIgnoreState", "YES", "--boo-ui-test-mode"]
@@ -116,6 +117,9 @@ class BooUITestCase: XCTestCase {
         }
         if let tailscalePort {
             app.launchArguments.append("--boo-ui-test-tailscale-port=\(tailscalePort)")
+        }
+        if let forcedTerminalErrorKind {
+            app.launchArguments.append("--boo-ui-test-terminal-error=\(forcedTerminalErrorKind)")
         }
         app.launchEnvironment["BOO_UI_TEST_AUTO_CONNECT"] = autoConnect ? "1" : "0"
         return app
@@ -220,7 +224,8 @@ class BooUITestCase: XCTestCase {
         XCTAssertTrue(peerButtons.count > 0 || errorTexts.count > 0, "Expected Tailscale devices or an API error to appear", file: file, line: line)
     }
 
-    func openLiveTerminal(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+    @discardableResult
+    func openLiveTerminal(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) -> Bool {
         let title = app.staticTexts["screen-title"]
         if title.waitForExistence(timeout: 5), isConnectScreenTitle(title.label) {
             connectToConfiguredBoo(from: app, file: file, line: line)
@@ -235,14 +240,23 @@ class BooUITestCase: XCTestCase {
             let errorLabel = app.staticTexts["connect-error-label"]
             if errorLabel.exists, !errorLabel.label.isEmpty {
                 XCTFail("connect did not reach terminal: \(errorLabel.label)", file: file, line: line)
-                return
+                return false
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         }
         XCTAssertTrue(terminal.exists, "expected terminal after connect, title='\(title.label)'", file: file, line: line)
+        guard terminal.exists else {
+            return false
+        }
         let attachedExpectation = NSPredicate(format: "label BEGINSWITH %@", "attached-")
-        expectation(for: attachedExpectation, evaluatedWith: terminal)
-        waitForExpectations(timeout: 10)
+        let attachResult = XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: attachedExpectation, object: terminal)],
+            timeout: 10
+        )
+        XCTAssertEqual(attachResult, .completed, "terminal did not attach", file: file, line: line)
+        guard attachResult == .completed else {
+            return false
+        }
 
         let errorTexts = [
             "unreachable",
@@ -253,6 +267,7 @@ class BooUITestCase: XCTestCase {
         for text in errorTexts {
             XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] %@", text)).firstMatch.exists, "terminal opened in bad state containing '\(text)'", file: file, line: line)
         }
+        return true
     }
 
 }

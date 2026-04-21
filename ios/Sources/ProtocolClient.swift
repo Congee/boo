@@ -691,6 +691,11 @@ final class GSPClient: ObservableObject {
         expectedServerIdentityId = identityId
     }
 
+    func clearErrorState() {
+        lastErrorKind = nil
+        lastError = nil
+    }
+
     private func sendAttach(sessionId: UInt32, attachmentId: UInt64, resumeToken: UInt64?) {
         attachRequestedAt = Date()
         var payload = Data(count: resumeToken == nil ? 12 : 20)

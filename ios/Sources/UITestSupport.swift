@@ -17,6 +17,7 @@ struct UITestLaunchConfiguration {
     let tailscalePort: UInt16?
     let tailscaleToken: String?
     let showFloatingBackButton: Bool?
+    let forcedTerminalErrorKind: String?
     let mockTailscaleDevices: [MockTailscaleDevice]
 
     private static func fileConfiguredHostAndPort() -> (host: String, port: UInt16)? {
@@ -98,6 +99,8 @@ struct UITestLaunchConfiguration {
         let showFloatingBackButton = argumentValue(prefix: "--boo-ui-test-show-floating-back-button=", arguments: arguments)
             .flatMap { ["1", "true", "yes"].contains($0.lowercased()) ? true : ["0", "false", "no"].contains($0.lowercased()) ? false : nil }
             ?? env["BOO_UI_TEST_SHOW_FLOATING_BACK_BUTTON"].flatMap { ["1", "true", "yes"].contains($0.lowercased()) ? true : ["0", "false", "no"].contains($0.lowercased()) ? false : nil }
+        let forcedTerminalErrorKind = argumentValue(prefix: "--boo-ui-test-terminal-error=", arguments: arguments)
+            ?? env["BOO_UI_TEST_TERMINAL_ERROR"]
 
         return UITestLaunchConfiguration(
             resetStorage: resetStorage,
@@ -108,6 +111,7 @@ struct UITestLaunchConfiguration {
             tailscalePort: tailscalePort,
             tailscaleToken: tailscaleToken,
             showFloatingBackButton: showFloatingBackButton,
+            forcedTerminalErrorKind: forcedTerminalErrorKind,
             mockTailscaleDevices: parseMockTailscaleDevices(arguments: arguments, env: env)
         )
     }

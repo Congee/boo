@@ -70,6 +70,23 @@ enum ClientWireErrorKind: Equatable {
             return false
         }
     }
+
+    static func uiTestNamed(_ raw: String) -> ClientWireErrorKind? {
+        switch raw.lowercased() {
+        case "authenticationfailed":
+            return .authenticationFailed
+        case "attachmentresumeunsupported":
+            return .attachmentResumeUnsupported
+        case "attachmentresumewindowexpired":
+            return .attachmentResumeWindowExpired
+        case "attachmentresumetokenmismatch":
+            return .attachmentResumeTokenMismatch
+        case "invalidresumetoken":
+            return .invalidResumeToken
+        default:
+            return nil
+        }
+    }
 }
 
 struct AuthOkMetadata: Equatable {
@@ -272,9 +289,20 @@ enum ClientWireReducer {
             state.resumeToken = nil
             return .none
         case .sessionExited:
-            state.attachedSessionId = nil
-            state.attachmentId = nil
-            state.resumeToken = nil
+            if payload.count >= 4 {
+                let exitedSessionId = payload.withUnsafeBytes {
+                    UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
+                }
+                if state.attachedSessionId == exitedSessionId {
+                    state.attachedSessionId = nil
+                    state.attachmentId = nil
+                    state.resumeToken = nil
+                }
+            } else {
+                state.attachedSessionId = nil
+                state.attachmentId = nil
+                state.resumeToken = nil
+            }
             return .listSessions
         case .sessionCreated:
             guard payload.count >= 4 else { return .none }

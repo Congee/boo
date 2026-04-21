@@ -6,6 +6,7 @@ final class BooAppLaunchTests: BooUITestCase {
         let connectStatus = app.staticTexts["connect-status-banner"].exists ? app.staticTexts["connect-status-banner"].label : "<none>"
         let connectError = app.staticTexts["connect-error-label"].exists ? app.staticTexts["connect-error-label"].label : "<none>"
         let bonjourError = app.staticTexts["bonjour-error-label"].exists ? app.staticTexts["bonjour-error-label"].label : "<none>"
+        let terminalBanner = app.staticTexts["terminal-banner-label"].exists ? app.staticTexts["terminal-banner-label"].label : "<none>"
         let terminal = app.otherElements["terminal-screen"]
         let terminalExists = terminal.exists
         let terminalLabel = terminalExists ? terminal.label : "<none>"
@@ -16,6 +17,7 @@ final class BooAppLaunchTests: BooUITestCase {
         connectStatus=\(connectStatus)
         connectError=\(connectError)
         bonjourError=\(bonjourError)
+        terminalBanner=\(terminalBanner)
         terminalExists=\(terminalExists)
         terminalLabel=\(terminalLabel)
         terminalValuePrefix=\(terminalValue.prefix(200))
@@ -357,7 +359,7 @@ final class BooAppLaunchTests: BooUITestCase {
         app.launch()
         app.tap()
 
-        openLiveTerminal(app)
+        guard openLiveTerminal(app) else { return }
         assertTerminalCanType(app, marker: "BOO_UI_TYPED")
     }
 
@@ -367,7 +369,7 @@ final class BooAppLaunchTests: BooUITestCase {
         app.launch()
         app.tap()
 
-        openLiveTerminal(app)
+        guard openLiveTerminal(app) else { return }
 
         let terminal = app.otherElements["terminal-screen"]
         XCTAssertTrue(terminal.waitForExistence(timeout: 10))
@@ -395,7 +397,7 @@ final class BooAppLaunchTests: BooUITestCase {
         app.launch()
         app.tap()
 
-        openLiveTerminal(app)
+        guard openLiveTerminal(app) else { return }
 
         let floatingBackButton = app.buttons["floating-back-button"]
         XCTAssertTrue(floatingBackButton.waitForExistence(timeout: 5))
@@ -419,7 +421,7 @@ final class BooAppLaunchTests: BooUITestCase {
         app.launch()
         app.tap()
 
-        openLiveTerminal(app)
+        guard openLiveTerminal(app) else { return }
         assertTerminalCanType(app, marker: "BOO_UI_TYPED_1")
 
         let floatingBackButton = app.buttons["floating-back-button"]
@@ -428,7 +430,7 @@ final class BooAppLaunchTests: BooUITestCase {
 
         waitForConnectScreen(app)
 
-        openLiveTerminal(app)
+        guard openLiveTerminal(app) else { return }
         waitForTerminalScreen(app)
         assertTerminalCanType(app, marker: "BOO_UI_TYPED_2")
     }
@@ -439,7 +441,7 @@ final class BooAppLaunchTests: BooUITestCase {
         app.launch()
         app.tap()
 
-        openLiveTerminal(app)
+        guard openLiveTerminal(app) else { return }
 
         let terminal = app.otherElements["terminal-screen"]
         terminal.tap()
@@ -452,6 +454,73 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTAssertFalse(keyboard.waitForExistence(timeout: 2))
 
         assertTerminalCanType(app, marker: "BOO_UI_TYPED_REFOCUS")
+    }
+
+    func testNewSessionRecoveryActionStillTypes() {
+        let app = makeApp(
+            autoConnect: false,
+            resetStorage: false,
+            forcedTerminalErrorKind: "attachmentResumeWindowExpired"
+        )
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        guard openLiveTerminal(app) else { return }
+
+        let terminal = app.otherElements["terminal-screen"]
+        let originalLabel = terminal.label
+
+        let newSessionButton = app.buttons["new-session-button"]
+        XCTAssertTrue(newSessionButton.waitForExistence(timeout: 5))
+        newSessionButton.tap()
+
+        let labelChange = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label != %@", originalLabel),
+            object: terminal
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [labelChange], timeout: 10), .completed)
+
+        assertTerminalCanType(app, marker: "BOO_UI_TYPED_NEW")
+    }
+
+    func testCloseSessionRecoveryActionStillTypes() {
+        let app = makeApp(
+            autoConnect: false,
+            resetStorage: false,
+            forcedTerminalErrorKind: "attachmentResumeWindowExpired"
+        )
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        guard openLiveTerminal(app) else { return }
+
+        let terminal = app.otherElements["terminal-screen"]
+        let firstLabel = terminal.label
+
+        let newSessionButton = app.buttons["new-session-button"]
+        XCTAssertTrue(newSessionButton.waitForExistence(timeout: 5))
+        newSessionButton.tap()
+
+        let labelChange = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label != %@", firstLabel),
+            object: terminal
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [labelChange], timeout: 10), .completed)
+        let secondLabel = terminal.label
+
+        let closeSessionButton = app.buttons["close-session-button"]
+        XCTAssertTrue(closeSessionButton.waitForExistence(timeout: 5))
+        closeSessionButton.tap()
+
+        let relabeled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label != %@", secondLabel),
+            object: terminal
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [relabeled], timeout: 10), .completed)
+
+        assertTerminalCanType(app, marker: "BOO_UI_TYPED_CLOSE")
     }
 
     func testConnectScreenElementsAppear() {

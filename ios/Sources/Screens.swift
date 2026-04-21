@@ -635,6 +635,7 @@ struct TerminalSessionScreen: View {
     @State private var altActive = false
     @State private var metaActive = false
     @State private var requestedInitialSession = false
+    @State private var didApplyUITestForcedError = false
 
     private var visibleSessions: [SessionInfo] {
         client.sessions.filter { !$0.childExited }
@@ -698,6 +699,7 @@ struct TerminalSessionScreen: View {
                 client.listSessions()
             }
             autoAttachPreferredSessionIfNeeded()
+            applyUITestForcedErrorIfNeeded()
             guard !isDisconnected, client.attachedSessionId != nil else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 keyboardFocused = true
@@ -705,6 +707,7 @@ struct TerminalSessionScreen: View {
         }
         .onReceive(client.$sessions) { _ in
             autoAttachPreferredSessionIfNeeded()
+            applyUITestForcedErrorIfNeeded()
         }
         .onChange(of: client.authenticated) { _, authenticated in
             if !authenticated {
@@ -715,6 +718,7 @@ struct TerminalSessionScreen: View {
             if attachedSessionId != nil {
                 requestedInitialSession = false
                 keyboardFocused = true
+                applyUITestForcedErrorIfNeeded()
             }
         }
         .onChange(of: isDisconnected) { _, disconnected in
@@ -839,35 +843,42 @@ struct TerminalSessionScreen: View {
                 .font(KineticFont.caption)
                 .foregroundStyle(color)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("terminal-banner-label")
 
             HStack(spacing: KineticSpacing.sm) {
                 if hasResumeFailure {
                     Button("Forget Resume") {
                         forgetResumeAttachment()
+                        client.clearErrorState()
                     }
                     .buttonStyle(KineticSecondaryButtonStyle())
+                    .accessibilityIdentifier("forget-resume-button")
                 }
 
                 if let attachedSessionId = client.attachedSessionId {
                     Button("Close Session") {
+                        forgetResumeAttachment()
+                        client.clearErrorState()
                         client.destroySession(sessionId: attachedSessionId)
-                        client.detach()
-                        client.listSessions()
                     }
                     .buttonStyle(KineticSecondaryButtonStyle())
+                    .accessibilityIdentifier("close-session-button")
                 }
 
                 Button("New Session") {
                     forgetResumeAttachment()
+                    client.clearErrorState()
                     client.createSession()
                 }
                 .buttonStyle(KineticSecondaryButtonStyle())
+                .accessibilityIdentifier("new-session-button")
 
                 Button("Disconnect") {
                     monitor.disconnect()
                     dismiss()
                 }
                 .buttonStyle(KineticSecondaryButtonStyle())
+                .accessibilityIdentifier("disconnect-session-button")
             }
         }
         .padding(KineticSpacing.md)
@@ -920,6 +931,17 @@ struct TerminalSessionScreen: View {
         if let host = monitor.lastHost, let port = monitor.lastPort {
             store.clearResumeAttachment(host: host, port: port)
         }
+    }
+
+    private func applyUITestForcedErrorIfNeeded() {
+        guard !didApplyUITestForcedError,
+              client.attachedSessionId != nil,
+              let rawKind = UITestLaunchConfiguration.current()?.forcedTerminalErrorKind,
+              let kind = ClientWireErrorKind.uiTestNamed(rawKind)
+        else { return }
+        didApplyUITestForcedError = true
+        client.lastErrorKind = kind
+        client.lastError = kind.message
     }
 
     private func autoAttachPreferredSessionIfNeeded() {

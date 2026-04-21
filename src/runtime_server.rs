@@ -813,12 +813,21 @@ impl BooApp {
                     self.sync_after_tab_change();
                 }
                 self.invalidate_remote_sessions_cache();
+                let sessions = self.current_remote_sessions();
+                let focused_session_id = self.server.tabs.active_session_id();
                 if let Some(server) = self
                     .remote_server_for_client(client_id)
                     .or(self.server.local_gui_server.as_ref())
                     .or(self.server.remote_server.as_ref())
                 {
                     server.send_session_exited(target);
+                    server.send_session_list(client_id, sessions.as_ref());
+                    if let Some(session_id) = focused_session_id {
+                        server.send_attached(client_id, session_id, None);
+                        self.publish_remote_session(session_id);
+                    } else {
+                        server.send_detached(client_id);
+                    }
                 }
             }
         }
