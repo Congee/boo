@@ -88,6 +88,8 @@ struct BooRootView: View {
         }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else { return }
+            store.refreshTailscaleTokenStatus()
+            tailscaleBrowser.refresh(store: store)
             guard activeMonitor.lastHost != nil, !client.connected else { return }
             activeMonitor.reconnect()
         }
@@ -337,38 +339,42 @@ struct ConnectScreen: View {
                         }
                     }
 
-                    if store.hasTailscaleAPIToken || tailscaleBrowser.isLoading || !tailscaleBrowser.peers.isEmpty || tailscaleBrowser.lastError != nil {
-                        VStack(alignment: .leading, spacing: KineticSpacing.sm) {
-                            KineticSectionLabel(text: "Tailscale Devices")
-                            Text("Tailnet devices from the Tailscale API. Boo still needs to be running on the configured port.")
+                    VStack(alignment: .leading, spacing: KineticSpacing.sm) {
+                        KineticSectionLabel(text: "Tailscale Devices")
+                        Text("Tailnet devices from the Tailscale API. Boo still needs to be running on the configured port.")
+                            .font(KineticFont.caption)
+                            .foregroundStyle(KineticColor.onSurfaceVariant)
+                        if !store.hasTailscaleAPIToken {
+                            Text("No Tailscale API token saved. Add one in Settings to list tailnet devices.")
                                 .font(KineticFont.caption)
                                 .foregroundStyle(KineticColor.onSurfaceVariant)
-                            if tailscaleBrowser.isLoading {
-                                ProgressView()
-                                    .tint(KineticColor.primary)
-                            }
-                            if let error = tailscaleBrowser.lastError {
-                                Text(error)
-                                    .font(KineticFont.caption)
-                                    .foregroundStyle(KineticColor.error)
-                                    .padding(KineticSpacing.md)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(KineticColor.error.opacity(0.1))
-                                    .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
-                            }
-                            ForEach(tailscaleBrowser.peers) { peer in
-                                let state = peer.online ? "online" : "offline"
-                                let detail = [peer.os, state, peer.address, "boo:\(peer.port)"].compactMap { $0 }.joined(separator: " · ")
-                                KineticCardRow(
-                                    icon: "network",
-                                    title: peer.name,
-                                    subtitle: detail,
-                                    onTap: {
-                                        connectToHost(peer.host, port: peer.port, nodeName: peer.name)
-                                    },
-                                    accessibilityIdentifier: "tailscale-peer-\(peer.name)"
-                                )
-                            }
+                                .accessibilityIdentifier("tailscale-token-missing-label")
+                        }
+                        if tailscaleBrowser.isLoading {
+                            ProgressView()
+                                .tint(KineticColor.primary)
+                        }
+                        if let error = tailscaleBrowser.lastError {
+                            Text(error)
+                                .font(KineticFont.caption)
+                                .foregroundStyle(KineticColor.error)
+                                .padding(KineticSpacing.md)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(KineticColor.error.opacity(0.1))
+                                .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+                        }
+                        ForEach(tailscaleBrowser.peers) { peer in
+                            let state = peer.online ? "online" : "offline"
+                            let detail = [peer.os, state, peer.address, "boo:\(peer.port)"].compactMap { $0 }.joined(separator: " · ")
+                            KineticCardRow(
+                                icon: "network",
+                                title: peer.name,
+                                subtitle: detail,
+                                onTap: {
+                                    connectToHost(peer.host, port: peer.port, nodeName: peer.name)
+                                },
+                                accessibilityIdentifier: "tailscale-peer-\(peer.name)"
+                            )
                         }
                     }
 
@@ -389,6 +395,7 @@ struct ConnectScreen: View {
             }
         }
         .onAppear {
+            store.refreshTailscaleTokenStatus()
             browser.startBrowsing()
             tailscaleBrowser.refresh(store: store)
         }

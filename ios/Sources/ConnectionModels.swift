@@ -156,24 +156,28 @@ final class ConnectionStore: ObservableObject {
     @Published var tailscaleDiscoverySettings = TailscaleDiscoverySettings()
     @Published var tailscaleTokenStatusMessage: String?
 
-    private let nodesKey = "boo.remote.savedNodes"
-    private let historyKey = "boo.remote.connectionHistory"
-    private let trustedIdentitiesKey = "boo.remote.trustedServerIdentities"
-    private let resumeAttachmentsKey = "boo.remote.resumeAttachments"
-    private let tailscaleSettingsKey = "boo.remote.tailscale.discovery"
-    private let tailscaleTokenService = "me.congee.boo.tailscale"
-    private let tailscaleTokenAccount = "api-token"
     private let maxHistory = 50
+    private let storageNamespaceSuffix: String
     private var trustedServerIdentities: [String: String] = [:]
     private var resumeAttachments: [String: ResumeAttachmentMetadata] = [:]
 
+    private var nodesKey: String { "boo.remote.savedNodes\(storageNamespaceSuffix)" }
+    private var historyKey: String { "boo.remote.connectionHistory\(storageNamespaceSuffix)" }
+    private var trustedIdentitiesKey: String { "boo.remote.trustedServerIdentities\(storageNamespaceSuffix)" }
+    private var resumeAttachmentsKey: String { "boo.remote.resumeAttachments\(storageNamespaceSuffix)" }
+    private var tailscaleSettingsKey: String { "boo.remote.tailscale.discovery\(storageNamespaceSuffix)" }
+    private var tailscaleTokenService: String { "me.congee.boo.tailscale\(storageNamespaceSuffix)" }
+    private let tailscaleTokenAccount = "api-token"
+
     init() {
+        storageNamespaceSuffix = UITestLaunchConfiguration.current() == nil ? "" : ".uitest"
         applyUITestConfiguration()
         loadNodes()
         loadHistory()
         loadTrustedServerIdentities()
         loadResumeAttachments()
         loadTailscaleSettings()
+        refreshTailscaleTokenStatus()
     }
 
     func addNode(_ node: SavedNode) {
@@ -266,6 +270,16 @@ final class ConnectionStore: ObservableObject {
     func updateTailscaleDiscovery(defaultPort: UInt16) {
         tailscaleDiscoverySettings.defaultPort = defaultPort
         saveTailscaleSettings()
+    }
+
+    func refreshTailscaleTokenStatus() {
+        guard let token = tailscaleAPIToken(),
+              !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            tailscaleTokenStatusMessage = nil
+            return
+        }
+        tailscaleTokenStatusMessage = "Tailscale token saved securely in Keychain."
     }
 
     @discardableResult

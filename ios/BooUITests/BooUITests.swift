@@ -19,6 +19,21 @@ final class BooAppLaunchTests: BooUITestCase {
         scrollUntilExists(offlineBox, in: app)
     }
 
+    func testConnectScreenShowsTailscaleSectionWithoutToken() {
+        let app = makeApp(autoConnect: false, resetStorage: true)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        navigateToConnectScreen(app)
+
+        let tailscaleSection = app.staticTexts["TAILSCALE DEVICES"]
+        scrollUntilExists(tailscaleSection, in: app)
+
+        let missingLabel = app.staticTexts["tailscale-token-missing-label"]
+        scrollUntilExists(missingLabel, in: app)
+    }
+
     func testTailscaleTokenCanBeSavedAndCleared() {
         let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
@@ -75,6 +90,13 @@ final class BooAppLaunchTests: BooUITestCase {
 
         let persistedLabel = relaunched.staticTexts["API access token saved securely in the iOS Keychain."]
         XCTAssertTrue(persistedLabel.waitForExistence(timeout: 5))
+
+        let sessionsTab = relaunched.buttons["tab-sessions"]
+        XCTAssertTrue(sessionsTab.waitForExistence(timeout: 5))
+        sessionsTab.tap()
+        navigateToConnectScreen(relaunched)
+        let tailscaleSection = relaunched.staticTexts["TAILSCALE DEVICES"]
+        scrollUntilExists(tailscaleSection, in: relaunched)
 
         let clearButton = relaunched.buttons["clear-tailscale-token-button"]
         XCTAssertTrue(clearButton.waitForExistence(timeout: 5))
