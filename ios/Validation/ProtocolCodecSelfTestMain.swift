@@ -178,6 +178,58 @@ struct ProtocolCodecSelfTestMain {
         assertEqual(detachedEffect, .none, "detached has no side effect")
         assertEqual(clientState.attachedSessionId, nil, "detached clears attached session")
 
+        clientState.attachedSessionId = 42
+        clientState.attachmentId = 0xB001D00DCAFEBEEF
+        clientState.resumeToken = 0x0BADF00DDEADC0DE
+        let sessionExitedEffect = ClientWireReducer.reduce(message: .sessionExited, payload: Data(), state: &clientState)
+        assertEqual(sessionExitedEffect, .listSessions, "session exited triggers session refresh")
+        assertEqual(clientState.attachedSessionId, nil, "session exited clears attached session")
+        assertEqual(clientState.attachmentId, nil, "session exited clears attachment id")
+        assertEqual(clientState.resumeToken, nil, "session exited clears resume token")
+
+        let reachableSessions = [
+            SessionInfo(
+                id: 42,
+                name: "Tab 1",
+                title: "shell",
+                pwd: "/tmp",
+                attached: true,
+                childExited: false
+            )
+        ]
+        assertEqual(
+            resolveAttachedSessionHealth(attachedSessionId: nil, sessions: reachableSessions),
+            .unattached,
+            "missing attachment is unhealthy"
+        )
+        assertEqual(
+            resolveAttachedSessionHealth(attachedSessionId: 7, sessions: reachableSessions),
+            .unreachable(sessionId: 7),
+            "missing attached session is unreachable"
+        )
+        assertEqual(
+            resolveAttachedSessionHealth(attachedSessionId: 42, sessions: reachableSessions),
+            .reachable(sessionId: 42),
+            "live attached session is reachable"
+        )
+        assertEqual(
+            resolveAttachedSessionHealth(
+                attachedSessionId: 9,
+                sessions: [
+                    SessionInfo(
+                        id: 9,
+                        name: "Tab 9",
+                        title: "shell",
+                        pwd: "/tmp",
+                        attached: true,
+                        childExited: true
+                    )
+                ]
+            ),
+            .exited(sessionId: 9),
+            "exited session is not treated as reachable"
+        )
+
         print("iOS wire codec self-test passed")
     }
 }

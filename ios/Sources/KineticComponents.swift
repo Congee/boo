@@ -252,53 +252,140 @@ struct TerminalKeyboardBridge: UIViewRepresentable {
         Coordinator(parent: self)
     }
 
-    func makeUIView(context: Context) -> UITextField {
-        let textField = UITextField(frame: .zero)
-        textField.delegate = context.coordinator
-        textField.autocorrectionType = .no
-        textField.autocapitalizationType = .none
-        textField.spellCheckingType = .no
-        textField.smartQuotesType = .no
-        textField.smartDashesType = .no
-        textField.smartInsertDeleteType = .no
-        textField.returnKeyType = .default
-        textField.tintColor = .clear
-        textField.textColor = .clear
-        textField.backgroundColor = .clear
-        return textField
+    func makeUIView(context: Context) -> TerminalProxyTextView {
+        let textView = TerminalProxyTextView(frame: .zero, textContainer: nil)
+        textView.delegate = context.coordinator
+        textView.onText = onText
+        textView.onBackspace = onBackspace
+        textView.autocorrectionType = .no
+        textView.autocapitalizationType = .none
+        textView.spellCheckingType = .no
+        textView.smartQuotesType = .no
+        textView.smartDashesType = .no
+        textView.smartInsertDeleteType = .no
+        textView.returnKeyType = .default
+        textView.tintColor = .clear
+        textView.textColor = .clear
+        textView.backgroundColor = .clear
+        textView.keyboardAppearance = .dark
+        textView.translatesAutoresizingMaskIntoConstraints = false
+        textView.textContainerInset = .zero
+        textView.textContainer.lineFragmentPadding = 0
+        textView.isScrollEnabled = false
+        textView.accessibilityIdentifier = "terminal-text-proxy"
+        return textView
     }
 
-    func updateUIView(_ uiView: UITextField, context: Context) {
-        if isFocused, !uiView.isFirstResponder {
-            uiView.becomeFirstResponder()
-        } else if !isFocused, uiView.isFirstResponder {
-            uiView.resignFirstResponder()
+    func updateUIView(_ uiView: TerminalProxyTextView, context: Context) {
+        uiView.onText = onText
+        uiView.onBackspace = onBackspace
+        uiView.setFocus(isFocused)
+        if !uiView.isFirstResponder {
+            uiView.text = ""
         }
     }
 
-    final class Coordinator: NSObject, UITextFieldDelegate {
+    final class Coordinator: NSObject, UITextViewDelegate {
         let parent: TerminalKeyboardBridge
 
         init(parent: TerminalKeyboardBridge) {
             self.parent = parent
         }
 
-        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-            parent.onText("\r")
-            return false
-        }
-
-        func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
-            if range.length > 0 && string.isEmpty {
-                for _ in 0..<range.length {
-                    parent.onBackspace()
+        func textViewDidBeginEditing(_ textView: UITextView) {
+            if !parent.isFocused {
+                DispatchQueue.main.async {
+                    self.parent.isFocused = true
                 }
-                return false
             }
-
-            guard !string.isEmpty else { return false }
-            parent.onText(string)
-            return false
         }
+
+        func textViewDidEndEditing(_ textView: UITextView) {
+            if parent.isFocused {
+                DispatchQueue.main.async {
+                    self.parent.isFocused = false
+                }
+            }
+        }
+    }
+}
+
+final class TerminalProxyTextView: UITextView {
+    var onText: ((String) -> Void)?
+    var onBackspace: (() -> Void)?
+    private var desiredFocus = false
+
+    override var canBecomeFirstResponder: Bool { true }
+
+    override init(frame: CGRect, textContainer: NSTextContainer?) {
+        super.init(frame: frame, textContainer: textContainer)
+        commonInit()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        commonInit()
+    }
+
+    private func commonInit() {
+        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+    }
+
+    func setFocus(_ focused: Bool) {
+        desiredFocus = focused
+        guard window != nil else { return }
+        if focused, !isFirstResponder {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.desiredFocus, self.window != nil, !self.isFirstResponder else { return }
+                _ = self.becomeFirstResponder()
+            }
+        } else if !focused, isFirstResponder {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.desiredFocus, self.isFirstResponder else { return }
+                _ = self.resignFirstResponder()
+            }
+        }
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        setFocus(desiredFocus)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let becameFirstResponder = super.becomeFirstResponder()
+        if becameFirstResponder {
+            selectedTextRange = textRange(from: beginningOfDocument, to: beginningOfDocument)
+        }
+        return becameFirstResponder
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        _ = becomeFirstResponder()
+        super.touchesEnded(touches, with: event)
+    }
+
+    override func accessibilityActivate() -> Bool {
+        becomeFirstResponder()
+    }
+
+    override func deleteBackward() {
+        onBackspace?()
+        text = ""
+    }
+
+    override func insertText(_ text: String) {
+        guard !text.isEmpty else { return }
+        onText?(text.replacingOccurrences(of: "\n", with: "\r"))
+        self.text = ""
+    }
+
+    override func caretRect(for position: UITextPosition) -> CGRect {
+        .zero
+    }
+
+    override func selectionRects(for range: UITextRange) -> [UITextSelectionRect] {
+        []
     }
 }

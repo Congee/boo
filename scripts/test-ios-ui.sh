@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOCKET_PATH="${BOO_IOS_UI_TEST_SOCKET:-/tmp/boo-ios-ui-tests.sock}"
-PORT="${BOO_IOS_UI_TEST_PORT:-7351}"
+PORT="${BOO_IOS_UI_TEST_PORT:-}"
 DESTINATION="${BOO_IOS_UI_TEST_DESTINATION:-platform=iOS Simulator,name=iPad mini (A17 Pro),OS=26.3.1}"
 DERIVED_DATA="${BOO_IOS_UI_TEST_DERIVED_DATA:-$ROOT/ios/.derived-uitests}"
 HOST="${BOO_IOS_UI_TEST_HOST:-}"
@@ -22,6 +22,13 @@ if [[ "$DESTINATION" == *"platform=iOS Simulator"* ]]; then
   BIND_ADDRESS="127.0.0.1"
 else
   BIND_ADDRESS="0.0.0.0"
+fi
+
+if [[ -z "$PORT" ]]; then
+  PORT="$(
+    python3 -c 'import socket, sys; bind = sys.argv[1]; s = socket.socket(); s.bind((bind, 0)); print(s.getsockname()[1]); s.close()' \
+      "$BIND_ADDRESS"
+  )"
 fi
 
 cleanup() {
@@ -51,6 +58,10 @@ rm -f "$SOCKET_PATH"
 target/debug/boo server --socket "$SOCKET_PATH" --remote-port "$PORT" --remote-bind-address "$BIND_ADDRESS" >/tmp/boo-ios-ui-tests.log 2>&1 &
 SERVER_PID=$!
 sleep 1
+if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
+  cat /tmp/boo-ios-ui-tests.log >&2
+  exit 1
+fi
 
 if [[ "$DESTINATION" == *"platform=iOS Simulator"* ]]; then
   BOO_UI_TEST_HOST="$HOST" BOO_UI_TEST_PORT="$PORT" \

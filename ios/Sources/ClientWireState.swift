@@ -185,11 +185,16 @@ enum ClientWireReducer {
                 UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: 12, as: UInt64.self))
             } : nil
             return .none
-        case .detached, .sessionExited:
+        case .detached:
             state.attachedSessionId = nil
             state.attachmentId = nil
             state.resumeToken = nil
             return .none
+        case .sessionExited:
+            state.attachedSessionId = nil
+            state.attachmentId = nil
+            state.resumeToken = nil
+            return .listSessions
         case .sessionCreated:
             guard payload.count >= 4 else { return .none }
             let sessionId = payload.withUnsafeBytes {

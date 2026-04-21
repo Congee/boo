@@ -73,4 +73,25 @@ class BooUITestCase: XCTestCase {
         app.launchEnvironment["BOO_UI_TEST_AUTO_CONNECT"] = autoConnect ? "1" : "0"
         return app
     }
+
+    func sessionRows(in app: XCUIApplication) -> XCUIElementQuery {
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "session-row-"))
+    }
+
+    func keyboardDismissButton(in app: XCUIApplication) -> XCUIElement {
+        let predicates = [
+            NSPredicate(format: "label CONTAINS[c] 'hide keyboard'"),
+            NSPredicate(format: "label CONTAINS[c] 'dismiss keyboard'"),
+            NSPredicate(format: "identifier CONTAINS[c] 'Hide keyboard'"),
+            NSPredicate(format: "identifier CONTAINS[c] 'Dismiss keyboard'")
+        ]
+
+        for predicate in predicates {
+            let button = app.buttons.matching(predicate).firstMatch
+            if button.exists {
+                return button
+            }
+        }
+        return app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'keyboard' OR identifier CONTAINS[c] 'keyboard'")).firstMatch
+    }
 }

@@ -49,15 +49,6 @@ struct WireCell {
     var isItalic: Bool { (styleFlags & 0x02) != 0 }
 }
 
-struct SessionInfo: Identifiable {
-    let id: UInt32
-    let name: String
-    let title: String
-    let pwd: String
-    let attached: Bool
-    let childExited: Bool
-}
-
 @MainActor
 final class ScreenState: ObservableObject {
     @Published var rows: UInt16 = 0
@@ -73,6 +64,27 @@ final class ScreenState: ObservableObject {
         let index = row * Int(cols) + col
         guard index >= 0, index < cells.count else { return WireCell() }
         return cells[index]
+    }
+
+    var accessibilityTextSnapshot: String {
+        guard rows > 0, cols > 0, cells.count == Int(rows) * Int(cols) else { return "" }
+
+        var text = ""
+        for row in 0..<Int(rows) {
+            for col in 0..<Int(cols) {
+                let index = row * Int(cols) + col
+                let codepoint = cells[index].codepoint
+                if codepoint == 0 {
+                    text.append(" ")
+                } else if let scalar = UnicodeScalar(codepoint) {
+                    text.append(Character(scalar))
+                }
+            }
+            if row + 1 < Int(rows) {
+                text.append("\n")
+            }
+        }
+        return text
     }
 }
 
@@ -174,6 +186,7 @@ final class GSPClient: ObservableObject {
     @Published var attachedSessionId: UInt32?
     @Published var attachmentId: UInt64?
     @Published var resumeToken: UInt64?
+    @Published var pendingAttachedSessionId: UInt32?
     @Published var lastError: String?
 
     private var connection: NWConnection?
@@ -255,6 +268,7 @@ final class GSPClient: ObservableObject {
         attachedSessionId = nil
         attachmentId = nil
         resumeToken = nil
+        pendingAttachedSessionId = nil
         desiredAttachedSessionId = nil
         desiredAttachmentId = nil
         desiredResumeToken = nil
@@ -286,9 +300,8 @@ final class GSPClient: ObservableObject {
         desiredAttachedSessionId = sessionId
         desiredAttachmentId = newAttachmentId
         desiredResumeToken = nil
-        attachedSessionId = sessionId
-        attachmentId = newAttachmentId
-        resumeToken = nil
+        pendingAttachedSessionId = sessionId
+        lastError = nil
         sendAttach(sessionId: sessionId, attachmentId: newAttachmentId, resumeToken: nil)
     }
 
@@ -296,6 +309,7 @@ final class GSPClient: ObservableObject {
         desiredAttachedSessionId = sessionId
         desiredAttachmentId = attachmentId
         desiredResumeToken = resumeToken
+        pendingAttachedSessionId = sessionId
     }
 
     func configureTrustedServerIdentity(_ identityId: String?) {
@@ -327,6 +341,7 @@ final class GSPClient: ObservableObject {
         attachedSessionId = nil
         attachmentId = nil
         resumeToken = nil
+        pendingAttachedSessionId = nil
         desiredAttachedSessionId = nil
         desiredAttachmentId = nil
         desiredResumeToken = nil
@@ -590,6 +605,7 @@ final class GSPClient: ObservableObject {
             attachedSessionId = nil
             attachmentId = nil
             resumeToken = nil
+            pendingAttachedSessionId = nil
             sessions = []
             screen = ScreenState()
         }
@@ -699,6 +715,18 @@ final class GSPClient: ObservableObject {
         attachedSessionId = state.attachedSessionId
         attachmentId = state.attachmentId
         resumeToken = state.resumeToken
+        if attachedSessionId != nil {
+            pendingAttachedSessionId = nil
+        } else {
+            switch message {
+            case .detached, .sessionExited:
+                pendingAttachedSessionId = nil
+            case .errorMsg where pendingAttachedSessionId != nil:
+                pendingAttachedSessionId = nil
+            default:
+                break
+            }
+        }
         applyDecodedSessions(state.sessions)
         if let decodedScreen = state.screen {
             applyDecodedScreen(decodedScreen)
