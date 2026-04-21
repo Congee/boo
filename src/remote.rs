@@ -329,7 +329,8 @@ impl RemoteServer {
     pub(crate) fn for_test(state: Arc<Mutex<State>>) -> Self {
         Self {
             state,
-            _listener: std::thread::spawn(|| {}),
+            _quic_listener: None,
+            _local_listener: Some(std::thread::spawn(|| {})),
             _advertiser: None,
             local_socket_path: None,
             bind_address: None,

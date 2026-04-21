@@ -26,6 +26,7 @@ quinn = { version = "0.11", default-features = false, features = ["runtime-tokio
 rcgen = "0.13"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+hostname = "0.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
