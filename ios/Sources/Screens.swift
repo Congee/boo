@@ -1,6 +1,7 @@
 import SwiftUI
 import Network
 import UIKit
+import Foundation
 
 private func formatConnectionTarget(host: String, port: UInt16) -> String {
     port == 7337 ? host : "\(host):\(port)"
@@ -9,6 +10,9 @@ private func formatConnectionTarget(host: String, port: UInt16) -> String {
 private func endpointDisplayTarget(_ endpoint: NWEndpoint) -> (nodeName: String, host: String, port: UInt16) {
     switch endpoint {
     case .service(let name, _, _, _):
+        if let parsed = parseAdvertisedServiceTarget(name) {
+            return parsed
+        }
         return (name, name, 7337)
     case .hostPort(let host, let port):
         let hostString = host.debugDescription
@@ -17,6 +21,108 @@ private func endpointDisplayTarget(_ endpoint: NWEndpoint) -> (nodeName: String,
         let text = "\(endpoint)"
         return (text, text, 7337)
     }
+}
+
+private final class BonjourServiceResolver: NSObject, NetServiceDelegate {
+    private var completion: ((Result<(host: String, port: UInt16), Error>) -> Void)?
+    private var service: NetService?
+
+    func resolve(endpoint: NWEndpoint, completion: @escaping (Result<(host: String, port: UInt16), Error>) -> Void) {
+        guard case .service(let name, let type, let domain, _) = endpoint else {
+            completion(.failure(NSError(domain: "BooBonjour", code: -1, userInfo: [NSLocalizedDescriptionKey: "Bonjour resolve requires a service endpoint"])))
+            return
+        }
+
+        let service = NetService(domain: domain.isEmpty ? "local." : domain, type: type, name: name)
+        service.includesPeerToPeer = true
+        service.delegate = self
+        self.service = service
+        self.completion = completion
+        service.resolve(withTimeout: 5)
+    }
+
+    func netServiceDidResolveAddress(_ sender: NetService) {
+        defer {
+            sender.stop()
+            service = nil
+        }
+
+        if let addresses = sender.addresses {
+            if let host = addresses.compactMap({ parseNumericHost(from: $0, preferredFamily: AF_INET) }).first
+                ?? addresses.compactMap({ parseNumericHost(from: $0, preferredFamily: AF_INET6) }).first
+            {
+                completion?(.success((host: host, port: UInt16(sender.port))))
+                completion = nil
+                return
+            }
+        }
+
+        if let hostName = sender.hostName?.trimmingCharacters(in: CharacterSet(charactersIn: ".")),
+           !hostName.isEmpty {
+            completion?(.success((host: hostName, port: UInt16(sender.port))))
+            completion = nil
+            return
+        }
+
+        completion?(.failure(NSError(domain: "BooBonjour", code: -2, userInfo: [NSLocalizedDescriptionKey: "Bonjour resolved without an address"])))
+        completion = nil
+    }
+
+    func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
+        defer {
+            sender.stop()
+            service = nil
+            completion = nil
+        }
+        let code = errorDict[NetService.errorCode]?.intValue ?? -1
+        completion?(.failure(NSError(domain: "BooBonjour", code: code, userInfo: [NSLocalizedDescriptionKey: "Bonjour resolve failed: \(code)"])))
+    }
+
+    private func parseNumericHost(from addressData: Data, preferredFamily: Int32) -> String? {
+        addressData.withUnsafeBytes { rawBuffer in
+            guard let sockaddr = rawBuffer.baseAddress?.assumingMemoryBound(to: sockaddr.self) else {
+                return nil
+            }
+
+            switch Int32(sockaddr.pointee.sa_family) {
+            case AF_INET where preferredFamily == AF_INET:
+                let addr = rawBuffer.baseAddress!.assumingMemoryBound(to: sockaddr_in.self).pointee.sin_addr
+                var storage = addr
+                var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                guard inet_ntop(AF_INET, &storage, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil else {
+                    return nil
+                }
+                return String(cString: buffer)
+            case AF_INET6 where preferredFamily == AF_INET6:
+                let addr = rawBuffer.baseAddress!.assumingMemoryBound(to: sockaddr_in6.self).pointee.sin6_addr
+                var storage = addr
+                var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+                guard inet_ntop(AF_INET6, &storage, &buffer, socklen_t(INET6_ADDRSTRLEN)) != nil else {
+                    return nil
+                }
+                return String(cString: buffer)
+            default:
+                return nil
+            }
+        }
+    }
+}
+
+private func parseAdvertisedServiceTarget(_ serviceName: String) -> (nodeName: String, host: String, port: UInt16)? {
+    guard
+        let regex = try? NSRegularExpression(pattern: #"^boo on (.+) \((\d+)\)$"#),
+        let match = regex.firstMatch(in: serviceName, range: NSRange(serviceName.startIndex..., in: serviceName)),
+        match.numberOfRanges == 3,
+        let hostRange = Range(match.range(at: 1), in: serviceName),
+        let portRange = Range(match.range(at: 2), in: serviceName),
+        let port = UInt16(serviceName[portRange])
+    else {
+        return nil
+    }
+
+    let hostLabel = String(serviceName[hostRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !hostLabel.isEmpty else { return nil }
+    return (hostLabel, "\(hostLabel).local", port)
 }
 
 struct BooRootView: View {
@@ -186,6 +292,8 @@ struct ConnectScreen: View {
 
     @State private var host = ""
     @State private var authKey = ""
+    @State private var serviceResolver: BonjourServiceResolver?
+    @State private var resolvingBonjourService = false
 
     private var statusBanner: (message: String, color: Color)? {
         switch monitor.reconnectState {
@@ -210,6 +318,9 @@ struct ConnectScreen: View {
         case .connectionLost(let reason):
             return (reason, KineticColor.error)
         default:
+            if resolvingBonjourService {
+                return ("Resolving discovered host…", KineticColor.primary)
+            }
             return nil
         }
     }
@@ -415,6 +526,26 @@ struct ConnectScreen: View {
 
     private func connectToEndpoint(_ endpoint: NWEndpoint) {
         let display = endpointDisplayTarget(endpoint)
+        if case .service = endpoint {
+            client.lastError = nil
+            resolvingBonjourService = true
+            let resolver = BonjourServiceResolver()
+            serviceResolver = resolver
+            resolver.resolve(endpoint: endpoint) { result in
+                Task { @MainActor in
+                    resolvingBonjourService = false
+                    serviceResolver = nil
+                    switch result {
+                    case .success(let resolved):
+                        print("[boo-ios] resolved Bonjour service \(display.nodeName) -> \(resolved.host):\(resolved.port)")
+                        connectToHost(resolved.host, port: resolved.port, nodeName: display.nodeName)
+                    case .failure(let error):
+                        client.lastError = error.localizedDescription
+                    }
+                }
+            }
+            return
+        }
         let historyId = store.recordConnection(
             nodeName: display.nodeName,
             host: formatConnectionTarget(host: display.host, port: display.port)

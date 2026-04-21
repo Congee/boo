@@ -5,7 +5,8 @@
 //! substrate differs from the local Unix-socket lane.
 
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
+use std::collections::BTreeSet;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::{Arc, Mutex, mpsc};
 
 use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
@@ -40,55 +41,59 @@ pub(crate) fn start_quic_listener(
             .build()
             .map_err(io::Error::other)?,
     );
-    let bind_addr = resolve_socket_addr(bind_address, port)?;
     let server_config = make_server_config().map_err(io::Error::other)?;
-    let udp_socket = UdpSocket::bind(bind_addr)?;
-    udp_socket.set_nonblocking(true)?;
-    let endpoint = {
-        let _guard = runtime.enter();
-        Endpoint::new(
-            EndpointConfig::default(),
-            Some(server_config),
-            udp_socket,
-            Arc::new(TokioRuntime),
-        )
-        .map_err(io::Error::other)?
-    };
-    let runtime_for_task = Arc::clone(&runtime);
-    runtime.spawn(async move {
-        while let Some(connecting) = endpoint.accept().await {
-            let state = Arc::clone(&state);
-            let cmd_tx = cmd_tx.clone();
-            let runtime = Arc::clone(&runtime_for_task);
-            tokio::spawn(async move {
-                let Ok(connection) = connecting.await else {
-                    return;
-                };
-                let Ok((send, recv)) = connection.accept_bi().await else {
-                    return;
-                };
-                let reader = QuicRecvReader {
-                    recv,
-                    runtime: Arc::clone(&runtime),
-                    _connection: connection.clone(),
-                };
-                let writer = QuicSendWriter {
-                    send,
-                    runtime,
-                    _connection: connection,
-                };
-                std::thread::spawn(move || {
-                    run_remote_client_session(
-                        reader,
-                        writer,
-                        state,
-                        cmd_tx,
-                        TRANSPORT_LABEL_QUIC,
-                    );
+    let bind_addrs = resolve_socket_addrs(bind_address, port)?;
+    for bind_addr in bind_addrs {
+        let udp_socket = UdpSocket::bind(bind_addr)?;
+        udp_socket.set_nonblocking(true)?;
+        let endpoint = {
+            let _guard = runtime.enter();
+            Endpoint::new(
+                EndpointConfig::default(),
+                Some(server_config.clone()),
+                udp_socket,
+                Arc::new(TokioRuntime),
+            )
+            .map_err(io::Error::other)?
+        };
+        let runtime_for_task = Arc::clone(&runtime);
+        let state = Arc::clone(&state);
+        let cmd_tx = cmd_tx.clone();
+        runtime.spawn(async move {
+            while let Some(connecting) = endpoint.accept().await {
+                let state = Arc::clone(&state);
+                let cmd_tx = cmd_tx.clone();
+                let runtime = Arc::clone(&runtime_for_task);
+                tokio::spawn(async move {
+                    let Ok(connection) = connecting.await else {
+                        return;
+                    };
+                    let Ok((send, recv)) = connection.accept_bi().await else {
+                        return;
+                    };
+                    let reader = QuicRecvReader {
+                        recv,
+                        runtime: Arc::clone(&runtime),
+                        _connection: connection.clone(),
+                    };
+                    let writer = QuicSendWriter {
+                        send,
+                        runtime,
+                        _connection: connection,
+                    };
+                    std::thread::spawn(move || {
+                        run_remote_client_session(
+                            reader,
+                            writer,
+                            state,
+                            cmd_tx,
+                            TRANSPORT_LABEL_QUIC,
+                        );
+                    });
                 });
-            });
-        }
-    });
+            }
+        });
+    }
     Ok(QuicServerHandle { _runtime: runtime })
 }
 
@@ -157,11 +162,26 @@ pub(crate) fn connect_direct(
     )
 }
 
-fn resolve_socket_addr(bind_address: &str, port: u16) -> io::Result<SocketAddr> {
-    (bind_address, port)
-        .to_socket_addrs()?
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::AddrNotAvailable, "no bind address records"))
+fn resolve_socket_addrs(bind_address: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+    let mut addrs = BTreeSet::new();
+    for addr in (bind_address, port).to_socket_addrs()? {
+        addrs.insert(addr);
+    }
+
+    if bind_address == "0.0.0.0" {
+        addrs.insert(SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port));
+    } else if bind_address == "::" || bind_address == "[::]" {
+        addrs.insert(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port));
+    }
+
+    if addrs.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::AddrNotAvailable,
+            "no bind address records",
+        ));
+    }
+
+    Ok(addrs.into_iter().collect())
 }
 
 fn make_server_config() -> Result<ServerConfig, String> {

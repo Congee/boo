@@ -193,6 +193,36 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTAssertEqual(discoveredRows.count, 1, "expected exactly one discovered daemon row after dedupe")
     }
 
+    func testTappingDiscoveredDaemonConnects() {
+        let app = makeApp(autoConnect: false, resetStorage: true)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        navigateToConnectScreen(app)
+        let title = app.staticTexts["screen-title"]
+
+        let discoveredRows = discoveredDaemonRows(in: app)
+        let firstRow = discoveredRows.firstMatch
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 12))
+        firstRow.tap()
+
+        let deadline = Date().addingTimeInterval(12)
+        while Date() < deadline {
+            if title.exists, title.label == "Active Sessions" {
+                return
+            }
+            let errorLabel = app.staticTexts["connect-error-label"]
+            if errorLabel.exists, !errorLabel.label.isEmpty {
+                XCTFail("discovered daemon connect failed: \(errorLabel.label)")
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+
+        let banner = app.staticTexts["connect-status-banner"].label
+        XCTFail("discovered daemon tap never left connect screen; status='\(banner)'")
+    }
+
     func testTapTab1FromActiveSessionsAndType() {
         let app = makeApp(autoConnect: false, resetStorage: false)
         _ = installSystemAlertHandler(for: app)
