@@ -46,9 +46,7 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTAssertTrue(createButton.waitForExistence(timeout: 20))
         createButton.tap()
 
-        let terminalInput = app.textFields["terminal-input"]
-        XCTAssertTrue(terminalInput.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["terminal-send-button"].exists)
         XCTAssertTrue(app.otherElements["terminal-screen"].exists)
+        XCTAssertTrue(app.buttons["terminal-keyboard-button"].exists)
     }
 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum BooTab: String, CaseIterable {
     case sessions
@@ -239,5 +240,65 @@ struct RemoteTerminalView: View {
             )
         }
         .background(.black)
+    }
+}
+
+struct TerminalKeyboardBridge: UIViewRepresentable {
+    @Binding var isFocused: Bool
+    let onText: (String) -> Void
+    let onBackspace: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIView(context: Context) -> UITextField {
+        let textField = UITextField(frame: .zero)
+        textField.delegate = context.coordinator
+        textField.autocorrectionType = .no
+        textField.autocapitalizationType = .none
+        textField.spellCheckingType = .no
+        textField.smartQuotesType = .no
+        textField.smartDashesType = .no
+        textField.smartInsertDeleteType = .no
+        textField.returnKeyType = .default
+        textField.tintColor = .clear
+        textField.textColor = .clear
+        textField.backgroundColor = .clear
+        return textField
+    }
+
+    func updateUIView(_ uiView: UITextField, context: Context) {
+        if isFocused, !uiView.isFirstResponder {
+            uiView.becomeFirstResponder()
+        } else if !isFocused, uiView.isFirstResponder {
+            uiView.resignFirstResponder()
+        }
+    }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        let parent: TerminalKeyboardBridge
+
+        init(parent: TerminalKeyboardBridge) {
+            self.parent = parent
+        }
+
+        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+            parent.onText("\r")
+            return false
+        }
+
+        func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
+            if range.length > 0 && string.isEmpty {
+                for _ in 0..<range.length {
+                    parent.onBackspace()
+                }
+                return false
+            }
+
+            guard !string.isEmpty else { return false }
+            parent.onText(string)
+            return false
+        }
     }
 }

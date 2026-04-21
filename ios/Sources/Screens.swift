@@ -463,7 +463,7 @@ struct TerminalSessionScreen: View {
     @Binding var selectedTab: BooTab
     let serverIdentityWarning: String?
 
-    @State private var inputText = ""
+    @State private var keyboardFocused = false
     @State private var ctrlActive = false
     @State private var altActive = false
     @State private var metaActive = false
@@ -499,13 +499,31 @@ struct TerminalSessionScreen: View {
             }
             .opacity(isDisconnected ? 0.5 : 1.0)
             .accessibilityIdentifier("terminal-screen")
+            .onTapGesture { keyboardFocused = true }
+
+            HStack {
+                Button {
+                    client.detach()
+                    selectedTab = .sessions
+                } label: {
+                    Label("Sessions", systemImage: "sidebar.left")
+                        .font(KineticFont.caption)
+                        .fontWeight(.bold)
+                        .foregroundStyle(KineticColor.secondary)
+                        .padding(.horizontal, KineticSpacing.md)
+                        .padding(.vertical, KineticSpacing.sm)
+                        .background(KineticColor.surfaceContainerHighest)
+                        .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+                }
+                Spacer()
+            }
+            .padding(.horizontal, KineticSpacing.md)
+            .padding(.top, KineticSpacing.sm)
+            .padding(.bottom, KineticSpacing.xs)
+            .background(KineticColor.surfaceContainerHigh.opacity(0.45))
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: KineticSpacing.sm) {
-                    modifierButton("Sessions") {
-                        client.detach()
-                        selectedTab = .sessions
-                    }
                     modifierButton("ESC") { sendSpecialKey([0x1b]) }
                     modifierButton("CTRL", active: ctrlActive) { ctrlActive.toggle() }
                     modifierButton("ALT", active: altActive) { altActive.toggle() }
@@ -529,23 +547,27 @@ struct TerminalSessionScreen: View {
             }
             .background(KineticColor.surfaceContainerHigh.opacity(0.8))
 
-            HStack(spacing: KineticSpacing.sm) {
-                TextField("Type a command...", text: $inputText)
-                    .font(KineticFont.monoInput)
-                    .foregroundStyle(KineticColor.secondary)
-                    .padding(KineticSpacing.md)
-                    .background(KineticColor.surfaceContainerLowest)
-                    .clipShape(RoundedRectangle(cornerRadius: KineticRadius.container))
-                    .disabled(isDisconnected)
-                    .onSubmit { sendCommand() }
-                    .accessibilityIdentifier("terminal-input")
-
-                Button("Send") { sendCommand() }
-                    .buttonStyle(KineticPrimaryButtonStyle())
-                    .frame(width: 110)
-                    .accessibilityIdentifier("terminal-send-button")
+            HStack {
+                Text("Tap terminal to type")
+                    .font(KineticFont.caption)
+                    .foregroundStyle(KineticColor.onSurfaceVariant)
+                Spacer()
+                Button(keyboardFocused ? "Hide Keyboard" : "Keyboard") {
+                    keyboardFocused.toggle()
+                }
+                .buttonStyle(KineticSecondaryButtonStyle())
+                .accessibilityIdentifier("terminal-keyboard-button")
             }
             .padding(KineticSpacing.md)
+            .background(KineticColor.surface)
+
+            TerminalKeyboardBridge(isFocused: $keyboardFocused) { text in
+                sendTypedText(text)
+            } onBackspace: {
+                client.sendInputBytes(Data([0x7f]))
+            }
+            .frame(width: 1, height: 1)
+            .opacity(0.01)
         }
         .background(KineticColor.surface)
     }
@@ -620,25 +642,31 @@ struct TerminalSessionScreen: View {
         }
     }
 
-    private func sendCommand() {
-        guard !inputText.isEmpty else { return }
-        var text = inputText
-        if ctrlActive, let first = text.first, first.isLetter {
-            let code = UInt8(first.uppercased().first!.asciiValue! - 64)
-            client.sendInputBytes(Data([code]))
+    private func sendTypedText(_ text: String) {
+        guard !text.isEmpty else { return }
+
+        if ctrlActive, text.count == 1, let first = text.first, first.isLetter,
+           let ascii = first.uppercased().first?.asciiValue
+        {
+            client.sendInputBytes(Data([ascii - 64]))
             ctrlActive = false
             altActive = false
             metaActive = false
-            inputText = ""
             return
         }
+
         if altActive || metaActive {
-            text = "\u{1b}" + text
+            client.sendInputBytes(Data([0x1b]))
             altActive = false
             metaActive = false
         }
-        client.sendInput(text + "\r")
-        inputText = ""
+
+        if text == "\r" {
+            client.sendInputBytes(Data([0x0d]))
+            return
+        }
+
+        client.sendInput(text)
     }
 
     private func handleTerminalGesture(_ action: RemoteTerminalGestureAction) {
