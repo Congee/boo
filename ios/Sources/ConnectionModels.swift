@@ -56,6 +56,10 @@ struct TailscaleDiscoverySettings: Codable, Equatable {
     var defaultPort: UInt16 = 7337
 }
 
+struct TerminalDisplaySettings: Codable, Equatable {
+    var showFloatingBackButton = true
+}
+
 private enum KeychainStringStore {
     private static func describe(_ status: OSStatus) -> String {
         if let message = SecCopyErrorMessageString(status, nil) as String? {
@@ -153,6 +157,7 @@ final class ConnectionStore: ObservableObject {
     @Published var savedNodes: [SavedNode] = []
     @Published var history: [ConnectionHistoryEntry] = []
     @Published var tailscaleDiscoverySettings = TailscaleDiscoverySettings()
+    @Published var terminalDisplaySettings = TerminalDisplaySettings()
     @Published var tailscaleTokenStatusMessage: String?
 
     private let maxHistory = 50
@@ -165,6 +170,7 @@ final class ConnectionStore: ObservableObject {
     private var trustedIdentitiesKey: String { "boo.remote.trustedServerIdentities\(storageNamespaceSuffix)" }
     private var resumeAttachmentsKey: String { "boo.remote.resumeAttachments\(storageNamespaceSuffix)" }
     private var tailscaleSettingsKey: String { "boo.remote.tailscale.discovery\(storageNamespaceSuffix)" }
+    private var terminalDisplaySettingsKey: String { "boo.remote.terminalDisplay\(storageNamespaceSuffix)" }
     private var tailscaleTokenService: String { "me.congee.boo.tailscale\(storageNamespaceSuffix)" }
     private let tailscaleTokenAccount = "api-token"
 
@@ -176,6 +182,7 @@ final class ConnectionStore: ObservableObject {
         loadTrustedServerIdentities()
         loadResumeAttachments()
         loadTailscaleSettings()
+        loadTerminalDisplaySettings()
         refreshTailscaleTokenStatus()
     }
 
@@ -269,6 +276,11 @@ final class ConnectionStore: ObservableObject {
     func updateTailscaleDiscovery(defaultPort: UInt16) {
         tailscaleDiscoverySettings.defaultPort = defaultPort
         saveTailscaleSettings()
+    }
+
+    func updateTerminalDisplay(showFloatingBackButton: Bool) {
+        terminalDisplaySettings.showFloatingBackButton = showFloatingBackButton
+        saveTerminalDisplaySettings()
     }
 
     func refreshTailscaleTokenStatus() {
@@ -370,6 +382,17 @@ final class ConnectionStore: ObservableObject {
         UserDefaults.standard.set(data, forKey: tailscaleSettingsKey)
     }
 
+    private func loadTerminalDisplaySettings() {
+        guard let data = UserDefaults.standard.data(forKey: terminalDisplaySettingsKey),
+              let settings = try? JSONDecoder().decode(TerminalDisplaySettings.self, from: data) else { return }
+        terminalDisplaySettings = settings
+    }
+
+    private func saveTerminalDisplaySettings() {
+        guard let data = try? JSONEncoder().encode(terminalDisplaySettings) else { return }
+        UserDefaults.standard.set(data, forKey: terminalDisplaySettingsKey)
+    }
+
     private func applyUITestConfiguration() {
         guard let config = UITestLaunchConfiguration.current() else { return }
 
@@ -379,12 +402,18 @@ final class ConnectionStore: ObservableObject {
             UserDefaults.standard.removeObject(forKey: trustedIdentitiesKey)
             UserDefaults.standard.removeObject(forKey: resumeAttachmentsKey)
             UserDefaults.standard.removeObject(forKey: tailscaleSettingsKey)
+            UserDefaults.standard.removeObject(forKey: terminalDisplaySettingsKey)
             try? KeychainStringStore.delete(service: tailscaleTokenService, account: tailscaleTokenAccount)
         }
 
         if let tailscalePort = config.tailscalePort {
             tailscaleDiscoverySettings.defaultPort = tailscalePort
             saveTailscaleSettings()
+        }
+
+        if let showFloatingBackButton = config.showFloatingBackButton {
+            terminalDisplaySettings.showFloatingBackButton = showFloatingBackButton
+            saveTerminalDisplaySettings()
         }
 
         if let tailscaleToken = config.tailscaleToken?.trimmingCharacters(in: .whitespacesAndNewlines),

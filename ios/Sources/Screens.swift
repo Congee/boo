@@ -665,6 +665,8 @@ struct TerminalSessionScreen: View {
         terminalSessionBody
             .background(KineticColor.surface)
             .toolbar { terminalKeyboardToolbar }
+            .navigationBarBackButtonHidden(true)
+            .toolbar(.hidden, for: .navigationBar)
             .overlay(alignment: .leading) {
                 GeometryReader { geo in
                     Color.clear
@@ -680,6 +682,15 @@ struct TerminalSessionScreen: View {
                                     dismiss()
                                 }
                         )
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if store.terminalDisplaySettings.showFloatingBackButton {
+                    GeometryReader { geo in
+                        floatingBackButton
+                            .padding(.top, max(geo.safeAreaInsets.top, 12))
+                            .padding(.leading, KineticSpacing.md)
+                    }
                 }
             }
         .onAppear {
@@ -862,6 +873,46 @@ struct TerminalSessionScreen: View {
         .padding(KineticSpacing.md)
         .background(color.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+    }
+
+    private var floatingBackButton: some View {
+        Button {
+            dismiss()
+        } label: {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(KineticColor.onSurface)
+                .frame(width: 38, height: 38)
+                .background(
+                    ZStack {
+                        Circle()
+                            .fill(.ultraThinMaterial)
+                        Circle()
+                            .fill(
+                                RadialGradient(
+                                    colors: [
+                                        Color.gray.opacity(0.30),
+                                        Color.gray.opacity(0.18),
+                                        Color.clear
+                                    ],
+                                    center: .center,
+                                    startRadius: 6,
+                                    endRadius: 38
+                                )
+                            )
+                            .scaleEffect(1.75)
+                    }
+                )
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(0.30), lineWidth: 0.8)
+                )
+                .shadow(color: .black.opacity(0.16), radius: 16, x: 0, y: 8)
+        }
+        .buttonStyle(.plain)
+        .contentShape(Circle())
+        .accessibilityIdentifier("floating-back-button")
+        .accessibilityLabel("Back")
     }
 
     private func forgetResumeAttachment() {
@@ -1102,6 +1153,25 @@ struct SettingsScreen: View {
                             .buttonStyle(KineticSecondaryButtonStyle())
                             .accessibilityIdentifier("clear-tailscale-token-button")
                         }
+                    }
+
+                    VStack(alignment: .leading, spacing: KineticSpacing.sm) {
+                        KineticSectionLabel(text: "Terminal Display")
+                        Toggle(isOn: Binding(
+                            get: { store.terminalDisplaySettings.showFloatingBackButton },
+                            set: { store.updateTerminalDisplay(showFloatingBackButton: $0) }
+                        )) {
+                            VStack(alignment: .leading, spacing: KineticSpacing.xs) {
+                                Text("Show floating Back button")
+                                    .font(KineticFont.bodySmall)
+                                    .foregroundStyle(KineticColor.onSurface)
+                                Text("Overlay a compact Back button over the terminal. Turn this off to rely on the native back gesture only.")
+                                    .font(KineticFont.caption)
+                                    .foregroundStyle(KineticColor.onSurfaceVariant)
+                            }
+                        }
+                        .tint(KineticColor.primary)
+                        .accessibilityIdentifier("settings-show-floating-back-button-toggle")
                     }
 
                     if !store.savedNodes.isEmpty {

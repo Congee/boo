@@ -16,6 +16,7 @@ struct UITestLaunchConfiguration {
     let autoConnect: Bool
     let tailscalePort: UInt16?
     let tailscaleToken: String?
+    let showFloatingBackButton: Bool?
     let mockTailscaleDevices: [MockTailscaleDevice]
 
     private static func fileConfiguredHostAndPort() -> (host: String, port: UInt16)? {
@@ -94,6 +95,9 @@ struct UITestLaunchConfiguration {
             ?? env["BOO_UI_TEST_TAILSCALE_PORT"].flatMap(UInt16.init)
         let tailscaleToken = argumentValue(prefix: "--boo-ui-test-tailscale-token=", arguments: arguments)
             ?? env["BOO_UI_TEST_TAILSCALE_TOKEN"]
+        let showFloatingBackButton = argumentValue(prefix: "--boo-ui-test-show-floating-back-button=", arguments: arguments)
+            .flatMap { ["1", "true", "yes"].contains($0.lowercased()) ? true : ["0", "false", "no"].contains($0.lowercased()) ? false : nil }
+            ?? env["BOO_UI_TEST_SHOW_FLOATING_BACK_BUTTON"].flatMap { ["1", "true", "yes"].contains($0.lowercased()) ? true : ["0", "false", "no"].contains($0.lowercased()) ? false : nil }
 
         return UITestLaunchConfiguration(
             resetStorage: resetStorage,
@@ -103,6 +107,7 @@ struct UITestLaunchConfiguration {
             autoConnect: autoConnect,
             tailscalePort: tailscalePort,
             tailscaleToken: tailscaleToken,
+            showFloatingBackButton: showFloatingBackButton,
             mockTailscaleDevices: parseMockTailscaleDevices(arguments: arguments, env: env)
         )
     }
