@@ -1,6 +1,81 @@
 import XCTest
 
 final class BooAppLaunchTests: BooUITestCase {
+    func testTailscaleTokenCanBeSavedAndCleared() {
+        let app = makeApp(autoConnect: false, resetStorage: true)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        let settingsButton = app.buttons["settings-button"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 5))
+        settingsButton.tap()
+
+        let title = app.staticTexts["screen-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertEqual(title.label, "Settings")
+
+        let portField = app.textFields["settings-tailscale-port-input"]
+        XCTAssertTrue(portField.waitForExistence(timeout: 5))
+        portField.tap()
+        portField.typeText(XCUIKeyboardKey.delete.rawValue + XCUIKeyboardKey.delete.rawValue + XCUIKeyboardKey.delete.rawValue + XCUIKeyboardKey.delete.rawValue)
+        portField.typeText("7337")
+
+        let tokenField = app.secureTextFields["settings-tailscale-token-input"]
+        XCTAssertTrue(tokenField.waitForExistence(timeout: 5))
+        scrollUntilHittable(tokenField, in: app)
+        tokenField.tap()
+        tokenField.typeText("tskey-test-ui-token")
+
+        let saveButton = app.buttons["save-tailscale-settings-button"]
+        XCTAssertTrue(saveButton.waitForExistence(timeout: 5))
+        scrollUntilHittable(saveButton, in: app)
+        saveButton.tap()
+
+        let savedLabel = app.staticTexts["API access token saved securely in the iOS Keychain."]
+        XCTAssertTrue(savedLabel.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["clear-tailscale-token-button"].waitForExistence(timeout: 5))
+
+        app.terminate()
+
+        let relaunched = makeApp(autoConnect: false, resetStorage: false)
+        _ = installSystemAlertHandler(for: relaunched)
+        relaunched.launch()
+        relaunched.tap()
+
+        let relaunchedSettings = relaunched.buttons["settings-button"]
+        XCTAssertTrue(relaunchedSettings.waitForExistence(timeout: 5))
+        relaunchedSettings.tap()
+
+        let relaunchedTitle = relaunched.staticTexts["screen-title"]
+        XCTAssertTrue(relaunchedTitle.waitForExistence(timeout: 5))
+        XCTAssertEqual(relaunchedTitle.label, "Settings")
+
+        let persistedLabel = relaunched.staticTexts["API access token saved securely in the iOS Keychain."]
+        XCTAssertTrue(persistedLabel.waitForExistence(timeout: 5))
+
+        let clearButton = relaunched.buttons["clear-tailscale-token-button"]
+        XCTAssertTrue(clearButton.waitForExistence(timeout: 5))
+        scrollUntilHittable(clearButton, in: relaunched)
+        clearButton.tap()
+        XCTAssertFalse(persistedLabel.waitForExistence(timeout: 1))
+
+        relaunched.terminate()
+
+        let cleared = makeApp(autoConnect: false, resetStorage: false)
+        _ = installSystemAlertHandler(for: cleared)
+        cleared.launch()
+        cleared.tap()
+        let clearedSettings = cleared.buttons["settings-button"]
+        XCTAssertTrue(clearedSettings.waitForExistence(timeout: 5))
+        clearedSettings.tap()
+        let clearedTitle = cleared.staticTexts["screen-title"]
+        XCTAssertTrue(clearedTitle.waitForExistence(timeout: 5))
+        XCTAssertEqual(clearedTitle.label, "Settings")
+        XCTAssertFalse(cleared.staticTexts["API access token saved securely in the iOS Keychain."].exists)
+        XCTAssertFalse(cleared.buttons["clear-tailscale-token-button"].exists)
+    }
+
     func testConnectScreenShowsDiscoveredDaemon() {
         let app = makeApp(autoConnect: false)
         _ = installSystemAlertHandler(for: app)

@@ -98,4 +98,14 @@ class BooUITestCase: XCTestCase {
     func discoveredDaemonRows(in app: XCUIApplication) -> XCUIElementQuery {
         app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "discovered-daemon-"))
     }
+
+    func scrollUntilHittable(_ element: XCUIElement, in app: XCUIApplication, maxSwipes: Int = 6, file: StaticString = #filePath, line: UInt = #line) {
+        for _ in 0..<maxSwipes {
+            if element.isHittable {
+                return
+            }
+            app.swipeUp()
+        }
+        XCTAssertTrue(element.isHittable, "Element was not hittable after scrolling", file: file, line: line)
+    }
 }
