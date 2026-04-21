@@ -25,7 +25,9 @@ final class BooAppLaunchTests: BooUITestCase {
         app.launch()
         app.tap()
 
-        let settingsButton = app.buttons["settings-button"]
+        let settingsButton = app.buttons["settings-button"].exists
+            ? app.buttons["settings-button"]
+            : app.buttons["tab-settings"]
         XCTAssertTrue(settingsButton.waitForExistence(timeout: 5))
         settingsButton.tap()
 
@@ -61,7 +63,9 @@ final class BooAppLaunchTests: BooUITestCase {
         relaunched.launch()
         relaunched.tap()
 
-        let relaunchedSettings = relaunched.buttons["settings-button"]
+        let relaunchedSettings = relaunched.buttons["settings-button"].exists
+            ? relaunched.buttons["settings-button"]
+            : relaunched.buttons["tab-settings"]
         XCTAssertTrue(relaunchedSettings.waitForExistence(timeout: 5))
         relaunchedSettings.tap()
 
@@ -84,7 +88,9 @@ final class BooAppLaunchTests: BooUITestCase {
         _ = installSystemAlertHandler(for: cleared)
         cleared.launch()
         cleared.tap()
-        let clearedSettings = cleared.buttons["settings-button"]
+        let clearedSettings = cleared.buttons["settings-button"].exists
+            ? cleared.buttons["settings-button"]
+            : cleared.buttons["tab-settings"]
         XCTAssertTrue(clearedSettings.waitForExistence(timeout: 5))
         clearedSettings.tap()
         let clearedTitle = cleared.staticTexts["screen-title"]
@@ -152,7 +158,14 @@ final class BooAppLaunchTests: BooUITestCase {
 
         let discoveredRows = discoveredDaemonRows(in: app)
         let firstRow = discoveredRows.firstMatch
-        XCTAssertTrue(firstRow.waitForExistence(timeout: 12))
+        if !firstRow.waitForExistence(timeout: 12) {
+            let browserError = app.staticTexts["bonjour-error-label"].label
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = "discovery-failure"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            XCTFail("expected discovered daemon row; browserError='\(browserError)'")
+        }
     }
 
     func testTapTab1FromActiveSessionsAndType() {
@@ -172,14 +185,8 @@ final class BooAppLaunchTests: BooUITestCase {
         }
 
         if title.label != "Active Sessions", let explicitHost {
-            let hostField = app.textFields["connect-host-input"]
-            XCTAssertTrue(hostField.waitForExistence(timeout: 5))
-            hostField.tap()
-            hostField.typeText("\(explicitHost):\(port)")
-
-            let connectButton = app.buttons["connect-button"]
-            XCTAssertTrue(connectButton.waitForExistence(timeout: 5))
-            connectButton.tap()
+            _ = explicitHost
+            connectToConfiguredBoo(from: app)
             XCTAssertTrue(title.waitForExistence(timeout: 20))
         }
 
@@ -255,25 +262,26 @@ final class BooAppLaunchTests: BooUITestCase {
     }
 
     func testAutoConnectCanCreateAndAttachSession() {
-        XCTAssertNotNil(explicitHost)
-        let app = makeApp(autoConnect: false)
+        let app = makeApp(autoConnect: false, resetStorage: false)
         _ = installSystemAlertHandler(for: app)
         app.launch()
         app.tap()
 
         let createButton = app.buttons["create-session-button"]
         if !createButton.waitForExistence(timeout: 5) {
-            let hostField = app.textFields["connect-host-input"]
-            XCTAssertTrue(hostField.waitForExistence(timeout: 5))
-            hostField.tap()
-            hostField.typeText("\(explicitHost!):\(port)")
-
-            let connectButton = app.buttons["connect-button"]
-            XCTAssertTrue(connectButton.waitForExistence(timeout: 5))
-            connectButton.tap()
+            connectToConfiguredBoo(from: app)
         }
 
-        XCTAssertTrue(createButton.waitForExistence(timeout: 20))
+        if !createButton.waitForExistence(timeout: 20) {
+            let errorText = app.staticTexts["connect-error-label"].label
+            let statusText = app.staticTexts["connect-status-banner"].label
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = "connect-failure"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            XCTFail("connect did not reach sessions; status='\(statusText)' error='\(errorText)'")
+            return
+        }
         let existingSessions = sessionRows(in: app)
         if existingSessions.count > 0 {
             existingSessions.element(boundBy: 0).tap()

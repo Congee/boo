@@ -1,7 +1,7 @@
 //! mDNS service advertisement for the remote Boo daemon.
 //!
 //! This module owns the tiny lifecycle wrapper around the platform-specific
-//! publisher process used to announce `_boo._tcp`.
+//! publisher process used to announce `_boo._udp`.
 
 use std::process::{Child, Command, Stdio};
 
@@ -22,7 +22,7 @@ impl ServiceAdvertiser {
         let mut command = {
             let mut command = Command::new("dns-sd");
             command
-                .args(["-R", service_name, "_boo._tcp", "local", &port.to_string()])
+                .args(["-R", service_name, "_boo._udp", "local", &port.to_string()])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
             command
@@ -32,7 +32,7 @@ impl ServiceAdvertiser {
         let mut command = {
             let mut command = Command::new("avahi-publish-service");
             command
-                .args([service_name, "_boo._tcp", &port.to_string()])
+                .args([service_name, "_boo._udp", &port.to_string()])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
             command

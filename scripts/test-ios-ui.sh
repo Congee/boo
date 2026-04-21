@@ -8,7 +8,9 @@ DESTINATION="${BOO_IOS_UI_TEST_DESTINATION:-platform=iOS Simulator,name=iPad min
 DERIVED_DATA="${BOO_IOS_UI_TEST_DERIVED_DATA:-$ROOT/ios/.derived-uitests}"
 HOST="${BOO_IOS_UI_TEST_HOST:-}"
 TEAM_ID="${BOO_IOS_TEAM_ID:-}"
+ONLY_TEST="${BOO_IOS_UI_TEST_ONLY:-}"
 GENERATED_CONFIG="$ROOT/ios/BooUITests/GeneratedUITestConfig.swift"
+HOST_PORT_FILE="/tmp/boo-ios-ui-tests.env"
 
 if [[ -z "$HOST" ]]; then
   if [[ "$DESTINATION" == *"platform=iOS Simulator"* ]]; then
@@ -37,6 +39,7 @@ cleanup() {
     wait "$SERVER_PID" >/dev/null 2>&1 || true
   fi
   rm -f "$SOCKET_PATH"
+  rm -f "$HOST_PORT_FILE"
   cat > "$GENERATED_CONFIG" <<'EOF'
 enum GeneratedUITestConfig {
     static let host: String? = nil
@@ -53,6 +56,10 @@ enum GeneratedUITestConfig {
     static let port: UInt16 = $PORT
 }
 EOF
+cat > "$HOST_PORT_FILE" <<EOF
+BOO_UI_TEST_HOST=$HOST
+BOO_UI_TEST_PORT=$PORT
+EOF
 cargo build >/dev/null
 rm -f "$SOCKET_PATH"
 target/debug/boo server --socket "$SOCKET_PATH" --remote-port "$PORT" --remote-bind-address "$BIND_ADDRESS" >/tmp/boo-ios-ui-tests.log 2>&1 &
@@ -63,6 +70,11 @@ if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
   exit 1
 fi
 
+TEST_ARGS=()
+if [[ -n "$ONLY_TEST" ]]; then
+  TEST_ARGS+=("-only-testing:$ONLY_TEST")
+fi
+
 if [[ "$DESTINATION" == *"platform=iOS Simulator"* ]]; then
   BOO_UI_TEST_HOST="$HOST" BOO_UI_TEST_PORT="$PORT" \
     xcodebuild \
@@ -70,6 +82,7 @@ if [[ "$DESTINATION" == *"platform=iOS Simulator"* ]]; then
     -scheme Boo \
     -destination "$DESTINATION" \
     -derivedDataPath "$DERIVED_DATA" \
+    "${TEST_ARGS[@]}" \
     test
 else
   if [[ -z "$TEAM_ID" ]]; then
@@ -89,5 +102,6 @@ else
     DEVELOPMENT_TEAM="$TEAM_ID" \
     INFOPLIST_KEY_BOO_UI_TEST_HOST="$HOST" \
     INFOPLIST_KEY_BOO_UI_TEST_PORT="$PORT" \
+    "${TEST_ARGS[@]}" \
     test
 fi

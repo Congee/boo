@@ -34,6 +34,7 @@ Remote:
 - `BOO_IOS_DEVICE_ID=<device-id> bash scripts/launch-ios-device.sh`
 - `BOO_IOS_DEVICE_ID=<device-id> bash scripts/deploy-ios-device.sh`
 - `BOO_IOS_UI_TEST_DESTINATION='id=<device-id>' bash scripts/test-ios-ui.sh`
+- `BOO_IOS_UI_TEST_DESTINATION='id=<device-id>' BOO_IOS_UI_TEST_ONLY='BooUITests/BooAppLaunchTests/<testName>' bash scripts/test-ios-ui.sh`
 
 ## Testing Principles
 
@@ -44,3 +45,6 @@ Remote:
 - when adding third-party discovery paths such as Tailscale, separate
   peer-list validation from actual Boo service reachability; device discovery
   alone does not prove the remote daemon is listening
+- real-device Bonjour discovery also depends on the iOS Local Network
+  permission; if the app reports local-network authorization failure, that is
+  a device permission issue, not a QUIC daemon failure

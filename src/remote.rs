@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::io;
-use std::net::TcpListener;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -35,7 +34,8 @@ use crate::remote_wire::{random_instance_id, random_u64_nonzero};
 #[allow(unused_imports)]
 pub use crate::remote_wire::{
     MessageType, REMOTE_CAPABILITIES, REMOTE_CAPABILITY_ATTACHMENT_RESUME,
-    REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT, REMOTE_PROTOCOL_VERSION, RemoteCell, RemoteFullState,
+    REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT, REMOTE_PROTOCOL_VERSION, RemoteCell,
+    RemoteFullState,
     decode_auth_ok_payload, encode_full_state, encode_message, encode_session_list, read_message,
     validate_auth_ok_payload,
 };
@@ -122,7 +122,8 @@ pub enum RemoteCmd {
 }
 
 use crate::remote_auth::read_loop;
-use crate::remote_listener::{NEXT_CLIENT_ID, serve_incoming_tcp_client};
+use crate::remote_listener::NEXT_CLIENT_ID;
+use crate::remote_quic::{QuicServerHandle, start_quic_listener};
 use crate::remote_server_advertise::ServiceAdvertiser;
 use crate::remote_server_attach::prepare_attachment as prepare_remote_attachment;
 use crate::remote_server_control::{
@@ -144,11 +145,12 @@ use crate::remote_server_targets::{
     retain_local_attached_pane_states as retain_local_attached_pane_states_inner,
     retarget_local_attached_client_ids,
 };
-use crate::remote_state::{ClientState, REMOTE_READ_TIMEOUT, State};
+use crate::remote_state::{ClientState, State};
 
 pub struct RemoteServer {
     state: Arc<Mutex<State>>,
-    _listener: std::thread::JoinHandle<()>,
+    _quic_listener: Option<QuicServerHandle>,
+    _local_listener: Option<std::thread::JoinHandle<()>>,
     _advertiser: Option<ServiceAdvertiser>,
     local_socket_path: Option<PathBuf>,
     bind_address: Option<String>,
@@ -158,29 +160,15 @@ pub struct RemoteServer {
 impl RemoteServer {
     pub fn start(config: RemoteConfig) -> io::Result<(Self, mpsc::Receiver<RemoteCmd>)> {
         let bind_address = config.effective_bind_address().to_string();
-        let listener = TcpListener::bind((bind_address.as_str(), config.port))?;
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::new(),
             revivable_attachments: HashMap::new(),
             server_identity_id: random_instance_id(),
             server_instance_id: random_instance_id(),
         }));
-        let state_for_listener = Arc::clone(&state);
         let (cmd_tx, cmd_rx) = mpsc::channel();
-        let cmd_tx_for_tcp = cmd_tx.clone();
-        let listener_thread = std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(stream) = stream else {
-                    continue;
-                };
-                let _ = stream.set_read_timeout(Some(REMOTE_READ_TIMEOUT));
-                let state = Arc::clone(&state_for_listener);
-                let cmd_tx = cmd_tx_for_tcp.clone();
-                std::thread::spawn(move || {
-                    serve_incoming_tcp_client(stream, state, cmd_tx);
-                });
-            }
-        });
+        let quic_listener =
+            start_quic_listener(&bind_address, config.port, Arc::clone(&state), cmd_tx.clone())?;
 
         let advertiser = if config.should_advertise() {
             ServiceAdvertiser::spawn(&config.service_name, config.port)
@@ -190,7 +178,7 @@ impl RemoteServer {
         {
             let state = state.lock().expect("remote server state poisoned");
             log::info!(
-                "remote tcp server started: bind_address={} port={} protocol_version={} capabilities={} build_id={} server_identity_id={} server_instance_id={}",
+                "remote quic server started: bind_address={} port={} protocol_version={} capabilities={} build_id={} server_identity_id={} server_instance_id={}",
                 bind_address,
                 config.port,
                 REMOTE_PROTOCOL_VERSION,
@@ -203,7 +191,8 @@ impl RemoteServer {
         Ok((
             Self {
                 state,
-                _listener: listener_thread,
+                _quic_listener: Some(quic_listener),
+                _local_listener: None,
                 _advertiser: advertiser,
                 local_socket_path: None,
                 bind_address: Some(bind_address),
@@ -294,7 +283,8 @@ impl RemoteServer {
         Ok((
             Self {
                 state,
-                _listener: listener_thread,
+                _quic_listener: None,
+                _local_listener: Some(listener_thread),
                 _advertiser: None,
                 local_socket_path: Some(socket_path),
                 bind_address: None,

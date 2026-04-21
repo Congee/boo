@@ -174,11 +174,11 @@ final class RemoteValidator {
         self.authKey = authKey.isEmpty ? nil : SymmetricKey(data: Data(authKey.utf8))
     }
 
-    func browse(serviceType: String = "_boo._tcp", timeout: TimeInterval = 3.0) -> NWEndpoint? {
+    func browse(serviceType: String = "_boo._udp", timeout: TimeInterval = 3.0) -> NWEndpoint? {
         let semaphore = DispatchSemaphore(value: 0)
         let browser = NWBrowser(
             for: .bonjour(type: serviceType, domain: nil),
-            using: NWParameters()
+            using: NWParameters.udp
         )
         browser.stateUpdateHandler = { state in
             if case .failed = state {

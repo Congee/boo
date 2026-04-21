@@ -3,9 +3,33 @@ import Foundation
 import Darwin
 
 class BooUITestCase: XCTestCase {
+    private var fileConfiguredHostAndPort: (host: String, port: UInt16)? {
+        let url = URL(fileURLWithPath: "/tmp/boo-ios-ui-tests.env")
+        guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+
+        var host: String?
+        var port: UInt16?
+        for line in raw.split(whereSeparator: \.isNewline) {
+            let parts = line.split(separator: "=", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            switch parts[0] {
+            case "BOO_UI_TEST_HOST":
+                host = parts[1]
+            case "BOO_UI_TEST_PORT":
+                port = UInt16(parts[1])
+            default:
+                break
+            }
+        }
+
+        guard let host, let port else { return nil }
+        return (host, port)
+    }
+
     var explicitHost: String? {
         ProcessInfo.processInfo.environment["BOO_UI_TEST_HOST"]
             ?? (Bundle.main.infoDictionary?["BOO_UI_TEST_HOST"] as? String)
+            ?? fileConfiguredHostAndPort?.host
             ?? GeneratedUITestConfig.host
     }
 
@@ -13,6 +37,7 @@ class BooUITestCase: XCTestCase {
         ProcessInfo.processInfo.environment["BOO_UI_TEST_PORT"].flatMap(UInt16.init)
             ?? (Bundle.main.infoDictionary?["BOO_UI_TEST_PORT"] as? String).flatMap(UInt16.init)
             ?? (Bundle.main.infoDictionary?["BOO_UI_TEST_PORT"] as? NSNumber).map(\.uint16Value)
+            ?? fileConfiguredHostAndPort?.port
             ?? GeneratedUITestConfig.port
     }
 
@@ -112,6 +137,33 @@ class BooUITestCase: XCTestCase {
 
     func discoveredDaemonRows(in app: XCUIApplication) -> XCUIElementQuery {
         app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "discovered-daemon-"))
+    }
+
+    func connectToConfiguredBoo(from app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        if app.buttons["saved-node-Local Boo"].waitForExistence(timeout: 2) {
+            app.buttons["saved-node-Local Boo"].tap()
+            return
+        }
+        if let explicitHost, app.buttons[explicitHost].waitForExistence(timeout: 1) {
+            app.buttons[explicitHost].tap()
+            return
+        }
+        if app.buttons["Local Boo"].waitForExistence(timeout: 1) {
+            app.buttons["Local Boo"].tap()
+            return
+        }
+        guard let explicitHost else {
+            XCTFail("Expected explicit host or saved Local Boo node for UI test", file: file, line: line)
+            return
+        }
+        let hostField = app.textFields["connect-host-input"]
+        XCTAssertTrue(hostField.waitForExistence(timeout: 5), file: file, line: line)
+        hostField.tap()
+        XCTAssertTrue(hostField.waitForExistence(timeout: 5), file: file, line: line)
+        hostField.typeText("\(explicitHost):\(port)")
+        let connectButton = app.buttons["connect-button"]
+        XCTAssertTrue(connectButton.waitForExistence(timeout: 5), file: file, line: line)
+        connectButton.tap()
     }
 
     func scrollUntilHittable(_ element: XCUIElement, in app: XCUIApplication, maxSwipes: Int = 6, file: StaticString = #filePath, line: UInt = #line) {

@@ -109,14 +109,14 @@ pub struct GlobalArgs {
     #[arg(
         long = "remote-port",
         global = true,
-        help = "Start the Boo-native TCP remote daemon on this port"
+        help = "Start the Boo-native QUIC remote daemon on this port"
     )]
     pub remote_port: Option<u16>,
 
     #[arg(
         long = "remote-bind-address",
         global = true,
-        help = "Bind address for the Boo-native TCP remote daemon; defaults to 127.0.0.1"
+        help = "Bind address for the Boo-native QUIC remote daemon; defaults to 127.0.0.1"
     )]
     pub remote_bind_address: Option<String>,
 
@@ -137,7 +137,7 @@ pub enum Command {
     KillServer,
     /// List live sessions on the Boo server
     Ls,
-    /// Probe a Boo-native TCP remote daemon directly
+    /// Probe a Boo-native QUIC remote daemon directly
     ProbeRemoteDaemon {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
@@ -146,7 +146,7 @@ pub enum Command {
         #[arg(long = "expect-server-identity")]
         expect_server_identity: Option<String>,
     },
-    /// List sessions from a Boo-native TCP remote daemon directly
+    /// List sessions from a Boo-native QUIC remote daemon directly
     RemoteDaemonSessions {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
@@ -155,7 +155,7 @@ pub enum Command {
         #[arg(long = "expect-server-identity")]
         expect_server_identity: Option<String>,
     },
-    /// Create a session on a Boo-native TCP remote daemon directly
+    /// Create a session on a Boo-native QUIC remote daemon directly
     RemoteDaemonCreate {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
@@ -172,7 +172,7 @@ pub enum Command {
     RemoteUpgradeTarget,
     /// Bootstrap a remote Boo host over SSH, resolve its canonical native endpoint, and probe the direct transport
     RemoteUpgradeProbe,
-    /// Attach to a session on a Boo-native TCP remote daemon directly
+    /// Attach to a session on a Boo-native QUIC remote daemon directly
     RemoteDaemonAttach {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
@@ -217,7 +217,7 @@ impl Cli {
     }
 }
 
-/// Transport choice resolved from CLI --tls / --quic flags. Plain carries through
+/// Transport choice resolved from advertised daemon capabilities.
 fn probe_remote_daemon_dispatch(
     host: &str,
     port: u16,
@@ -923,7 +923,7 @@ mod tests {
         assert!(long.contains("Connect through SSH to a remote Boo host"));
         assert!(long.contains("local forwarded socket"));
         assert!(long.contains("Remote Boo control socket path on the SSH host"));
-        assert!(long.contains("Boo-native TCP remote daemon"));
+        assert!(long.contains("Boo-native QUIC remote daemon"));
         assert!(long.contains("~/.nix-profile/bin/boo"));
     }
 
@@ -969,7 +969,7 @@ mod tests {
         assert!(summary.upgrade_ready);
         assert_eq!(
             summary.selected_transport,
-            Some(crate::remote::DirectTransportKind::TcpDirect)
+            Some(crate::remote::DirectTransportKind::QuicDirect)
         );
         assert_eq!(summary.direct_host.as_deref(), Some("macbook.local"));
         assert_eq!(summary.port, Some(7337));
@@ -1004,7 +1004,7 @@ mod tests {
         assert!(!summary.upgrade_ready);
         assert_eq!(
             summary.selected_transport,
-            Some(crate::remote::DirectTransportKind::TcpDirect)
+            Some(crate::remote::DirectTransportKind::QuicDirect)
         );
         assert_eq!(summary.direct_host, None);
         assert!(

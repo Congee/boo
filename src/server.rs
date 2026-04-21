@@ -169,11 +169,11 @@ impl State {
                 service_name: "boo".to_string(),
             }) {
                 Ok((server, rx)) => {
-                    log::info!("remote daemon listening on tcp/{port}");
+                    log::info!("remote daemon listening on quic/{port}");
                     (Some(server), rx)
                 }
                 Err(error) => {
-                    log::error!("failed to start remote daemon on tcp/{port}: {error}");
+                    log::error!("failed to start remote daemon on quic/{port}: {error}");
                     let (_tx, rx) = mpsc::channel();
                     (None, rx)
                 }

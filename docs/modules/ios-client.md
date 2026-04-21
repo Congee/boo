@@ -26,13 +26,14 @@ It handles:
 
 ## Important Current Behavior
 
-- browses `_boo._tcp`
+- browses `_boo._udp`
 - can list tailnet devices when a Tailscale API access token is configured in Settings
 - does not reuse the installed Tailscale app's authenticated session
 - stores the Tailscale API access token in the iOS Keychain rather than plain app settings
 - connects through resolved Network framework endpoints
 - supports saved nodes and connection history
 - supports attachment resume and trusted server identity pinning
+- if Bonjour browsing returns local-network authorization failure, the app now shows a direct error and an `Open iPad Settings` action instead of silently showing an empty discovery list
 
 ## Verification
 

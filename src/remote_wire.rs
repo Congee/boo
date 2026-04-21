@@ -3,7 +3,7 @@
 //! Pure serde helpers with no server state: frame header layout, protocol
 //! version / capability flags, the `MessageType` opcode set, and the encode /
 //! decode / parse functions that translate between rust types and the byte
-//! stream used over plain-TCP, TLS, and QUIC transports.
+//! stream used over local stream and QUIC transports.
 //!
 //! Anything that mutates `State` or touches the socket lifecycle lives in
 //! `remote.rs`; this module is intentionally dependency-free so it can be
@@ -24,14 +24,14 @@ pub const REMOTE_CAPABILITY_IMAGES: u32 = 1 << 3;
 pub const REMOTE_CAPABILITY_HEARTBEAT: u32 = 1 << 4;
 pub const REMOTE_CAPABILITY_ATTACHMENT_RESUME: u32 = 1 << 5;
 pub const REMOTE_CAPABILITY_DAEMON_IDENTITY: u32 = 1 << 6;
-pub const REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT: u32 = 1 << 7;
+pub const REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT: u32 = 1 << 7;
 pub const REMOTE_CAPABILITIES: u32 = REMOTE_CAPABILITY_SCREEN_DELTAS
     | REMOTE_CAPABILITY_UI_STATE
     | REMOTE_CAPABILITY_IMAGES
     | REMOTE_CAPABILITY_HEARTBEAT
     | REMOTE_CAPABILITY_ATTACHMENT_RESUME
     | REMOTE_CAPABILITY_DAEMON_IDENTITY
-    | REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT;
+    | REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT;
 
 pub(crate) const LOCAL_INPUT_SEQ_LEN: usize = 8;
 pub(crate) const REMOTE_FULL_STATE_HEADER_LEN: usize = 14;
@@ -386,8 +386,8 @@ pub fn validate_auth_ok_payload(payload: &[u8]) -> Result<(), String> {
     if (capabilities & REMOTE_CAPABILITY_DAEMON_IDENTITY) == 0 {
         return Err("Remote server does not advertise daemon identity support".to_string());
     }
-    if (capabilities & REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT) == 0 {
-        return Err("Remote server does not advertise TCP direct transport".to_string());
+    if (capabilities & REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT) == 0 {
+        return Err("Remote server does not advertise QUIC direct transport".to_string());
     }
     if build_id.as_deref().is_none_or(str::is_empty) {
         return Err("Remote handshake is missing server build metadata".to_string());
@@ -1383,11 +1383,11 @@ mod tests {
     fn validate_auth_ok_payload_rejects_missing_direct_transport_capability() {
         let mut payload = encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe");
         payload[2..6].copy_from_slice(
-            &(REMOTE_CAPABILITIES & !REMOTE_CAPABILITY_TCP_DIRECT_TRANSPORT).to_le_bytes(),
+            &(REMOTE_CAPABILITIES & !REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT).to_le_bytes(),
         );
         assert_eq!(
             validate_auth_ok_payload(&payload),
-            Err("Remote server does not advertise TCP direct transport".to_string())
+            Err("Remote server does not advertise QUIC direct transport".to_string())
         );
     }
 

@@ -6,7 +6,7 @@ This directory contains the Boo iOS remote viewer app.
 
 - SwiftUI iOS app with bundle identifier `me.congee.boo`
 - Connects to the Boo remote daemon using the existing GSP-compatible wire protocol
-- Discovers Bonjour services on `_boo._tcp`
+- Discovers Bonjour services on `_boo._udp`
 - Lists Tailscale devices through the Tailscale API when configured in Settings
 - Connects to discovered Bonjour services via the resolved Network framework endpoint instead of degrading them to a guessed `host:port`
 - Supports:
@@ -38,6 +38,7 @@ This directory contains the Boo iOS remote viewer app.
 - The Boo Rust app now exposes the matching TCP daemon when `remote-port` is configured, for example `boo --headless --remote-port 7337`.
 - Optional challenge/response auth is enabled by configuring `remote-auth-key` on the Boo daemon side and entering the same key in the iOS client.
 - iOS local-network discovery requires `NSLocalNetworkUsageDescription` and `NSBonjourServices`; both are configured in the Xcode project.
+- If Bonjour discovery reports that local network access is required, enable `boo` in `Settings > Privacy & Security > Local Network`.
 - Tailscale discovery is separate from Bonjour. It lists devices in the same tailnet through the Tailscale API, then connects to them on the configured Boo port.
 - The Tailscale section currently discovers devices, not Boo services. It assumes Boo is listening on the configured remote port, which defaults to `7337`.
 - Tailscale discovery requires a Tailscale API access token configured in the iOS app Settings screen.
@@ -52,7 +53,7 @@ The Swift app client and the validator now share the same wire-codec implementat
 
 It verifies:
 
-- Bonjour discovery on `_boo._tcp`
+- Bonjour discovery on `_boo._udp`
 - HMAC auth against a live Boo daemon
 - session listing
 - create + attach
@@ -110,6 +111,9 @@ Notes:
   real attached device; on a real device it starts a local Boo daemon, writes a
   temporary UI-test host config for the test bundle, and exercises the visible
   connect/session terminal flow end-to-end
+- Bonjour discovery on a real device still depends on the iPad or iPhone granting
+  Local Network access to `boo`; otherwise the app now surfaces a direct error
+  and an `Open iPad Settings` action instead of silently showing an empty list
 
 ## Remaining Manual Validation
 

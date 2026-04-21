@@ -1,5 +1,6 @@
 import SwiftUI
 import Network
+import UIKit
 
 private func formatConnectionTarget(host: String, port: UInt16) -> String {
     port == 7337 ? host : "\(host):\(port)"
@@ -223,6 +224,7 @@ struct ConnectScreen: View {
                         Text(statusBanner.message)
                             .font(KineticFont.caption)
                             .foregroundStyle(statusBanner.color)
+                            .accessibilityIdentifier("connect-status-banner")
                             .padding(KineticSpacing.md)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(statusBanner.color.opacity(0.1))
@@ -249,10 +251,31 @@ struct ConnectScreen: View {
                         Text(error)
                             .font(KineticFont.caption)
                             .foregroundStyle(KineticColor.error)
+                            .accessibilityIdentifier("connect-error-label")
                             .padding(KineticSpacing.md)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(KineticColor.error.opacity(0.1))
                             .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+                    }
+                    if let browserError = browser.lastError {
+                        VStack(alignment: .leading, spacing: KineticSpacing.sm) {
+                            Text(browserError)
+                                .font(KineticFont.caption)
+                                .foregroundStyle(KineticColor.error)
+                                .accessibilityIdentifier("bonjour-error-label")
+                            if browserError.contains("Local network access is required") {
+                                Button("Open iPad Settings") {
+                                    guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                                    UIApplication.shared.open(url)
+                                }
+                                .buttonStyle(KineticSecondaryButtonStyle())
+                                .accessibilityIdentifier("open-local-network-settings-button")
+                            }
+                        }
+                        .padding(KineticSpacing.md)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(KineticColor.error.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
                     }
 
                     VStack(spacing: KineticSpacing.sm) {

@@ -1,8 +1,6 @@
 //! Sync direct-client session transport for remote daemon RPCs.
 
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
 
 use crate::remote_types::{RemoteAttachedSummary, RemoteDirectSessionInfo};
 use crate::remote_wire::{
@@ -10,8 +8,6 @@ use crate::remote_wire::{
     encode_message, parse_session_id, read_attach_bootstrap, read_probe_auth_reply,
     read_probe_reply, validate_auth_ok_payload,
 };
-
-const DIRECT_CLIENT_SOCKET_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) trait DirectReadWrite: Read + Write {}
 impl<T: Read + Write> DirectReadWrite for T {}
@@ -25,29 +21,6 @@ pub(crate) struct DirectTransportSession<S: DirectReadWrite> {
     pub(crate) build_id: Option<String>,
     pub(crate) server_instance_id: Option<String>,
     pub(crate) server_identity_id: Option<String>,
-}
-
-impl DirectTransportSession<TcpStream> {
-    pub(crate) fn connect(
-        host: &str,
-        port: u16,
-        expected_server_identity: Option<&str>,
-    ) -> Result<Self, String> {
-        let addr = (host, port)
-            .to_socket_addrs()
-            .map_err(|error| format!("failed to resolve {host}:{port}: {error}"))?
-            .next()
-            .ok_or_else(|| format!("no address records for {host}:{port}"))?;
-        let stream = TcpStream::connect_timeout(&addr, DIRECT_CLIENT_SOCKET_TIMEOUT)
-            .map_err(|error| format!("failed to connect to {host}:{port}: {error}"))?;
-        stream
-            .set_read_timeout(Some(DIRECT_CLIENT_SOCKET_TIMEOUT))
-            .map_err(|error| format!("failed to set read timeout: {error}"))?;
-        stream
-            .set_write_timeout(Some(DIRECT_CLIENT_SOCKET_TIMEOUT))
-            .map_err(|error| format!("failed to set write timeout: {error}"))?;
-        Self::connect_over_stream(stream, host.to_string(), port, expected_server_identity)
-    }
 }
 
 impl<S: DirectReadWrite> DirectTransportSession<S> {

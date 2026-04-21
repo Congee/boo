@@ -25,6 +25,7 @@ mod remote_config_tests;
 mod remote_direct_session;
 mod remote_full_state;
 mod remote_listener;
+mod remote_quic;
 mod remote_server_advertise;
 mod remote_server_attach;
 mod remote_server_broadcast;

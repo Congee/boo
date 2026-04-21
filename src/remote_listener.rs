@@ -1,9 +1,5 @@
 //! Accept-loop and per-connection socket lifecycle for the remote daemon.
 //!
-//! Plain TCP only. Identity is enforced by the network substrate
-//! (Tailscale / overlay) — see Phase 1/2 commits for why the previous
-//! TLS+SPKI and QUIC transports were removed.
-//!
 //! Each accepted connection ends up in [`run_remote_client_session`],
 //! which registers a `ClientState`, spawns the writer thread, and hands
 //! the reader off to the blocking `read_loop` in `remote_auth`.
@@ -23,26 +19,6 @@ use crate::remote_state::{ClientState, State};
 /// cross-reference a client_id in the clients snapshot with the reader/writer
 /// threads that serve it.
 pub(crate) static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
-
-const TRANSPORT_LABEL_PLAIN: &str = "plain";
-
-pub(crate) fn serve_incoming_tcp_client(
-    stream: std::net::TcpStream,
-    state: Arc<Mutex<State>>,
-    cmd_tx: mpsc::Sender<RemoteCmd>,
-) {
-    let Ok(writer_stream) = stream.try_clone() else {
-        log::warn!("remote tcp client dropped: failed to clone stream for writer");
-        return;
-    };
-    run_remote_client_session(
-        stream,
-        writer_stream,
-        state,
-        cmd_tx,
-        TRANSPORT_LABEL_PLAIN,
-    );
-}
 
 pub(crate) fn run_remote_client_session<R, W>(
     reader: R,
@@ -81,7 +57,7 @@ pub(crate) fn run_remote_client_session<R, W>(
         (client_id, outbound_rx)
     };
     log::info!(
-        "remote tcp client connected: client_id={client_id} transport={transport_label}"
+        "remote client connected: client_id={client_id} transport={transport_label}"
     );
 
     std::thread::spawn(move || writer_loop(writer, outbound_rx, true, true));

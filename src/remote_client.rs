@@ -1,8 +1,5 @@
-//! Public direct-client RPCs over plain TCP. Identity is enforced by the
-//! underlying network substrate (Tailscale / overlay); no SPKI pinning,
-//! no HMAC, no TLS here.
-
-use std::net::TcpStream;
+//! Public direct-client RPCs over QUIC. Identity is enforced by the
+//! higher-level Boo handshake and the surrounding network substrate.
 
 use crate::remote::DirectTransportSession;
 use crate::remote_types::{
@@ -11,14 +8,18 @@ use crate::remote_types::{
 };
 
 pub fn select_direct_transport(
-    _capabilities: u32,
+    capabilities: u32,
     _migration_capable_path_available: bool,
 ) -> Result<DirectTransportKind, String> {
-    Ok(DirectTransportKind::TcpDirect)
+    if (capabilities & crate::remote::REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT) != 0 {
+        Ok(DirectTransportKind::QuicDirect)
+    } else {
+        Err("remote daemon does not advertise QUIC direct transport".to_string())
+    }
 }
 
 fn probe_summary_from_session(
-    client: &mut DirectTransportSession<TcpStream>,
+    client: &mut DirectTransportSession<crate::remote_quic::QuicDirectStream>,
     port: u16,
 ) -> Result<RemoteProbeSummary, String> {
     let heartbeat_rtt_ms = client.heartbeat_round_trip(b"boo-remote-probe")?;
@@ -39,24 +40,26 @@ pub fn probe_remote_endpoint(
     port: u16,
     expected_server_identity: Option<&str>,
 ) -> Result<RemoteProbeSummary, String> {
-    let mut client = DirectTransportSession::connect(host, port, expected_server_identity)?;
+    let mut client = crate::remote_quic::connect_direct(host, port, expected_server_identity)?;
     probe_summary_from_session(&mut client, port)
 }
 
 pub fn probe_selected_direct_transport(
-    _transport: DirectTransportKind,
+    transport: DirectTransportKind,
     host: &str,
     port: u16,
     expected_server_identity: Option<&str>,
 ) -> Result<RemoteUpgradeProbeSummary, String> {
-    Ok(RemoteUpgradeProbeSummary {
-        selected_transport: DirectTransportKind::TcpDirect,
-        probe: probe_remote_endpoint(host, port, expected_server_identity)?,
-    })
+    match transport {
+        DirectTransportKind::QuicDirect => Ok(RemoteUpgradeProbeSummary {
+            selected_transport: DirectTransportKind::QuicDirect,
+            probe: probe_remote_endpoint(host, port, expected_server_identity)?,
+        }),
+    }
 }
 
 fn list_summary_from_session(
-    client: &mut DirectTransportSession<TcpStream>,
+    client: &mut DirectTransportSession<crate::remote_quic::QuicDirectStream>,
     port: u16,
 ) -> Result<RemoteSessionListSummary, String> {
     let heartbeat_rtt_ms = client.heartbeat_round_trip(b"boo-remote-list")?;
@@ -79,12 +82,12 @@ pub fn list_remote_daemon_sessions(
     port: u16,
     expected_server_identity: Option<&str>,
 ) -> Result<RemoteSessionListSummary, String> {
-    let mut client = DirectTransportSession::connect(host, port, expected_server_identity)?;
+    let mut client = crate::remote_quic::connect_direct(host, port, expected_server_identity)?;
     list_summary_from_session(&mut client, port)
 }
 
 fn attach_summary_from_session(
-    client: &mut DirectTransportSession<TcpStream>,
+    client: &mut DirectTransportSession<crate::remote_quic::QuicDirectStream>,
     port: u16,
     session_id: u32,
     attachment_id: Option<u64>,
@@ -120,12 +123,12 @@ pub fn attach_remote_daemon_session(
     attachment_id: Option<u64>,
     resume_token: Option<u64>,
 ) -> Result<RemoteAttachSummary, String> {
-    let mut client = DirectTransportSession::connect(host, port, expected_server_identity)?;
+    let mut client = crate::remote_quic::connect_direct(host, port, expected_server_identity)?;
     attach_summary_from_session(&mut client, port, session_id, attachment_id, resume_token)
 }
 
 fn create_summary_from_session(
-    client: &mut DirectTransportSession<TcpStream>,
+    client: &mut DirectTransportSession<crate::remote_quic::QuicDirectStream>,
     port: u16,
     cols: u16,
     rows: u16,
@@ -152,7 +155,7 @@ pub fn create_remote_daemon_session(
     cols: u16,
     rows: u16,
 ) -> Result<RemoteCreateSummary, String> {
-    let mut client = DirectTransportSession::connect(host, port, expected_server_identity)?;
+    let mut client = crate::remote_quic::connect_direct(host, port, expected_server_identity)?;
     create_summary_from_session(&mut client, port, cols, rows)
 }
 

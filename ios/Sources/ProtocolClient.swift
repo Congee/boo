@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import CryptoKit
+import Security
 import UIKit
 
 enum GSPMessageType: UInt8 {
@@ -108,23 +109,44 @@ struct TailscalePeer: Identifiable, Hashable {
 final class BonjourBrowser: ObservableObject {
     @Published var daemons: [DiscoveredDaemon] = []
     @Published var isSearching = false
+    @Published var lastError: String?
 
     private var browsers: [NWBrowser] = []
     private let queue = DispatchQueue(label: "boo-bonjour-browser")
-    private let serviceTypes = ["_boo._tcp"]
+    private let serviceTypes = ["_boo._udp"]
+
+    private func describeBrowserError(_ error: NWError) -> String {
+        let raw = "\(error)"
+        if raw.contains("NoAuth") {
+            return "Local network access is required for Bonjour discovery. Enable boo in Settings > Privacy & Security > Local Network."
+        }
+        return "Bonjour browse failed: \(error)"
+    }
 
     func startBrowsing() {
         stopBrowsing()
         isSearching = true
+        lastError = nil
         for type in serviceTypes {
             let descriptor = NWBrowser.Descriptor.bonjour(type: type, domain: nil)
-            let params = NWParameters()
+            let params = NWParameters.udp
             params.includePeerToPeer = true
             let browser = NWBrowser(for: descriptor, using: params)
             browser.stateUpdateHandler = { [weak self] state in
                 Task { @MainActor in
-                    if case .failed = state { self?.isSearching = false }
-                    if case .cancelled = state { self?.isSearching = false }
+                    switch state {
+                    case .failed(let error):
+                        self?.isSearching = false
+                        self?.lastError = self?.describeBrowserError(error)
+                    case .waiting(let error):
+                        self?.lastError = self?.describeBrowserError(error)
+                    case .ready:
+                        self?.lastError = nil
+                    case .cancelled:
+                        self?.isSearching = false
+                    default:
+                        break
+                    }
                 }
             }
             browser.browseResultsChangedHandler = { [weak self] _, _ in
@@ -142,6 +164,7 @@ final class BonjourBrowser: ObservableObject {
         browsers.removeAll()
         daemons.removeAll()
         isSearching = false
+        lastError = nil
     }
 
     private func refreshDiscoveredDaemons() {
@@ -379,8 +402,7 @@ final class GSPClient: ObservableObject {
         self.authKey = authKey.isEmpty ? nil : SymmetricKey(data: Data(authKey.utf8))
         prepareForConnectionAttempt()
         let generation = connectionGeneration
-        let params = NWParameters.tcp
-        params.allowLocalEndpointReuse = true
+        let params = makeQUICParameters()
         connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: params)
         installStateHandler(generation: generation)
         connection?.start(queue: queue)
@@ -547,11 +569,23 @@ final class GSPClient: ObservableObject {
         self.authKey = authKey.isEmpty ? nil : SymmetricKey(data: Data(authKey.utf8))
         prepareForConnectionAttempt()
         let generation = connectionGeneration
-        let params = NWParameters.tcp
-        params.allowLocalEndpointReuse = true
+        let params = makeQUICParameters()
         connection = NWConnection(to: endpoint, using: params)
         installStateHandler(generation: generation)
         connection?.start(queue: queue)
+    }
+
+    private func makeQUICParameters() -> NWParameters {
+        let options = NWProtocolQUIC.Options(alpn: ["boo-remote"])
+        options.direction = .bidirectional
+        options.idleTimeout = Int(Self.heartbeatTimeout * 1000)
+        sec_protocol_options_set_verify_block(options.securityProtocolOptions, { _, _, complete in
+            complete(true)
+        }, queue)
+        let params = NWParameters(quic: options)
+        params.allowLocalEndpointReuse = true
+        params.includePeerToPeer = true
+        return params
     }
 
     private func handleAuthChallenge(_ payload: Data) {
@@ -571,13 +605,18 @@ final class GSPClient: ObservableObject {
         header[2] = type.rawValue
         let len = UInt32(payload.count).littleEndian
         header.withUnsafeMutableBytes { $0.storeBytes(of: len, toByteOffset: 3, as: UInt32.self) }
-        connection?.send(content: header + payload, completion: .contentProcessed { [weak self] error in
-            guard let error else { return }
-            Task { @MainActor in
-                guard let self, self.connectionGeneration == generation else { return }
-                self.lastError = "Send failed: \(error)"
+        connection?.send(
+            content: header + payload,
+            contentContext: .defaultStream,
+            isComplete: false,
+            completion: .contentProcessed { [weak self] error in
+                guard let error else { return }
+                Task { @MainActor in
+                    guard let self, self.connectionGeneration == generation else { return }
+                    self.lastError = "Send failed: \(error)"
+                }
             }
-        })
+        )
     }
 
     private func prepareForConnectionAttempt() {
@@ -594,6 +633,7 @@ final class GSPClient: ObservableObject {
         connection?.stateUpdateHandler = { [weak self] state in
             Task { @MainActor in
                 guard let self, self.connectionGeneration == generation else { return }
+                print("[boo-ios] connection state = \(state)")
                 switch state {
                 case .ready:
                     self.connected = true
@@ -604,6 +644,9 @@ final class GSPClient: ObservableObject {
                     }
                     self.readHeader(generation: generation)
                     self.sendAuth()
+                case .waiting(let error):
+                    self.connected = false
+                    self.lastError = "Connection waiting: \(error)"
                 case .failed(let error):
                     self.protocolError("Connection failed: \(error)")
                 case .cancelled:
@@ -617,37 +660,51 @@ final class GSPClient: ObservableObject {
     }
 
     private func readHeader(generation: UInt64) {
-        connection?.receive(minimumIncompleteLength: Self.headerLen, maximumLength: Self.headerLen) { [weak self] content, _, isComplete, _ in
-            guard let self, self.connectionGeneration == generation else { return }
-            guard let data = content, data.count == Self.headerLen else {
-                if isComplete { self.protocolError("Connection closed") }
-                return
-            }
-            guard data[0] == Self.magic[0], data[1] == Self.magic[1] else {
-                self.lastError = "Invalid protocol header"
-                self.disconnect()
-                return
-            }
-            let type = data[2]
-            let payloadLen = data.withUnsafeBytes { UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 3, as: UInt32.self)) }
-            if payloadLen == 0 {
-                self.handleMessage(type: type, payload: Data())
-                self.readHeader(generation: generation)
-            } else {
-                self.readPayload(type: type, length: Int(payloadLen), generation: generation)
+        connection?.receive(minimumIncompleteLength: Self.headerLen, maximumLength: Self.headerLen) { [weak self] content, _, isComplete, error in
+            Task { @MainActor in
+                guard let self, self.connectionGeneration == generation else { return }
+                if let error {
+                    print("[boo-ios] readHeader error = \(error)")
+                    self.protocolError("Receive failed: \(error)")
+                    return
+                }
+                guard let data = content, data.count == Self.headerLen else {
+                    if isComplete { self.protocolError("Connection closed") }
+                    return
+                }
+                guard data[0] == Self.magic[0], data[1] == Self.magic[1] else {
+                    self.lastError = "Invalid protocol header"
+                    self.disconnect()
+                    return
+                }
+                let type = data[2]
+                let payloadLen = data.withUnsafeBytes { UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 3, as: UInt32.self)) }
+                if payloadLen == 0 {
+                    self.handleMessage(type: type, payload: Data())
+                    self.readHeader(generation: generation)
+                } else {
+                    self.readPayload(type: type, length: Int(payloadLen), generation: generation)
+                }
             }
         }
     }
 
     private func readPayload(type: UInt8, length: Int, generation: UInt64) {
-        connection?.receive(minimumIncompleteLength: length, maximumLength: length) { [weak self] content, _, isComplete, _ in
-            guard let self, self.connectionGeneration == generation else { return }
-            guard let data = content else {
-                if isComplete { self.protocolError("Connection closed") }
-                return
+        connection?.receive(minimumIncompleteLength: length, maximumLength: length) { [weak self] content, _, isComplete, error in
+            Task { @MainActor in
+                guard let self, self.connectionGeneration == generation else { return }
+                if let error {
+                    print("[boo-ios] readPayload error = \(error)")
+                    self.protocolError("Receive failed: \(error)")
+                    return
+                }
+                guard let data = content else {
+                    if isComplete { self.protocolError("Connection closed") }
+                    return
+                }
+                self.handleMessage(type: type, payload: data)
+                self.readHeader(generation: generation)
             }
-            self.handleMessage(type: type, payload: data)
-            self.readHeader(generation: generation)
         }
     }
 

@@ -30,10 +30,6 @@ pub(crate) const AUTH_CHALLENGE_WINDOW: Duration = Duration::from_secs(30);
 /// treats it as stale and tears the connection down.
 pub(crate) const DIRECT_CLIENT_HEARTBEAT_WINDOW: Duration = Duration::from_secs(20);
 
-/// Read timeout applied to the inbound TCP socket so the reader can poll the
-/// state mutex for disconnect reasons between reads.
-pub(crate) const REMOTE_READ_TIMEOUT: Duration = Duration::from_secs(1);
-
 pub(crate) struct ClientState {
     pub(crate) outbound: mpsc::Sender<OutboundMessage>,
     pub(crate) authenticated: bool,
