@@ -1,15 +1,42 @@
 import Foundation
 
 struct UITestLaunchConfiguration {
+    struct MockTailscaleDevice {
+        let name: String
+        let host: String
+        let address: String?
+        let os: String?
+        let online: Bool
+    }
+
     let resetStorage: Bool
     let nodeName: String?
     let host: String?
     let port: UInt16
     let authKey: String
     let autoConnect: Bool
+    let mockTailscaleDevices: [MockTailscaleDevice]
 
     private static func argumentValue(prefix: String, arguments: [String]) -> String? {
         arguments.first { $0.hasPrefix(prefix) }.map { String($0.dropFirst(prefix.count)) }
+    }
+
+    private static func parseMockTailscaleDevices(arguments: [String], env: [String: String]) -> [MockTailscaleDevice] {
+        let raw = argumentValue(prefix: "--boo-ui-test-tailscale-devices=", arguments: arguments)
+            ?? env["BOO_UI_TEST_TAILSCALE_DEVICES"]
+        guard let raw, !raw.isEmpty else { return [] }
+
+        return raw.split(separator: ";").compactMap { entry in
+            let parts = entry.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+            guard parts.count >= 5 else { return nil }
+            return MockTailscaleDevice(
+                name: parts[0],
+                host: parts[1],
+                address: parts[2].isEmpty ? nil : parts[2],
+                os: parts[3].isEmpty ? nil : parts[3],
+                online: parts[4] == "1"
+            )
+        }
     }
 
     static func current() -> UITestLaunchConfiguration? {
@@ -35,7 +62,8 @@ struct UITestLaunchConfiguration {
             host: host,
             port: port,
             authKey: authKey,
-            autoConnect: autoConnect
+            autoConnect: autoConnect,
+            mockTailscaleDevices: parseMockTailscaleDevices(arguments: arguments, env: env)
         )
     }
 }

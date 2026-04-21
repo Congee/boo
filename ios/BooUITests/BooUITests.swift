@@ -1,6 +1,24 @@
 import XCTest
 
 final class BooAppLaunchTests: BooUITestCase {
+    func testConnectScreenShowsMockTailscaleDevices() {
+        let mockDevices = "Mac mini|mini.tailnet.ts.net|100.64.0.10|macOS|1;Offline box|offline.ts.net|100.64.0.11|Linux|0"
+        let app = makeApp(autoConnect: false, resetStorage: true, mockTailscaleDevices: mockDevices)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        navigateToConnectScreen(app)
+
+        let tailscaleSection = app.staticTexts["TAILSCALE DEVICES"]
+        scrollUntilExists(tailscaleSection, in: app)
+
+        let macMini = app.buttons["tailscale-peer-Mac mini"]
+        let offlineBox = app.buttons["tailscale-peer-Offline box"]
+        scrollUntilExists(macMini, in: app)
+        scrollUntilExists(offlineBox, in: app)
+    }
+
     func testTailscaleTokenCanBeSavedAndCleared() {
         let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)

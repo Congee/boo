@@ -179,6 +179,23 @@ final class TailscalePeerBrowser: ObservableObject {
     func refresh(store: ConnectionStore) {
         refreshTask?.cancel()
 
+        if let config = UITestLaunchConfiguration.current(), !config.mockTailscaleDevices.isEmpty {
+            peers = config.mockTailscaleDevices.map {
+                TailscalePeer(
+                    id: "\($0.name)-\($0.host)",
+                    name: $0.name,
+                    host: $0.host,
+                    port: store.tailscaleDiscoverySettings.defaultPort,
+                    address: $0.address,
+                    os: $0.os,
+                    online: $0.online
+                )
+            }
+            lastError = nil
+            isLoading = false
+            return
+        }
+
         guard let token = store.tailscaleAPIToken(),
               !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {

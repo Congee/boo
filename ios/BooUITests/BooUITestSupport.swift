@@ -53,7 +53,7 @@ class BooUITestCase: XCTestCase {
         }
     }
 
-    func makeApp(autoConnect: Bool = false, resetStorage: Bool = true) -> XCUIApplication {
+    func makeApp(autoConnect: Bool = false, resetStorage: Bool = true, mockTailscaleDevices: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-ApplePersistenceIgnoreState", "YES", "--boo-ui-test-mode"]
         app.launchEnvironment["BOO_UI_TEST_MODE"] = "1"
@@ -69,6 +69,9 @@ class BooUITestCase: XCTestCase {
         }
         if autoConnect {
             app.launchArguments.append("--boo-ui-test-auto-connect")
+        }
+        if let mockTailscaleDevices {
+            app.launchArguments.append("--boo-ui-test-tailscale-devices=\(mockTailscaleDevices)")
         }
         app.launchEnvironment["BOO_UI_TEST_AUTO_CONNECT"] = autoConnect ? "1" : "0"
         return app
@@ -107,5 +110,27 @@ class BooUITestCase: XCTestCase {
             app.swipeUp()
         }
         XCTAssertTrue(element.isHittable, "Element was not hittable after scrolling", file: file, line: line)
+    }
+
+    func scrollUntilExists(_ element: XCUIElement, in app: XCUIApplication, maxSwipes: Int = 6, file: StaticString = #filePath, line: UInt = #line) {
+        for _ in 0..<maxSwipes {
+            if element.exists {
+                return
+            }
+            app.swipeUp()
+        }
+        XCTAssertTrue(element.exists, "Element did not appear after scrolling", file: file, line: line)
+    }
+
+    func navigateToConnectScreen(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        let title = app.staticTexts["screen-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5), file: file, line: line)
+        if title.label == "Active Sessions" {
+            let disconnectButton = app.buttons["sessions-disconnect-button"]
+            XCTAssertTrue(disconnectButton.waitForExistence(timeout: 5), file: file, line: line)
+            disconnectButton.tap()
+            XCTAssertTrue(title.waitForExistence(timeout: 5), file: file, line: line)
+        }
+        XCTAssertEqual(title.label, "Connect to Server", file: file, line: line)
     }
 }
