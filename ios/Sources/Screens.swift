@@ -295,6 +295,17 @@ struct ConnectScreen: View {
     @State private var serviceResolver: BonjourServiceResolver?
     @State private var resolvingBonjourService = false
 
+    private var displayedConnectError: String? {
+        guard let error = client.lastError else { return nil }
+        if error == "Connection timed out",
+           let host = monitor.lastHost,
+           let peer = tailscaleBrowser.peers.first(where: { $0.host == host || $0.address == host })
+        {
+            return "Timed out reaching \(peer.name) over Tailscale. Make sure this iPad is connected to Tailscale and Boo is listening on port \(peer.port)."
+        }
+        return error
+    }
+
     private var statusBanner: (message: String, color: Color)? {
         switch monitor.reconnectState {
         case .waiting(let attempt, _):
@@ -356,11 +367,17 @@ struct ConnectScreen: View {
                     VStack(alignment: .leading, spacing: KineticSpacing.sm) {
                         KineticSectionLabel(text: "Machine Address")
                         KineticInputField(placeholder: "hostname or ip:port", text: $host, accessibilityIdentifier: "connect-host-input")
-                        KineticSectionLabel(text: "Auth Key")
+                        Text("Connect directly to a LAN host, a Tailscale IP, or any other reachable Boo endpoint.")
+                            .font(KineticFont.caption)
+                            .foregroundStyle(KineticColor.onSurfaceVariant)
+                        KineticSectionLabel(text: "Shared Secret (Optional)")
                         KineticInputField(placeholder: "optional shared secret", text: $authKey, secure: true, accessibilityIdentifier: "connect-authkey-input")
+                        Text("Use this only if the remote Boo server is configured with an auth key. It is a shared secret used for challenge-response authentication before the session opens.")
+                            .font(KineticFont.caption)
+                            .foregroundStyle(KineticColor.onSurfaceVariant)
                     }
 
-                    if let error = client.lastError {
+                    if let error = displayedConnectError {
                         Text(error)
                             .font(KineticFont.caption)
                             .foregroundStyle(KineticColor.error)
@@ -432,6 +449,9 @@ struct ConnectScreen: View {
                     if !browser.daemons.isEmpty || browser.isSearching {
                         VStack(alignment: .leading, spacing: KineticSpacing.sm) {
                             KineticSectionLabel(text: "Discovered on Network")
+                            Text("Bonjour discovery on your current LAN or Wi-Fi network.")
+                                .font(KineticFont.caption)
+                                .foregroundStyle(KineticColor.onSurfaceVariant)
                             if browser.isSearching && browser.daemons.isEmpty {
                                 ProgressView()
                                     .tint(KineticColor.primary)
@@ -452,7 +472,7 @@ struct ConnectScreen: View {
 
                     VStack(alignment: .leading, spacing: KineticSpacing.sm) {
                         KineticSectionLabel(text: "Tailscale Devices")
-                        Text("Tailnet devices from the Tailscale API. Boo still needs to be running on the configured port.")
+                        Text("Devices in your tailnet from the Tailscale API. Boo still needs to be running on the configured port, and this iPad must be connected to Tailscale to reach them.")
                             .font(KineticFont.caption)
                             .foregroundStyle(KineticColor.onSurfaceVariant)
                         if !store.hasTailscaleAPIToken {
@@ -475,7 +495,7 @@ struct ConnectScreen: View {
                                 .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
                         }
                         ForEach(tailscaleBrowser.peers) { peer in
-                            let detail = [peer.os, peer.stateDescription, peer.address, "boo:\(peer.port)"].compactMap { $0 }.joined(separator: " · ")
+                            let detail = tailscalePeerDetail(peer)
                             KineticCardRow(
                                 icon: "network",
                                 title: peer.name,
@@ -485,6 +505,7 @@ struct ConnectScreen: View {
                                 },
                                 accessibilityIdentifier: "tailscale-peer-\(peer.name)"
                             )
+                            .opacity(peer.online ? 1.0 : 0.6)
                         }
                     }
 
@@ -572,6 +593,21 @@ struct ConnectScreen: View {
             return (String(raw[..<index]), port)
         }
         return (raw, 7337)
+    }
+
+    private func tailscalePeerDetail(_ peer: TailscalePeer) -> String {
+        var parts: [String] = []
+        if let os = peer.os { parts.append(os) }
+        parts.append(peer.stateDescription)
+        if let address = peer.address { parts.append(address) }
+        parts.append("boo:\(peer.port)")
+        if client.lastError == "Connection timed out",
+           let host = monitor.lastHost,
+           (peer.host == host || peer.address == host)
+        {
+            parts.append("unreachable from this iPad")
+        }
+        return parts.joined(separator: " · ")
     }
 }
 
