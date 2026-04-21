@@ -501,17 +501,6 @@ struct ConnectScreen: View {
                         }
                     }
 
-                    if !store.history.isEmpty {
-                        VStack(alignment: .leading, spacing: KineticSpacing.sm) {
-                            KineticSectionLabel(text: "Recent Connections")
-                            ForEach(store.history.prefix(5)) { entry in
-                                KineticCardRow(icon: "clock.arrow.circlepath", title: entry.nodeName, subtitle: "\(entry.host) · \(entry.relativeTimeString)") {
-                                    host = entry.host
-                                }
-                            }
-                        }
-                    }
-
                     Spacer().frame(height: 120)
                 }
                 .padding(.horizontal, KineticSpacing.md)
