@@ -316,7 +316,10 @@ struct ConnectScreen: View {
 
                     if store.hasTailscaleAPIToken || tailscaleBrowser.isLoading || !tailscaleBrowser.peers.isEmpty || tailscaleBrowser.lastError != nil {
                         VStack(alignment: .leading, spacing: KineticSpacing.sm) {
-                            KineticSectionLabel(text: "Tailscale Peers")
+                            KineticSectionLabel(text: "Tailscale Devices")
+                            Text("Tailnet devices from the Tailscale API. Boo still needs to be running on the configured port.")
+                                .font(KineticFont.caption)
+                                .foregroundStyle(KineticColor.onSurfaceVariant)
                             if tailscaleBrowser.isLoading {
                                 ProgressView()
                                     .tint(KineticColor.primary)
@@ -332,7 +335,7 @@ struct ConnectScreen: View {
                             }
                             ForEach(tailscaleBrowser.peers) { peer in
                                 let state = peer.online ? "online" : "offline"
-                                let detail = [peer.os, state, peer.address].compactMap { $0 }.joined(separator: " · ")
+                                let detail = [peer.os, state, peer.address, "boo:\(peer.port)"].compactMap { $0 }.joined(separator: " · ")
                                 KineticCardRow(
                                     icon: "network",
                                     title: peer.name,
@@ -1059,18 +1062,36 @@ struct SettingsScreen: View {
 
                     VStack(alignment: .leading, spacing: KineticSpacing.sm) {
                         KineticSectionLabel(text: "Tailscale Discovery")
-                        Text("List tailnet peers through the Tailscale API. This is separate from Bonjour and works across the tailnet, not just the local LAN.")
+                        Text("Use a Tailscale API access token to list tailnet devices. This does not reuse the Tailscale app session, and it does not verify that Boo is actually running on those devices.")
                             .font(KineticFont.caption)
                             .foregroundStyle(KineticColor.onSurfaceVariant)
+                        if store.hasTailscaleAPIToken {
+                            Text("API access token saved securely in the iOS Keychain.")
+                                .font(KineticFont.caption)
+                                .foregroundStyle(KineticColor.primary)
+                        }
                         KineticInputField(placeholder: "Default Boo Port", text: $tailscalePort, keyboardType: .numberPad, accessibilityIdentifier: "settings-tailscale-port-input")
-                        KineticInputField(placeholder: "Tailscale API Token", text: $tailscaleToken, secure: true, accessibilityIdentifier: "settings-tailscale-token-input")
+                        KineticInputField(placeholder: store.hasTailscaleAPIToken ? "Replace saved Tailscale API access token" : "Tailscale API Access Token", text: $tailscaleToken, secure: true, accessibilityIdentifier: "settings-tailscale-token-input")
                         Button("Save Tailscale Settings") {
                             let port = UInt16(tailscalePort) ?? 7337
-                            store.updateTailscaleDiscovery(defaultPort: port, apiToken: tailscaleToken)
+                            store.updateTailscaleDiscovery(defaultPort: port)
+                            if !tailscaleToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                store.replaceTailscaleAPIToken(tailscaleToken)
+                                tailscaleToken = ""
+                            }
                             tailscaleBrowser.refresh(store: store)
                         }
                         .buttonStyle(KineticPrimaryButtonStyle())
                         .accessibilityIdentifier("save-tailscale-settings-button")
+                        if store.hasTailscaleAPIToken {
+                            Button("Clear Saved Tailscale Token") {
+                                store.clearTailscaleAPIToken()
+                                tailscaleToken = ""
+                                tailscaleBrowser.refresh(store: store)
+                            }
+                            .buttonStyle(KineticSecondaryButtonStyle())
+                            .accessibilityIdentifier("clear-tailscale-token-button")
+                        }
                     }
 
                     if !store.savedNodes.isEmpty {
@@ -1102,7 +1123,7 @@ struct SettingsScreen: View {
         }
         .onAppear {
             tailscalePort = "\(store.tailscaleDiscoverySettings.defaultPort)"
-            tailscaleToken = store.tailscaleAPIToken() ?? ""
+            tailscaleToken = ""
         }
     }
 

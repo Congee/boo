@@ -18,7 +18,7 @@ The iOS app is a native SwiftUI client for Boo's native remote daemon.
 It handles:
 
 - Bonjour discovery
-- optional Tailscale peer discovery through the Tailscale API
+- optional Tailscale device discovery through the Tailscale API
 - auth
 - session listing and attach
 - reconnect/resume metadata
@@ -27,7 +27,9 @@ It handles:
 ## Important Current Behavior
 
 - browses `_boo._tcp`
-- can list tailnet peers when a Tailscale API token is configured in Settings
+- can list tailnet devices when a Tailscale API access token is configured in Settings
+- does not reuse the installed Tailscale app's authenticated session
+- stores the Tailscale API access token in the iOS Keychain rather than plain app settings
 - connects through resolved Network framework endpoints
 - supports saved nodes and connection history
 - supports attachment resume and trusted server identity pinning

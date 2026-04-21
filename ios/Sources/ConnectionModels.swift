@@ -218,15 +218,19 @@ final class ConnectionStore: ObservableObject {
         KeychainStringStore.load(service: tailscaleTokenService, account: tailscaleTokenAccount)
     }
 
-    func updateTailscaleDiscovery(defaultPort: UInt16, apiToken: String) {
+    func updateTailscaleDiscovery(defaultPort: UInt16) {
         tailscaleDiscoverySettings.defaultPort = defaultPort
         saveTailscaleSettings()
+    }
+
+    func replaceTailscaleAPIToken(_ apiToken: String) {
         let trimmed = apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            KeychainStringStore.delete(service: tailscaleTokenService, account: tailscaleTokenAccount)
-        } else {
-            KeychainStringStore.save(trimmed, service: tailscaleTokenService, account: tailscaleTokenAccount)
-        }
+        guard !trimmed.isEmpty else { return }
+        KeychainStringStore.save(trimmed, service: tailscaleTokenService, account: tailscaleTokenAccount)
+    }
+
+    func clearTailscaleAPIToken() {
+        KeychainStringStore.delete(service: tailscaleTokenService, account: tailscaleTokenAccount)
     }
 
     private func loadNodes() {
