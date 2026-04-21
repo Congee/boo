@@ -758,7 +758,7 @@ struct SessionsScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             KineticTopBar(
-                title: "Sessions",
+                title: "boo > Sessions",
                 subtitle: nil,
                 compact: true,
                 showBrand: false
@@ -883,9 +883,18 @@ struct TerminalSessionScreen: View {
         return "Session \(sessionId)"
     }
 
+    private var terminalHeaderTitle: String {
+        "boo > Sessions > \(sessionTitle)"
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            terminalBreadcrumbBar
+            KineticTopBar(
+                title: terminalHeaderTitle,
+                subtitle: nil,
+                compact: true,
+                showBrand: false
+            )
 
             if let serverIdentityWarning {
                 transportBanner(reason: serverIdentityWarning, color: KineticColor.error)
@@ -952,6 +961,13 @@ struct TerminalSessionScreen: View {
                 keyboardFocused = true
             }
         }
+        .onChange(of: isDisconnected) { _, disconnected in
+            if disconnected {
+                keyboardFocused = false
+                client.detach()
+                selectedTab = .sessions
+            }
+        }
         .onDisappear {
             keyboardFocused = false
         }
@@ -975,56 +991,6 @@ struct TerminalSessionScreen: View {
             return reason
         }
         return nil
-    }
-
-    private var terminalBreadcrumbBar: some View {
-        HStack(spacing: 6) {
-            HStack(spacing: 6) {
-                Image("boo-logo-mark")
-                    .resizable()
-                    .interpolation(.high)
-                    .frame(width: 18, height: 18)
-                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                    .accessibilityHidden(true)
-                Text("boo")
-                    .font(.system(size: 13, weight: .black, design: .monospaced))
-                    .foregroundStyle(KineticColor.primary)
-            }
-            .fixedSize()
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(KineticColor.onSurfaceVariant)
-                .accessibilityHidden(true)
-
-            Button {
-                client.detach()
-                selectedTab = .sessions
-            } label: {
-                Text("Sessions")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(KineticColor.secondary)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Sessions")
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(KineticColor.onSurfaceVariant)
-                .accessibilityHidden(true)
-
-            Text(sessionTitle)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(KineticColor.onSurface)
-                .lineLimit(1)
-                .truncationMode(.tail)
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, KineticSpacing.md)
-        .padding(.top, KineticSpacing.sm)
-        .padding(.bottom, 6)
-        .accessibilityIdentifier("terminal-breadcrumb-bar")
     }
 
     private func transportBanner(reason: String, color: Color) -> some View {

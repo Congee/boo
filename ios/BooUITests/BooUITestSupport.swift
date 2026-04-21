@@ -3,6 +3,18 @@ import Foundation
 import Darwin
 
 class BooUITestCase: XCTestCase {
+    func isConnectScreenTitle(_ label: String) -> Bool {
+        label == "Connect to Server"
+    }
+
+    func isSessionsScreenTitle(_ label: String) -> Bool {
+        label == "boo > Sessions" || label == "Active Sessions"
+    }
+
+    func isTerminalScreenTitle(_ label: String) -> Bool {
+        label.hasPrefix("boo > Sessions > ") || label == "Tab 1" || label.hasPrefix("Tab ")
+    }
+
     private var fileConfiguredHostAndPort: (host: String, port: UInt16)? {
         let url = URL(fileURLWithPath: "/tmp/boo-ios-ui-tests.env")
         guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return nil }
@@ -192,13 +204,13 @@ class BooUITestCase: XCTestCase {
     func navigateToConnectScreen(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
         let title = app.staticTexts["screen-title"]
         XCTAssertTrue(title.waitForExistence(timeout: 5), file: file, line: line)
-        if title.label == "Active Sessions" {
+        if isSessionsScreenTitle(title.label) {
             let disconnectButton = app.buttons["sessions-disconnect-button"]
             XCTAssertTrue(disconnectButton.waitForExistence(timeout: 5), file: file, line: line)
             disconnectButton.tap()
             XCTAssertTrue(title.waitForExistence(timeout: 5), file: file, line: line)
         }
-        XCTAssertEqual(title.label, "Connect to Server", file: file, line: line)
+        XCTAssertTrue(isConnectScreenTitle(title.label), "expected connect screen, got '\(title.label)'", file: file, line: line)
     }
 
     func waitForAnyTailscaleResult(in app: XCUIApplication, timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line) {
@@ -214,5 +226,62 @@ class BooUITestCase: XCTestCase {
         }
 
         XCTAssertTrue(peerButtons.count > 0 || errorTexts.count > 0, "Expected Tailscale devices or an API error to appear", file: file, line: line)
+    }
+
+    func reachSessionsScreen(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        let title = app.staticTexts["screen-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5), file: file, line: line)
+
+        if isConnectScreenTitle(title.label) {
+            connectToConfiguredBoo(from: app, file: file, line: line)
+            XCTAssertTrue(title.waitForExistence(timeout: 20), file: file, line: line)
+        }
+
+        if isTerminalScreenTitle(title.label) {
+            let disconnectButton = app.buttons["sessions-disconnect-button"]
+            if disconnectButton.waitForExistence(timeout: 2) {
+                disconnectButton.tap()
+                XCTAssertTrue(title.waitForExistence(timeout: 10), file: file, line: line)
+            }
+        }
+
+        if !isSessionsScreenTitle(title.label) {
+            let disconnectButton = app.buttons["sessions-disconnect-button"]
+            if disconnectButton.waitForExistence(timeout: 2) {
+                disconnectButton.tap()
+                XCTAssertTrue(title.waitForExistence(timeout: 10), file: file, line: line)
+            }
+        }
+
+        XCTAssertTrue(isSessionsScreenTitle(title.label), "expected sessions screen, got '\(title.label)'", file: file, line: line)
+    }
+
+    func openLiveTerminal(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        reachSessionsScreen(app, file: file, line: line)
+
+        let existingSessions = sessionRows(in: app)
+        if existingSessions.count > 0 {
+            existingSessions.element(boundBy: 0).tap()
+        } else {
+            let createButton = app.buttons["create-session-button"]
+            XCTAssertTrue(createButton.waitForExistence(timeout: 10), file: file, line: line)
+            createButton.tap()
+        }
+
+        let title = app.staticTexts["screen-title"]
+        let terminal = app.otherElements["terminal-screen"]
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10), file: file, line: line)
+        XCTAssertTrue(title.waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertTrue(isTerminalScreenTitle(title.label), "expected terminal screen, got '\(title.label)'", file: file, line: line)
+
+        let errorTexts = [
+            "unreachable",
+            "Connection lost",
+            "Remote heartbeat timed out",
+            "timed out"
+        ]
+        for text in errorTexts {
+            XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] %@", text)).firstMatch.exists, "terminal opened in bad state containing '\(text)'", file: file, line: line)
+        }
     }
 }

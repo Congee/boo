@@ -170,13 +170,13 @@ final class BooAppLaunchTests: BooUITestCase {
 
         let title = app.staticTexts["screen-title"]
         XCTAssertTrue(title.waitForExistence(timeout: 5))
-        if title.label == "Active Sessions" {
+        if isSessionsScreenTitle(title.label) {
             let disconnectButton = app.buttons["sessions-disconnect-button"]
             XCTAssertTrue(disconnectButton.waitForExistence(timeout: 5))
             disconnectButton.tap()
             XCTAssertTrue(title.waitForExistence(timeout: 5))
         }
-        XCTAssertEqual(title.label, "Connect to Server")
+        XCTAssertTrue(isConnectScreenTitle(title.label))
 
         let discoveredRows = discoveredDaemonRows(in: app)
         let firstRow = discoveredRows.firstMatch
@@ -209,7 +209,7 @@ final class BooAppLaunchTests: BooUITestCase {
 
         let deadline = Date().addingTimeInterval(12)
         while Date() < deadline {
-            if title.exists, title.label == "Active Sessions" {
+            if title.exists, isSessionsScreenTitle(title.label) {
                 return
             }
             let errorLabel = app.staticTexts["connect-error-label"]
@@ -242,7 +242,7 @@ final class BooAppLaunchTests: BooUITestCase {
 
         let deadline = Date().addingTimeInterval(15)
         while Date() < deadline {
-            if title.exists, title.label == "Active Sessions" {
+            if title.exists, isSessionsScreenTitle(title.label) {
                 return
             }
             let errorLabel = app.staticTexts["connect-error-label"]
@@ -258,44 +258,25 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTFail("tailscale device tap neither connected nor surfaced a timeout; status='\(banner)'")
     }
 
-    func testTapTab1FromActiveSessionsAndType() {
+    func testOpenLiveSessionAndType() {
         let app = makeApp(autoConnect: false, resetStorage: false)
         _ = installSystemAlertHandler(for: app)
         app.launch()
         app.tap()
 
-        let title = app.staticTexts["screen-title"]
-        XCTAssertTrue(title.waitForExistence(timeout: 5))
-
-        if title.label != "Active Sessions", title.label == "Tab 1" || title.label.hasPrefix("Tab ") {
-            let sessionsButton = app.buttons["Sessions"]
-            XCTAssertTrue(sessionsButton.waitForExistence(timeout: 5))
-            sessionsButton.tap()
-            XCTAssertTrue(title.waitForExistence(timeout: 5))
-        }
-
-        if title.label != "Active Sessions", let explicitHost {
-            _ = explicitHost
-            connectToConfiguredBoo(from: app)
-            XCTAssertTrue(title.waitForExistence(timeout: 20))
-        }
-
-        XCTAssertEqual(title.label, "Active Sessions")
-        let tab1 = app.buttons["session-row-1"]
-        XCTAssertTrue(tab1.waitForExistence(timeout: 10))
-        tab1.tap()
+        openLiveTerminal(app)
 
         let terminal = app.otherElements["terminal-screen"]
-        XCTAssertTrue(terminal.waitForExistence(timeout: 10))
         terminal.tap()
 
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
         let proxy = app.textViews["terminal-text-proxy"]
         XCTAssertTrue(proxy.waitForExistence(timeout: 5))
-        proxy.typeText("echo BOO_TAB1_TYPED\r")
+        proxy.tap()
+        proxy.typeText("echo BOO_UI_TYPED\r")
 
-        let outputExpectation = NSPredicate(format: "value CONTAINS %@", "BOO_TAB1_TYPED")
+        let outputExpectation = NSPredicate(format: "value CONTAINS %@", "BOO_UI_TYPED")
         expectation(for: outputExpectation, evaluatedWith: terminal)
         waitForExpectations(timeout: 10)
     }
@@ -309,7 +290,7 @@ final class BooAppLaunchTests: BooUITestCase {
         let title = app.staticTexts["screen-title"]
         XCTAssertTrue(title.waitForExistence(timeout: 5))
 
-        if title.label != "Active Sessions", let explicitHost {
+        if !isSessionsScreenTitle(title.label), let explicitHost {
             let hostField = app.textFields["connect-host-input"]
             XCTAssertTrue(hostField.waitForExistence(timeout: 5))
             hostField.tap()
@@ -325,7 +306,7 @@ final class BooAppLaunchTests: BooUITestCase {
         attachment.name = "active-sessions"
         attachment.lifetime = .keepAlways
         add(attachment)
-        XCTAssertEqual(title.label, "Active Sessions")
+        XCTAssertTrue(isSessionsScreenTitle(title.label))
     }
 
     func testConnectScreenElementsAppear() {
@@ -336,13 +317,13 @@ final class BooAppLaunchTests: BooUITestCase {
 
         let title = app.staticTexts["screen-title"]
         XCTAssertTrue(title.waitForExistence(timeout: 5))
-        if title.label == "Active Sessions" {
+        if isSessionsScreenTitle(title.label) {
             let disconnectButton = app.buttons["sessions-disconnect-button"]
             XCTAssertTrue(disconnectButton.waitForExistence(timeout: 5))
             disconnectButton.tap()
             XCTAssertTrue(title.waitForExistence(timeout: 5))
         }
-        XCTAssertEqual(title.label, "Connect to Server")
+        XCTAssertTrue(isConnectScreenTitle(title.label))
         XCTAssertTrue(app.textFields["connect-host-input"].exists)
         XCTAssertTrue(app.buttons["connect-button"].exists)
         XCTAssertTrue(app.buttons["settings-button"].exists)
@@ -357,30 +338,9 @@ final class BooAppLaunchTests: BooUITestCase {
         app.launch()
         app.tap()
 
-        let createButton = app.buttons["create-session-button"]
-        if !createButton.waitForExistence(timeout: 5) {
-            connectToConfiguredBoo(from: app)
-        }
-
-        if !createButton.waitForExistence(timeout: 20) {
-            let errorText = app.staticTexts["connect-error-label"].label
-            let statusText = app.staticTexts["connect-status-banner"].label
-            let attachment = XCTAttachment(screenshot: app.screenshot())
-            attachment.name = "connect-failure"
-            attachment.lifetime = .keepAlways
-            add(attachment)
-            XCTFail("connect did not reach sessions; status='\(statusText)' error='\(errorText)'")
-            return
-        }
-        let existingSessions = sessionRows(in: app)
-        if existingSessions.count > 0 {
-            existingSessions.element(boundBy: 0).tap()
-        } else {
-            createButton.tap()
-        }
+        openLiveTerminal(app)
 
         let terminal = app.otherElements["terminal-screen"]
-        XCTAssertTrue(terminal.waitForExistence(timeout: 10))
         let proxy = app.textViews["terminal-text-proxy"]
         XCTAssertTrue(proxy.waitForExistence(timeout: 5))
         proxy.tap()
