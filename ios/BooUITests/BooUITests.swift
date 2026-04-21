@@ -39,7 +39,7 @@ final class BooAppLaunchTests: BooUITestCase {
         portField.typeText(XCUIKeyboardKey.delete.rawValue + XCUIKeyboardKey.delete.rawValue + XCUIKeyboardKey.delete.rawValue + XCUIKeyboardKey.delete.rawValue)
         portField.typeText("7337")
 
-        let tokenField = app.secureTextFields["settings-tailscale-token-input"]
+        let tokenField = app.textFields["settings-tailscale-token-input"]
         XCTAssertTrue(tokenField.waitForExistence(timeout: 5))
         scrollUntilHittable(tokenField, in: app)
         tokenField.tap()

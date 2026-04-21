@@ -1071,7 +1071,7 @@ struct SettingsScreen: View {
                                 .foregroundStyle(KineticColor.primary)
                         }
                         KineticInputField(placeholder: "Default Boo Port", text: $tailscalePort, keyboardType: .numberPad, accessibilityIdentifier: "settings-tailscale-port-input")
-                        KineticInputField(placeholder: store.hasTailscaleAPIToken ? "Replace saved Tailscale API access token" : "Tailscale API Access Token", text: $tailscaleToken, secure: true, accessibilityIdentifier: "settings-tailscale-token-input")
+                        KineticInputField(placeholder: store.hasTailscaleAPIToken ? "Replace saved Tailscale API access token" : "Tailscale API Access Token", text: $tailscaleToken, accessibilityIdentifier: "settings-tailscale-token-input")
                         Button("Save Tailscale Settings") {
                             let port = UInt16(tailscalePort) ?? 7337
                             store.updateTailscaleDiscovery(defaultPort: port)
