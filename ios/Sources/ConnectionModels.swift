@@ -58,7 +58,14 @@ struct TailscaleDiscoverySettings: Codable, Equatable {
 }
 
 private enum KeychainStringStore {
-    static func load(service: String, account: String) -> String? {
+    private static func describe(_ status: OSStatus) -> String {
+        if let message = SecCopyErrorMessageString(status, nil) as String? {
+            return message
+        }
+        return "OSStatus \(status)"
+    }
+
+    static func load(service: String, account: String) throws -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -68,16 +75,29 @@ private enum KeychainStringStore {
         ]
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess,
-              let data = item as? Data,
+        if status == errSecItemNotFound {
+            return nil
+        }
+        guard status == errSecSuccess else {
+            throw NSError(
+                domain: "BooKeychain",
+                code: Int(status),
+                userInfo: [NSLocalizedDescriptionKey: "Failed to read Tailscale token from Keychain: \(describe(status))"]
+            )
+        }
+        guard let data = item as? Data,
               let string = String(data: data, encoding: .utf8)
         else {
-            return nil
+            throw NSError(
+                domain: "BooKeychain",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to decode Tailscale token from Keychain"]
+            )
         }
         return string
     }
 
-    static func save(_ value: String, service: String, account: String) {
+    static func save(_ value: String, service: String, account: String) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -86,22 +106,46 @@ private enum KeychainStringStore {
         let data = Data(value.utf8)
         let attributes: [String: Any] = [
             kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
         let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
         if updateStatus == errSecItemNotFound {
             var insert = query
             insert[kSecValueData as String] = data
-            SecItemAdd(insert as CFDictionary, nil)
+            insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            let addStatus = SecItemAdd(insert as CFDictionary, nil)
+            guard addStatus == errSecSuccess else {
+                throw NSError(
+                    domain: "BooKeychain",
+                    code: Int(addStatus),
+                    userInfo: [NSLocalizedDescriptionKey: "Failed to save Tailscale token to Keychain: \(describe(addStatus))"]
+                )
+            }
+            return
+        }
+        guard updateStatus == errSecSuccess else {
+            throw NSError(
+                domain: "BooKeychain",
+                code: Int(updateStatus),
+                userInfo: [NSLocalizedDescriptionKey: "Failed to update Tailscale token in Keychain: \(describe(updateStatus))"]
+            )
         }
     }
 
-    static func delete(service: String, account: String) {
+    static func delete(service: String, account: String) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw NSError(
+                domain: "BooKeychain",
+                code: Int(status),
+                userInfo: [NSLocalizedDescriptionKey: "Failed to clear Tailscale token from Keychain: \(describe(status))"]
+            )
+        }
     }
 }
 
@@ -110,6 +154,7 @@ final class ConnectionStore: ObservableObject {
     @Published var savedNodes: [SavedNode] = []
     @Published var history: [ConnectionHistoryEntry] = []
     @Published var tailscaleDiscoverySettings = TailscaleDiscoverySettings()
+    @Published var tailscaleTokenStatusMessage: String?
 
     private let nodesKey = "boo.remote.savedNodes"
     private let historyKey = "boo.remote.connectionHistory"
@@ -215,7 +260,19 @@ final class ConnectionStore: ObservableObject {
     }
 
     func tailscaleAPIToken() -> String? {
-        KeychainStringStore.load(service: tailscaleTokenService, account: tailscaleTokenAccount)
+        do {
+            let token = try KeychainStringStore.load(service: tailscaleTokenService, account: tailscaleTokenAccount)
+            if token != nil, tailscaleTokenStatusMessage == "Tailscale token saved securely in Keychain." {
+                return token
+            }
+            if token == nil {
+                tailscaleTokenStatusMessage = nil
+            }
+            return token
+        } catch {
+            tailscaleTokenStatusMessage = error.localizedDescription
+            return nil
+        }
     }
 
     func updateTailscaleDiscovery(defaultPort: UInt16) {
@@ -223,14 +280,27 @@ final class ConnectionStore: ObservableObject {
         saveTailscaleSettings()
     }
 
-    func replaceTailscaleAPIToken(_ apiToken: String) {
+    @discardableResult
+    func replaceTailscaleAPIToken(_ apiToken: String) -> Bool {
         let trimmed = apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        KeychainStringStore.save(trimmed, service: tailscaleTokenService, account: tailscaleTokenAccount)
+        guard !trimmed.isEmpty else { return false }
+        do {
+            try KeychainStringStore.save(trimmed, service: tailscaleTokenService, account: tailscaleTokenAccount)
+            tailscaleTokenStatusMessage = "Tailscale token saved securely in Keychain."
+            return true
+        } catch {
+            tailscaleTokenStatusMessage = error.localizedDescription
+            return false
+        }
     }
 
     func clearTailscaleAPIToken() {
-        KeychainStringStore.delete(service: tailscaleTokenService, account: tailscaleTokenAccount)
+        do {
+            try KeychainStringStore.delete(service: tailscaleTokenService, account: tailscaleTokenAccount)
+            tailscaleTokenStatusMessage = nil
+        } catch {
+            tailscaleTokenStatusMessage = error.localizedDescription
+        }
     }
 
     private func loadNodes() {
@@ -297,7 +367,7 @@ final class ConnectionStore: ObservableObject {
             UserDefaults.standard.removeObject(forKey: trustedIdentitiesKey)
             UserDefaults.standard.removeObject(forKey: resumeAttachmentsKey)
             UserDefaults.standard.removeObject(forKey: tailscaleSettingsKey)
-            KeychainStringStore.delete(service: tailscaleTokenService, account: tailscaleTokenAccount)
+            try? KeychainStringStore.delete(service: tailscaleTokenService, account: tailscaleTokenAccount)
         }
 
         if let tailscalePort = config.tailscalePort {
@@ -308,7 +378,7 @@ final class ConnectionStore: ObservableObject {
         if let tailscaleToken = config.tailscaleToken?.trimmingCharacters(in: .whitespacesAndNewlines),
            !tailscaleToken.isEmpty
         {
-            KeychainStringStore.save(tailscaleToken, service: tailscaleTokenService, account: tailscaleTokenAccount)
+            try? KeychainStringStore.save(tailscaleToken, service: tailscaleTokenService, account: tailscaleTokenAccount)
         }
 
         guard let host = config.host else { return }

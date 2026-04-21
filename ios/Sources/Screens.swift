@@ -1088,10 +1088,16 @@ struct SettingsScreen: View {
                         Text("Use a Tailscale API access token to list tailnet devices. This does not reuse the Tailscale app session, and it does not verify that Boo is actually running on those devices.")
                             .font(KineticFont.caption)
                             .foregroundStyle(KineticColor.onSurfaceVariant)
-                        if store.hasTailscaleAPIToken {
+                        if let statusMessage = store.tailscaleTokenStatusMessage {
+                            Text(statusMessage)
+                                .font(KineticFont.caption)
+                                .foregroundStyle(statusMessage.contains("saved securely") ? KineticColor.primary : KineticColor.error)
+                                .accessibilityIdentifier("settings-tailscale-token-status")
+                        } else if store.hasTailscaleAPIToken {
                             Text("API access token saved securely in the iOS Keychain.")
                                 .font(KineticFont.caption)
                                 .foregroundStyle(KineticColor.primary)
+                                .accessibilityIdentifier("settings-tailscale-token-status")
                         }
                         KineticInputField(placeholder: "Default Boo Port", text: $tailscalePort, keyboardType: .numberPad, accessibilityIdentifier: "settings-tailscale-port-input")
                         KineticInputField(placeholder: store.hasTailscaleAPIToken ? "Replace saved Tailscale API access token" : "Tailscale API Access Token", text: $tailscaleToken, accessibilityIdentifier: "settings-tailscale-token-input")
@@ -1099,8 +1105,9 @@ struct SettingsScreen: View {
                             let port = UInt16(tailscalePort) ?? 7337
                             store.updateTailscaleDiscovery(defaultPort: port)
                             if !tailscaleToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                store.replaceTailscaleAPIToken(tailscaleToken)
-                                tailscaleToken = ""
+                                if store.replaceTailscaleAPIToken(tailscaleToken) {
+                                    tailscaleToken = ""
+                                }
                             }
                             tailscaleBrowser.refresh(store: store)
                         }
