@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 pub(crate) fn send_state_to_client(
     state: &Arc<Mutex<State>>,
     client_id: u64,
-    session_id: u32,
+    tab_id: u32,
     next_state: Arc<RemoteFullState>,
 ) {
     let _scope = crate::profiling::scope("server.stream.encode_state", crate::profiling::Kind::Cpu);
@@ -17,7 +17,7 @@ pub(crate) fn send_state_to_client(
         let Some(client) = guard.clients.get(&client_id) else {
             return;
         };
-        if client.attached_session != Some(session_id) {
+        if client.attached_session != Some(tab_id) {
             return;
         }
         (
@@ -46,7 +46,7 @@ pub(crate) fn send_state_to_client(
         let Some(client) = guard.clients.get_mut(&client_id) else {
             return;
         };
-        if client.attached_session != Some(session_id) {
+        if client.attached_session != Some(tab_id) {
             false
         } else {
             client.last_state = Some(Arc::clone(&next_state));
@@ -74,7 +74,7 @@ pub(crate) fn send_state_to_client(
 pub(crate) fn send_pane_state_to_client(
     state: &Arc<Mutex<State>>,
     client_id: u64,
-    session_id: u32,
+    tab_id: u32,
     pane_id: u64,
     next_state: Arc<RemoteFullState>,
 ) {
@@ -83,7 +83,7 @@ pub(crate) fn send_pane_state_to_client(
         let Some(client) = guard.clients.get(&client_id) else {
             return;
         };
-        if client.attached_session != Some(session_id) {
+        if client.attached_session != Some(tab_id) {
             return;
         }
         (client.outbound.clone(), client.pane_states.get(&pane_id).cloned())
@@ -104,7 +104,7 @@ pub(crate) fn send_pane_state_to_client(
         let Some(client) = guard.clients.get_mut(&client_id) else {
             return;
         };
-        if client.attached_session != Some(session_id) {
+        if client.attached_session != Some(tab_id) {
             false
         } else {
             client.pane_states.insert(pane_id, Arc::clone(&next_state));

@@ -119,7 +119,7 @@ struct ClientUiState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ClientTabState {
     index: usize,
-    session_id: Option<u32>,
+    tab_id: Option<u32>,
     active: bool,
     title: String,
     pane_count: usize,
@@ -135,7 +135,7 @@ pub struct ClientApp {
     visible_panes: Vec<control::UiPaneSnapshot>,
     mouse_selection: control::UiMouseSelectionSnapshot,
     mode: ClientMode,
-    active_session_id: Option<u32>,
+    active_remote_tab_id: Option<u32>,
     pane_snapshots: HashMap<u64, Arc<vt_backend_core::TerminalSnapshot>>,
     focused_pane_id: u64,
     last_error: Option<String>,
@@ -234,7 +234,7 @@ impl ClientApp {
     }
 
     fn apply_ui_runtime_state(&mut self, state: control::UiRuntimeState) {
-        if self.active_session_id.is_none() && !matches!(self.mode, ClientMode::Attached) {
+        if self.active_remote_tab_id.is_none() && !matches!(self.mode, ClientMode::Attached) {
             return;
         }
         self.ui_state = ClientUiState::from_runtime_state(&state);
@@ -313,7 +313,7 @@ impl ClientApp {
             visible_panes: Vec::new(),
             mouse_selection: control::UiMouseSelectionSnapshot::default(),
             mode: ClientMode::Bootstrapping,
-            active_session_id: None,
+            active_remote_tab_id: None,
             pane_snapshots,
             focused_pane_id,
             last_error: None,
@@ -433,7 +433,7 @@ impl ClientApp {
             build_status_right(
                 &self.ui_state,
                 self.mode,
-                self.active_session_id,
+                self.active_remote_tab_id,
                 self.last_error.as_deref(),
                 self.remote_host.as_deref(),
                 self.remote_debug_summary.as_deref(),
@@ -976,22 +976,22 @@ impl ClientApp {
 
     fn handle_stream_event(&mut self, event: LocalStreamEvent) {
         match event {
-            LocalStreamEvent::SessionList(sessions) => {
-                let live_sessions: Vec<_> = sessions
+            LocalStreamEvent::SessionList(tabs) => {
+                let live_tabs: Vec<_> = tabs
                     .iter()
-                    .filter(|session| !session.child_exited)
+                    .filter(|tab| !tab.child_exited)
                     .collect();
-                self.apply_remote_sessions(&sessions);
-                if let Some(session_id) =
-                    session_list_attach_target(self.mode, self.active_session_id, &live_sessions)
+                self.apply_remote_tabs(&tabs);
+                if let Some(tab_id) =
+                    tab_list_attach_target(self.mode, self.active_remote_tab_id, &live_tabs)
                 {
                     self.should_exit = false;
-                    self.send_stream_command(StreamCommand::Attach(session_id));
+                    self.send_stream_command(StreamCommand::Attach(tab_id));
                 } else if matches!(self.mode, ClientMode::Attached)
                     && self
-                        .active_session_id
-                        .map(|session_id| {
-                            live_sessions.iter().any(|session| session.id == session_id)
+                        .active_remote_tab_id
+                        .map(|tab_id| {
+                            live_tabs.iter().any(|tab| tab.id == tab_id)
                         })
                         .unwrap_or(false)
                 {
@@ -1006,8 +1006,8 @@ impl ClientApp {
                 }
             }
             LocalStreamEvent::Attached(session_id) => {
-                self.active_session_id = Some(session_id);
-                self.ui_state.mark_active_session(Some(session_id));
+                self.active_remote_tab_id = Some(session_id);
+                self.ui_state.mark_active_tab(Some(session_id));
             }
             LocalStreamEvent::UiRuntimeState(state) => {
                 self.apply_ui_runtime_state(state);
@@ -1040,13 +1040,13 @@ impl ClientApp {
             }
             LocalStreamEvent::Detached => {
                 self.mode = ClientMode::Recovering;
-                self.active_session_id = None;
+                self.active_remote_tab_id = None;
                 self.pending_input_latencies.clear();
                 self.send_stream_command(StreamCommand::ListSessions);
             }
             LocalStreamEvent::SessionExited(session_id) => {
-                if self.active_session_id == Some(session_id) {
-                    self.active_session_id = None;
+                if self.active_remote_tab_id == Some(session_id) {
+                    self.active_remote_tab_id = None;
                 }
                 self.mode = ClientMode::Recovering;
                 self.should_exit = false;
@@ -1300,8 +1300,8 @@ impl ClientApp {
         }
     }
 
-    fn apply_remote_sessions(&mut self, sessions: &[remote::RemoteSessionInfo]) {
-        self.ui_state = ClientUiState::from_remote_sessions(sessions, self.active_session_id);
+    fn apply_remote_tabs(&mut self, tabs: &[remote::RemoteTabInfo]) {
+        self.ui_state = ClientUiState::from_remote_tabs(tabs, self.active_remote_tab_id);
     }
 
     fn update_gui_test_status(&self) {
@@ -1454,28 +1454,28 @@ fn note_gui_test_input_method_commit() {
     gui_test_input_method_commit_seq().fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
-fn session_list_attach_target(
+fn tab_list_attach_target(
     mode: ClientMode,
-    active_session_id: Option<u32>,
-    live_sessions: &[&remote::RemoteSessionInfo],
+    active_remote_tab_id: Option<u32>,
+    live_tabs: &[&remote::RemoteTabInfo],
 ) -> Option<u32> {
     if matches!(mode, ClientMode::Attached)
-        && active_session_id
-            .map(|session_id| live_sessions.iter().any(|session| session.id == session_id))
+        && active_remote_tab_id
+            .map(|tab_id| live_tabs.iter().any(|tab| tab.id == tab_id))
             .unwrap_or(false)
     {
         return None;
     }
 
-    active_session_id
-        .and_then(|session_id| {
-            live_sessions
+    active_remote_tab_id
+        .and_then(|tab_id| {
+            live_tabs
                 .iter()
                 .copied()
-                .find(|session| session.id == session_id)
+                .find(|tab| tab.id == tab_id)
         })
-        .or_else(|| live_sessions.first().copied())
-        .map(|session| session.id)
+        .or_else(|| live_tabs.first().copied())
+        .map(|tab| tab.id)
 }
 
 impl ClientUiState {
@@ -1486,7 +1486,7 @@ impl ClientUiState {
                 .iter()
                 .map(|tab| ClientTabState {
                     index: tab.index,
-                    session_id: None,
+                    tab_id: None,
                     active: tab.active,
                     title: tab.title.clone(),
                     pane_count: tab.pane_count,
@@ -1499,38 +1499,41 @@ impl ClientUiState {
         }
     }
 
-    fn from_remote_sessions(
-        sessions: &[remote::RemoteSessionInfo],
-        active_session_id: Option<u32>,
+    fn from_remote_tabs(
+        tabs: &[remote::RemoteTabInfo],
+        active_remote_tab_id: Option<u32>,
     ) -> Self {
-        let active_index = active_session_id
-            .and_then(|session_id| sessions.iter().position(|session| session.id == session_id))
-            .or_else(|| sessions.iter().position(|session| session.attached))
+        let remote_tabs = tabs;
+        let active_index = active_remote_tab_id
+            .and_then(|tab_id| remote_tabs.iter().position(|tab| tab.id == tab_id))
+            .or_else(|| remote_tabs.iter().position(|tab| tab.attached))
             .unwrap_or(0);
-        let tabs = sessions
+        let tabs = remote_tabs
             .iter()
             .enumerate()
-            .map(|(index, session)| ClientTabState {
+            .map(|(index, tab)| ClientTabState {
                 index,
-                session_id: Some(session.id),
+                tab_id: Some(tab.id),
                 active: index == active_index,
-                title: if session.title.is_empty() {
-                    session.name.clone()
+                title: if tab.title.is_empty() {
+                    tab.name.clone()
                 } else {
-                    session.title.clone()
+                    tab.title.clone()
                 },
                 pane_count: 1,
             })
             .collect::<Vec<_>>();
-        let pwd = sessions
+        let pwd = remote_tabs
             .get(active_index)
-            .map(|session| session.pwd.clone())
+            .map(|tab| tab.pwd.clone())
             .unwrap_or_default();
+        let pane_count = usize::from(!tabs.is_empty());
+        let active_tab = active_index.min(tabs.len().saturating_sub(1));
         Self {
             tabs,
-            active_tab: active_index.min(sessions.len().saturating_sub(1)),
+            active_tab,
             pwd,
-            pane_count: usize::from(!sessions.is_empty()),
+            pane_count,
             status_bar: crate::status_components::UiStatusBarSnapshot::default(),
         }
     }
@@ -1542,7 +1545,7 @@ impl ClientUiState {
                 .iter()
                 .map(|tab| ClientTabState {
                     index: tab.index,
-                    session_id: None,
+                    tab_id: None,
                     active: tab.active,
                     title: tab.title.clone(),
                     pane_count: tab.pane_count,
@@ -1555,14 +1558,14 @@ impl ClientUiState {
         }
     }
 
-    fn mark_active_session(&mut self, session_id: Option<u32>) {
-        let Some(session_id) = session_id else {
+    fn mark_active_tab(&mut self, tab_id: Option<u32>) {
+        let Some(tab_id) = tab_id else {
             return;
         };
         if let Some(index) = self
             .tabs
             .iter()
-            .position(|tab| tab.session_id == Some(session_id))
+            .position(|tab| tab.tab_id == Some(tab_id))
         {
             self.active_tab = index;
         }
@@ -2988,7 +2991,7 @@ fn remote_cell_to_snapshot_default(cell: &remote::RemoteCell) -> vt_backend_core
 fn build_status_right(
     ui_state: &ClientUiState,
     mode: ClientMode,
-    active_session_id: Option<u32>,
+    active_remote_tab_id: Option<u32>,
     last_error: Option<&str>,
     remote_host: Option<&str>,
     remote_debug_summary: Option<&str>,
@@ -3006,8 +3009,8 @@ fn build_status_right(
                 right_parts.push(format!("{remote_prefix}: bootstrapping"))
             }
             ClientMode::Recovering => {
-                if let Some(session_id) = active_session_id {
-                    right_parts.push(format!("{remote_prefix}: recovering session {session_id}"))
+                if let Some(session_id) = active_remote_tab_id {
+                    right_parts.push(format!("{remote_prefix}: recovering tab {session_id}"))
                 } else {
                     right_parts.push(format!("{remote_prefix}: recovering"))
                 }
@@ -3303,7 +3306,7 @@ mod tests {
     #[test]
     fn apply_ui_runtime_state_tracks_mouse_selection() {
         let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
-        app.active_session_id = Some(7);
+        app.active_remote_tab_id = Some(7);
         app.mode = ClientMode::Attached;
         app.apply_ui_runtime_state(control::UiRuntimeState {
             active_tab: 0,
@@ -3909,7 +3912,7 @@ mod tests {
 
     #[test]
     fn attached_mode_session_list_does_not_force_reattach_to_existing_active_session() {
-        let sessions = vec![
+        let tabs = vec![
             remote::RemoteSessionInfo {
                 id: 7,
                 name: "one".to_string(),
@@ -3927,16 +3930,16 @@ mod tests {
                 child_exited: false,
             },
         ];
-        let live = sessions.iter().collect::<Vec<_>>();
+        let live = tabs.iter().collect::<Vec<_>>();
         assert_eq!(
-            session_list_attach_target(ClientMode::Attached, Some(7), &live),
+            tab_list_attach_target(ClientMode::Attached, Some(7), &live),
             None
         );
     }
 
     #[test]
     fn recovering_mode_session_list_reattaches_to_existing_active_session() {
-        let sessions = vec![
+        let tabs = vec![
             remote::RemoteSessionInfo {
                 id: 7,
                 name: "one".to_string(),
@@ -3954,9 +3957,9 @@ mod tests {
                 child_exited: false,
             },
         ];
-        let live = sessions.iter().collect::<Vec<_>>();
+        let live = tabs.iter().collect::<Vec<_>>();
         assert_eq!(
-            session_list_attach_target(ClientMode::Recovering, Some(7), &live),
+            tab_list_attach_target(ClientMode::Recovering, Some(7), &live),
             Some(7)
         );
     }
@@ -3967,14 +3970,14 @@ mod tests {
         let (tx, _rx) = std::sync::mpsc::channel();
         app.stream_tx = Some(tx);
         app.mode = ClientMode::Attached;
-        app.active_session_id = Some(7);
+        app.active_remote_tab_id = Some(7);
         app.should_exit = true;
         app.last_error = Some("stale".to_string());
 
         app.handle_stream_event(LocalStreamEvent::SessionExited(7));
 
         assert!(matches!(app.mode, ClientMode::Recovering));
-        assert_eq!(app.active_session_id, None);
+        assert_eq!(app.active_remote_tab_id, None);
         assert!(!app.should_exit);
         assert_eq!(app.last_error, None);
     }
@@ -3983,13 +3986,13 @@ mod tests {
     fn disconnect_enters_recovering_without_dropping_active_session() {
         let (mut app, _) = ClientApp::new("/tmp/test.sock".to_string());
         app.mode = ClientMode::Attached;
-        app.active_session_id = Some(7);
+        app.active_remote_tab_id = Some(7);
         app.should_exit = true;
 
         app.handle_stream_event(LocalStreamEvent::Disconnected);
 
         assert!(matches!(app.mode, ClientMode::Recovering));
-        assert_eq!(app.active_session_id, Some(7));
+        assert_eq!(app.active_remote_tab_id, Some(7));
         assert!(!app.should_exit);
         assert_eq!(
             app.last_error.as_deref(),
@@ -4042,7 +4045,7 @@ mod tests {
         };
         assert_eq!(
             build_status_right(&ui_state, ClientMode::Recovering, Some(7), None, None, None),
-            "remote: recovering session 7  /tmp"
+            "remote: recovering tab 7  /tmp"
         );
     }
 
