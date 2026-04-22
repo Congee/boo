@@ -31,8 +31,6 @@ pub struct TabIdentityInfo {
     pub title: String,
 }
 
-pub type TabSessionInfo = TabIdentityInfo;
-
 impl TabManager {
     pub fn new() -> Self {
         Self {
@@ -361,11 +359,6 @@ impl TabManager {
                 title: self.display_title(index, None),
             })
             .collect()
-    }
-
-    #[allow(dead_code)]
-    pub fn tab_session_info(&self) -> Vec<TabSessionInfo> {
-        self.tab_identity_info()
     }
 
     pub fn tab_id_for_index(&self, index: usize) -> Option<u32> {

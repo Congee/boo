@@ -273,20 +273,16 @@ When runtime-view tests are green:
 These are the main seams where the old session-shaped transport still leaks
 through and needs replacement:
 
-- wire opcodes
-  - `ListSessions`
-  - `SessionList`
-  - `SessionCreated`
-  - `SessionExited`
+- wire compatibility surface
+  - legacy numeric opcodes for:
+    - list tabs
+    - tab list
+    - tab created
+    - tab exited
+  - serde decode aliases like `session_id` and `attached_session`
 - client bootstrap
   - iOS `listSessions()` and attach heuristics
   - local GUI remote stream handling that still starts from a tab/session list
-- error text
-  - `UnknownSession`
-  - `FailedCreateSession`
-  - `CannotDestroyLastSession`
-- direct-client helpers
-  - compatibility wrappers named `*_session*`
 
 The next protocol step is to preserve wire compatibility while shifting
 internals and client bootstrap to:
