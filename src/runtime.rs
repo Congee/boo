@@ -557,9 +557,9 @@ impl BooApp {
         for pane_id in poll.exited_panes {
             self.status_components
                 .clear(&crate::status_components::osc_source_for_pane(pane_id), None);
-            if let Some(session_id) = self.server.tabs.tab_id_for_pane_id(pane_id) {
+            if let Some(tab_id) = self.server.tabs.tab_id_for_pane_id(pane_id) {
                 for server in self.remote_servers() {
-                    server.send_tab_exited(session_id);
+                    server.send_tab_exited(tab_id);
                 }
             }
             self.close_pane_by_id(pane_id);
