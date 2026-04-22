@@ -565,7 +565,7 @@ impl BooApp {
             self.close_pane_by_id(pane_id);
             remote_dirty = true;
         }
-        if remote_dirty && self.has_attached_stream_sessions() {
+        if remote_dirty && self.has_runtime_stream_subscribers() {
             self.mark_active_remote_tab_dirty();
         }
     }
