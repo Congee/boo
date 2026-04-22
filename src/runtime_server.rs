@@ -327,15 +327,15 @@ impl BooApp {
                                 .server
                                 .tabs
                                 .active_tab_id()
-                                .is_some_and(|session_id| self.pane_for_tab(session_id).is_some())
+                                .is_some_and(|tab_id| self.pane_for_tab(tab_id).is_some())
                     });
                 if should_bootstrap_local
-                    && let Some(session_id) = self.server.tabs.active_tab_id()
+                    && let Some(tab_id) = self.server.tabs.active_tab_id()
                 {
                     if let Some(server) = self.server.local_gui_server.as_ref() {
-                        self.bootstrap_local_stream_client(server, client_id, session_id);
+                        self.bootstrap_local_stream_client(server, client_id, tab_id);
                     }
-                    self.publish_remote_tab(session_id);
+                    self.publish_remote_tab(tab_id);
                 }
                 let tabs = self.current_remote_tabs();
                 if let Some(server) = self
@@ -358,15 +358,15 @@ impl BooApp {
                                 .server
                                 .tabs
                                 .active_tab_id()
-                                .is_some_and(|session_id| self.pane_for_tab(session_id).is_some())
+                                .is_some_and(|tab_id| self.pane_for_tab(tab_id).is_some())
                     });
                 if should_bootstrap_local
-                    && let Some(session_id) = self.server.tabs.active_tab_id()
+                    && let Some(tab_id) = self.server.tabs.active_tab_id()
                 {
                     if let Some(server) = self.server.local_gui_server.as_ref() {
-                        self.bootstrap_local_stream_client(server, client_id, session_id);
+                        self.bootstrap_local_stream_client(server, client_id, tab_id);
                     }
-                    self.publish_remote_tab(session_id);
+                    self.publish_remote_tab(tab_id);
                 }
                 let tabs = self.current_remote_tabs();
                 if let Some(server) = self
@@ -441,7 +441,7 @@ impl BooApp {
                     self.server.tabs.len()
                 );
                 let created = self.new_tab();
-                let Some(session_id) = created else {
+                let Some(tab_id) = created else {
                     log::warn!(
                         "remote_create_failed client_id={client_id} cols={cols} rows={rows} tabs_after={}",
                         self.server.tabs.len()
@@ -459,13 +459,13 @@ impl BooApp {
                     }
                     return;
                 };
-                if let Some(pane) = self.pane_for_tab(session_id) {
+                if let Some(pane) = self.pane_for_tab(tab_id) {
                     let (width, height) = self.tab_size_pixels(cols, rows);
                     self.resize_pane_backend(pane, self.scale_factor(), width, height);
                 }
                 self.invalidate_remote_tabs_cache();
                 log::info!(
-                    "remote_create_succeeded client_id={client_id} tab_id={session_id} tabs_after={}",
+                    "remote_create_succeeded client_id={client_id} tab_id={tab_id} tabs_after={}",
                     self.server.tabs.len()
                 );
                 if let Some(server) = self
@@ -473,9 +473,9 @@ impl BooApp {
                     .or(self.server.local_gui_server.as_ref())
                     .or(self.server.remote_server.as_ref())
                 {
-                    server.send_tab_created(client_id, session_id);
-                    server.send_tab_attached(client_id, session_id, None);
-                    self.publish_remote_tab(session_id);
+                    server.send_tab_created(client_id, tab_id);
+                    server.send_tab_attached(client_id, tab_id, None);
+                    self.publish_remote_tab(tab_id);
                 }
             }
             server::Command::RemoteInput {
@@ -484,7 +484,7 @@ impl BooApp {
                 input_seq,
             } => {
                 let started_at = Instant::now();
-                let Some(session_id) = self
+                let Some(tab_id) = self
                     .remote_server_for_client(client_id)
                     .and_then(|server| server.client_subscription_tab(client_id))
                 else {
@@ -497,13 +497,13 @@ impl BooApp {
                     }
                     return;
                 };
-                let Some(pane) = self.pane_for_tab(session_id) else {
+                let Some(pane) = self.pane_for_tab(tab_id) else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_tab_exited(session_id);
+                        server.send_tab_exited(tab_id);
                     }
                     return;
                 };
@@ -515,7 +515,7 @@ impl BooApp {
                 } else {
                     let _ = self.backend.write_input(pane, &bytes);
                 }
-                self.mark_remote_tab_dirty(session_id);
+                self.mark_remote_tab_dirty(tab_id);
                 log_server_latency("remote_input_applied", started_at);
             }
             server::Command::RemoteKey {
@@ -524,7 +524,7 @@ impl BooApp {
                 input_seq,
             } => {
                 let started_at = Instant::now();
-                let Some(session_id) = self
+                let Some(tab_id) = self
                     .remote_server_for_client(client_id)
                     .and_then(|server| server.client_subscription_tab(client_id))
                 else {
@@ -537,13 +537,13 @@ impl BooApp {
                     }
                     return;
                 };
-                let Some(tab_index) = self.server.tabs.find_index_by_tab_id(session_id) else {
+                let Some(tab_index) = self.server.tabs.find_index_by_tab_id(tab_id) else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_tab_exited(session_id);
+                        server.send_tab_exited(tab_id);
                     }
                     return;
                 };
@@ -558,7 +558,7 @@ impl BooApp {
                     server.record_input_seq(client_id, input_seq);
                 }
                 self.inject_key(&keyspec);
-                self.mark_remote_tab_dirty(session_id);
+                self.mark_remote_tab_dirty(tab_id);
                 log_server_latency("remote_key_applied", started_at);
             }
             server::Command::RemoteResize {
@@ -566,7 +566,7 @@ impl BooApp {
                 cols,
                 rows,
             } => {
-                let Some(session_id) = self
+                let Some(tab_id) = self
                     .remote_server_for_client(client_id)
                     .and_then(|server| server.client_subscription_tab(client_id))
                 else {
@@ -579,18 +579,18 @@ impl BooApp {
                     }
                     return;
                 };
-                let Some(_pane) = self.pane_for_tab(session_id) else {
+                let Some(_pane) = self.pane_for_tab(tab_id) else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_tab_exited(session_id);
+                        server.send_tab_exited(tab_id);
                     }
                     return;
                 };
                 if self.resize_viewport_cells(cols, rows) {
-                    self.publish_remote_tab(session_id);
+                    self.publish_remote_tab(tab_id);
                 }
             }
             server::Command::RemoteExecuteCommand { client_id, input } => {
@@ -613,7 +613,7 @@ impl BooApp {
                 }
             }
             server::Command::RemoteAppKeyEvent { client_id, event } => {
-                let Some(session_id) = self
+                let Some(tab_id) = self
                     .remote_server_for_client(client_id)
                     .and_then(|server| server.client_subscription_tab(client_id))
                 else {
@@ -626,13 +626,13 @@ impl BooApp {
                     }
                     return;
                 };
-                let Some(tab_index) = self.server.tabs.find_index_by_tab_id(session_id) else {
+                let Some(tab_index) = self.server.tabs.find_index_by_tab_id(tab_id) else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_tab_exited(session_id);
+                        server.send_tab_exited(tab_id);
                     }
                     return;
                 };
@@ -671,7 +671,7 @@ impl BooApp {
                     crate::app_input::AppMouseEvent::WheelScrolledLines { .. }
                         | crate::app_input::AppMouseEvent::WheelScrolledPixels { .. }
                 );
-                let Some(session_id) = self
+                let Some(tab_id) = self
                     .remote_server_for_client(client_id)
                     .and_then(|server| server.client_subscription_tab(client_id))
                 else {
@@ -684,13 +684,13 @@ impl BooApp {
                     }
                     return;
                 };
-                let Some(tab_index) = self.server.tabs.find_index_by_tab_id(session_id) else {
+                let Some(tab_index) = self.server.tabs.find_index_by_tab_id(tab_id) else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_tab_exited(session_id);
+                        server.send_tab_exited(tab_id);
                     }
                     return;
                 };
@@ -714,8 +714,8 @@ impl BooApp {
                         server.send_tab_list(client_id, tabs.as_ref());
                     }
                     if changed_ui || should_republish_session {
-                        server.send_tab_attached(client_id, session_id, None);
-                        self.publish_remote_tab(session_id);
+                        server.send_tab_attached(client_id, tab_id, None);
+                        self.publish_remote_tab(tab_id);
                     }
                 }
             }
@@ -738,7 +738,7 @@ impl BooApp {
                 }
             }
             server::Command::RemoteFocusPane { client_id, pane_id } => {
-                let Some(session_id) = self
+                let Some(tab_id) = self
                     .remote_server_for_client(client_id)
                     .and_then(|server| server.client_subscription_tab(client_id))
                 else {
@@ -751,13 +751,13 @@ impl BooApp {
                     }
                     return;
                 };
-                let Some(tab_index) = self.server.tabs.find_index_by_tab_id(session_id) else {
+                let Some(tab_index) = self.server.tabs.find_index_by_tab_id(tab_id) else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_tab_exited(session_id);
+                        server.send_tab_exited(tab_id);
                     }
                     return;
                 };
@@ -779,8 +779,8 @@ impl BooApp {
                     {
                     server.send_ui_runtime_state(client_id, &ui_state);
                     server.send_tab_list(client_id, tabs.as_ref());
-                    server.send_tab_attached(client_id, session_id, None);
-                    self.publish_remote_tab(session_id);
+                    server.send_tab_attached(client_id, tab_id, None);
+                    self.publish_remote_tab(tab_id);
                     }
                 }
             }

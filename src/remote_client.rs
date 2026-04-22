@@ -329,7 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn attach_remote_daemon_session_reads_attached_and_initial_state_over_socket() {
+    fn attach_remote_daemon_tab_reads_attached_and_initial_state_over_socket() {
         use std::net::TcpListener;
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
@@ -392,7 +392,7 @@ mod tests {
                 .expect("write full state");
         });
 
-        let summary = attach_remote_daemon_session(
+        let summary = attach_remote_daemon_tab(
             "127.0.0.1",
             port,
             Some("test-daemon"),
@@ -415,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn create_remote_daemon_session_uses_shared_handshake_and_create_path() {
+    fn create_remote_daemon_tab_uses_shared_handshake_and_create_path() {
         use std::net::TcpListener;
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
@@ -447,10 +447,10 @@ mod tests {
                     MessageType::SessionCreated,
                     &77_u32.to_le_bytes(),
                 ))
-                .expect("write session created");
+                .expect("write tab created");
         });
 
-        let summary = create_remote_daemon_session(
+        let summary = create_remote_daemon_tab(
             "127.0.0.1",
             port,
             Some("test-daemon"),
