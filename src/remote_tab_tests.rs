@@ -55,7 +55,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_transport_session_lists_tabs_over_unix_stream() {
+    fn direct_transport_lists_tabs_over_unix_stream() {
         let (client_stream, mut server_stream) =
             UnixStream::pair().expect("create unix stream pair");
         let server = std::thread::spawn(move || {

@@ -38,8 +38,7 @@ pub use crate::remote_wire::{
     REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT, REMOTE_PROTOCOL_VERSION, RemoteCell,
     RemoteErrorCode,
     RemoteFullState,
-    decode_auth_ok_payload, encode_full_state, encode_message, encode_session_list,
-    encode_tab_list, read_message,
+    decode_auth_ok_payload, encode_full_state, encode_message, encode_tab_list, read_message,
     validate_auth_ok_payload,
 };
 use crate::remote_batcher::{OutboundMessage, writer_loop};

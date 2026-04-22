@@ -95,7 +95,7 @@ mod tests {
         let mut state = empty_state();
         state.clients.insert(1, test_client(tx, Some(11), true));
         let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
-        let sessions = vec![RemoteTabInfo {
+        let tabs = vec![RemoteTabInfo {
             id: 11,
             name: "Tab 1".to_string(),
             title: "boo".to_string(),
@@ -104,8 +104,8 @@ mod tests {
             child_exited: false,
         }];
 
-        server.send_tab_list(1, &sessions);
-        server.send_tab_list(1, &sessions);
+        server.send_tab_list(1, &tabs);
+        server.send_tab_list(1, &tabs);
 
         match rx.recv().expect("tab list frame") {
             OutboundMessage::Frame(frame) => {
@@ -123,7 +123,7 @@ mod tests {
         let mut state = empty_state();
         state.clients.insert(1, test_client(tx, Some(11), true));
         let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
-        let sessions = vec![RemoteTabInfo {
+        let tabs = vec![RemoteTabInfo {
             id: 11,
             name: "Tab 1".to_string(),
             title: "boo".to_string(),
@@ -132,8 +132,8 @@ mod tests {
             child_exited: false,
         }];
 
-        server.reply_tab_list(1, &sessions);
-        server.reply_tab_list(1, &sessions);
+        server.reply_tab_list(1, &tabs);
+        server.reply_tab_list(1, &tabs);
 
         for _ in 0..2 {
             match rx.recv().expect("tab list frame") {

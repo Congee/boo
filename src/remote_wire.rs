@@ -848,13 +848,6 @@ pub(crate) fn parse_created_tab_id(payload: &[u8]) -> Option<u32> {
     parse_tab_id(payload)
 }
 
-#[allow(dead_code)]
-pub(crate) fn decode_session_list_payload(
-    payload: &[u8],
-) -> Result<Vec<RemoteDirectTabInfo>, String> {
-    decode_tab_list_payload(payload)
-}
-
 pub(crate) fn parse_attach_request(payload: &[u8]) -> Option<(u32, Option<u64>, Option<u64>)> {
     let tab_id = parse_tab_id(payload)?;
     let attachment_id = (payload.len() >= 12).then(|| {
@@ -929,11 +922,6 @@ pub fn encode_tab_list(tabs: &[RemoteTabInfo]) -> Vec<u8> {
         payload.push(flags);
     }
     payload
-}
-
-#[allow(dead_code)]
-pub fn encode_session_list(tabs: &[RemoteTabInfo]) -> Vec<u8> {
-    encode_tab_list(tabs)
 }
 
 pub fn encode_full_state(
@@ -1487,7 +1475,7 @@ mod tests {
     }
 
     #[test]
-    fn read_probe_auth_reply_skips_unsolicited_session_list() {
+    fn read_probe_auth_reply_skips_unsolicited_tab_list() {
         let mut frames = Vec::new();
         frames.extend_from_slice(&encode_message(MessageType::SessionList, b"[]"));
         frames.extend_from_slice(&encode_message(
