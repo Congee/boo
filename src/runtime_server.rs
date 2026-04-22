@@ -891,11 +891,6 @@ impl BooApp {
         (width, height)
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn session_size_pixels(&self, cols: u16, rows: u16) -> (u32, u32) {
-        self.tab_size_pixels(cols, rows)
-    }
-
     pub(crate) fn publish_remote_tab(&self, tab_id: u32) {
         let started_at = Instant::now();
         let servers = self.remote_servers().collect::<Vec<_>>();

@@ -151,7 +151,7 @@ mod tests {
     fn retarget_local_attached_to_tab_skips_same_tab_unattached_and_remote_clients() {
         let (local_attached_tx, local_attached_rx) = mpsc::channel();
         let (local_unattached_tx, local_unattached_rx) = mpsc::channel();
-        let (local_same_session_tx, local_same_session_rx) = mpsc::channel();
+        let (local_same_tab_tx, local_same_tab_rx) = mpsc::channel();
         let (remote_attached_tx, remote_attached_rx) = mpsc::channel();
         let mut state = empty_state();
         state
@@ -160,7 +160,7 @@ mod tests {
         state.clients.insert(2, test_client(local_unattached_tx, None, true));
         state
             .clients
-            .insert(3, test_client(local_same_session_tx, Some(22), true));
+            .insert(3, test_client(local_same_tab_tx, Some(22), true));
         state
             .clients
             .insert(4, test_client(remote_attached_tx, Some(11), false));
@@ -176,7 +176,7 @@ mod tests {
             OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
         }
         assert!(local_unattached_rx.try_recv().is_err());
-        assert!(local_same_session_rx.try_recv().is_err());
+        assert!(local_same_tab_rx.try_recv().is_err());
         assert!(remote_attached_rx.try_recv().is_err());
     }
 

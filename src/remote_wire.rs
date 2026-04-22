@@ -1598,11 +1598,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_attach_request_supports_session_only_attachment_and_resume_token_forms() {
-        let session_only = 11_u32.to_le_bytes().to_vec();
-        assert_eq!(parse_attach_request(&session_only), Some((11, None, None)));
+    fn parse_attach_request_supports_tab_only_attachment_and_resume_token_forms() {
+        let tab_only = 11_u32.to_le_bytes().to_vec();
+        assert_eq!(parse_attach_request(&tab_only), Some((11, None, None)));
 
-        let mut with_attachment = session_only.clone();
+        let mut with_attachment = tab_only.clone();
         with_attachment.extend_from_slice(&0xabc_u64.to_le_bytes());
         assert_eq!(
             parse_attach_request(&with_attachment),

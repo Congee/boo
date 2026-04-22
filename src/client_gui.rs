@@ -3965,7 +3965,7 @@ mod tests {
     }
 
     #[test]
-    fn session_exit_relists_tabs_instead_of_immediately_exiting() {
+    fn tab_exit_relists_tabs_instead_of_immediately_exiting() {
         let (mut app, _) = ClientApp::new("/tmp/test.sock".to_string());
         let (tx, _rx) = std::sync::mpsc::channel();
         app.stream_tx = Some(tx);

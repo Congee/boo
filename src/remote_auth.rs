@@ -291,7 +291,7 @@ mod tests {
     }
 
     #[test]
-    fn read_loop_emits_list_sessions_for_authenticated_client() {
+    fn read_loop_emits_list_tabs_for_authenticated_client() {
         let (outbound_tx, _outbound_rx) = mpsc::channel();
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::from([(1, remote_client(outbound_tx, true))]),

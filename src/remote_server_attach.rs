@@ -41,7 +41,7 @@ pub(crate) fn prepare_attachment(
     if let Some(revive) = revive {
         if revive.tab_id != tab_id {
             log::warn!(
-                "remote revive rejected: client_id={client_id} attachment_id={attachment_id} reason=session-mismatch expected={} actual={tab_id}",
+                "remote revive rejected: client_id={client_id} attachment_id={attachment_id} reason=tab-mismatch expected={} actual={tab_id}",
                 revive.tab_id
             );
             return Err(RemoteErrorCode::AttachmentBelongsToDifferentTab);
@@ -236,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    fn send_attached_to_same_session_preserves_stream_state() {
+    fn send_attached_to_same_tab_preserves_stream_state() {
         let (outbound, outbound_rx) = mpsc::channel();
         let mut state = empty_state();
         let mut client = local_client(outbound);

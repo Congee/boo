@@ -1245,7 +1245,7 @@ impl BooApp {
             "set-tab-title" => {
                 if parts.len() >= 2 {
                     self.server.tabs.set_active_title(parts[1..].join(" "));
-                    self.mark_active_remote_session_dirty();
+                    self.mark_active_remote_tab_dirty();
                     self.relayout();
                 }
             }

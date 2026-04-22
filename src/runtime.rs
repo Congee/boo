@@ -336,11 +336,6 @@ impl BooApp {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn mark_active_remote_session_dirty(&mut self) {
-        self.mark_active_remote_tab_dirty();
-    }
-
     pub(crate) fn invoke_status_component(&mut self, source: &str, id: &str) -> bool {
         let Some(action) = self.status_components.click_action(source, id) else {
             return false;
