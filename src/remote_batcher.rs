@@ -2,7 +2,7 @@
 //!
 //! The daemon reader/executor pushes per-client frames onto an `mpsc::Sender<OutboundMessage>`,
 //! and a dedicated writer thread drains the other end via [`writer_loop`]. Under load this
-//! lets us coalesce redundant control frames (multiple SessionList / UiRuntimeState /
+//! lets us coalesce redundant control frames (multiple tab-list / UiRuntimeState /
 //! UiAppearance updates queued while the socket was blocked collapse to the latest) and
 //! optionally keep only the newest screen-update frame, which is how we avoid shipping
 //! stale VT deltas to a slow client.
@@ -91,7 +91,7 @@ struct OutboundBatch {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CoalescibleFrameKind {
-    SessionList,
+    TabList,
     UiRuntimeState,
     UiAppearance,
 }
@@ -99,7 +99,7 @@ enum CoalescibleFrameKind {
 #[derive(Default)]
 struct PendingOutboundFrames {
     order: Vec<CoalescibleFrameKind>,
-    session_list: Option<Vec<u8>>,
+    tab_list: Option<Vec<u8>>,
     ui_runtime_state: Option<Vec<u8>>,
     ui_appearance: Option<Vec<u8>>,
 }
@@ -114,7 +114,7 @@ impl PendingOutboundFrames {
     fn set(&mut self, kind: CoalescibleFrameKind, frame: Vec<u8>) {
         self.push_kind_once(kind);
         match kind {
-            CoalescibleFrameKind::SessionList => self.session_list = Some(frame),
+            CoalescibleFrameKind::TabList => self.tab_list = Some(frame),
             CoalescibleFrameKind::UiRuntimeState => self.ui_runtime_state = Some(frame),
             CoalescibleFrameKind::UiAppearance => self.ui_appearance = Some(frame),
         }
@@ -124,7 +124,7 @@ impl PendingOutboundFrames {
         let mut frames = Vec::with_capacity(self.order.len());
         for kind in self.order.drain(..) {
             let frame = match kind {
-                CoalescibleFrameKind::SessionList => self.session_list.take(),
+                CoalescibleFrameKind::TabList => self.tab_list.take(),
                 CoalescibleFrameKind::UiRuntimeState => self.ui_runtime_state.take(),
                 CoalescibleFrameKind::UiAppearance => self.ui_appearance.take(),
             };
@@ -154,7 +154,7 @@ fn collect_outbound_batch(
             message_count += 1;
             if let Some(kind) = coalescible_frame_kind(&frame) {
                 let replaced = match kind {
-                    CoalescibleFrameKind::SessionList => pending_control.session_list.is_some(),
+                    CoalescibleFrameKind::TabList => pending_control.tab_list.is_some(),
                     CoalescibleFrameKind::UiRuntimeState => {
                         pending_control.ui_runtime_state.is_some()
                     }
@@ -216,7 +216,7 @@ fn collect_outbound_batch(
 fn coalescible_frame_kind(frame: &[u8]) -> Option<CoalescibleFrameKind> {
     let ty = frame.get(2).copied().and_then(|value| MessageType::try_from(value).ok())?;
     match ty {
-        MessageType::SessionList => Some(CoalescibleFrameKind::SessionList),
+        MessageType::SessionList => Some(CoalescibleFrameKind::TabList),
         MessageType::UiRuntimeState => Some(CoalescibleFrameKind::UiRuntimeState),
         MessageType::UiAppearance => Some(CoalescibleFrameKind::UiAppearance),
         _ => None,

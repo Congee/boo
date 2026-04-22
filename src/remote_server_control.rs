@@ -8,7 +8,7 @@ use crate::remote_wire::{MessageType, encode_message, encode_tab_list};
 use std::sync::{Arc, Mutex};
 
 pub(crate) enum CachedControlPayload {
-    SessionList,
+    TabList,
     UiRuntimeState,
     UiAppearance,
 }
@@ -23,7 +23,7 @@ pub(crate) fn send_tab_list(
         client_id,
         MessageType::SessionList,
         &encode_tab_list(tabs),
-        CachedControlPayload::SessionList,
+        CachedControlPayload::TabList,
     );
 }
 
@@ -54,7 +54,7 @@ pub(crate) fn send_tab_list_to_local_clients(
             client_id,
             MessageType::SessionList,
             &payload,
-            CachedControlPayload::SessionList,
+            CachedControlPayload::TabList,
         );
     }
 }
@@ -212,7 +212,7 @@ fn cache_slot_mut(
     cache_slot: CachedControlPayload,
 ) -> &mut Option<Vec<u8>> {
     match cache_slot {
-        CachedControlPayload::SessionList => &mut client.runtime_subscription.last_tab_list_payload,
+        CachedControlPayload::TabList => &mut client.runtime_subscription.last_tab_list_payload,
         CachedControlPayload::UiRuntimeState => &mut client.runtime_subscription.last_ui_runtime_state_payload,
         CachedControlPayload::UiAppearance => &mut client.runtime_subscription.last_ui_appearance_payload,
     }
