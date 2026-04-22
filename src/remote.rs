@@ -362,6 +362,14 @@ impl RemoteServer {
         self.client_tab(client_id)
     }
 
+    pub fn send_tab_created(&self, client_id: u64, tab_id: u32) {
+        self.send_to_client(
+            client_id,
+            MessageType::SessionCreated,
+            tab_id.to_le_bytes().to_vec(),
+        );
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(state: Arc<Mutex<State>>) -> Self {
         Self {
@@ -471,12 +479,9 @@ impl RemoteServer {
         self.send_to_client(client_id, MessageType::Detached, Vec::new());
     }
 
+    #[allow(dead_code)]
     pub fn send_session_created(&self, client_id: u64, tab_id: u32) {
-        self.send_to_client(
-            client_id,
-            MessageType::SessionCreated,
-            tab_id.to_le_bytes().to_vec(),
-        );
+        self.send_tab_created(client_id, tab_id);
     }
 
     pub fn send_error(&self, client_id: u64, code: RemoteErrorCode, message: &str) {

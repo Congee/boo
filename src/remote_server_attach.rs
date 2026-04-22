@@ -322,6 +322,6 @@ mod tests {
         let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
 
         assert!(server.has_client(1));
-        assert_eq!(server.client_session(1), None);
+        assert_eq!(server.client_subscription_tab(1), None);
     }
 }

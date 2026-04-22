@@ -131,7 +131,7 @@ impl BooApp {
         let appearance = Self::resolve_appearance_config(&boo_config);
         let (cell_width, cell_height) =
             terminal_metrics(appearance.font_size, appearance.font_families.first().copied());
-        let initial_dirty_remote_sessions =
+        let initial_dirty_remote_tabs =
             server.tabs.active_tab_id().into_iter().collect::<Vec<_>>();
 
         #[cfg(target_os = "linux")]
@@ -208,8 +208,8 @@ impl BooApp {
                     appearance_revision: 1,
                     surface_initialized_once: false,
                     app_focused: true,
-                    dirty_remote_sessions: initial_dirty_remote_sessions.clone(),
-                    cached_remote_sessions: None,
+                    dirty_remote_tabs: initial_dirty_remote_tabs.clone(),
+                    cached_remote_tabs: None,
                     desktop_notifications_enabled: boo_config.desktop_notifications,
                     notify_on_command_finish: boo_config.notify_on_command_finish,
                     notify_on_command_finish_action: boo_config.notify_on_command_finish_action,
@@ -295,8 +295,8 @@ impl BooApp {
                     appearance_revision: 1,
                     surface_initialized_once: false,
                     app_focused: true,
-                    dirty_remote_sessions: initial_dirty_remote_sessions,
-                    cached_remote_sessions: None,
+                    dirty_remote_tabs: initial_dirty_remote_tabs,
+                    cached_remote_tabs: None,
                     desktop_notifications_enabled: boo_config.desktop_notifications,
                     notify_on_command_finish: boo_config.notify_on_command_finish,
                     notify_on_command_finish_action: boo_config.notify_on_command_finish_action,
@@ -311,28 +311,28 @@ impl BooApp {
 
 impl BooApp {
     pub(crate) fn current_remote_tabs(&mut self) -> std::sync::Arc<[remote::RemoteTabInfo]> {
-        if let Some(cached) = self.cached_remote_sessions.as_ref() {
+        if let Some(cached) = self.cached_remote_tabs.as_ref() {
             return std::sync::Arc::clone(cached);
         }
         let tabs = std::sync::Arc::<[remote::RemoteTabInfo]>::from(self.remote_tabs());
-        self.cached_remote_sessions = Some(std::sync::Arc::clone(&tabs));
+        self.cached_remote_tabs = Some(std::sync::Arc::clone(&tabs));
         tabs
     }
 
-    pub(crate) fn invalidate_remote_sessions_cache(&mut self) {
-        self.cached_remote_sessions = None;
+    pub(crate) fn invalidate_remote_tabs_cache(&mut self) {
+        self.cached_remote_tabs = None;
     }
 
     #[allow(dead_code)]
-    pub(crate) fn current_remote_sessions(&mut self) -> std::sync::Arc<[remote::RemoteSessionInfo]> {
+    pub(crate) fn current_remote_tabs_compat(&mut self) -> std::sync::Arc<[remote::RemoteSessionInfo]> {
         self.current_remote_tabs()
     }
 
     pub(crate) fn mark_remote_tab_dirty(&mut self, tab_id: u32) {
-        if !self.dirty_remote_sessions.contains(&tab_id) {
-            self.dirty_remote_sessions.push(tab_id);
+        if !self.dirty_remote_tabs.contains(&tab_id) {
+            self.dirty_remote_tabs.push(tab_id);
         }
-        self.invalidate_remote_sessions_cache();
+        self.invalidate_remote_tabs_cache();
     }
 
     pub(crate) fn mark_active_remote_tab_dirty(&mut self) {
@@ -342,7 +342,7 @@ impl BooApp {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn mark_remote_session_dirty(&mut self, session_id: u32) {
+    pub(crate) fn mark_remote_tab_dirty_compat(&mut self, session_id: u32) {
         self.mark_remote_tab_dirty(session_id);
     }
 
@@ -358,7 +358,7 @@ impl BooApp {
         if action.is_empty() {
             return false;
         }
-        self.invalidate_remote_sessions_cache();
+        self.invalidate_remote_tabs_cache();
         self.execute_command(&action);
         true
     }
@@ -694,12 +694,12 @@ impl BooApp {
         if remote_cmd_budget == 0 {
             more_server_cmds_pending = true;
         }
-        if !self.dirty_remote_sessions.is_empty() {
+        if !self.dirty_remote_tabs.is_empty() {
             let _scope =
                 crate::profiling::scope("server.publish_remote_state", crate::profiling::Kind::Cpu);
-            let dirty_sessions = std::mem::take(&mut self.dirty_remote_sessions);
-            for session_id in dirty_sessions {
-                self.publish_remote_tab(session_id);
+            let dirty_tabs = std::mem::take(&mut self.dirty_remote_tabs);
+            for tab_id in dirty_tabs {
+                self.publish_remote_tab(tab_id);
             }
         }
         if more_server_cmds_pending {

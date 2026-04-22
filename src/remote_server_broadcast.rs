@@ -148,7 +148,7 @@ mod tests {
     }
 
     #[test]
-    fn retarget_local_attached_to_session_skips_same_session_unattached_and_remote_clients() {
+    fn retarget_local_attached_to_tab_skips_same_tab_unattached_and_remote_clients() {
         let (local_attached_tx, local_attached_rx) = mpsc::channel();
         let (local_unattached_tx, local_unattached_rx) = mpsc::channel();
         let (local_same_session_tx, local_same_session_rx) = mpsc::channel();
@@ -166,7 +166,7 @@ mod tests {
             .insert(4, test_client(remote_attached_tx, Some(11), false));
         let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
 
-        server.retarget_local_attached_to_session(22);
+        server.retarget_local_attached_to_tab(22);
 
         match local_attached_rx.recv().expect("local attached frame") {
             OutboundMessage::Frame(frame) => {

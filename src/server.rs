@@ -97,7 +97,7 @@ pub enum Command {
     RemoteConnected {
         client_id: u64,
     },
-    RemoteListSessions {
+    RemoteListTabs {
         client_id: u64,
     },
     RemoteAttach {
@@ -280,7 +280,7 @@ impl From<remote::RemoteCmd> for Command {
     fn from(value: remote::RemoteCmd) -> Self {
         match value {
             remote::RemoteCmd::Connected { client_id } => Self::RemoteConnected { client_id },
-            remote::RemoteCmd::ListTabs { client_id } => Self::RemoteListSessions { client_id },
+            remote::RemoteCmd::ListTabs { client_id } => Self::RemoteListTabs { client_id },
             remote::RemoteCmd::Attach {
                 client_id,
                 tab_id,
