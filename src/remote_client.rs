@@ -164,7 +164,8 @@ mod tests {
     use super::*;
     use crate::remote_types::RemoteTabInfo;
     use crate::remote_wire::{
-        MessageType, REMOTE_PROTOCOL_VERSION, RemoteCell, RemoteFullState, encode_auth_ok_payload,
+        MESSAGE_TYPE_LIST_TABS, MESSAGE_TYPE_TAB_CREATED, MESSAGE_TYPE_TAB_LIST, MessageType,
+        REMOTE_PROTOCOL_VERSION, RemoteCell, RemoteFullState, encode_auth_ok_payload,
         encode_full_state, encode_message, encode_tab_list, parse_attach_request, read_message,
     };
     use std::io::Write;
@@ -224,11 +225,11 @@ mod tests {
                 .expect("write heartbeat ack");
 
             let (ty, payload) = read_message(&mut stream).expect("read list tabs");
-            assert_eq!(ty, MessageType::ListSessions);
+            assert_eq!(ty, MESSAGE_TYPE_LIST_TABS);
             assert!(payload.is_empty());
             stream
                 .write_all(&encode_message(
-                    MessageType::SessionList,
+                    MESSAGE_TYPE_TAB_LIST,
                     &encode_tab_list(&[RemoteTabInfo {
                         id: 11,
                         name: "dev".to_string(),
@@ -405,7 +406,7 @@ mod tests {
             assert_eq!(payload, [132, 0, 48, 0]);
             stream
                 .write_all(&encode_message(
-                    MessageType::SessionCreated,
+                    MESSAGE_TYPE_TAB_CREATED,
                     &77_u32.to_le_bytes(),
                 ))
                 .expect("write tab created");

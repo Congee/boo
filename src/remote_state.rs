@@ -32,7 +32,7 @@ pub(crate) const DIRECT_CLIENT_HEARTBEAT_WINDOW: Duration = Duration::from_secs(
 
 /// Transport-only resume/attachment identity for a live client stream.
 ///
-/// This is the part of the old "session" model that is still real: a direct
+/// This is the part of the old remote attachment model that is still real: a direct
 /// client may hold a resumable attachment lease. It is intentionally separate
 /// from runtime identity and terminal state caches.
 pub(crate) struct ClientAttachmentLease {

@@ -110,7 +110,7 @@ mod tests {
         match rx.recv().expect("tab list frame") {
             OutboundMessage::Frame(frame) => {
                 assert_eq!(&frame[..2], &MAGIC);
-                assert_eq!(frame[2], MessageType::SessionList as u8);
+                assert_eq!(frame[2], crate::remote_wire::MESSAGE_TYPE_TAB_LIST as u8);
             }
             OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
         }
@@ -139,7 +139,7 @@ mod tests {
             match rx.recv().expect("tab list frame") {
                 OutboundMessage::Frame(frame) => {
                     assert_eq!(&frame[..2], &MAGIC);
-                    assert_eq!(frame[2], MessageType::SessionList as u8);
+                    assert_eq!(frame[2], crate::remote_wire::MESSAGE_TYPE_TAB_LIST as u8);
                 }
                 OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
             }

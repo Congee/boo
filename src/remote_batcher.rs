@@ -216,7 +216,7 @@ fn collect_outbound_batch(
 fn coalescible_frame_kind(frame: &[u8]) -> Option<CoalescibleFrameKind> {
     let ty = frame.get(2).copied().and_then(|value| MessageType::try_from(value).ok())?;
     match ty {
-        MessageType::SessionList => Some(CoalescibleFrameKind::TabList),
+        crate::remote_wire::MESSAGE_TYPE_TAB_LIST => Some(CoalescibleFrameKind::TabList),
         MessageType::UiRuntimeState => Some(CoalescibleFrameKind::UiRuntimeState),
         MessageType::UiAppearance => Some(CoalescibleFrameKind::UiAppearance),
         _ => None,

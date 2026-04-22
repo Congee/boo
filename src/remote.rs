@@ -38,6 +38,8 @@ pub use crate::remote_wire::{
     REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT, REMOTE_PROTOCOL_VERSION, RemoteCell,
     RemoteErrorCode,
     RemoteFullState,
+    MESSAGE_TYPE_LIST_TABS, MESSAGE_TYPE_TAB_CREATED, MESSAGE_TYPE_TAB_EXITED,
+    MESSAGE_TYPE_TAB_LIST,
     decode_auth_ok_payload, encode_full_state, encode_message, encode_tab_list, read_message,
     validate_auth_ok_payload,
 };
@@ -341,7 +343,7 @@ impl RemoteServer {
     pub fn send_tab_created(&self, client_id: u64, tab_id: u32) {
         self.send_to_client(
             client_id,
-            MessageType::SessionCreated,
+            MESSAGE_TYPE_TAB_CREATED,
             tab_id.to_le_bytes().to_vec(),
         );
     }
@@ -550,7 +552,7 @@ impl RemoteServer {
         for client_id in client_ids {
             self.send_to_client(
                 client_id,
-                MessageType::SessionExited,
+                MESSAGE_TYPE_TAB_EXITED,
                 tab_id.to_le_bytes().to_vec(),
             );
             self.update_client(client_id, |client| {

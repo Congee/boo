@@ -8,8 +8,9 @@ mod tests {
         DIRECT_CLIENT_HEARTBEAT_WINDOW, State,
     };
     use crate::remote_wire::{
-        MessageType, RemoteCell, RemoteErrorCode, RemoteFullState, decode_error_payload,
-        encode_auth_ok_payload, encode_message, encode_tab_list, read_message,
+        MESSAGE_TYPE_LIST_TABS, MESSAGE_TYPE_TAB_LIST, MessageType, RemoteCell, RemoteErrorCode,
+        RemoteFullState, decode_error_payload, encode_auth_ok_payload, encode_message,
+        encode_tab_list, read_message,
     };
     use std::collections::{HashMap, VecDeque};
     use std::io::{self, Read, Write};
@@ -77,11 +78,11 @@ mod tests {
                 .expect("write heartbeat ack");
 
             let (ty, payload) = read_message(&mut server_stream).expect("read list tabs");
-            assert_eq!(ty, MessageType::ListSessions);
+            assert_eq!(ty, MESSAGE_TYPE_LIST_TABS);
             assert!(payload.is_empty());
             server_stream
                 .write_all(&encode_message(
-                    MessageType::SessionList,
+                    MESSAGE_TYPE_TAB_LIST,
                     &encode_tab_list(&[RemoteTabInfo {
                         id: 21,
                         name: "unix".to_string(),

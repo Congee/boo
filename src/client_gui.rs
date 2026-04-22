@@ -2217,7 +2217,7 @@ fn local_stream_subscription(
                         let result = match command {
                             StreamCommand::ListTabs => write_stream_message(
                                 &mut write,
-                                remote::MessageType::ListSessions,
+                                remote::MESSAGE_TYPE_LIST_TABS,
                                 &[],
                             ),
                             StreamCommand::AttachTab(tab_id) => write_stream_message(
@@ -2556,7 +2556,7 @@ fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStream
         };
         scope.add_bytes(payload.len() as u64);
         let event = match ty {
-            remote::MessageType::SessionList => {
+            remote::MESSAGE_TYPE_TAB_LIST => {
                 decode_remote_tab_list(&payload).map(LocalStreamEvent::TabList)
             }
             remote::MessageType::Attached => decode_u32(&payload).map(LocalStreamEvent::TabAttached),
@@ -2577,7 +2577,7 @@ fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStream
                 })
             }
             remote::MessageType::Detached => Some(LocalStreamEvent::Detached),
-            remote::MessageType::SessionExited => {
+            remote::MESSAGE_TYPE_TAB_EXITED => {
                 decode_u32(&payload).map(LocalStreamEvent::TabExited)
             }
             remote::MessageType::FullState => {

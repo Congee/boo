@@ -4,7 +4,7 @@ use crate::remote::RemoteTabInfo;
 use crate::remote_batcher::OutboundMessage;
 use crate::remote_server_targets::{local_attached_client_ids_for_tab, local_client_ids};
 use crate::remote_state::{ClientState, State};
-use crate::remote_wire::{MessageType, encode_message, encode_tab_list};
+use crate::remote_wire::{MESSAGE_TYPE_TAB_LIST, MessageType, encode_message, encode_tab_list};
 use std::sync::{Arc, Mutex};
 
 pub(crate) enum CachedControlPayload {
@@ -21,7 +21,7 @@ pub(crate) fn send_tab_list(
     send_cached_control_payload_bytes(
         state,
         client_id,
-        MessageType::SessionList,
+        MESSAGE_TYPE_TAB_LIST,
         &encode_tab_list(tabs),
         CachedControlPayload::TabList,
     );
@@ -32,7 +32,7 @@ pub(crate) fn reply_tab_list(
     client_id: u64,
     tabs: &[RemoteTabInfo],
 ) {
-    let frame = encode_message(MessageType::SessionList, &encode_tab_list(tabs));
+    let frame = encode_message(MESSAGE_TYPE_TAB_LIST, &encode_tab_list(tabs));
     let guard = state.lock().expect("remote server state poisoned");
     if let Some(client) = guard.clients.get(&client_id) {
         let _ = client.outbound.send(OutboundMessage::Frame(frame));
@@ -52,7 +52,7 @@ pub(crate) fn send_tab_list_to_local_clients(
         send_cached_control_payload_bytes(
             state,
             client_id,
-            MessageType::SessionList,
+            MESSAGE_TYPE_TAB_LIST,
             &payload,
             CachedControlPayload::TabList,
         );

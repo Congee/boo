@@ -4,9 +4,10 @@ use std::io::{Read, Write};
 
 use crate::remote_types::{RemoteAttachedSummary, RemoteDirectTabInfo};
 use crate::remote_wire::{
-    MessageType, RemoteFullState, decode_auth_ok_payload, decode_tab_list_payload,
-    encode_message, parse_created_tab_id, read_attach_bootstrap, read_probe_auth_reply,
-    read_probe_reply, validate_auth_ok_payload,
+    MESSAGE_TYPE_LIST_TABS, MESSAGE_TYPE_TAB_CREATED, MESSAGE_TYPE_TAB_LIST, MessageType,
+    RemoteFullState, decode_auth_ok_payload, decode_tab_list_payload, encode_message,
+    parse_created_tab_id, read_attach_bootstrap, read_probe_auth_reply, read_probe_reply,
+    validate_auth_ok_payload,
 };
 
 pub(crate) trait DirectReadWrite: Read + Write {}
@@ -95,7 +96,7 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
 
     pub(crate) fn list_tabs(&mut self) -> Result<Vec<RemoteDirectTabInfo>, String> {
         self.stream
-            .write_all(&encode_message(MessageType::ListSessions, &[]))
+            .write_all(&encode_message(MESSAGE_TYPE_LIST_TABS, &[]))
             .map_err(|error| {
                 format!(
                     "failed to send list tabs request to {}:{}: {error}",
@@ -103,7 +104,7 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
                 )
             })?;
         let (_reply_ty, payload) =
-            read_probe_reply(&mut self.stream, &self.host, self.port, MessageType::SessionList)?;
+            read_probe_reply(&mut self.stream, &self.host, self.port, MESSAGE_TYPE_TAB_LIST)?;
         decode_tab_list_payload(&payload).map_err(|error| {
             format!(
                 "failed to decode remote tab list from {}:{}: {error}",
@@ -153,7 +154,12 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
                 )
             })?;
         let (_reply_ty, payload) =
-            read_probe_reply(&mut self.stream, &self.host, self.port, MessageType::SessionCreated)?;
+            read_probe_reply(
+                &mut self.stream,
+                &self.host,
+                self.port,
+                MESSAGE_TYPE_TAB_CREATED,
+            )?;
         parse_created_tab_id(&payload).ok_or_else(|| {
             format!(
                 "invalid tab-created payload from remote endpoint {}:{}",

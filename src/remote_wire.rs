@@ -86,6 +86,11 @@ pub enum MessageType {
     HeartbeatAck = 0x92,
 }
 
+pub const MESSAGE_TYPE_LIST_TABS: MessageType = MessageType::ListSessions;
+pub const MESSAGE_TYPE_TAB_LIST: MessageType = MessageType::SessionList;
+pub const MESSAGE_TYPE_TAB_CREATED: MessageType = MessageType::SessionCreated;
+pub const MESSAGE_TYPE_TAB_EXITED: MessageType = MessageType::SessionExited;
+
 #[repr(u16)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RemoteErrorCode {
@@ -1477,7 +1482,7 @@ mod tests {
     #[test]
     fn read_probe_auth_reply_skips_unsolicited_tab_list() {
         let mut frames = Vec::new();
-        frames.extend_from_slice(&encode_message(MessageType::SessionList, b"[]"));
+        frames.extend_from_slice(&encode_message(MESSAGE_TYPE_TAB_LIST, b"[]"));
         frames.extend_from_slice(&encode_message(
             MessageType::AuthOk,
             &encode_auth_ok_payload("test-daemon", "test-instance"),

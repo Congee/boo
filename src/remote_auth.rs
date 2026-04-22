@@ -119,7 +119,7 @@ pub(crate) fn read_loop(
         }
 
         let command = match ty {
-            MessageType::ListSessions => Some(RemoteCmd::ListTabs { client_id }),
+            crate::remote_wire::MESSAGE_TYPE_LIST_TABS => Some(RemoteCmd::ListTabs { client_id }),
             MessageType::Attach => {
                 parse_attach_request(&payload).map(|(tab_id, attachment_id, resume_token)| RemoteCmd::Attach {
                     client_id,
@@ -299,7 +299,7 @@ mod tests {
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let mut frames = Vec::new();
-        frames.extend_from_slice(&encode_message(MessageType::ListSessions, &[]));
+        frames.extend_from_slice(&encode_message(crate::remote_wire::MESSAGE_TYPE_LIST_TABS, &[]));
 
         read_loop(std::io::Cursor::new(frames), 1, state, cmd_tx);
 
