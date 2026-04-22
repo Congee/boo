@@ -3,8 +3,11 @@ import Foundation
 import Darwin
 
 class BooUITestCase: XCTestCase {
-    func isConnectScreenTitle(_ label: String) -> Bool {
-        label == "Connect to Server"
+    func isConnectScreen(_ app: XCUIApplication) -> Bool {
+        let screen = app.otherElements["connect-screen"]
+        let hostField = app.textFields["connect-host-input"]
+        let connectButton = app.buttons["connect-button"]
+        return screen.exists || (hostField.exists && connectButton.exists)
     }
 
     private var fileConfiguredHostAndPort: (host: String, port: UInt16)? {
@@ -209,9 +212,14 @@ class BooUITestCase: XCTestCase {
     }
 
     func navigateToConnectScreen(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
-        let title = app.staticTexts["screen-title"]
-        XCTAssertTrue(title.waitForExistence(timeout: 5), file: file, line: line)
-        XCTAssertTrue(isConnectScreenTitle(title.label), "expected connect screen, got '\(title.label)'", file: file, line: line)
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            if isConnectScreen(app) {
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+        XCTFail("expected connect screen", file: file, line: line)
     }
 
     func waitForAnyTailscaleResult(in app: XCUIApplication, timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line) {
@@ -231,8 +239,7 @@ class BooUITestCase: XCTestCase {
 
     @discardableResult
     func openLiveTerminal(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) -> Bool {
-        let title = app.staticTexts["screen-title"]
-        if title.waitForExistence(timeout: 5), isConnectScreenTitle(title.label) {
+        if isConnectScreen(app) {
             connectToConfiguredBoo(from: app, file: file, line: line)
         }
 
@@ -249,7 +256,7 @@ class BooUITestCase: XCTestCase {
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         }
-        XCTAssertTrue(terminal.exists, "expected terminal after connect, title='\(title.label)'", file: file, line: line)
+        XCTAssertTrue(terminal.exists, "expected terminal after connect", file: file, line: line)
         guard terminal.exists else {
             return false
         }

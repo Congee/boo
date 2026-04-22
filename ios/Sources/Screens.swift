@@ -444,17 +444,12 @@ struct ConnectScreen: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            KineticTopBar(
-                title: "Connect to Server",
-                subtitle: "Discover a Boo daemon on your local network or connect manually to a compatible remote endpoint."
-            )
-            ScrollView {
-                scrollContent
-            }
-            .safeAreaInset(edge: .bottom) {
-                Color.clear.frame(height: 96)
-            }
+        ScrollView {
+            scrollContent
+        }
+        .accessibilityIdentifier("connect-screen")
+        .safeAreaInset(edge: .bottom) {
+            Color.clear.frame(height: 96)
         }
         .onAppear {
             applyUITestHostPrefillIfNeeded()
@@ -564,10 +559,6 @@ struct ConnectScreen: View {
                 .buttonStyle(KineticPrimaryButtonStyle())
                 .disabled(host.isEmpty)
                 .accessibilityIdentifier("connect-button")
-
-            Button("Settings") { selectedTab = .settings }
-                .buttonStyle(KineticSecondaryButtonStyle())
-                .accessibilityIdentifier("settings-button")
         }
     }
 

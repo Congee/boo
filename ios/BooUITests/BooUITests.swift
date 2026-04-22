@@ -3,6 +3,7 @@ import XCTest
 final class BooAppLaunchTests: BooUITestCase {
     private func uiStateSnapshot(_ app: XCUIApplication) -> String {
         let title = app.staticTexts["screen-title"].exists ? app.staticTexts["screen-title"].label : "<none>"
+        let connectScreen = app.otherElements["connect-screen"].exists
         let connectStatus = app.staticTexts["connect-status-banner"].exists ? app.staticTexts["connect-status-banner"].label : "<none>"
         let connectError = app.staticTexts["connect-error-label"].exists ? app.staticTexts["connect-error-label"].label : "<none>"
         let bonjourError = app.staticTexts["bonjour-error-label"].exists ? app.staticTexts["bonjour-error-label"].label : "<none>"
@@ -14,6 +15,7 @@ final class BooAppLaunchTests: BooUITestCase {
         let floatingBack = app.buttons["floating-back-button"].exists
         return """
         title=\(title)
+        connectScreen=\(connectScreen)
         connectStatus=\(connectStatus)
         connectError=\(connectError)
         bonjourError=\(bonjourError)
@@ -33,7 +35,6 @@ final class BooAppLaunchTests: BooUITestCase {
     }
 
     private func waitForConnectScreen(_ app: XCUIApplication, timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line) {
-        let title = app.staticTexts["screen-title"]
         let connectButton = app.buttons["connect-button"]
         let savedNode = app.buttons["saved-node-Local Boo"]
         let deadline = Date().addingTimeInterval(timeout)
@@ -42,7 +43,7 @@ final class BooAppLaunchTests: BooUITestCase {
                 connectButton.isHittable ||
                 savedNode.isHittable ||
                 firstHittableDiscoveredDaemonRow(in: app) != nil
-            if title.exists, isConnectScreenTitle(title.label), hasHittableConnectAction {
+            if isConnectScreen(app), hasHittableConnectAction {
                 return
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
@@ -149,9 +150,7 @@ final class BooAppLaunchTests: BooUITestCase {
         app.launch()
         app.tap()
 
-        let settingsButton = app.buttons["settings-button"].exists
-            ? app.buttons["settings-button"]
-            : app.buttons["tab-settings"]
+        let settingsButton = app.buttons["tab-settings"]
         XCTAssertTrue(settingsButton.waitForExistence(timeout: 5))
         settingsButton.tap()
 
@@ -187,9 +186,7 @@ final class BooAppLaunchTests: BooUITestCase {
         relaunched.launch()
         relaunched.tap()
 
-        let relaunchedSettings = relaunched.buttons["settings-button"].exists
-            ? relaunched.buttons["settings-button"]
-            : relaunched.buttons["tab-settings"]
+        let relaunchedSettings = relaunched.buttons["tab-settings"]
         XCTAssertTrue(relaunchedSettings.waitForExistence(timeout: 5))
         relaunchedSettings.tap()
 
@@ -219,9 +216,7 @@ final class BooAppLaunchTests: BooUITestCase {
         _ = installSystemAlertHandler(for: cleared)
         cleared.launch()
         cleared.tap()
-        let clearedSettings = cleared.buttons["settings-button"].exists
-            ? cleared.buttons["settings-button"]
-            : cleared.buttons["tab-settings"]
+        let clearedSettings = cleared.buttons["tab-settings"]
         XCTAssertTrue(clearedSettings.waitForExistence(timeout: 5))
         clearedSettings.tap()
         let clearedTitle = cleared.staticTexts["screen-title"]
@@ -249,7 +244,7 @@ final class BooAppLaunchTests: BooUITestCase {
         app.launch()
         app.tap()
 
-        let settingsButton = app.buttons["settings-button"]
+        let settingsButton = app.buttons["tab-settings"]
         XCTAssertTrue(settingsButton.waitForExistence(timeout: 5))
         settingsButton.tap()
 
@@ -277,9 +272,7 @@ final class BooAppLaunchTests: BooUITestCase {
         app.launch()
         app.tap()
 
-        let title = app.staticTexts["screen-title"]
-        XCTAssertTrue(title.waitForExistence(timeout: 5))
-        XCTAssertTrue(isConnectScreenTitle(title.label))
+        navigateToConnectScreen(app)
 
         let discoveredRows = discoveredDaemonRows(in: app)
         let firstRow = discoveredRows.firstMatch
@@ -517,9 +510,7 @@ final class BooAppLaunchTests: BooUITestCase {
             sessionsTab.tap()
         }
 
-        let title = app.staticTexts["screen-title"]
-        XCTAssertTrue(title.waitForExistence(timeout: 10), "expected app to reach first screen")
-        XCTAssertEqual(title.label, "Connect to Server", "expected dashboard screen, got '\(title.label)'")
+        navigateToConnectScreen(app)
 
         // Give live Bonjour/Tailscale rows time to settle before capturing.
         sleep(8)
@@ -546,10 +537,9 @@ final class BooAppLaunchTests: BooUITestCase {
         let finish = app.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5))
         start.press(forDuration: 0.05, thenDragTo: finish)
 
-        let title = app.staticTexts["screen-title"]
         let deadline = Date().addingTimeInterval(10)
         while Date() < deadline {
-            if title.exists, isConnectScreenTitle(title.label) {
+            if isConnectScreen(app) {
                 return
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
@@ -570,10 +560,9 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTAssertTrue(floatingBackButton.waitForExistence(timeout: 5))
         floatingBackButton.tap()
 
-        let title = app.staticTexts["screen-title"]
         let deadline = Date().addingTimeInterval(10)
         while Date() < deadline {
-            if title.exists, isConnectScreenTitle(title.label) {
+            if isConnectScreen(app) {
                 return
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
@@ -742,12 +731,9 @@ final class BooAppLaunchTests: BooUITestCase {
         app.launch()
         app.tap()
 
-        let title = app.staticTexts["screen-title"]
-        XCTAssertTrue(title.waitForExistence(timeout: 5))
-        XCTAssertTrue(isConnectScreenTitle(title.label))
+        navigateToConnectScreen(app)
         XCTAssertTrue(app.textFields["connect-host-input"].exists)
         XCTAssertTrue(app.buttons["connect-button"].exists)
-        XCTAssertTrue(app.buttons["settings-button"].exists)
     }
 
     func testAutoConnectCanCreateAndAttachSession() {
