@@ -455,29 +455,89 @@ enum ReconnectState: Equatable {
     case failed(reason: String)
 }
 
+enum ConnectionRouteKind: Equatable {
+    case bonjourLAN
+    case tailscale
+    case manual
+
+    var networkUnavailableMessage: String {
+        switch self {
+        case .bonjourLAN:
+            return "Local network unavailable on this iPad"
+        case .tailscale:
+            return "Tailscale path unavailable on this iPad"
+        case .manual:
+            return "Network unavailable on this iPad"
+        }
+    }
+
+    var hostUnreachableMessage: String {
+        switch self {
+        case .bonjourLAN:
+            return "LAN host unreachable from this iPad"
+        case .tailscale:
+            return "Tailscale host unreachable from this iPad"
+        case .manual:
+            return "Host unreachable from this iPad"
+        }
+    }
+}
+
+enum NetworkPathState: Equatable {
+    case unsatisfied
+    case satisfied(isExpensive: Bool, usesWiFi: Bool, usesCellular: Bool, usesWired: Bool)
+
+    var summaryMessage: String {
+        switch self {
+        case .unsatisfied:
+            return "This iPad is currently offline"
+        case .satisfied(let isExpensive, let usesWiFi, let usesCellular, let usesWired):
+            if usesWiFi { return "Connected over Wi-Fi" }
+            if usesWired { return "Connected over wired network" }
+            if usesCellular { return isExpensive ? "Connected over cellular" : "Connected over network" }
+            return isExpensive ? "Connected over metered network" : "Connected over network"
+        }
+    }
+
+    var isSatisfied: Bool {
+        if case .satisfied = self { return true }
+        return false
+    }
+}
+
 @MainActor
 final class ConnectionMonitor: ObservableObject {
     @Published var status: ConnectionStatus = .disconnected
     @Published var transportHealth: TransportHealth = .idle
     @Published var reconnectState: ReconnectState = .idle
+    @Published var networkPathState: NetworkPathState = .unsatisfied
+    @Published var latencyMs: Double?
+    @Published var estimatedPacketLossRate: Double?
 
     private let client: GSPClient
     private let store: ConnectionStore
     private var cancellables = Set<AnyCancellable>()
     private var heartbeatTimer: AnyCancellable?
     private var reconnectWorkItem: DispatchWorkItem?
+    private let pathMonitor = NWPathMonitor()
+    private let pathQueue = DispatchQueue(label: "boo-ios.network-path")
 
     private static let degradedHeartbeatAge: TimeInterval = 8
     private static let lostHeartbeatAge: TimeInterval = 15
     private static let reconnectDelay: TimeInterval = 2
     private static let maxReconnectAttempts = 5
+    private static let postDisconnectConnectDelay: TimeInterval = 0.2
 
     private var reconnectAllowed = false
     private var reconnectAttempt = 0
+    private var connectionIntentGeneration: UInt64 = 0
+    private var lastDisconnectAt: Date?
 
     private(set) var lastEndpoint: NWEndpoint?
     private(set) var lastHost: String?
     private(set) var lastPort: UInt16?
+    private(set) var lastDisplayName: String?
+    private(set) var lastRouteKind: ConnectionRouteKind = .manual
     private(set) var currentHistoryId: UUID?
     private(set) var currentNodeId: UUID?
 
@@ -485,6 +545,7 @@ final class ConnectionMonitor: ObservableObject {
         self.client = client
         self.store = store
         observe()
+        observePath()
     }
 
     private func observe() {
@@ -531,6 +592,26 @@ final class ConnectionMonitor: ObservableObject {
         }
         .store(in: &cancellables)
 
+        Publishers.CombineLatest3(
+            client.$lastHeartbeatRttMs,
+            client.$heartbeatSentCount,
+            Publishers.CombineLatest(client.$heartbeatAckCount, client.$heartbeatTimeoutCount)
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] rtt, sent, ackAndTimeout in
+            guard let self else { return }
+            let (acked, timeouts) = ackAndTimeout
+            self.latencyMs = rtt
+            if sent < 5 {
+                self.estimatedPacketLossRate = nil
+            } else {
+                let outstanding = max(Int64(sent) - Int64(acked) - Int64(timeouts), 0)
+                let lostEstimate = Double(timeouts) + Double(outstanding) * 0.5
+                self.estimatedPacketLossRate = min(100, max(0, (lostEstimate / Double(sent)) * 100))
+            }
+        }
+        .store(in: &cancellables)
+
         heartbeatTimer = Timer
             .publish(every: 1, on: .main, in: .common)
             .autoconnect()
@@ -545,30 +626,57 @@ final class ConnectionMonitor: ObservableObject {
             }
     }
 
-    func connect(host: String, port: UInt16, historyId: UUID? = nil, nodeId: UUID? = nil) {
+    func connect(host: String, port: UInt16, routeKind: ConnectionRouteKind = .manual, displayName: String? = nil, historyId: UUID? = nil, nodeId: UUID? = nil) {
+        connectionIntentGeneration &+= 1
+        let intentGeneration = connectionIntentGeneration
         lastEndpoint = nil
         lastHost = host
         lastPort = port
+        lastDisplayName = displayName
+        lastRouteKind = routeKind
         currentHistoryId = historyId
         currentNodeId = nodeId
         status = .connecting
         transportHealth = .idle
         reconnectAllowed = true
         cancelReconnect()
-        startClientConnection(host: host, port: port)
+        beginConnection(intentGeneration: intentGeneration) {
+            self.startClientConnection(host: host, port: port)
+        }
     }
 
-    func connect(endpoint: NWEndpoint, displayHost: String, displayPort: UInt16, historyId: UUID? = nil, nodeId: UUID? = nil) {
+    func connect(endpoint: NWEndpoint, displayHost: String, displayPort: UInt16, routeKind: ConnectionRouteKind = .manual, displayName: String? = nil, historyId: UUID? = nil, nodeId: UUID? = nil) {
+        connectionIntentGeneration &+= 1
+        let intentGeneration = connectionIntentGeneration
         lastEndpoint = endpoint
         lastHost = displayHost
         lastPort = displayPort
+        lastDisplayName = displayName
+        lastRouteKind = routeKind
         currentHistoryId = historyId
         currentNodeId = nodeId
         status = .connecting
         transportHealth = .idle
         reconnectAllowed = true
         cancelReconnect()
-        startClientConnection(endpoint: endpoint, host: displayHost, port: displayPort)
+        beginConnection(intentGeneration: intentGeneration) {
+            self.startClientConnection(endpoint: endpoint, host: displayHost, port: displayPort)
+        }
+    }
+
+    private func beginConnection(intentGeneration: UInt64, start: @escaping () -> Void) {
+        let delay = max(
+            0,
+            Self.postDisconnectConnectDelay - Date().timeIntervalSince(lastDisconnectAt ?? .distantPast)
+        )
+        guard delay > 0 else {
+            start()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.connectionIntentGeneration == intentGeneration else { return }
+            start()
+        }
     }
 
     private func startClientConnection(host: String, port: UInt16) {
@@ -605,6 +713,8 @@ final class ConnectionMonitor: ObservableObject {
     }
 
     func disconnect() {
+        connectionIntentGeneration &+= 1
+        lastDisconnectAt = Date()
         reconnectAllowed = false
         cancelReconnect()
         client.disconnect()
@@ -614,6 +724,8 @@ final class ConnectionMonitor: ObservableObject {
         lastEndpoint = nil
         lastHost = nil
         lastPort = nil
+        lastDisplayName = nil
+        lastRouteKind = .manual
         currentHistoryId = nil
         currentNodeId = nil
     }
@@ -714,8 +826,10 @@ final class ConnectionMonitor: ObservableObject {
 
     private func scheduleReconnect() {
         cancelReconnect()
+        let intentGeneration = connectionIntentGeneration
         let workItem = DispatchWorkItem { [weak self] in
             guard let self,
+                  self.connectionIntentGeneration == intentGeneration,
                   self.reconnectAllowed else { return }
             self.status = .connecting
             if let endpoint = self.lastEndpoint,
@@ -737,5 +851,48 @@ final class ConnectionMonitor: ObservableObject {
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
         reconnectAttempt = 0
+    }
+
+    func contextualErrorMessage(_ raw: String) -> String {
+        switch raw {
+        case "Network unavailable on this iPad":
+            return lastRouteKind.networkUnavailableMessage
+        case "Host unreachable from this iPad":
+            return lastRouteKind.hostUnreachableMessage
+        case "Host network unreachable from this iPad":
+            return lastRouteKind.hostUnreachableMessage
+        default:
+            return raw
+        }
+    }
+
+    var networkStatusSummary: String {
+        networkPathState.summaryMessage
+    }
+
+    var latencyAndLossSummary: String? {
+        let latencyPart = latencyMs.map { String(format: "%.0f ms", $0) }
+        let lossPart = estimatedPacketLossRate.map { String(format: "%.0f%% loss", $0) }
+        let pieces = [latencyPart, lossPart].compactMap { $0 }
+        return pieces.isEmpty ? nil : pieces.joined(separator: " · ")
+    }
+
+    private func observePath() {
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            Task { @MainActor in
+                guard let self else { return }
+                if path.status != .satisfied {
+                    self.networkPathState = .unsatisfied
+                } else {
+                    self.networkPathState = .satisfied(
+                        isExpensive: path.isExpensive,
+                        usesWiFi: path.usesInterfaceType(.wifi),
+                        usesCellular: path.usesInterfaceType(.cellular),
+                        usesWired: path.usesInterfaceType(.wiredEthernet)
+                    )
+                }
+            }
+        }
+        pathMonitor.start(queue: pathQueue)
     }
 }

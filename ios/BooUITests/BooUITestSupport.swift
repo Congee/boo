@@ -146,6 +146,10 @@ class BooUITestCase: XCTestCase {
         app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "discovered-daemon-"))
     }
 
+    func firstHittableDiscoveredDaemonRow(in app: XCUIApplication) -> XCUIElement? {
+        discoveredDaemonRows(in: app).allElementsBoundByIndex.first(where: \.isHittable)
+    }
+
     func connectToConfiguredBoo(from app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
         let connectButton = app.buttons["connect-button"]
         if connectButton.waitForExistence(timeout: 2), connectButton.isEnabled {
@@ -157,8 +161,9 @@ class BooUITestCase: XCTestCase {
             return
         }
         let discoveredRows = discoveredDaemonRows(in: app)
-        if discoveredRows.firstMatch.waitForExistence(timeout: 2) {
-            discoveredRows.firstMatch.tap()
+        if discoveredRows.firstMatch.waitForExistence(timeout: 2),
+           let hittableDiscoveredRow = firstHittableDiscoveredDaemonRow(in: app) {
+            hittableDiscoveredRow.tap()
             return
         }
         if let explicitHost, app.buttons[explicitHost].waitForExistence(timeout: 1) {

@@ -123,6 +123,69 @@ struct TailscalePeer: Identifiable, Hashable {
     }
 }
 
+enum TailscalePeerProbeStatus: Equatable {
+    case probing
+    case reachable
+    case unreachable
+}
+
+struct TailscalePeerProbeMetrics: Equatable {
+    let status: TailscalePeerProbeStatus
+    let latencyMs: Double?
+    let lossRate: Double?
+}
+
+func measureBooQUICHandshakeLatency(endpoint: NWEndpoint) async -> Double? {
+    await withCheckedContinuation { continuation in
+        let queue = DispatchQueue(label: "boo-ios.endpoint-probe.\(endpoint)")
+        let options = NWProtocolQUIC.Options(alpn: ["boo-remote"])
+        let params = NWParameters(quic: options)
+        params.includePeerToPeer = true
+        let connection = NWConnection(to: endpoint, using: params)
+        let start = Date()
+        var finished = false
+
+        func resolve(_ value: Double?) {
+            guard !finished else { return }
+            finished = true
+            connection.stateUpdateHandler = nil
+            connection.cancel()
+            continuation.resume(returning: value)
+        }
+
+        let timeout = DispatchSource.makeTimerSource(queue: queue)
+        timeout.schedule(deadline: .now() + 3)
+        timeout.setEventHandler {
+            timeout.cancel()
+            resolve(nil)
+        }
+        timeout.resume()
+
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                timeout.cancel()
+                resolve(Date().timeIntervalSince(start) * 1000)
+            case .failed, .cancelled:
+                timeout.cancel()
+                resolve(nil)
+            default:
+                break
+            }
+        }
+        connection.start(queue: queue)
+    }
+}
+
+func measureBooQUICHandshakeLatency(host: String, port: UInt16) async -> Double? {
+    guard let endpointPort = NWEndpoint.Port(rawValue: port) else {
+        return nil
+    }
+    return await measureBooQUICHandshakeLatency(
+        endpoint: .hostPort(host: NWEndpoint.Host(host), port: endpointPort)
+    )
+}
+
 @MainActor
 final class BonjourBrowser: ObservableObject {
     @Published var daemons: [DiscoveredDaemon] = []
@@ -317,8 +380,40 @@ final class TailscalePeerBrowser: ObservableObject {
     @Published var peers: [TailscalePeer] = []
     @Published var isLoading = false
     @Published var lastError: String?
+    @Published private(set) var probeMetrics: [String: TailscalePeerProbeMetrics] = [:]
 
     private var refreshTask: Task<Void, Never>?
+    private var probeTasks: [String: Task<Void, Never>] = [:]
+    private var probeState: [String: ProbeAccumulator] = [:]
+
+    private struct ProbeAccumulator {
+        var attempts: Int = 0
+        var failures: Int = 0
+        var successes: Int = 0
+        var consecutiveFailures: Int = 0
+        var lastLatencyMs: Double?
+
+        var metrics: TailscalePeerProbeMetrics {
+            let status: TailscalePeerProbeStatus = {
+                if lastLatencyMs != nil {
+                    return .reachable
+                }
+                if attempts >= 3 && consecutiveFailures >= 3 {
+                    return .unreachable
+                }
+                return .probing
+            }()
+            let loss: Double? = {
+                guard attempts >= 5, successes > 0 else { return nil }
+                return (Double(failures) / Double(attempts)) * 100
+            }()
+            return TailscalePeerProbeMetrics(
+                status: status,
+                latencyMs: lastLatencyMs,
+                lossRate: loss
+            )
+        }
+    }
 
     func refresh(store: ConnectionStore) {
         refreshTask?.cancel()
@@ -338,6 +433,7 @@ final class TailscalePeerBrowser: ObservableObject {
             }
             lastError = nil
             isLoading = false
+            updateProbeTasks()
             return
         }
 
@@ -347,6 +443,7 @@ final class TailscalePeerBrowser: ObservableObject {
             peers = []
             lastError = nil
             isLoading = false
+            clearProbeTasks()
             return
         }
 
@@ -361,11 +458,13 @@ final class TailscalePeerBrowser: ObservableObject {
                 peers = fetched
                 lastError = nil
                 isLoading = false
+                updateProbeTasks()
             } catch {
                 guard !Task.isCancelled else { return }
                 peers = []
                 lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 isLoading = false
+                clearProbeTasks()
             }
         }
     }
@@ -374,6 +473,7 @@ final class TailscalePeerBrowser: ObservableObject {
         refreshTask?.cancel()
         refreshTask = nil
         isLoading = false
+        clearProbeTasks()
     }
 
     private func fetchPeers(token: String, port: UInt16) async throws -> [TailscalePeer] {
@@ -513,6 +613,53 @@ final class TailscalePeerBrowser: ObservableObject {
         }
         return nil
     }
+
+    private func updateProbeTasks() {
+        let onlineIDs = Set(peers.filter(\.online).map(\.id))
+
+        for (id, task) in probeTasks where !onlineIDs.contains(id) {
+            task.cancel()
+            probeTasks.removeValue(forKey: id)
+            probeState.removeValue(forKey: id)
+            probeMetrics.removeValue(forKey: id)
+        }
+
+        for peer in peers where peer.online {
+            guard probeTasks[peer.id] == nil else { continue }
+            probeTasks[peer.id] = Task { [weak self] in
+                await self?.runProbeLoop(for: peer)
+            }
+        }
+    }
+
+    private func clearProbeTasks() {
+        probeTasks.values.forEach { $0.cancel() }
+        probeTasks.removeAll()
+        probeState.removeAll()
+        probeMetrics.removeAll()
+    }
+
+    private func runProbeLoop(for peer: TailscalePeer) async {
+        while !Task.isCancelled {
+            let latency = await measureBooQUICHandshakeLatency(host: peer.host, port: peer.port)
+            if Task.isCancelled { return }
+            await MainActor.run {
+                var state = self.probeState[peer.id] ?? ProbeAccumulator()
+                state.attempts += 1
+                if let latency {
+                    state.successes += 1
+                    state.consecutiveFailures = 0
+                    state.lastLatencyMs = latency
+                } else {
+                    state.failures += 1
+                    state.consecutiveFailures += 1
+                }
+                self.probeState[peer.id] = state
+                self.probeMetrics[peer.id] = state.metrics
+            }
+            try? await Task.sleep(for: .seconds(15))
+        }
+    }
 }
 
 @MainActor
@@ -532,6 +679,9 @@ final class GSPClient: ObservableObject {
     @Published var lastSeenServerIdentityId: String?
     @Published var lastHeartbeatAck: Date?
     @Published var lastHeartbeatRttMs: Double?
+    @Published var heartbeatSentCount: UInt64 = 0
+    @Published var heartbeatAckCount: UInt64 = 0
+    @Published var heartbeatTimeoutCount: UInt64 = 0
     @Published var lastConnectLatencyMs: Double?
     @Published var lastAuthLatencyMs: Double?
     @Published var lastSessionListLatencyMs: Double?
@@ -621,6 +771,9 @@ final class GSPClient: ObservableObject {
         serverIdentityId = nil
         lastHeartbeatAck = nil
         lastHeartbeatRttMs = nil
+        heartbeatSentCount = 0
+        heartbeatAckCount = 0
+        heartbeatTimeoutCount = 0
         lastHeartbeatSent = nil
         pendingHeartbeatToken = nil
         attachedSessionId = nil
@@ -637,6 +790,8 @@ final class GSPClient: ObservableObject {
         authRequestedAt = nil
         sessionListRequestedAt = nil
         attachRequestedAt = nil
+        lastErrorKind = nil
+        lastError = nil
     }
 
     func listSessions() {
@@ -748,6 +903,7 @@ final class GSPClient: ObservableObject {
     func sendHeartbeat() {
         let token = UInt64(Date().timeIntervalSince1970 * 1000)
         pendingHeartbeatToken = token
+        heartbeatSentCount &+= 1
         sendMessage(type: .heartbeat, payload: Data(withUnsafeBytes(of: token.littleEndian, Array.init)))
     }
 
@@ -832,6 +988,16 @@ final class GSPClient: ObservableObject {
     }
 
     private func prepareForConnectionAttempt() {
+        connection?.cancel()
+        connection = nil
+        stopConnectionTimeout()
+        stopHeartbeatLoop()
+        connected = false
+        authenticated = false
+        lastHeartbeatAck = nil
+        lastHeartbeatRttMs = nil
+        lastHeartbeatSent = nil
+        pendingHeartbeatToken = nil
         connectionGeneration &+= 1
         connectionDebugGeneration = connectionGeneration
         connectionAttemptCount &+= 1
@@ -839,6 +1005,7 @@ final class GSPClient: ObservableObject {
             reconnectAttemptCount &+= 1
         }
         connectStartedAt = Date()
+        lastError = nil
         startConnectionTimeout(for: connectionGeneration)
     }
 
@@ -879,16 +1046,15 @@ final class GSPClient: ObservableObject {
                     self.sendAuth()
                 case .waiting(let error):
                     self.connected = false
-                    let raw = "\(error)"
-                    if raw.contains("rawValue: 61") || raw.contains("Connection refused") {
+                    if self.isConnectionRefused(error) {
                         self.stopConnectionTimeout()
                         self.protocolError("Connection refused")
                     } else {
-                        self.lastError = "Connection waiting: \(error)"
+                        self.lastError = self.userFacingTransportMessage(for: error, prefix: "Waiting for network")
                     }
                 case .failed(let error):
                     self.stopConnectionTimeout()
-                    self.protocolError("Connection failed: \(error)")
+                    self.protocolError(self.userFacingTransportMessage(for: error, prefix: "Connection failed"))
                 case .cancelled:
                     self.stopConnectionTimeout()
                     self.stopHeartbeatLoop()
@@ -897,6 +1063,45 @@ final class GSPClient: ObservableObject {
                     break
                 }
             }
+        }
+    }
+
+    private func isConnectionRefused(_ error: NWError) -> Bool {
+        if case .posix(let code) = error {
+            return code == .ECONNREFUSED
+        }
+        return false
+    }
+
+    private func userFacingTransportMessage(for error: NWError, prefix: String) -> String {
+        switch error {
+        case .posix(let code):
+            switch code {
+            case .ENETDOWN:
+                return "Network unavailable on this iPad"
+            case .ENETUNREACH:
+                return "Host network unreachable from this iPad"
+            case .EHOSTUNREACH:
+                return "Host unreachable from this iPad"
+            case .ETIMEDOUT:
+                return "Connection timed out"
+            case .ECONNRESET:
+                return "Connection was reset"
+            case .ECONNABORTED:
+                return "Connection was interrupted"
+            case .ENOTCONN:
+                return "Connection is no longer active"
+            default:
+                return "\(prefix): \(String(describing: code))"
+            }
+        case .dns(let code):
+            return "\(prefix): DNS error (\(code))"
+        case .tls(let status):
+            return "\(prefix): TLS error (\(status))"
+        case .wifiAware(let code):
+            return "\(prefix): Wi-Fi aware error (\(code))"
+        @unknown default:
+            return "\(prefix)"
         }
     }
 
@@ -996,6 +1201,7 @@ final class GSPClient: ObservableObject {
                 }
                 if let pendingHeartbeatToken, token == pendingHeartbeatToken, let lastHeartbeatSent {
                     lastHeartbeatRttMs = Date().timeIntervalSince(lastHeartbeatSent) * 1000
+                    heartbeatAckCount &+= 1
                     self.pendingHeartbeatToken = nil
                 }
             }
@@ -1041,6 +1247,9 @@ final class GSPClient: ObservableObject {
             pendingAttachedSessionId = nil
             sessions = []
             screen = ScreenState()
+        }
+        if message == "Remote heartbeat timed out" {
+            heartbeatTimeoutCount &+= 1
         }
         lastError = message
         lastErrorKind = .remote(message)

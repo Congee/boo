@@ -34,9 +34,15 @@ final class BooAppLaunchTests: BooUITestCase {
 
     private func waitForConnectScreen(_ app: XCUIApplication, timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line) {
         let title = app.staticTexts["screen-title"]
+        let connectButton = app.buttons["connect-button"]
+        let savedNode = app.buttons["saved-node-Local Boo"]
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if title.exists, isConnectScreenTitle(title.label) {
+            let hasHittableConnectAction =
+                connectButton.isHittable ||
+                savedNode.isHittable ||
+                firstHittableDiscoveredDaemonRow(in: app) != nil
+            if title.exists, isConnectScreenTitle(title.label), hasHittableConnectAction {
                 return
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
@@ -363,6 +369,132 @@ final class BooAppLaunchTests: BooUITestCase {
         assertTerminalCanType(app, marker: "BOO_UI_TYPED")
     }
 
+    func testOpenLiveSessionShowsCustomKeyboardAccessory() {
+        let app = makeApp(autoConnect: false, resetStorage: false)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        guard openLiveTerminal(app) else { return }
+
+        let terminal = app.otherElements["terminal-screen"]
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10))
+        terminal.tap()
+
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+
+        XCTAssertTrue(app.buttons["terminal-key-dismiss"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["terminal-key-ctrl"].exists)
+        XCTAssertTrue(app.buttons["terminal-key-alt"].exists)
+        XCTAssertTrue(app.buttons["terminal-key-tab"].exists)
+        XCTAssertTrue(app.buttons["terminal-key-tilde"].exists)
+        XCTAssertTrue(app.buttons["terminal-key-dollar"].exists)
+        XCTAssertTrue(app.buttons["terminal-key-backslash"].exists)
+        XCTAssertTrue(app.buttons["terminal-key-left-bracket"].exists)
+        XCTAssertTrue(app.buttons["terminal-key-right-bracket"].exists)
+        XCTAssertTrue(app.buttons["terminal-key-less-than"].exists)
+        XCTAssertTrue(app.buttons["terminal-key-greater-than"].exists)
+        XCTAssertTrue(app.buttons["terminal-key-left"].exists)
+        XCTAssertTrue(app.buttons["terminal-key-right"].exists)
+        XCTAssertTrue(app.buttons["terminal-key-meta"].exists)
+    }
+
+    func testDashboardRowShowsLatencyMetricAfterConnect() {
+        let app = makeApp(autoConnect: false, resetStorage: false, includeConfiguredHost: false)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        guard openLiveTerminal(app) else { return }
+
+        let floatingBackButton = app.buttons["floating-back-button"]
+        XCTAssertTrue(floatingBackButton.waitForExistence(timeout: 5))
+        floatingBackButton.tap()
+
+        waitForConnectScreen(app)
+
+        let discoveredRows = discoveredDaemonRows(in: app)
+        let firstRow = discoveredRows.firstMatch
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 12))
+
+        let metricBadge = app.staticTexts.matching(identifier: "host-metric-example-mbp").firstMatch
+        XCTAssertTrue(metricBadge.waitForExistence(timeout: 8), "expected visible discovered-host metric badge")
+
+        let predicate = NSPredicate(format: "label MATCHES %@", "\\b[0-9]+ ms\\b")
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: metricBadge)
+        let result = XCTWaiter.wait(for: [expectation], timeout: 8)
+        XCTAssertEqual(
+            result,
+            .completed,
+            "expected discovered-host metric badge to contain latency text, got '\(metricBadge.label)'"
+        )
+
+        let screenshotAttachment = XCTAttachment(screenshot: app.screenshot())
+        screenshotAttachment.name = "dashboard-row-metrics"
+        screenshotAttachment.lifetime = .keepAlways
+        add(screenshotAttachment)
+    }
+
+    func testTailscaleRowShowsProbeOrLatencyState() {
+        let mockDevices = "blackbox|100.124.214.64|100.124.214.64|linux|1"
+        let app = makeApp(
+            autoConnect: false,
+            resetStorage: true,
+            mockTailscaleDevices: mockDevices,
+            includeConfiguredHost: false
+        )
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        navigateToConnectScreen(app)
+
+        let tailscaleSection = app.staticTexts["TAILSCALE DEVICES"]
+        scrollUntilExists(tailscaleSection, in: app)
+
+        let row = app.buttons["tailscale-peer-blackbox"].exists ? app.buttons["tailscale-peer-blackbox"] : app.otherElements["tailscale-peer-blackbox"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "expected visible Tailscale row for blackbox")
+
+        let metricBadge = app.staticTexts.matching(identifier: "host-metric-blackbox").firstMatch
+        XCTAssertTrue(metricBadge.waitForExistence(timeout: 10), "expected visible Tailscale metric badge for blackbox")
+
+        let predicate = NSPredicate(format: "label MATCHES %@", "\\b(probing|unreachable|[0-9]+ ms)\\b")
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: metricBadge)
+        let result = XCTWaiter.wait(for: [expectation], timeout: 10)
+        XCTAssertEqual(
+            result,
+            .completed,
+            "expected visible Tailscale metric badge state, got '\(metricBadge.label)'"
+        )
+    }
+
+    func testOfflineTailscaleRowIsNotTappable() {
+        let mockDevices = "Online Mac|online.tailnet.ts.net|100.64.0.10|macOS|1;Offline box|offline.tailnet.ts.net|100.64.0.11|Linux|0"
+        let app = makeApp(autoConnect: false, resetStorage: true, mockTailscaleDevices: mockDevices)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        navigateToConnectScreen(app)
+
+        let onlineRow = app.buttons["tailscale-peer-Online Mac"]
+        let offlineButtonRow = app.buttons["tailscale-peer-Offline box"]
+        let offlineAnyRow = app.descendants(matching: .any).matching(identifier: "tailscale-peer-Offline box").firstMatch
+
+        scrollUntilExists(onlineRow, in: app)
+        scrollUntilExists(offlineAnyRow, in: app)
+
+        XCTAssertTrue(onlineRow.exists)
+        XCTAssertFalse(offlineButtonRow.exists, "offline Tailscale row should not be rendered as a tappable button")
+        XCTAssertTrue(offlineAnyRow.exists, "offline Tailscale row should still be visible")
+
+        let screenshotAttachment = XCTAttachment(screenshot: app.screenshot())
+        screenshotAttachment.name = "offline-tailscale-row"
+        screenshotAttachment.lifetime = .keepAlways
+        add(screenshotAttachment)
+    }
+
     func testSwipeBackFromTerminalReturnsToConnectScreen() {
         let app = makeApp(autoConnect: false, resetStorage: false)
         _ = installSystemAlertHandler(for: app)
@@ -433,6 +565,52 @@ final class BooAppLaunchTests: BooUITestCase {
         guard openLiveTerminal(app) else { return }
         waitForTerminalScreen(app)
         assertTerminalCanType(app, marker: "BOO_UI_TYPED_2")
+    }
+
+    func testFastSwipeBackAndReconnectStress() {
+        let app = makeApp(autoConnect: false, resetStorage: false, includeConfiguredHost: false)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        let loops = 5
+        for iteration in 1...loops {
+            guard openLiveTerminal(app) else {
+                XCTFail("failed to open live terminal on iteration \(iteration):\n\(uiStateSnapshot(app))")
+                return
+            }
+
+            let terminal = app.otherElements["terminal-screen"]
+            XCTAssertTrue(terminal.waitForExistence(timeout: 10))
+            let backZone = app.otherElements["terminal-back-swipe-zone"]
+            XCTAssertTrue(backZone.waitForExistence(timeout: 5))
+            let start = backZone.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
+            let finish = app.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5))
+            start.press(forDuration: 0.01, thenDragTo: finish)
+
+            waitForConnectScreen(app)
+
+            let discoveredRows = discoveredDaemonRows(in: app)
+            let firstRow = discoveredRows.firstMatch
+            XCTAssertTrue(firstRow.waitForExistence(timeout: 12), "missing discovered host row after swipe-back on iteration \(iteration):\n\(uiStateSnapshot(app))")
+            firstRow.tap()
+
+            waitForTerminalScreen(app)
+            let attachedExpectation = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "label BEGINSWITH %@", "attached-"),
+                object: terminal
+            )
+            let attachedResult = XCTWaiter.wait(for: [attachedExpectation], timeout: 10)
+            XCTAssertEqual(
+                attachedResult,
+                .completed,
+                "terminal did not reattach after fast reconnect on iteration \(iteration):\n\(uiStateSnapshot(app))",
+                file: #filePath,
+                line: #line
+            )
+        }
+
+        assertTerminalCanType(app, marker: "BOO_UI_TYPED_STRESS")
     }
 
     func testKeyboardDismissAndRefocusStillTypes() {

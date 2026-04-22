@@ -125,6 +125,81 @@ private func parseAdvertisedServiceTarget(_ serviceName: String) -> (nodeName: S
     return (hostLabel, "\(hostLabel).local", port)
 }
 
+private struct DashboardProbeMetrics: Equatable {
+    let status: TailscalePeerProbeStatus
+    let latencyMs: Double?
+}
+
+@MainActor
+private final class DashboardProbeMonitor: ObservableObject {
+    @Published private(set) var metrics: [String: DashboardProbeMetrics] = [:]
+
+    private var tasks: [String: Task<Void, Never>] = [:]
+
+    struct Target: Equatable {
+        let key: String
+        let host: String?
+        let port: UInt16
+        let endpoint: NWEndpoint?
+    }
+
+    func updateTargets(_ targets: [Target]) {
+        let targetKeys = Set(targets.map(\.key))
+
+        for (key, task) in tasks where !targetKeys.contains(key) {
+            task.cancel()
+            tasks.removeValue(forKey: key)
+            metrics.removeValue(forKey: key)
+        }
+
+        for target in targets {
+            guard tasks[target.key] == nil else { continue }
+            tasks[target.key] = Task { [weak self] in
+                await self?.runProbeLoop(for: target)
+            }
+        }
+    }
+
+    func stop() {
+        tasks.values.forEach { $0.cancel() }
+        tasks.removeAll()
+        metrics.removeAll()
+    }
+
+    private func runProbeLoop(for target: Target) async {
+        var attempts = 0
+        var consecutiveFailures = 0
+        while !Task.isCancelled {
+            let latency: Double? = if let endpoint = target.endpoint {
+                await measureBooQUICHandshakeLatency(endpoint: endpoint)
+            } else if let host = target.host {
+                await measureBooQUICHandshakeLatency(host: host, port: target.port)
+            } else {
+                nil
+            }
+            if Task.isCancelled { return }
+            attempts += 1
+            if latency == nil {
+                consecutiveFailures += 1
+            } else {
+                consecutiveFailures = 0
+            }
+            await MainActor.run {
+                let status: TailscalePeerProbeStatus
+                if let latency {
+                    status = .reachable
+                } else if attempts >= 3 && consecutiveFailures >= 3 {
+                    status = .unreachable
+                } else {
+                    status = .probing
+                }
+                self.metrics[target.key] = DashboardProbeMetrics(status: status, latencyMs: latency)
+            }
+            try? await Task.sleep(for: .seconds(15))
+        }
+    }
+}
+
 struct BooRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var client = GSPClient()
@@ -149,7 +224,7 @@ struct BooRootView: View {
             Group {
                 switch selectedTab {
                 case .sessions:
-                    NavigationStack {
+                    ZStack {
                         ConnectScreen(
                             client: client,
                             browser: browser,
@@ -157,10 +232,26 @@ struct BooRootView: View {
                             store: store,
                             monitor: activeMonitor,
                             selectedTab: $selectedTab,
+                            onPresentConnectedTerminal: {
+                                showingConnectedTerminal = true
+                            },
                             serverIdentityWarning: serverIdentityWarning
                         )
-                        .navigationDestination(isPresented: $showingConnectedTerminal) {
-                            TerminalSessionScreen(client: client, monitor: activeMonitor, store: store, serverIdentityWarning: serverIdentityWarning)
+                        .opacity(showingConnectedTerminal ? 0 : 1)
+                        .allowsHitTesting(!showingConnectedTerminal)
+                        .accessibilityHidden(showingConnectedTerminal)
+                        if showingConnectedTerminal {
+                            TerminalSessionScreen(
+                                client: client,
+                                monitor: activeMonitor,
+                                store: store,
+                                serverIdentityWarning: serverIdentityWarning,
+                                onBack: {
+                                    showingConnectedTerminal = false
+                                }
+                            )
+                            .ignoresSafeArea()
+                            .zIndex(1)
                         }
                     }
                 case .history:
@@ -189,12 +280,6 @@ struct BooRootView: View {
         }
         .onChange(of: activeMonitor.status) { oldValue, newValue in
             handleStatusChange(from: oldValue, to: newValue)
-        }
-        .onChange(of: showingConnectedTerminal) { oldValue, newValue in
-            guard oldValue, !newValue else { return }
-            if client.connected || client.authenticated {
-                activeMonitor.disconnect()
-            }
         }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else { return }
@@ -254,13 +339,11 @@ struct BooRootView: View {
                 }
             }
         case .connectionLost:
-            showingConnectedTerminal = false
             if let historyId = activeMonitor.currentHistoryId {
                 store.endConnection(id: historyId, status: .timedOut)
                 activeMonitor.clearTrackedConnection()
             }
         case .disconnected:
-            showingConnectedTerminal = false
             if let host = activeMonitor.lastHost, let port = activeMonitor.lastPort {
                 store.clearResumeAttachment(host: host, port: port)
             }
@@ -291,10 +374,12 @@ struct BooRootView: View {
         activeMonitor.connect(
             host: host,
             port: config.port,
+            displayName: config.nodeName ?? host,
             historyId: historyId,
             nodeId: matchingNodeId
         )
     }
+
 }
 
 struct ConnectScreen: View {
@@ -304,8 +389,10 @@ struct ConnectScreen: View {
     @ObservedObject var store: ConnectionStore
     @ObservedObject var monitor: ConnectionMonitor
     @Binding var selectedTab: BooTab
+    let onPresentConnectedTerminal: () -> Void
     let serverIdentityWarning: String?
 
+    @StateObject private var dashboardProbeMonitor = DashboardProbeMonitor()
     @State private var host = ""
     @State private var serviceResolver: BonjourServiceResolver?
     @State private var resolvingBonjourService = false
@@ -313,13 +400,14 @@ struct ConnectScreen: View {
 
     private var displayedConnectError: String? {
         guard let error = client.lastError else { return nil }
+        let contextual = monitor.contextualErrorMessage(error)
         if error == "Connection timed out",
            let host = monitor.lastHost,
            let peer = tailscaleBrowser.peers.first(where: { $0.host == host || $0.address == host })
         {
             return "Timed out reaching \(peer.name) over Tailscale. Make sure this iPad is connected to Tailscale and Boo is listening on port \(peer.port)."
         }
-        return error
+        return contextual
     }
 
     private var statusBanner: (message: String, color: Color)? {
@@ -333,20 +421,23 @@ struct ConnectScreen: View {
         }
         switch monitor.transportHealth {
         case .degraded(let reason):
-            return (reason, KineticColor.tertiary)
+            return (decorateStatusMessage(reason), KineticColor.tertiary)
         case .lost(let reason):
-            return (reason, KineticColor.error)
+            return (decorateStatusMessage(reason), KineticColor.error)
         default:
             break
         }
         switch monitor.status {
         case .connecting:
-            return ("Connecting…", KineticColor.primary)
+            return (decorateStatusMessage("Connecting…"), KineticColor.primary)
         case .connectionLost(let reason):
-            return (reason, KineticColor.error)
+            return (decorateStatusMessage(reason), KineticColor.error)
         default:
             if resolvingBonjourService {
                 return ("Resolving discovered host…", KineticColor.primary)
+            }
+            if !monitor.networkPathState.isSatisfied {
+                return (monitor.networkStatusSummary, KineticColor.tertiary)
             }
             return nil
         }
@@ -359,169 +450,10 @@ struct ConnectScreen: View {
                 subtitle: "Discover a Boo daemon on your local network or connect manually to a compatible remote endpoint."
             )
             ScrollView {
-                VStack(alignment: .leading, spacing: KineticSpacing.xl) {
-                    if let statusBanner {
-                        Text(statusBanner.message)
-                            .font(KineticFont.caption)
-                            .foregroundStyle(statusBanner.color)
-                            .accessibilityIdentifier("connect-status-banner")
-                            .padding(KineticSpacing.md)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(statusBanner.color.opacity(0.1))
-                            .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
-                    }
-                    if let serverIdentityWarning {
-                        Text(serverIdentityWarning)
-                            .font(KineticFont.caption)
-                            .foregroundStyle(KineticColor.error)
-                            .padding(KineticSpacing.md)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(KineticColor.error.opacity(0.1))
-                            .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
-                    }
-
-                    VStack(alignment: .leading, spacing: KineticSpacing.sm) {
-                        KineticSectionLabel(text: "Machine Address")
-                        KineticInputField(placeholder: "hostname or ip:port", text: $host, accessibilityIdentifier: "connect-host-input")
-                        Text("Connect directly to a LAN host, a Tailscale IP, or any other reachable Boo endpoint.")
-                            .font(KineticFont.caption)
-                            .foregroundStyle(KineticColor.onSurfaceVariant)
-                    }
-
-                    if let error = displayedConnectError {
-                        Text(error)
-                            .font(KineticFont.caption)
-                            .foregroundStyle(KineticColor.error)
-                            .accessibilityIdentifier("connect-error-label")
-                            .padding(KineticSpacing.md)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(KineticColor.error.opacity(0.1))
-                            .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
-                    }
-                    if let browserError = browser.lastError {
-                        VStack(alignment: .leading, spacing: KineticSpacing.sm) {
-                            Text(browserError)
-                                .font(KineticFont.caption)
-                                .foregroundStyle(KineticColor.error)
-                                .accessibilityIdentifier("bonjour-error-label")
-                            if browserError.contains("Local network access is required") {
-                                Button("Open iPad Settings") {
-                                    guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
-                                    UIApplication.shared.open(url)
-                                }
-                                .buttonStyle(KineticSecondaryButtonStyle())
-                                .accessibilityIdentifier("open-local-network-settings-button")
-                            }
-                        }
-                        .padding(KineticSpacing.md)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(KineticColor.error.opacity(0.1))
-                        .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
-                    }
-
-                    VStack(spacing: KineticSpacing.sm) {
-                        Button("Connect") { connectManual() }
-                            .buttonStyle(KineticPrimaryButtonStyle())
-                            .disabled(host.isEmpty)
-                            .accessibilityIdentifier("connect-button")
-
-                        Button("Settings") { selectedTab = .settings }
-                            .buttonStyle(KineticSecondaryButtonStyle())
-                            .accessibilityIdentifier("settings-button")
-                    }
-
-                    if !store.savedNodes.isEmpty {
-                        VStack(alignment: .leading, spacing: KineticSpacing.sm) {
-                            KineticSectionLabel(text: "Saved Nodes")
-                            ForEach(store.savedNodes) { node in
-                                KineticCardRow(
-                                    icon: "server.rack",
-                                    title: node.name,
-                                    subtitle: "\(node.host):\(node.port)",
-                                    onTap: {
-                                        let historyId = store.recordConnection(
-                                            nodeName: node.name,
-                                            host: formatConnectionTarget(host: node.host, port: node.port)
-                                        )
-                                        monitor.connect(
-                                            host: node.host,
-                                            port: node.port,
-                                            historyId: historyId,
-                                            nodeId: node.id
-                                        )
-                                    },
-                                    accessibilityIdentifier: "saved-node-\(node.name)"
-                                )
-                            }
-                        }
-                    }
-
-                    if !browser.daemons.isEmpty || browser.isSearching {
-                        VStack(alignment: .leading, spacing: KineticSpacing.sm) {
-                            KineticSectionLabel(text: "Discovered on Network")
-                            Text("Bonjour discovery on your current LAN or Wi-Fi network.")
-                                .font(KineticFont.caption)
-                                .foregroundStyle(KineticColor.onSurfaceVariant)
-                            if browser.isSearching && browser.daemons.isEmpty {
-                                ProgressView()
-                                    .tint(KineticColor.primary)
-                            }
-                            ForEach(browser.daemons) { daemon in
-                                KineticCardRow(
-                                    icon: "terminal",
-                                    title: daemon.title,
-                                    subtitle: daemon.subtitle,
-                                    onTap: {
-                                        connectToEndpoint(daemon.endpoint)
-                                    },
-                                    accessibilityIdentifier: "discovered-daemon-\(daemon.name)"
-                                )
-                            }
-                        }
-                    }
-
-                    VStack(alignment: .leading, spacing: KineticSpacing.sm) {
-                        KineticSectionLabel(text: "Tailscale Devices")
-                        Text("Devices in your tailnet from the Tailscale API. Boo still needs to be running on the configured port, and this iPad must be connected to Tailscale to reach them.")
-                            .font(KineticFont.caption)
-                            .foregroundStyle(KineticColor.onSurfaceVariant)
-                        if !store.hasTailscaleAPIToken {
-                            Text("No Tailscale API token saved. Add one in Settings to list tailnet devices.")
-                                .font(KineticFont.caption)
-                                .foregroundStyle(KineticColor.onSurfaceVariant)
-                                .accessibilityIdentifier("tailscale-token-missing-label")
-                        }
-                        if tailscaleBrowser.isLoading {
-                            ProgressView()
-                                .tint(KineticColor.primary)
-                        }
-                        if let error = tailscaleBrowser.lastError {
-                            Text(error)
-                                .font(KineticFont.caption)
-                                .foregroundStyle(KineticColor.error)
-                                .padding(KineticSpacing.md)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(KineticColor.error.opacity(0.1))
-                                .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
-                        }
-                        ForEach(tailscaleBrowser.peers) { peer in
-                            let detail = tailscalePeerDetail(peer)
-                            KineticCardRow(
-                                icon: "network",
-                                title: peer.name,
-                                subtitle: detail,
-                                onTap: {
-                                    connectToHost(peer.host, port: peer.port, nodeName: peer.name)
-                                },
-                                accessibilityIdentifier: "tailscale-peer-\(peer.name)"
-                            )
-                            .opacity(peer.online ? 1.0 : 0.6)
-                        }
-                    }
-
-                    Spacer().frame(height: 120)
-                }
-                .padding(.horizontal, KineticSpacing.md)
+                scrollContent
+            }
+            .safeAreaInset(edge: .bottom) {
+                Color.clear.frame(height: 96)
             }
         }
         .onAppear {
@@ -529,20 +461,227 @@ struct ConnectScreen: View {
             store.refreshTailscaleTokenStatus()
             browser.startBrowsing()
             tailscaleBrowser.refresh(store: store)
+            refreshDashboardProbes()
         }
         .onDisappear {
             browser.stopBrowsing()
             tailscaleBrowser.stop()
+            dashboardProbeMonitor.stop()
         }
         .onChange(of: store.tailscaleDiscoverySettings) { _, _ in
             tailscaleBrowser.refresh(store: store)
+        }
+        .onChange(of: browser.daemons) { _, _ in
+            refreshDashboardProbes()
+        }
+        .onReceive(store.$savedNodes) { _ in
+            refreshDashboardProbes()
+        }
+    }
+
+    private var scrollContent: some View {
+        VStack(alignment: .leading, spacing: KineticSpacing.xl) {
+            statusSection
+            addressSection
+            errorSection
+            actionSection
+            savedNodesSection
+            discoveredSection
+            tailscaleSection
+            Spacer().frame(height: 120)
+        }
+        .padding(.horizontal, KineticSpacing.md)
+    }
+
+    @ViewBuilder
+    private var statusSection: some View {
+        if let statusBanner {
+            Text(statusBanner.message)
+                .font(KineticFont.caption)
+                .foregroundStyle(statusBanner.color)
+                .accessibilityIdentifier("connect-status-banner")
+                .padding(KineticSpacing.md)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(statusBanner.color.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+        }
+        if let serverIdentityWarning {
+            Text(serverIdentityWarning)
+                .font(KineticFont.caption)
+                .foregroundStyle(KineticColor.error)
+                .padding(KineticSpacing.md)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(KineticColor.error.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+        }
+    }
+
+    private var addressSection: some View {
+        VStack(alignment: .leading, spacing: KineticSpacing.sm) {
+            KineticSectionLabel(text: "Machine Address")
+            KineticInputField(placeholder: "hostname or ip:port", text: $host, accessibilityIdentifier: "connect-host-input")
+            Text("Connect directly to a LAN host, a Tailscale IP, or any other reachable Boo endpoint.")
+                .font(KineticFont.caption)
+                .foregroundStyle(KineticColor.onSurfaceVariant)
+        }
+    }
+
+    @ViewBuilder
+    private var errorSection: some View {
+        if let error = displayedConnectError {
+            Text(error)
+                .font(KineticFont.caption)
+                .foregroundStyle(KineticColor.error)
+                .accessibilityIdentifier("connect-error-label")
+                .padding(KineticSpacing.md)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(KineticColor.error.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+        }
+        if let browserError = browser.lastError {
+            VStack(alignment: .leading, spacing: KineticSpacing.sm) {
+                Text(browserError)
+                    .font(KineticFont.caption)
+                    .foregroundStyle(KineticColor.error)
+                    .accessibilityIdentifier("bonjour-error-label")
+                if browserError.contains("Local network access is required") {
+                    Button("Open iPad Settings") {
+                        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                        UIApplication.shared.open(url)
+                    }
+                    .buttonStyle(KineticSecondaryButtonStyle())
+                    .accessibilityIdentifier("open-local-network-settings-button")
+                }
+            }
+            .padding(KineticSpacing.md)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(KineticColor.error.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+        }
+    }
+
+    private var actionSection: some View {
+        VStack(spacing: KineticSpacing.sm) {
+            Button("Connect") { connectManual() }
+                .buttonStyle(KineticPrimaryButtonStyle())
+                .disabled(host.isEmpty)
+                .accessibilityIdentifier("connect-button")
+
+            Button("Settings") { selectedTab = .settings }
+                .buttonStyle(KineticSecondaryButtonStyle())
+                .accessibilityIdentifier("settings-button")
+        }
+    }
+
+    @ViewBuilder
+    private var savedNodesSection: some View {
+        if !store.savedNodes.isEmpty {
+            VStack(alignment: .leading, spacing: KineticSpacing.sm) {
+                KineticSectionLabel(text: "Saved Nodes")
+                ForEach(store.savedNodes) { node in
+                    KineticCardRow(
+                        icon: "server.rack",
+                        title: node.name,
+                        subtitle: rowSubtitle(base: "\(node.host):\(node.port)", host: node.host, port: node.port, nodeName: node.name),
+                        trailingText: liveMetrics(host: node.host, port: node.port, nodeName: node.name),
+                        trailingAccessibilityIdentifier: rowMetricAccessibilityIdentifier(nodeName: node.name),
+                        onTap: {
+                            let historyId = store.recordConnection(
+                                nodeName: node.name,
+                                host: formatConnectionTarget(host: node.host, port: node.port)
+                            )
+                            monitor.connect(
+                                host: node.host,
+                                port: node.port,
+                                displayName: node.name,
+                                historyId: historyId,
+                                nodeId: node.id
+                            )
+                        },
+                        accessibilityIdentifier: "saved-node-\(node.name)"
+                    )
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var discoveredSection: some View {
+        if !browser.daemons.isEmpty || browser.isSearching {
+            VStack(alignment: .leading, spacing: KineticSpacing.sm) {
+                KineticSectionLabel(text: "Discovered on Network")
+                Text("Bonjour discovery on your current LAN or Wi-Fi network.")
+                    .font(KineticFont.caption)
+                    .foregroundStyle(KineticColor.onSurfaceVariant)
+                if browser.isSearching && browser.daemons.isEmpty {
+                    ProgressView()
+                        .tint(KineticColor.primary)
+                }
+                ForEach(browser.daemons) { daemon in
+                    let display = endpointDisplayTarget(daemon.endpoint)
+                    KineticCardRow(
+                        icon: "terminal",
+                        title: daemon.title,
+                        subtitle: rowSubtitle(base: daemon.subtitle, host: display.host, port: display.port, nodeName: display.nodeName),
+                        trailingText: liveMetrics(host: display.host, port: display.port, nodeName: display.nodeName),
+                        trailingAccessibilityIdentifier: rowMetricAccessibilityIdentifier(nodeName: display.nodeName),
+                        onTap: {
+                            connectToEndpoint(daemon.endpoint)
+                        },
+                        accessibilityIdentifier: "discovered-daemon-\(daemon.name)"
+                    )
+                }
+            }
+        }
+    }
+
+    private var tailscaleSection: some View {
+        VStack(alignment: .leading, spacing: KineticSpacing.sm) {
+            KineticSectionLabel(text: "Tailscale Devices")
+            Text("Devices in your tailnet from the Tailscale API. Boo still needs to be running on the configured port, and this iPad must be connected to Tailscale to reach them.")
+                .font(KineticFont.caption)
+                .foregroundStyle(KineticColor.onSurfaceVariant)
+            if !store.hasTailscaleAPIToken {
+                Text("No Tailscale API token saved. Add one in Settings to list tailnet devices.")
+                    .font(KineticFont.caption)
+                    .foregroundStyle(KineticColor.onSurfaceVariant)
+                    .accessibilityIdentifier("tailscale-token-missing-label")
+            }
+            if tailscaleBrowser.isLoading {
+                ProgressView()
+                    .tint(KineticColor.primary)
+            }
+            if let error = tailscaleBrowser.lastError {
+                Text(error)
+                    .font(KineticFont.caption)
+                    .foregroundStyle(KineticColor.error)
+                    .padding(KineticSpacing.md)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(KineticColor.error.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+            }
+            ForEach(tailscaleBrowser.peers) { peer in
+                let detail = tailscalePeerDetail(peer)
+                KineticCardRow(
+                    icon: "network",
+                    title: peer.name,
+                    subtitle: rowSubtitle(base: detail, host: peer.host, port: peer.port, nodeName: peer.name),
+                    trailingText: liveMetrics(host: peer.host, port: peer.port, nodeName: peer.name),
+                    trailingAccessibilityIdentifier: rowMetricAccessibilityIdentifier(nodeName: peer.name),
+                    onTap: peer.online ? {
+                        connectToHost(peer.host, port: peer.port, nodeName: peer.name, routeKind: .tailscale)
+                    } : nil,
+                    accessibilityIdentifier: "tailscale-peer-\(peer.name)"
+                )
+                .opacity(peer.online ? 1.0 : 0.6)
+            }
         }
     }
 
     private func connectManual() {
         guard !host.isEmpty else { return }
         let parsed = parseHost(host)
-        connectToHost(parsed.0, port: parsed.1, nodeName: parsed.0)
+        connectToHost(parsed.0, port: parsed.1, nodeName: parsed.0, routeKind: .manual)
     }
 
     private func applyUITestHostPrefillIfNeeded() {
@@ -560,6 +699,12 @@ struct ConnectScreen: View {
 
     private func connectToEndpoint(_ endpoint: NWEndpoint) {
         let display = endpointDisplayTarget(endpoint)
+        if shouldReuseActiveConnection(host: display.host, port: display.port, nodeName: display.nodeName) {
+            DispatchQueue.main.async {
+                onPresentConnectedTerminal()
+            }
+            return
+        }
         if case .service = endpoint {
             client.lastError = nil
             resolvingBonjourService = true
@@ -572,7 +717,7 @@ struct ConnectScreen: View {
                     switch result {
                     case .success(let resolved):
                         print("[boo-ios] resolved Bonjour service \(display.nodeName) -> \(resolved.host):\(resolved.port)")
-                        connectToHost(resolved.host, port: resolved.port, nodeName: display.nodeName)
+                        connectToHost(resolved.host, port: resolved.port, nodeName: display.nodeName, routeKind: .bonjourLAN)
                     case .failure(let error):
                         client.lastError = error.localizedDescription
                     }
@@ -588,16 +733,46 @@ struct ConnectScreen: View {
             endpoint: endpoint,
             displayHost: display.host,
             displayPort: display.port,
+            routeKind: .bonjourLAN,
+            displayName: display.nodeName,
             historyId: historyId
         )
     }
 
-    private func connectToHost(_ host: String, port: UInt16, nodeName: String) {
+    private func connectToHost(_ host: String, port: UInt16, nodeName: String, routeKind: ConnectionRouteKind = .manual) {
+        if shouldReuseActiveConnection(host: host, port: port, nodeName: nodeName) {
+            DispatchQueue.main.async {
+                onPresentConnectedTerminal()
+            }
+            return
+        }
         let historyId = store.recordConnection(
             nodeName: nodeName,
             host: formatConnectionTarget(host: host, port: port)
         )
-        monitor.connect(host: host, port: port, historyId: historyId)
+        monitor.connect(host: host, port: port, routeKind: routeKind, displayName: nodeName, historyId: historyId)
+    }
+
+    private func decorateStatusMessage(_ raw: String) -> String {
+        let contextual = monitor.contextualErrorMessage(raw)
+        if let metrics = monitor.latencyAndLossSummary,
+           !contextual.contains("loss"),
+           contextual != "Connecting…" {
+            return "\(contextual) · \(metrics)"
+        }
+        return contextual
+    }
+
+    private func shouldReuseActiveConnection(host: String, port: UInt16, nodeName: String) -> Bool {
+        let sameEndpoint = monitor.lastHost == host && monitor.lastPort == port
+        let sameDisplayName = monitor.lastDisplayName == nodeName && monitor.lastPort == port
+        guard sameEndpoint || sameDisplayName else { return false }
+        switch monitor.status {
+        case .connecting, .connected, .authenticated, .attached, .connectionLost:
+            return true
+        case .disconnected:
+            return false
+        }
     }
 
     private func parseHost(_ raw: String) -> (String, UInt16) {
@@ -619,16 +794,105 @@ struct ConnectScreen: View {
         {
             parts.append("unreachable from this iPad")
         }
+        if let metrics = tailscaleBrowser.probeMetrics[peer.id],
+           metrics.status == .reachable,
+           let loss = metrics.lossRate,
+           loss > 0 {
+            parts.append("\(String(format: "%.0f", loss))% loss")
+        }
         return parts.joined(separator: " · ")
+    }
+
+    private func liveMetrics(host: String, port: UInt16, nodeName: String) -> String? {
+        if isCurrentTarget(host: host, port: port, nodeName: nodeName),
+           let latency = monitor.latencyMs {
+            return String(format: "%.0f ms", latency)
+        }
+        if let peer = tailscaleBrowser.peers.first(where: { $0.name == nodeName && $0.port == port }) {
+            if let metrics = tailscaleBrowser.probeMetrics[peer.id] {
+                switch metrics.status {
+                case .reachable:
+                    if let latency = metrics.latencyMs {
+                        return String(format: "%.0f ms", latency)
+                    }
+                case .probing:
+                    return "probing"
+                case .unreachable:
+                    return "unreachable"
+                }
+            } else if peer.online {
+                return "probing"
+            }
+        }
+        let dashboardKey = dashboardProbeKey(host: host, port: port, nodeName: nodeName)
+        if let metrics = dashboardProbeMonitor.metrics[dashboardKey] {
+            switch metrics.status {
+            case .reachable:
+                if let latency = metrics.latencyMs {
+                    return String(format: "%.0f ms", latency)
+                }
+            case .probing:
+                return "probing"
+            case .unreachable:
+                return "unreachable"
+            }
+        }
+        return nil
+    }
+
+    private func rowSubtitle(base: String, host: String, port: UInt16, nodeName: String) -> String {
+        guard isCurrentTarget(host: host, port: port, nodeName: nodeName) else { return base }
+        guard let loss = monitor.estimatedPacketLossRate, loss > 0 else { return base }
+        return "\(base) · \(String(format: "%.0f%% loss", loss))"
+    }
+
+    private func rowMetricAccessibilityIdentifier(nodeName: String) -> String {
+        "host-metric-\(nodeName)"
+    }
+
+    private func dashboardProbeKey(host: String, port: UInt16, nodeName: String) -> String {
+        "\(nodeName)|\(host)|\(port)"
+    }
+
+    private func refreshDashboardProbes() {
+        let savedTargets = store.savedNodes.map { node in
+            DashboardProbeMonitor.Target(
+                key: dashboardProbeKey(host: node.host, port: node.port, nodeName: node.name),
+                host: node.host,
+                port: node.port,
+                endpoint: nil
+            )
+        }
+        let discoveredTargets = browser.daemons.map { daemon in
+            let display = endpointDisplayTarget(daemon.endpoint)
+            return DashboardProbeMonitor.Target(
+                key: dashboardProbeKey(host: display.host, port: display.port, nodeName: display.nodeName),
+                host: display.host,
+                port: display.port,
+                endpoint: daemon.endpoint
+            )
+        }
+        dashboardProbeMonitor.updateTargets(savedTargets + discoveredTargets)
+    }
+
+    private func isCurrentTarget(host: String, port: UInt16, nodeName: String) -> Bool {
+        guard monitor.lastPort == port else { return false }
+        if monitor.lastHost == host {
+            return true
+        }
+        if monitor.lastDisplayName == nodeName {
+            return true
+        }
+        return false
     }
 }
 
 struct TerminalSessionScreen: View {
-    @Environment(\.dismiss) private var dismiss
     @ObservedObject var client: GSPClient
     @ObservedObject var monitor: ConnectionMonitor
     @ObservedObject var store: ConnectionStore
     let serverIdentityWarning: String?
+    let onBack: () -> Void
 
     @State private var keyboardFocused = false
     @State private var ctrlActive = false
@@ -666,7 +930,7 @@ struct TerminalSessionScreen: View {
         ZStack(alignment: .topLeading) {
             terminalSessionBody
                 .background(KineticColor.surface)
-                .toolbar { terminalKeyboardToolbar }
+                .ignoresSafeArea()
                 .navigationBarBackButtonHidden(true)
                 .toolbar(.hidden, for: .navigationBar)
 
@@ -681,7 +945,7 @@ struct TerminalSessionScreen: View {
                                 let dx = drag.translation.width
                                 let dy = drag.translation.height
                                 guard dx >= 64, abs(dx) > abs(dy) else { return }
-                                dismiss()
+                                goBack()
                             }
                     )
             }
@@ -717,7 +981,10 @@ struct TerminalSessionScreen: View {
         .onChange(of: client.attachedSessionId) { _, attachedSessionId in
             if attachedSessionId != nil {
                 requestedInitialSession = false
-                keyboardFocused = true
+                keyboardFocused = false
+                DispatchQueue.main.async {
+                    keyboardFocused = true
+                }
                 applyUITestForcedErrorIfNeeded()
             }
         }
@@ -739,31 +1006,6 @@ struct TerminalSessionScreen: View {
         }
     }
 
-    @ToolbarContentBuilder
-    private var terminalKeyboardToolbar: some ToolbarContent {
-        ToolbarItemGroup(placement: .keyboard) {
-            accessoryButton("ESC") { sendSpecialKey([0x1b]) }
-            accessoryButton("CTRL", active: ctrlActive) { ctrlActive.toggle() }
-            accessoryButton("ALT", active: altActive) { altActive.toggle() }
-            accessoryButton("TAB") { sendSpecialKey([0x09]) }
-            accessoryButton("↑") { sendSpecialKey([0x1b, 0x5b, 0x41]) }
-            accessoryButton("↓") { sendSpecialKey([0x1b, 0x5b, 0x42]) }
-            accessoryButton("←") { sendSpecialKey([0x1b, 0x5b, 0x44]) }
-            accessoryButton("→") { sendSpecialKey([0x1b, 0x5b, 0x43]) }
-            Menu("More") {
-                Button("META") { metaActive.toggle() }
-                Button("HOME") { sendSpecialKey([0x1b, 0x5b, 0x48]) }
-                Button("END") { sendSpecialKey([0x1b, 0x5b, 0x46]) }
-                Button("Page Up") { sendSpecialKey([0x1b, 0x5b, 0x35, 0x7e]) }
-                Button("Page Down") { sendSpecialKey([0x1b, 0x5b, 0x36, 0x7e]) }
-                Button("F1") { sendSpecialKey([0x1b, 0x4f, 0x50]) }
-                Button("F2") { sendSpecialKey([0x1b, 0x4f, 0x51]) }
-                Button("F3") { sendSpecialKey([0x1b, 0x4f, 0x52]) }
-                Button("F4") { sendSpecialKey([0x1b, 0x4f, 0x53]) }
-            }
-        }
-    }
-
     @ViewBuilder
     private var terminalBanner: some View {
         if let serverIdentityWarning {
@@ -771,11 +1013,11 @@ struct TerminalSessionScreen: View {
         } else if let sessionHealthIssue {
             transportBanner(reason: sessionHealthIssue, color: KineticColor.error)
         } else if let lastError = client.lastError, !lastError.isEmpty {
-            transportBanner(reason: lastError, color: KineticColor.error)
+            transportBanner(reason: monitor.contextualErrorMessage(lastError), color: KineticColor.error)
         } else if let disconnectReason {
-            transportBanner(reason: disconnectReason, color: KineticColor.error)
+            transportBanner(reason: monitor.contextualErrorMessage(disconnectReason), color: KineticColor.error)
         } else if case .degraded(let reason) = monitor.transportHealth {
-            transportBanner(reason: reason, color: KineticColor.tertiary)
+            transportBanner(reason: monitor.contextualErrorMessage(reason), color: KineticColor.tertiary)
         }
     }
 
@@ -795,11 +1037,40 @@ struct TerminalSessionScreen: View {
             keyboardFocused = true
         }
         .overlay {
-            TerminalKeyboardBridge(isFocused: $keyboardFocused) { text in
-                sendTypedText(text)
-            } onBackspace: {
-                client.sendInputBytes(Data([0x7f]))
-            }
+            TerminalKeyboardBridge(
+                isFocused: $keyboardFocused,
+                onText: { text in
+                    sendTypedText(text)
+                },
+                onBackspace: {
+                    client.sendInputBytes(Data([0x7f]))
+                },
+                accessoryState: TerminalKeyboardAccessoryState(
+                    ctrlActive: ctrlActive,
+                    altActive: altActive,
+                    metaActive: metaActive,
+                    onDismissKeyboard: {
+                        keyboardFocused = false
+                    },
+                    onInsertText: { text in
+                        sendTypedText(text)
+                    },
+                    onEscape: { sendSpecialKey([0x1b]) },
+                    onToggleCtrl: { ctrlActive.toggle() },
+                    onToggleAlt: { altActive.toggle() },
+                    onToggleMeta: { metaActive.toggle() },
+                    onTab: { sendSpecialKey([0x09]) },
+                    onArrowUp: { sendSpecialKey([0x1b, 0x5b, 0x41]) },
+                    onArrowDown: { sendSpecialKey([0x1b, 0x5b, 0x42]) },
+                    onArrowLeft: { sendSpecialKey([0x1b, 0x5b, 0x44]) },
+                    onArrowRight: { sendSpecialKey([0x1b, 0x5b, 0x43]) },
+                    onPageUp: { sendSpecialKey([0x1b, 0x5b, 0x35, 0x7e]) },
+                    onPageDown: { sendSpecialKey([0x1b, 0x5b, 0x36, 0x7e]) },
+                    onHome: { sendSpecialKey([0x1b, 0x5b, 0x48]) },
+                    onEnd: { sendSpecialKey([0x1b, 0x5b, 0x46]) }
+                )
+            )
+            .id("terminal-keyboard-\(client.connectionDebugGeneration)-\(client.attachedSessionId ?? 0)")
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
         }
@@ -828,8 +1099,8 @@ struct TerminalSessionScreen: View {
     private var activeErrorMessage: String? {
         if let serverIdentityWarning { return serverIdentityWarning }
         if let sessionHealthIssue { return sessionHealthIssue }
-        if let lastError = client.lastError, !lastError.isEmpty { return lastError }
-        if let disconnectReason { return disconnectReason }
+        if let lastError = client.lastError, !lastError.isEmpty { return monitor.contextualErrorMessage(lastError) }
+        if let disconnectReason { return monitor.contextualErrorMessage(disconnectReason) }
         return nil
     }
 
@@ -875,7 +1146,7 @@ struct TerminalSessionScreen: View {
 
                 Button("Disconnect") {
                     monitor.disconnect()
-                    dismiss()
+                    goBack()
                 }
                 .buttonStyle(KineticSecondaryButtonStyle())
                 .accessibilityIdentifier("disconnect-session-button")
@@ -888,7 +1159,7 @@ struct TerminalSessionScreen: View {
 
     private var floatingBackButton: some View {
         Button {
-            dismiss()
+            goBack()
         } label: {
             Image(systemName: "chevron.left")
                 .font(.system(size: 17, weight: .semibold))
@@ -933,6 +1204,16 @@ struct TerminalSessionScreen: View {
         }
     }
 
+    private func goBack() {
+        keyboardFocused = false
+        ctrlActive = false
+        altActive = false
+        metaActive = false
+        DispatchQueue.main.async {
+            onBack()
+        }
+    }
+
     private func applyUITestForcedErrorIfNeeded() {
         guard !didApplyUITestForcedError,
               client.attachedSessionId != nil,
@@ -955,14 +1236,6 @@ struct TerminalSessionScreen: View {
         }
         guard let session = preferredSessionToAttach else { return }
         client.attach(sessionId: session.id)
-    }
-
-    private func accessoryButton(_ label: String, active: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label)
-                .font(.system(size: 12, weight: .bold, design: .monospaced))
-                .foregroundStyle(active ? KineticColor.primary : KineticColor.secondary)
-        }
     }
 
     private func sendTypedText(_ text: String) {

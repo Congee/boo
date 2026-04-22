@@ -219,13 +219,27 @@ struct KineticCardRow: View {
     let icon: String
     let title: String
     let subtitle: String
+    var trailingText: String? = nil
+    var trailingAccessibilityIdentifier: String? = nil
     var onTap: (() -> Void)? = nil
     var accessibilityIdentifier: String? = nil
 
     var body: some View {
-        Button {
-            onTap?()
-        } label: {
+        Group {
+            if let onTap {
+                Button(action: onTap) {
+                    rowContent
+                }
+                .buttonStyle(.plain)
+            } else {
+                rowContent
+            }
+        }
+        .accessibilityIdentifier(accessibilityIdentifier ?? title)
+    }
+
+    private var rowContent: some View {
+        ZStack(alignment: .trailing) {
             HStack(spacing: KineticSpacing.md) {
                 Image(systemName: icon)
                     .font(.system(size: 20))
@@ -234,22 +248,39 @@ struct KineticCardRow: View {
                     .background(KineticColor.surfaceContainerHighest)
                     .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
                 VStack(alignment: .leading, spacing: KineticSpacing.xs) {
-                    Text(title)
-                        .font(KineticFont.bodySmall)
-                        .fontWeight(.bold)
-                        .foregroundStyle(KineticColor.onSurface)
+                    HStack(alignment: .firstTextBaseline, spacing: KineticSpacing.sm) {
+                        Text(title)
+                            .font(KineticFont.bodySmall)
+                            .fontWeight(.bold)
+                            .foregroundStyle(KineticColor.onSurface)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        if let trailingText, !trailingText.isEmpty {
+                            Text(trailingText)
+                                .font(KineticFont.caption)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(KineticColor.primary)
+                                .fixedSize(horizontal: true, vertical: true)
+                                .accessibilityIdentifier(trailingAccessibilityIdentifier ?? "\(title)-metric")
+                        }
+                    }
                     Text(subtitle)
                         .font(KineticFont.caption)
                         .foregroundStyle(KineticColor.onSurfaceVariant)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .foregroundStyle(KineticColor.onSurfaceVariant)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if onTap != nil {
+                    Image(systemName: "chevron.right")
+                        .foregroundStyle(KineticColor.onSurfaceVariant)
+                        .fixedSize()
+                }
             }
-            .padding(KineticSpacing.md)
-            .containerCard()
         }
-        .buttonStyle(.plain)
+        .padding(KineticSpacing.md)
+        .containerCard()
+        .accessibilityElement(children: .combine)
         .accessibilityIdentifier(accessibilityIdentifier ?? title)
     }
 }
@@ -338,6 +369,7 @@ struct TerminalKeyboardBridge: UIViewRepresentable {
     @Binding var isFocused: Bool
     let onText: (String) -> Void
     let onBackspace: () -> Void
+    let accessoryState: TerminalKeyboardAccessoryState
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -364,12 +396,14 @@ struct TerminalKeyboardBridge: UIViewRepresentable {
         textView.textContainer.lineFragmentPadding = 0
         textView.isScrollEnabled = false
         textView.accessibilityIdentifier = "terminal-text-proxy"
+        textView.updateAccessory(state: accessoryState)
         return textView
     }
 
     func updateUIView(_ uiView: TerminalProxyTextView, context: Context) {
         uiView.onText = onText
         uiView.onBackspace = onBackspace
+        uiView.updateAccessory(state: accessoryState)
         uiView.setFocus(isFocused)
         if !uiView.isFirstResponder {
             uiView.text = ""
@@ -401,10 +435,32 @@ struct TerminalKeyboardBridge: UIViewRepresentable {
     }
 }
 
+struct TerminalKeyboardAccessoryState {
+    var ctrlActive: Bool
+    var altActive: Bool
+    var metaActive: Bool
+    let onDismissKeyboard: () -> Void
+    let onInsertText: (String) -> Void
+    let onEscape: () -> Void
+    let onToggleCtrl: () -> Void
+    let onToggleAlt: () -> Void
+    let onToggleMeta: () -> Void
+    let onTab: () -> Void
+    let onArrowUp: () -> Void
+    let onArrowDown: () -> Void
+    let onArrowLeft: () -> Void
+    let onArrowRight: () -> Void
+    let onPageUp: () -> Void
+    let onPageDown: () -> Void
+    let onHome: () -> Void
+    let onEnd: () -> Void
+}
+
 final class TerminalProxyTextView: UITextView {
     var onText: ((String) -> Void)?
     var onBackspace: (() -> Void)?
     private var desiredFocus = false
+    private var accessoryState: TerminalKeyboardAccessoryState?
 
     override var canBecomeFirstResponder: Bool { true }
 
@@ -421,6 +477,12 @@ final class TerminalProxyTextView: UITextView {
     private func commonInit() {
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        inputAssistantItem.allowsHidingShortcuts = false
+    }
+
+    func updateAccessory(state: TerminalKeyboardAccessoryState) {
+        accessoryState = state
+        applyAssistantBarItems()
     }
 
     func setFocus(_ focused: Bool) {
@@ -442,6 +504,7 @@ final class TerminalProxyTextView: UITextView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         setFocus(desiredFocus)
+        applyAssistantBarItems()
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -459,6 +522,7 @@ final class TerminalProxyTextView: UITextView {
 
     override func accessibilityActivate() -> Bool {
         becomeFirstResponder()
+        return true
     }
 
     override func deleteBackward() {
@@ -478,5 +542,82 @@ final class TerminalProxyTextView: UITextView {
 
     override func selectionRects(for range: UITextRange) -> [UITextSelectionRect] {
         []
+    }
+    
+    private func applyAssistantBarItems() {
+        guard let state = accessoryState else {
+            inputAssistantItem.leadingBarButtonGroups = []
+            inputAssistantItem.trailingBarButtonGroups = []
+            return
+        }
+
+        let leftItems: [UIBarButtonItem] = [
+            assistantItem(title: "⌄", identifier: "terminal-key-dismiss", active: false) { [weak self] in
+                state.onDismissKeyboard()
+                self?.resignFirstResponder()
+            },
+            assistantItem(title: "⌃", identifier: "terminal-key-ctrl", active: state.ctrlActive) {
+                state.onToggleCtrl()
+            },
+            assistantItem(title: "⌥", identifier: "terminal-key-alt", active: state.altActive) {
+                state.onToggleAlt()
+            },
+            assistantItem(title: "⇥", identifier: "terminal-key-tab", active: false) {
+                state.onTab()
+            },
+            assistantItem(title: "~", identifier: "terminal-key-tilde", active: false) {
+                state.onInsertText("~")
+            },
+            assistantItem(title: "$", identifier: "terminal-key-dollar", active: false) {
+                state.onInsertText("$")
+            },
+            assistantItem(title: "\\", identifier: "terminal-key-backslash", active: false) {
+                state.onInsertText("\\")
+            }
+        ]
+
+        let rightItems: [UIBarButtonItem] = [
+            assistantItem(title: "[", identifier: "terminal-key-left-bracket", active: false) {
+                state.onInsertText("[")
+            },
+            assistantItem(title: "]", identifier: "terminal-key-right-bracket", active: false) {
+                state.onInsertText("]")
+            },
+            assistantItem(title: "<", identifier: "terminal-key-less-than", active: false) {
+                state.onInsertText("<")
+            },
+            assistantItem(title: ">", identifier: "terminal-key-greater-than", active: false) {
+                state.onInsertText(">")
+            },
+            assistantItem(title: "←", identifier: "terminal-key-left", active: false) {
+                state.onArrowLeft()
+            },
+            assistantItem(title: "→", identifier: "terminal-key-right", active: false) {
+                state.onArrowRight()
+            },
+            assistantItem(title: "⌘", identifier: "terminal-key-meta", active: state.metaActive) {
+                state.onToggleMeta()
+            }
+        ]
+
+        inputAssistantItem.leadingBarButtonGroups = [
+            UIBarButtonItemGroup(barButtonItems: leftItems, representativeItem: nil)
+        ]
+        inputAssistantItem.trailingBarButtonGroups = [
+            UIBarButtonItemGroup(barButtonItems: rightItems, representativeItem: nil)
+        ]
+    }
+
+    private func assistantItem(
+        title: String,
+        identifier: String,
+        active: Bool,
+        action: @escaping () -> Void
+    ) -> UIBarButtonItem {
+        let item = UIBarButtonItem(title: title, style: .plain, target: nil, action: nil)
+        item.primaryAction = UIAction { _ in action() }
+        item.accessibilityIdentifier = identifier
+        item.tintColor = active ? UIColor.label : UIColor.secondaryLabel
+        return item
     }
 }
