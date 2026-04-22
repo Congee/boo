@@ -201,7 +201,7 @@ pub fn create_remote_daemon_tab(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::remote_types::RemoteSessionInfo;
+    use crate::remote_types::RemoteTabInfo;
     use crate::remote_wire::{
         MessageType, REMOTE_PROTOCOL_VERSION, RemoteCell, RemoteFullState, encode_auth_ok_payload,
         encode_full_state, encode_message, encode_session_list, parse_attach_request, read_message,
@@ -268,7 +268,7 @@ mod tests {
             stream
                 .write_all(&encode_message(
                     MessageType::SessionList,
-                    &encode_session_list(&[RemoteSessionInfo {
+                    &encode_session_list(&[RemoteTabInfo {
                         id: 11,
                         name: "dev".to_string(),
                         title: "shell".to_string(),

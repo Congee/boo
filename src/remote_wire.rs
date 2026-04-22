@@ -12,7 +12,7 @@
 use std::io::{self, Read};
 use std::time::{Duration, Instant};
 
-use crate::remote_types::{RemoteAttachedSummary, RemoteDirectSessionInfo, RemoteSessionInfo};
+use crate::remote_types::{RemoteAttachedSummary, RemoteDirectSessionInfo, RemoteTabInfo};
 
 pub(crate) const MAGIC: [u8; 2] = [0x47, 0x53];
 pub(crate) const HEADER_LEN: usize = 7;
@@ -906,7 +906,7 @@ pub(crate) fn parse_key_payload(payload: &[u8], is_local: bool) -> Option<(Optio
     parse_input_payload(payload, is_local)
 }
 
-pub fn encode_session_list(sessions: &[RemoteSessionInfo]) -> Vec<u8> {
+pub fn encode_session_list(sessions: &[RemoteTabInfo]) -> Vec<u8> {
     let mut payload = Vec::new();
     payload.extend_from_slice(&(sessions.len() as u32).to_le_bytes());
     for session in sessions {
@@ -926,7 +926,7 @@ pub fn encode_session_list(sessions: &[RemoteSessionInfo]) -> Vec<u8> {
     payload
 }
 
-pub fn encode_tab_list(tabs: &[RemoteSessionInfo]) -> Vec<u8> {
+pub fn encode_tab_list(tabs: &[RemoteTabInfo]) -> Vec<u8> {
     encode_session_list(tabs)
 }
 
@@ -1274,11 +1274,11 @@ pub(crate) fn remaining_ms(now: Instant, deadline: Instant) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::remote_types::{RemoteDirectSessionInfo, RemoteSessionInfo};
+    use crate::remote_types::{RemoteDirectSessionInfo, RemoteTabInfo};
 
     #[test]
     fn session_list_encoding_matches_client_layout() {
-        let payload = encode_session_list(&[RemoteSessionInfo {
+        let payload = encode_session_list(&[RemoteTabInfo {
             id: 7,
             name: "Tab 1".to_string(),
             title: "shell".to_string(),
@@ -1501,7 +1501,7 @@ mod tests {
     #[test]
     fn decode_session_list_payload_round_trips_encoded_sessions() {
         let payload = encode_session_list(&[
-            RemoteSessionInfo {
+            RemoteTabInfo {
                 id: 7,
                 name: "Tab 1".to_string(),
                 title: "shell".to_string(),
@@ -1509,7 +1509,7 @@ mod tests {
                 attached: true,
                 child_exited: false,
             },
-            RemoteSessionInfo {
+            RemoteTabInfo {
                 id: 8,
                 name: String::new(),
                 title: "logs".to_string(),

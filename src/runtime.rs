@@ -324,7 +324,7 @@ impl BooApp {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn current_remote_tabs_compat(&mut self) -> std::sync::Arc<[remote::RemoteSessionInfo]> {
+    pub(crate) fn current_remote_tabs_compat(&mut self) -> std::sync::Arc<[remote::RemoteTabInfo]> {
         self.current_remote_tabs()
     }
 

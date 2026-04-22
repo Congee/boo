@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     use crate::control;
-    use crate::remote::{RemoteServer, RemoteSessionInfo};
+    use crate::remote::{RemoteServer, RemoteTabInfo};
     use crate::remote_batcher::OutboundMessage;
     use crate::remote_state::{ClientRuntimeSubscription, ClientState, State};
     use crate::remote_wire::{MAGIC, MessageType, RemoteCell, RemoteFullState};
@@ -95,7 +95,7 @@ mod tests {
         let mut state = empty_state();
         state.clients.insert(1, test_client(tx, Some(11), true));
         let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
-        let sessions = vec![RemoteSessionInfo {
+        let sessions = vec![RemoteTabInfo {
             id: 11,
             name: "Tab 1".to_string(),
             title: "boo".to_string(),
@@ -123,7 +123,7 @@ mod tests {
         let mut state = empty_state();
         state.clients.insert(1, test_client(tx, Some(11), true));
         let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
-        let sessions = vec![RemoteSessionInfo {
+        let sessions = vec![RemoteTabInfo {
             id: 11,
             name: "Tab 1".to_string(),
             title: "boo".to_string(),

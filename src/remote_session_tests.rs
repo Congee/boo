@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::remote::{DirectTransportSession, RemoteSessionInfo};
+    use crate::remote::{DirectTransportSession, RemoteTabInfo};
     use crate::remote_auth::read_loop;
     use crate::remote_batcher::OutboundMessage;
     use crate::remote_state::{
@@ -82,7 +82,7 @@ mod tests {
             server_stream
                 .write_all(&encode_message(
                     MessageType::SessionList,
-                    &encode_session_list(&[RemoteSessionInfo {
+                    &encode_session_list(&[RemoteTabInfo {
                         id: 21,
                         name: "unix".to_string(),
                         title: "shell".to_string(),

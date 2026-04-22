@@ -406,15 +406,15 @@ impl RemoteServer {
         )
     }
 
-    pub fn send_tab_list(&self, client_id: u64, tabs: &[RemoteSessionInfo]) {
+    pub fn send_tab_list(&self, client_id: u64, tabs: &[RemoteTabInfo]) {
         send_cached_tab_list(&self.state, client_id, tabs);
     }
 
-    pub fn reply_tab_list(&self, client_id: u64, tabs: &[RemoteSessionInfo]) {
+    pub fn reply_tab_list(&self, client_id: u64, tabs: &[RemoteTabInfo]) {
         send_reply_tab_list(&self.state, client_id, tabs);
     }
 
-    pub fn send_tab_list_to_local_clients(&self, tabs: &[RemoteSessionInfo]) {
+    pub fn send_tab_list_to_local_clients(&self, tabs: &[RemoteTabInfo]) {
         send_cached_tab_list_to_local_clients(&self.state, tabs);
     }
 
