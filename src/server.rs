@@ -434,8 +434,8 @@ mod tests {
 
     #[test]
     fn advertised_service_name_includes_boo_and_port() {
-        let name = advertised_remote_service_name(7337);
+        let name = advertised_remote_service_name(crate::config::DEFAULT_REMOTE_PORT);
         assert!(name.starts_with("boo on "));
-        assert!(name.ends_with("(7337)"));
+        assert!(name.ends_with(&format!("({})", crate::config::DEFAULT_REMOTE_PORT)));
     }
 }

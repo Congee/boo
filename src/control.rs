@@ -1061,7 +1061,7 @@ mod tests {
                             servers: vec![crate::remote::RemoteServerInfo {
                                 local_socket_path: Some("/tmp/boo.sock".to_string()),
                                 bind_address: Some("0.0.0.0".to_string()),
-                                port: Some(7337),
+                                port: Some(crate::config::DEFAULT_REMOTE_PORT),
                                 protocol_version: 1,
                                 capabilities: crate::remote::REMOTE_CAPABILITIES,
                                 build_id: env!("CARGO_PKG_VERSION").to_string(),

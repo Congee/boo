@@ -5,7 +5,7 @@ mod tests {
     #[test]
     fn remote_config_defaults_to_loopback_without_advertising() {
         let config = RemoteConfig {
-            port: 7337,
+            port: crate::config::DEFAULT_REMOTE_PORT,
             bind_address: None,
             service_name: "boo".to_string(),
         };
@@ -16,7 +16,7 @@ mod tests {
     #[test]
     fn remote_config_explicit_bind_address_advertises() {
         let config = RemoteConfig {
-            port: 7337,
+            port: crate::config::DEFAULT_REMOTE_PORT,
             bind_address: Some("192.0.2.5".to_string()),
             service_name: "boo".to_string(),
         };

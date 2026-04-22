@@ -4,7 +4,7 @@ import UIKit
 import Foundation
 
 private func formatConnectionTarget(host: String, port: UInt16) -> String {
-    port == 7337 ? host : "\(host):\(port)"
+    port == BooDefaultRemotePort ? host : "\(host):\(port)"
 }
 
 private func endpointDisplayTarget(_ endpoint: NWEndpoint) -> (nodeName: String, host: String, port: UInt16) {
@@ -13,13 +13,13 @@ private func endpointDisplayTarget(_ endpoint: NWEndpoint) -> (nodeName: String,
         if let parsed = parseAdvertisedServiceTarget(name) {
             return parsed
         }
-        return (name, name, 7337)
+        return (name, name, BooDefaultRemotePort)
     case .hostPort(let host, let port):
         let hostString = host.debugDescription
         return (hostString, hostString, port.rawValue)
     default:
         let text = "\(endpoint)"
-        return (text, text, 7337)
+        return (text, text, BooDefaultRemotePort)
     }
 }
 
@@ -779,7 +779,7 @@ struct ConnectScreen: View {
         if let index = raw.lastIndex(of: ":"), let port = UInt16(raw[raw.index(after: index)...]) {
             return (String(raw[..<index]), port)
         }
-        return (raw, 7337)
+        return (raw, BooDefaultRemotePort)
     }
 
     private func tailscalePeerDetail(_ peer: TailscalePeer) -> String {
@@ -1371,8 +1371,8 @@ struct SettingsScreen: View {
 
     @State private var nodeName = ""
     @State private var nodeHost = ""
-    @State private var nodePort = "7337"
-    @State private var tailscalePort = "7337"
+    @State private var nodePort = BooDefaultRemotePortText
+    @State private var tailscalePort = BooDefaultRemotePortText
     @State private var tailscaleToken = ""
 
     private var trustedIdentityRow: (current: String, trusted: String?)? {
@@ -1447,7 +1447,7 @@ struct SettingsScreen: View {
                         KineticInputField(placeholder: "Default Boo Port", text: $tailscalePort, keyboardType: .numberPad, accessibilityIdentifier: "settings-tailscale-port-input")
                         KineticInputField(placeholder: store.hasTailscaleAPIToken ? "Replace saved Tailscale API access token" : "Tailscale API Access Token", text: $tailscaleToken, accessibilityIdentifier: "settings-tailscale-token-input")
                         Button("Save Tailscale Settings") {
-                            let port = UInt16(tailscalePort) ?? 7337
+                            let port = UInt16(tailscalePort) ?? BooDefaultRemotePort
                             store.updateTailscaleDiscovery(defaultPort: port)
                             if !tailscaleToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                 if store.replaceTailscaleAPIToken(tailscaleToken) {
@@ -1518,15 +1518,18 @@ struct SettingsScreen: View {
         .onAppear {
             tailscalePort = "\(store.tailscaleDiscoverySettings.defaultPort)"
             tailscaleToken = ""
+            if nodePort.isEmpty {
+                nodePort = BooDefaultRemotePortText
+            }
         }
     }
 
     private func saveNode() {
         guard !nodeName.isEmpty, !nodeHost.isEmpty else { return }
-        let port = UInt16(nodePort) ?? 7337
+        let port = UInt16(nodePort) ?? BooDefaultRemotePort
         store.addNode(SavedNode(name: nodeName, host: nodeHost, port: port))
         nodeName = ""
         nodeHost = ""
-        nodePort = "7337"
+        nodePort = BooDefaultRemotePortText
     }
 }

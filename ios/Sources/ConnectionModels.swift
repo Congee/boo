@@ -3,11 +3,14 @@ import Combine
 import Network
 import Security
 
+let BooDefaultRemotePort: UInt16 = 7337
+let BooDefaultRemotePortText = String(BooDefaultRemotePort)
+
 struct SavedNode: Identifiable, Codable {
     var id = UUID()
     var name: String
     var host: String
-    var port: UInt16 = 7337
+    var port: UInt16 = BooDefaultRemotePort
     var lastConnected: Date?
 }
 
@@ -53,7 +56,7 @@ struct ResumeAttachmentMetadata: Codable, Equatable {
 }
 
 struct TailscaleDiscoverySettings: Codable, Equatable {
-    var defaultPort: UInt16 = 7337
+    var defaultPort: UInt16 = BooDefaultRemotePort
 }
 
 struct TerminalDisplaySettings: Codable, Equatable {
@@ -334,7 +337,7 @@ final class ConnectionStore: ObservableObject {
     }
 
     private func isLikelyUITestArtifactNode(_ node: SavedNode) -> Bool {
-        guard node.port != 7337 else { return false }
+        guard node.port != BooDefaultRemotePort else { return false }
         return node.name == "Local Boo" || node.name == "UI Test Node"
     }
 

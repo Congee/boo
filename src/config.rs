@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub type RgbColor = [u8; 3];
+pub const DEFAULT_REMOTE_PORT: u16 = 7337;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -273,7 +274,7 @@ impl Default for Config {
             remote_socket: None,
             remote_binary: None,
             remote_prefer_nix_profile_binary: false,
-            remote_port: None,
+            remote_port: Some(DEFAULT_REMOTE_PORT),
             remote_bind_address: None,
             keybinds: HashMap::new(),
             font_families: Vec::new(),
@@ -495,7 +496,7 @@ keybind = super+1 = goto_tab:1
         let config = Config::parse(content);
         assert_eq!(config.prefix_key.as_deref(), Some("ctrl+s"));
         assert_eq!(config.control_socket.as_deref(), Some("/tmp/boo.sock"));
-        assert_eq!(config.remote_port, Some(7337));
+        assert_eq!(config.remote_port, Some(DEFAULT_REMOTE_PORT));
         assert!(config.remote_prefer_nix_profile_binary);
         assert_eq!(config.remote_bind_address.as_deref(), Some("0.0.0.0"));
         assert_eq!(

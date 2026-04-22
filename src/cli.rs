@@ -687,6 +687,8 @@ mod tests {
     use super::{Cli, CompletionShell};
     use clap::{CommandFactory, Parser, error::ErrorKind};
 
+    const DEFAULT_REMOTE_PORT_STR: &str = "7337";
+
     #[test]
     fn parse_global_flags_after_subcommand() {
         let cli = Cli::parse_from([
@@ -749,7 +751,7 @@ mod tests {
             "--host",
             "127.0.0.1",
             "--port",
-            "7337",
+            DEFAULT_REMOTE_PORT_STR,
             "--expect-server-identity",
             "daemon-01",
         ]);
@@ -760,7 +762,7 @@ mod tests {
                     expect_server_identity,
             }) => {
                 assert_eq!(host, "127.0.0.1");
-                assert_eq!(port, 7337);
+                assert_eq!(port, crate::config::DEFAULT_REMOTE_PORT);
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
             }
             other => panic!("unexpected command: {other:?}"),
@@ -775,7 +777,7 @@ mod tests {
             "--host",
             "127.0.0.1",
             "--port",
-            "7337",
+            DEFAULT_REMOTE_PORT_STR,
             "--expect-server-identity",
             "daemon-01",
         ]);
@@ -786,7 +788,7 @@ mod tests {
                     expect_server_identity,
             }) => {
                 assert_eq!(host, "127.0.0.1");
-                assert_eq!(port, 7337);
+                assert_eq!(port, crate::config::DEFAULT_REMOTE_PORT);
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
             }
             other => panic!("unexpected command: {other:?}"),
@@ -801,7 +803,7 @@ mod tests {
             "--host",
             "127.0.0.1",
             "--port",
-            "7337",
+            DEFAULT_REMOTE_PORT_STR,
             "--session-id",
             "42",
             "--expect-server-identity",
@@ -821,7 +823,7 @@ mod tests {
                 resume_token,
             }) => {
                 assert_eq!(host, "127.0.0.1");
-                assert_eq!(port, 7337);
+                assert_eq!(port, crate::config::DEFAULT_REMOTE_PORT);
                 assert_eq!(session_id, 42);
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
                 assert_eq!(attachment_id, Some(99));
@@ -861,7 +863,7 @@ mod tests {
             "--host",
             "127.0.0.1",
             "--port",
-            "7337",
+            DEFAULT_REMOTE_PORT_STR,
             "--expect-server-identity",
             "daemon-01",
             "--cols",
@@ -878,7 +880,7 @@ mod tests {
                 rows,
             }) => {
                 assert_eq!(host, "127.0.0.1");
-                assert_eq!(port, 7337);
+                assert_eq!(port, crate::config::DEFAULT_REMOTE_PORT);
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
                 assert_eq!(cols, 132);
                 assert_eq!(rows, 48);
@@ -948,7 +950,7 @@ mod tests {
                 servers: vec![crate::remote::RemoteServerInfo {
                     local_socket_path: Some("/tmp/boo.sock".to_string()),
                     bind_address: Some("0.0.0.0".to_string()),
-                    port: Some(7337),
+                    port: Some(crate::config::DEFAULT_REMOTE_PORT),
                     protocol_version: crate::remote::REMOTE_PROTOCOL_VERSION,
                     capabilities: crate::remote::REMOTE_CAPABILITIES,
                     build_id: env!("CARGO_PKG_VERSION").to_string(),
@@ -972,7 +974,7 @@ mod tests {
             Some(crate::remote::DirectTransportKind::QuicDirect)
         );
         assert_eq!(summary.direct_host.as_deref(), Some("macbook.local"));
-        assert_eq!(summary.port, Some(7337));
+        assert_eq!(summary.port, Some(crate::config::DEFAULT_REMOTE_PORT));
     }
 
     #[test]
@@ -983,7 +985,7 @@ mod tests {
                 servers: vec![crate::remote::RemoteServerInfo {
                     local_socket_path: Some("/tmp/boo.sock".to_string()),
                     bind_address: Some("127.0.0.1".to_string()),
-                    port: Some(7337),
+                    port: Some(crate::config::DEFAULT_REMOTE_PORT),
                     protocol_version: crate::remote::REMOTE_PROTOCOL_VERSION,
                     capabilities: crate::remote::REMOTE_CAPABILITIES,
                     build_id: env!("CARGO_PKG_VERSION").to_string(),

@@ -370,8 +370,8 @@ final class BonjourBrowser: ObservableObject {
                         advertisedPort: advertisedPort(for: name)
                     )
                     if let existing = entriesByTitle[title] {
-                        let existingScore = existing.advertisedPort == 7337 ? 1 : 0
-                        let candidateScore = ranked.advertisedPort == 7337 ? 1 : 0
+                        let existingScore = existing.advertisedPort == BooDefaultRemotePort ? 1 : 0
+                        let candidateScore = ranked.advertisedPort == BooDefaultRemotePort ? 1 : 0
                         if candidateScore > existingScore {
                             entriesByTitle[title] = ranked
                         }
