@@ -4,7 +4,7 @@
 use crate::remote::DirectTransportSession;
 use crate::remote_types::{
     DirectTransportKind, RemoteAttachSummary, RemoteCreateSummary, RemoteProbeSummary,
-    RemoteSessionListSummary, RemoteTabListSummary, RemoteUpgradeProbeSummary,
+    RemoteTabListSummary, RemoteUpgradeProbeSummary,
 };
 
 pub fn select_direct_transport(
@@ -82,7 +82,7 @@ pub fn list_remote_daemon_sessions(
     host: &str,
     port: u16,
     expected_server_identity: Option<&str>,
-) -> Result<RemoteSessionListSummary, String> {
+) -> Result<RemoteTabListSummary, String> {
     list_remote_daemon_tabs(host, port, expected_server_identity)
 }
 
@@ -204,7 +204,7 @@ mod tests {
     use crate::remote_types::RemoteTabInfo;
     use crate::remote_wire::{
         MessageType, REMOTE_PROTOCOL_VERSION, RemoteCell, RemoteFullState, encode_auth_ok_payload,
-        encode_full_state, encode_message, encode_session_list, parse_attach_request, read_message,
+        encode_full_state, encode_message, encode_tab_list, parse_attach_request, read_message,
     };
     use std::io::Write;
 
@@ -238,7 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn list_remote_daemon_sessions_reuses_handshake_validation_over_socket() {
+    fn list_remote_daemon_tabs_reuses_handshake_validation_over_socket() {
         use std::net::TcpListener;
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
@@ -262,13 +262,13 @@ mod tests {
                 .write_all(&encode_message(MessageType::HeartbeatAck, &payload))
                 .expect("write heartbeat ack");
 
-            let (ty, payload) = read_message(&mut stream).expect("read list sessions");
+            let (ty, payload) = read_message(&mut stream).expect("read list tabs");
             assert_eq!(ty, MessageType::ListSessions);
             assert!(payload.is_empty());
             stream
                 .write_all(&encode_message(
                     MessageType::SessionList,
-                    &encode_session_list(&[RemoteTabInfo {
+                    &encode_tab_list(&[RemoteTabInfo {
                         id: 11,
                         name: "dev".to_string(),
                         title: "shell".to_string(),
@@ -280,8 +280,8 @@ mod tests {
                 .expect("write tab list");
         });
 
-        let summary = list_remote_daemon_sessions("127.0.0.1", port, None)
-            .expect("list sessions summary");
+        let summary =
+            list_remote_daemon_tabs("127.0.0.1", port, None).expect("list tabs summary");
         assert_eq!(summary.protocol_version, REMOTE_PROTOCOL_VERSION);
         assert_eq!(summary.server_identity_id.as_deref(), Some("test-daemon"));
         assert_eq!(summary.server_instance_id.as_deref(), Some("test-instance"));
@@ -295,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn list_remote_daemon_sessions_rejects_unexpected_server_identity() {
+    fn list_remote_daemon_tabs_rejects_unexpected_server_identity() {
         use std::net::TcpListener;
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
@@ -314,7 +314,7 @@ mod tests {
                 .expect("write auth ok");
         });
 
-        let error = list_remote_daemon_sessions(
+        let error = list_remote_daemon_tabs(
             "127.0.0.1",
             port,
             Some("expected-daemon"),

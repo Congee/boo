@@ -147,7 +147,8 @@ pub enum Command {
         expect_server_identity: Option<String>,
     },
     /// List tabs from a Boo-native QUIC remote daemon directly
-    RemoteDaemonSessions {
+    #[command(visible_alias = "remote-daemon-sessions")]
+    RemoteDaemonTabs {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
         #[arg(long)]
@@ -178,8 +179,8 @@ pub enum Command {
         host: String,
         #[arg(long)]
         port: u16,
-        #[arg(long = "session-id")]
-        session_id: u32,
+        #[arg(long = "tab-id", alias = "session-id")]
+        tab_id: u32,
         #[arg(long = "expect-server-identity")]
         expect_server_identity: Option<String>,
         #[arg(long = "attachment-id")]
@@ -373,7 +374,7 @@ where
                 Outcome::Exit(1)
             }
         },
-        Command::RemoteDaemonSessions {
+        Command::RemoteDaemonTabs {
             host,
             port,
             expect_server_identity,
@@ -386,7 +387,7 @@ where
                 let mut stdout = std::io::stdout().lock();
                 use std::io::Write;
                 if serde_json::to_writer_pretty(&mut stdout, &summary).is_err() {
-                    eprintln!("failed to serialize remote daemon session summary");
+                    eprintln!("failed to serialize remote daemon tab summary");
                     return Outcome::Exit(1);
                 }
                 let _ = writeln!(stdout);
@@ -535,7 +536,7 @@ where
         Command::RemoteDaemonAttach {
             host,
             port,
-            session_id,
+            tab_id,
             expect_server_identity,
             attachment_id,
             resume_token,
@@ -543,7 +544,7 @@ where
             host,
             *port,
             expect_server_identity.as_deref(),
-            *session_id,
+            *tab_id,
             *attachment_id,
             *resume_token,
         ) {
@@ -770,10 +771,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_remote_daemon_sessions_subcommand() {
+    fn parse_remote_daemon_tabs_subcommand() {
         let cli = Cli::parse_from([
             "boo",
-            "remote-daemon-sessions",
+            "remote-daemon-tabs",
             "--host",
             "127.0.0.1",
             "--port",
@@ -782,7 +783,7 @@ mod tests {
             "daemon-01",
         ]);
         match cli.command {
-            Some(super::Command::RemoteDaemonSessions {
+            Some(super::Command::RemoteDaemonTabs {
                 host,
                 port,
                     expect_server_identity,
@@ -804,7 +805,7 @@ mod tests {
             "127.0.0.1",
             "--port",
             DEFAULT_REMOTE_PORT_STR,
-            "--session-id",
+            "--tab-id",
             "42",
             "--expect-server-identity",
             "daemon-01",
@@ -817,17 +818,50 @@ mod tests {
             Some(super::Command::RemoteDaemonAttach {
                 host,
                 port,
-                session_id,
+                tab_id,
                     expect_server_identity,
                 attachment_id,
                 resume_token,
             }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, crate::config::DEFAULT_REMOTE_PORT);
-                assert_eq!(session_id, 42);
+                assert_eq!(tab_id, 42);
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
                 assert_eq!(attachment_id, Some(99));
                 assert_eq!(resume_token, Some(1234));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_remote_daemon_sessions_alias_subcommand() {
+        let cli = Cli::parse_from([
+            "boo",
+            "remote-daemon-sessions",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            DEFAULT_REMOTE_PORT_STR,
+        ]);
+        assert!(matches!(cli.command, Some(super::Command::RemoteDaemonTabs { .. })));
+    }
+
+    #[test]
+    fn parse_remote_daemon_attach_session_id_alias() {
+        let cli = Cli::parse_from([
+            "boo",
+            "remote-daemon-attach",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            DEFAULT_REMOTE_PORT_STR,
+            "--session-id",
+            "42",
+        ]);
+        match cli.command {
+            Some(super::Command::RemoteDaemonAttach { tab_id, .. }) => {
+                assert_eq!(tab_id, 42);
             }
             other => panic!("unexpected command: {other:?}"),
         }

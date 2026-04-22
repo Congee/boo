@@ -658,9 +658,7 @@ pub(crate) fn read_probe_auth_reply(
     ))
 }
 
-pub(crate) fn decode_session_list_payload(
-    payload: &[u8],
-) -> Result<Vec<RemoteDirectTabInfo>, String> {
+pub(crate) fn decode_tab_list_payload(payload: &[u8]) -> Result<Vec<RemoteDirectTabInfo>, String> {
     if payload.len() < 4 {
         return Err("payload too short".to_string());
     }
@@ -668,7 +666,7 @@ pub(crate) fn decode_session_list_payload(
     let count = u32::from_le_bytes(
         payload[offset..offset + 4]
             .try_into()
-            .map_err(|_| "invalid session count".to_string())?,
+            .map_err(|_| "invalid tab count".to_string())?,
     ) as usize;
     offset += 4;
 
@@ -710,7 +708,7 @@ pub(crate) fn decode_session_list_payload(
         Ok(value)
     }
 
-    let mut sessions = Vec::with_capacity(count);
+    let mut tabs = Vec::with_capacity(count);
     for _ in 0..count {
         let id = read_u32(payload, &mut offset)?;
         let name = read_string(payload, &mut offset)?;
@@ -720,7 +718,7 @@ pub(crate) fn decode_session_list_payload(
             .get(offset)
             .ok_or_else(|| "payload truncated".to_string())?;
         offset += 1;
-        sessions.push(RemoteDirectTabInfo {
+        tabs.push(RemoteDirectTabInfo {
             id,
             name,
             title,
@@ -732,17 +730,17 @@ pub(crate) fn decode_session_list_payload(
     if offset != payload.len() {
         return Err("payload has trailing bytes".to_string());
     }
-    Ok(sessions)
+    Ok(tabs)
 }
 
 pub(crate) fn decode_attached_payload(payload: &[u8]) -> Result<RemoteAttachedSummary, String> {
     if payload.len() < 4 {
         return Err("payload too short".to_string());
     }
-    let session_id = u32::from_le_bytes(
+    let tab_id = u32::from_le_bytes(
         payload[..4]
             .try_into()
-            .map_err(|_| "invalid session id".to_string())?,
+            .map_err(|_| "invalid tab id".to_string())?,
     );
     let attachment_id = if payload.len() >= 12 {
         Some(u64::from_le_bytes(
@@ -766,7 +764,7 @@ pub(crate) fn decode_attached_payload(payload: &[u8]) -> Result<RemoteAttachedSu
         return Err("payload has unexpected length".to_string());
     }
     Ok(RemoteAttachedSummary {
-        tab_id: session_id,
+        tab_id,
         attachment_id,
         resume_token,
     })
@@ -841,25 +839,24 @@ pub(crate) fn decode_remote_full_state_payload(payload: &[u8]) -> Result<RemoteF
     })
 }
 
-pub(crate) fn parse_session_id(payload: &[u8]) -> Option<u32> {
+pub(crate) fn parse_tab_id(payload: &[u8]) -> Option<u32> {
     (payload.len() >= 4)
         .then(|| u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]))
 }
 
-pub(crate) fn parse_tab_id(payload: &[u8]) -> Option<u32> {
-    parse_session_id(payload)
-}
-
 pub(crate) fn parse_created_tab_id(payload: &[u8]) -> Option<u32> {
-    parse_session_id(payload)
+    parse_tab_id(payload)
 }
 
-pub(crate) fn decode_tab_list_payload(payload: &[u8]) -> Result<Vec<RemoteDirectTabInfo>, String> {
-    decode_session_list_payload(payload)
+#[allow(dead_code)]
+pub(crate) fn decode_session_list_payload(
+    payload: &[u8],
+) -> Result<Vec<RemoteDirectTabInfo>, String> {
+    decode_tab_list_payload(payload)
 }
 
 pub(crate) fn parse_attach_request(payload: &[u8]) -> Option<(u32, Option<u64>, Option<u64>)> {
-    let tab_id = parse_session_id(payload)?;
+    let tab_id = parse_tab_id(payload)?;
     let attachment_id = (payload.len() >= 12).then(|| {
         u64::from_le_bytes([
             payload[4], payload[5], payload[6], payload[7], payload[8], payload[9], payload[10],
@@ -914,19 +911,19 @@ pub(crate) fn parse_key_payload(payload: &[u8], is_local: bool) -> Option<(Optio
     parse_input_payload(payload, is_local)
 }
 
-pub fn encode_session_list(sessions: &[RemoteTabInfo]) -> Vec<u8> {
+pub fn encode_tab_list(tabs: &[RemoteTabInfo]) -> Vec<u8> {
     let mut payload = Vec::new();
-    payload.extend_from_slice(&(sessions.len() as u32).to_le_bytes());
-    for session in sessions {
-        payload.extend_from_slice(&session.id.to_le_bytes());
-        push_string(&mut payload, &session.name);
-        push_string(&mut payload, &session.title);
-        push_string(&mut payload, &session.pwd);
+    payload.extend_from_slice(&(tabs.len() as u32).to_le_bytes());
+    for tab in tabs {
+        payload.extend_from_slice(&tab.id.to_le_bytes());
+        push_string(&mut payload, &tab.name);
+        push_string(&mut payload, &tab.title);
+        push_string(&mut payload, &tab.pwd);
         let mut flags = 0u8;
-        if session.attached {
+        if tab.attached {
             flags |= 0x01;
         }
-        if session.child_exited {
+        if tab.child_exited {
             flags |= 0x02;
         }
         payload.push(flags);
@@ -934,8 +931,9 @@ pub fn encode_session_list(sessions: &[RemoteTabInfo]) -> Vec<u8> {
     payload
 }
 
-pub fn encode_tab_list(tabs: &[RemoteTabInfo]) -> Vec<u8> {
-    encode_session_list(tabs)
+#[allow(dead_code)]
+pub fn encode_session_list(tabs: &[RemoteTabInfo]) -> Vec<u8> {
+    encode_tab_list(tabs)
 }
 
 pub fn encode_full_state(
@@ -1282,11 +1280,11 @@ pub(crate) fn remaining_ms(now: Instant, deadline: Instant) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::remote_types::{RemoteDirectSessionInfo, RemoteTabInfo};
+    use crate::remote_types::{RemoteDirectTabInfo, RemoteTabInfo};
 
     #[test]
-    fn session_list_encoding_matches_client_layout() {
-        let payload = encode_session_list(&[RemoteTabInfo {
+    fn tab_list_encoding_matches_client_layout() {
+        let payload = encode_tab_list(&[RemoteTabInfo {
             id: 7,
             name: "Tab 1".to_string(),
             title: "shell".to_string(),
@@ -1507,8 +1505,8 @@ mod tests {
     }
 
     #[test]
-    fn decode_session_list_payload_round_trips_encoded_sessions() {
-        let payload = encode_session_list(&[
+    fn decode_tab_list_payload_round_trips_encoded_tabs() {
+        let payload = encode_tab_list(&[
             RemoteTabInfo {
                 id: 7,
                 name: "Tab 1".to_string(),
@@ -1527,11 +1525,11 @@ mod tests {
             },
         ]);
 
-        let decoded = decode_session_list_payload(&payload).expect("decode session list");
+        let decoded = decode_tab_list_payload(&payload).expect("decode tab list");
         assert_eq!(
             decoded,
             vec![
-                RemoteDirectSessionInfo {
+                RemoteDirectTabInfo {
                     id: 7,
                     name: "Tab 1".to_string(),
                     title: "shell".to_string(),
@@ -1539,7 +1537,7 @@ mod tests {
                     attached: true,
                     child_exited: false,
                 },
-                RemoteDirectSessionInfo {
+                RemoteDirectTabInfo {
                     id: 8,
                     name: String::new(),
                     title: "logs".to_string(),
