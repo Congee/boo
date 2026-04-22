@@ -17,8 +17,8 @@ use rustls::{DigitallySignedStruct, RootCertStore, SignatureScheme};
 use tokio::runtime::{Builder, Runtime};
 
 use crate::remote::RemoteCmd;
-use crate::remote_direct_session::DirectTransportSession;
-use crate::remote_listener::run_remote_client_session;
+use crate::remote_direct_transport::DirectTransportSession;
+use crate::remote_listener::run_remote_client_connection;
 use crate::remote_state::State;
 
 pub(crate) const TRANSPORT_LABEL_QUIC: &str = "quic";
@@ -82,7 +82,7 @@ pub(crate) fn start_quic_listener(
                         _connection: connection,
                     };
                     std::thread::spawn(move || {
-                        run_remote_client_session(
+                        run_remote_client_connection(
                             reader,
                             writer,
                             state,

@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Instant;
 
-pub(crate) use crate::remote_direct_session::DirectTransportSession;
+pub(crate) use crate::remote_direct_transport::DirectTransportSession;
 
 // Re-export the public data types so existing callers of
 // `crate::remote::RemoteProbeSummary` etc. keep working unchanged.

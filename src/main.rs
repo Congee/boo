@@ -22,7 +22,7 @@ mod remote_batcher;
 mod remote_client;
 #[cfg(test)]
 mod remote_config_tests;
-mod remote_direct_session;
+mod remote_direct_transport;
 mod remote_full_state;
 mod remote_listener;
 mod remote_quic;

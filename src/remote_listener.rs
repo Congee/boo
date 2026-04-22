@@ -1,6 +1,6 @@
 //! Accept-loop and per-connection socket lifecycle for the remote daemon.
 //!
-//! Each accepted connection ends up in [`run_remote_client_session`],
+//! Each accepted connection ends up in [`run_remote_client_connection`],
 //! which registers a `ClientState`, spawns the writer thread, and hands
 //! the reader off to the blocking `read_loop` in `remote_auth`.
 
@@ -19,7 +19,7 @@ use crate::remote_state::{ClientRuntimeSubscription, ClientState, State};
 /// threads that serve it.
 pub(crate) static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 
-pub(crate) fn run_remote_client_session<R, W>(
+pub(crate) fn run_remote_client_connection<R, W>(
     reader: R,
     writer: W,
     state: Arc<Mutex<State>>,
