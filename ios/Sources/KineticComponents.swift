@@ -450,7 +450,6 @@ struct TerminalKeyboardAccessoryState {
     var ctrlActive: Bool
     var altActive: Bool
     var metaActive: Bool
-    let onDismissKeyboard: () -> Void
     let onInsertText: (String) -> Void
     let onEscape: () -> Void
     let onToggleCtrl: () -> Void
@@ -563,10 +562,6 @@ final class TerminalProxyTextView: UITextView {
         }
 
         let leftItems: [UIBarButtonItem] = [
-            assistantItem(title: "⌄", identifier: "terminal-key-dismiss", active: false) { [weak self] in
-                state.onDismissKeyboard()
-                self?.resignFirstResponder()
-            },
             assistantItem(title: "⌃", identifier: "terminal-key-ctrl", active: state.ctrlActive) {
                 state.onToggleCtrl()
             },

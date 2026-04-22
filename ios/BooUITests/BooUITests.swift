@@ -384,7 +384,6 @@ final class BooAppLaunchTests: BooUITestCase {
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
 
-        XCTAssertTrue(app.buttons["terminal-key-dismiss"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["terminal-key-ctrl"].exists)
         XCTAssertTrue(app.buttons["terminal-key-alt"].exists)
         XCTAssertTrue(app.buttons["terminal-key-tab"].exists)

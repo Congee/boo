@@ -1068,9 +1068,6 @@ struct TerminalSessionScreen: View {
                     ctrlActive: ctrlActive,
                     altActive: altActive,
                     metaActive: metaActive,
-                    onDismissKeyboard: {
-                        keyboardFocused = false
-                    },
                     onInsertText: { text in
                         sendTypedText(text)
                     },
