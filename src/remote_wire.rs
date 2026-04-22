@@ -50,7 +50,7 @@ pub const STYLE_FLAG_EXPLICIT_BG: u8 = 0x40;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageType {
     Auth = 0x01,
-    ListSessions = 0x02,
+    ListTabs = 0x02,
     Attach = 0x03,
     Detach = 0x04,
     Create = 0x05,
@@ -68,14 +68,14 @@ pub enum MessageType {
 
     AuthOk = 0x80,
     AuthFail = 0x81,
-    SessionList = 0x82,
+    TabList = 0x82,
     FullState = 0x83,
     Delta = 0x84,
     Attached = 0x85,
     Detached = 0x86,
     ErrorMsg = 0x87,
-    SessionCreated = 0x88,
-    SessionExited = 0x89,
+    TabCreated = 0x88,
+    TabExited = 0x89,
     ScrollData = 0x8a,
     Clipboard = 0x8b,
     Image = 0x8c,
@@ -86,10 +86,10 @@ pub enum MessageType {
     HeartbeatAck = 0x92,
 }
 
-pub const MESSAGE_TYPE_LIST_TABS: MessageType = MessageType::ListSessions;
-pub const MESSAGE_TYPE_TAB_LIST: MessageType = MessageType::SessionList;
-pub const MESSAGE_TYPE_TAB_CREATED: MessageType = MessageType::SessionCreated;
-pub const MESSAGE_TYPE_TAB_EXITED: MessageType = MessageType::SessionExited;
+pub const MESSAGE_TYPE_LIST_TABS: MessageType = MessageType::ListTabs;
+pub const MESSAGE_TYPE_TAB_LIST: MessageType = MessageType::TabList;
+pub const MESSAGE_TYPE_TAB_CREATED: MessageType = MessageType::TabCreated;
+pub const MESSAGE_TYPE_TAB_EXITED: MessageType = MessageType::TabExited;
 
 #[repr(u16)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -188,12 +188,12 @@ pub const fn logical_channel_for_message_type(message_type: MessageType) -> Logi
         MessageType::Auth
         | MessageType::AuthOk
         | MessageType::AuthFail
-        | MessageType::ListSessions
-        | MessageType::SessionList
+        | MessageType::ListTabs
+        | MessageType::TabList
         | MessageType::Create
-        | MessageType::SessionCreated
+        | MessageType::TabCreated
         | MessageType::Destroy
-        | MessageType::SessionExited
+        | MessageType::TabExited
         | MessageType::ErrorMsg => LogicalChannel::Control,
         MessageType::Attach
         | MessageType::Attached
@@ -226,7 +226,7 @@ impl TryFrom<u8> for MessageType {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         let message = match value {
             0x01 => Self::Auth,
-            0x02 => Self::ListSessions,
+            0x02 => Self::ListTabs,
             0x03 => Self::Attach,
             0x04 => Self::Detach,
             0x05 => Self::Create,
@@ -243,14 +243,14 @@ impl TryFrom<u8> for MessageType {
             0x11 => Self::Heartbeat,
             0x80 => Self::AuthOk,
             0x81 => Self::AuthFail,
-            0x82 => Self::SessionList,
+            0x82 => Self::TabList,
             0x83 => Self::FullState,
             0x84 => Self::Delta,
             0x85 => Self::Attached,
             0x86 => Self::Detached,
             0x87 => Self::ErrorMsg,
-            0x88 => Self::SessionCreated,
-            0x89 => Self::SessionExited,
+            0x88 => Self::TabCreated,
+            0x89 => Self::TabExited,
             0x8a => Self::ScrollData,
             0x8b => Self::Clipboard,
             0x8c => Self::Image,
@@ -512,7 +512,7 @@ pub(crate) fn read_probe_reply(
             return Ok((ty, payload));
         }
         match ty {
-            MessageType::SessionList
+            MessageType::TabList
             | MessageType::FullState
             | MessageType::Delta
             | MessageType::Attached
@@ -568,7 +568,7 @@ pub(crate) fn read_attach_bootstrap(
             }
         };
         match ty {
-            MessageType::SessionList
+            MessageType::TabList
             | MessageType::UiRuntimeState
             | MessageType::UiAppearance
             | MessageType::UiPaneFullState
@@ -642,7 +642,7 @@ pub(crate) fn read_probe_auth_reply(
             MessageType::AuthOk | MessageType::AuthFail => {
                 return Ok((ty, payload));
             }
-            MessageType::SessionList
+            MessageType::TabList
             | MessageType::FullState
             | MessageType::Delta
             | MessageType::Attached
@@ -1404,7 +1404,7 @@ mod tests {
     fn logical_channel_mapping_matches_current_message_families() {
         assert_eq!(logical_channel_for_message_type(MessageType::Auth), LogicalChannel::Control);
         assert_eq!(
-            logical_channel_for_message_type(MessageType::SessionList),
+            logical_channel_for_message_type(MessageType::TabList),
             LogicalChannel::Control
         );
         assert_eq!(
