@@ -9,7 +9,7 @@ mod tests {
     };
     use crate::remote_wire::{
         MessageType, RemoteCell, RemoteErrorCode, RemoteFullState, decode_error_payload,
-        encode_auth_ok_payload, encode_message, encode_session_list, read_message,
+        encode_auth_ok_payload, encode_message, encode_tab_list, read_message,
     };
     use std::collections::{HashMap, VecDeque};
     use std::io::{self, Read, Write};
@@ -82,7 +82,7 @@ mod tests {
             server_stream
                 .write_all(&encode_message(
                     MessageType::SessionList,
-                    &encode_session_list(&[RemoteTabInfo {
+                    &encode_tab_list(&[RemoteTabInfo {
                         id: 21,
                         name: "unix".to_string(),
                         title: "shell".to_string(),

@@ -34,7 +34,7 @@ mod remote_server_diag;
 mod remote_server_stream;
 mod remote_server_targets;
 #[cfg(test)]
-mod remote_session_tests;
+mod remote_tab_tests;
 mod remote_state;
 mod remote_types;
 mod remote_wire;

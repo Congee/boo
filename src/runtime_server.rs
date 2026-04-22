@@ -25,7 +25,7 @@ fn stage_to_profile_path(stage: &str) -> &'static str {
     match stage {
         "remote_input_applied" => "server.remote.input.apply",
         "remote_key_applied" => "server.remote.key.apply",
-        "publish_remote_session" => "server.remote.publish_session",
+        "publish_remote_tab" => "server.remote.publish_tab",
         _ => "server.unknown",
     }
 }
@@ -48,7 +48,7 @@ impl BooApp {
         Some(Arc::new(remote::full_state_from_ui(&snapshot)))
     }
 
-    fn publish_local_gui_runtime_state_for_active_session(&mut self) {
+    fn publish_local_gui_runtime_state_for_active_tab(&mut self) {
         let Some(tab_id) = self.server.tabs.active_tab_id() else {
             return;
         };
@@ -99,7 +99,7 @@ impl BooApp {
     }
 
     fn publish_local_gui_after_ui_action(&mut self, before: &LocalGuiTransportState) {
-        self.publish_local_gui_runtime_state_for_active_session();
+        self.publish_local_gui_runtime_state_for_active_tab();
         let after = self.local_gui_transport_state();
         if after != *before && let Some(tab_id) = after.tab_id {
             self.publish_remote_tab(tab_id);
@@ -666,7 +666,7 @@ impl BooApp {
                 }
             }
             server::Command::RemoteAppMouseEvent { client_id, event } => {
-                let should_republish_session = matches!(
+                let should_republish_tab = matches!(
                     event,
                     crate::app_input::AppMouseEvent::WheelScrolledLines { .. }
                         | crate::app_input::AppMouseEvent::WheelScrolledPixels { .. }
@@ -713,7 +713,7 @@ impl BooApp {
                         server.send_ui_runtime_state(client_id, &ui_state);
                         server.send_tab_list(client_id, tabs.as_ref());
                     }
-                    if changed_ui || should_republish_session {
+                    if changed_ui || should_republish_tab {
                         server.send_tab_attached(client_id, tab_id, None);
                         self.publish_remote_tab(tab_id);
                     }

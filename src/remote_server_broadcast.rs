@@ -48,7 +48,7 @@ mod tests {
     }
 
     #[test]
-    fn send_ui_runtime_state_to_local_attached_only_targets_matching_session() {
+    fn send_ui_runtime_state_to_local_attached_only_targets_matching_tab() {
         let (attached_tx, attached_rx) = mpsc::channel();
         let (unattached_tx, unattached_rx) = mpsc::channel();
         let mut state = empty_state();

@@ -56,18 +56,3 @@ pub(crate) fn retain_local_attached_pane_states(
         }
     }
 }
-
-#[allow(dead_code)]
-pub(crate) fn local_attached_client_ids(state: &State, tab_id: u32) -> Vec<u64> {
-    local_attached_client_ids_for_tab(state, tab_id)
-}
-
-#[allow(dead_code)]
-pub(crate) fn retarget_local_attached_client_ids(state: &State, tab_id: u32) -> Vec<u64> {
-    retarget_local_attached_client_ids_for_tab(state, tab_id)
-}
-
-#[allow(dead_code)]
-pub(crate) fn client_ids_for_session(state: &State, tab_id: u32) -> Vec<u64> {
-    client_ids_for_tab(state, tab_id)
-}

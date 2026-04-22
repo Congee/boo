@@ -3983,7 +3983,7 @@ mod tests {
     }
 
     #[test]
-    fn disconnect_enters_recovering_without_dropping_active_session() {
+    fn disconnect_enters_recovering_without_dropping_active_tab() {
         let (mut app, _) = ClientApp::new("/tmp/test.sock".to_string());
         app.mode = ClientMode::Attached;
         app.active_remote_tab_id = Some(7);
@@ -4038,7 +4038,7 @@ mod tests {
     }
 
     #[test]
-    fn fallback_status_right_shows_recovering_active_session() {
+    fn fallback_status_right_shows_recovering_active_tab() {
         let ui_state = ClientUiState {
             pwd: "/tmp".to_string(),
             ..ClientUiState::default()
