@@ -20,9 +20,6 @@ pub struct RemoteTabInfo {
     pub child_exited: bool,
 }
 
-#[allow(dead_code)]
-pub type RemoteSessionInfo = RemoteTabInfo;
-
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct RemoteClientInfo {
     pub client_id: u64,
@@ -106,9 +103,6 @@ pub struct RemoteDirectTabInfo {
     pub child_exited: bool,
 }
 
-#[allow(dead_code)]
-pub type RemoteDirectSessionInfo = RemoteDirectTabInfo;
-
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct RemoteTabListSummary {
     pub host: String,
@@ -121,9 +115,6 @@ pub struct RemoteTabListSummary {
     pub heartbeat_rtt_ms: u64,
     pub tabs: Vec<RemoteDirectTabInfo>,
 }
-
-#[allow(dead_code)]
-pub type RemoteSessionListSummary = RemoteTabListSummary;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct RemoteAttachedSummary {

@@ -77,15 +77,6 @@ fn list_summary_from_transport(
     })
 }
 
-#[allow(dead_code)]
-pub fn list_remote_daemon_sessions(
-    host: &str,
-    port: u16,
-    expected_server_identity: Option<&str>,
-) -> Result<RemoteTabListSummary, String> {
-    list_remote_daemon_tabs(host, port, expected_server_identity)
-}
-
 pub fn list_remote_daemon_tabs(
     host: &str,
     port: u16,
@@ -124,25 +115,6 @@ fn attach_summary_from_transport(
     })
 }
 
-#[allow(dead_code)]
-pub fn attach_remote_daemon_session(
-    host: &str,
-    port: u16,
-    expected_server_identity: Option<&str>,
-    tab_id: u32,
-    attachment_id: Option<u64>,
-    resume_token: Option<u64>,
-) -> Result<RemoteAttachSummary, String> {
-    attach_remote_daemon_tab(
-        host,
-        port,
-        expected_server_identity,
-        tab_id,
-        attachment_id,
-        resume_token,
-    )
-}
-
 pub fn attach_remote_daemon_tab(
     host: &str,
     port: u16,
@@ -174,17 +146,6 @@ fn create_summary_from_transport(
         heartbeat_rtt_ms,
         tab_id,
     })
-}
-
-#[allow(dead_code)]
-pub fn create_remote_daemon_session(
-    host: &str,
-    port: u16,
-    expected_server_identity: Option<&str>,
-    cols: u16,
-    rows: u16,
-) -> Result<RemoteCreateSummary, String> {
-    create_remote_daemon_tab(host, port, expected_server_identity, cols, rows)
 }
 
 pub fn create_remote_daemon_tab(
