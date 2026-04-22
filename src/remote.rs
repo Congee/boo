@@ -14,7 +14,7 @@ pub(crate) use crate::remote_direct_session::DirectTransportSession;
 pub use crate::remote_types::{
     DirectTransportKind, RemoteAttachSummary, RemoteAttachedSummary, RemoteClientInfo,
     RemoteClientsSnapshot, RemoteCreateSummary, RemoteDirectTabInfo,
-    RemoteProbeSummary, RemoteServerInfo, RemoteSessionInfo, RemoteSessionListSummary,
+    RemoteProbeSummary, RemoteServerInfo,
     RemoteTabInfo, RemoteTabListSummary, RemoteUpgradeProbeSummary, RevivableAttachmentInfo,
 };
 
@@ -22,8 +22,7 @@ pub use crate::remote_types::{
 // `crate::remote::probe_remote_endpoint` etc. keep working unchanged.
 #[allow(unused_imports)]
 pub use crate::remote_client::{
-    attach_remote_daemon_session, attach_remote_daemon_tab, create_remote_daemon_session,
-    create_remote_daemon_tab, list_remote_daemon_sessions, list_remote_daemon_tabs,
+    attach_remote_daemon_tab, create_remote_daemon_tab, list_remote_daemon_tabs,
     probe_remote_endpoint, probe_selected_direct_transport, select_direct_transport,
 };
 
