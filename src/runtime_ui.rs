@@ -44,7 +44,7 @@ impl BooApp {
     pub(crate) fn choose_tree_entries(&self) -> Vec<ChooseTreeEntry> {
         let active_pane_id = self.server.tabs.focused_pane().id();
         let mut entries = Vec::new();
-        for tab in self.server.tabs.tab_session_info() {
+        for tab in self.server.tabs.tab_identity_info() {
             let Some(tree) = self.server.tabs.tab_tree(tab.index) else {
                 continue;
             };

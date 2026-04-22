@@ -13,9 +13,9 @@ pub(crate) use crate::remote_direct_session::DirectTransportSession;
 #[allow(unused_imports)]
 pub use crate::remote_types::{
     DirectTransportKind, RemoteAttachSummary, RemoteAttachedSummary, RemoteClientInfo,
-    RemoteClientsSnapshot, RemoteCreateSummary, RemoteDirectSessionInfo, RemoteProbeSummary,
-    RemoteServerInfo, RemoteSessionInfo, RemoteSessionListSummary, RemoteUpgradeProbeSummary,
-    RevivableAttachmentInfo,
+    RemoteClientsSnapshot, RemoteCreateSummary, RemoteDirectSessionInfo, RemoteDirectTabInfo,
+    RemoteProbeSummary, RemoteServerInfo, RemoteSessionInfo, RemoteSessionListSummary,
+    RemoteTabInfo, RemoteTabListSummary, RemoteUpgradeProbeSummary, RevivableAttachmentInfo,
 };
 
 // Re-export the direct-client RPCs so existing callers of
@@ -128,9 +128,9 @@ use crate::remote_quic::{QuicServerHandle, start_quic_listener};
 use crate::remote_server_advertise::ServiceAdvertiser;
 use crate::remote_server_attach::prepare_attachment as prepare_remote_attachment;
 use crate::remote_server_control::{
-    reply_session_list as send_reply_session_list,
-    send_session_list as send_cached_session_list,
-    send_session_list_to_local_clients as send_cached_session_list_to_local_clients,
+    reply_tab_list as send_reply_tab_list,
+    send_tab_list as send_cached_tab_list,
+    send_tab_list_to_local_clients as send_cached_tab_list_to_local_clients,
     send_ui_appearance as send_local_ui_appearance,
     send_ui_appearance_to_local_clients as send_ui_appearance_to_all_local_clients,
     send_ui_runtime_state as send_local_ui_runtime_state,
@@ -142,9 +142,9 @@ use crate::remote_server_stream::{
     send_state_to_client as publish_state_to_client,
 };
 use crate::remote_server_targets::{
-    client_ids_for_session, local_attached_client_ids,
+    client_ids_for_tab, local_attached_client_ids_for_tab,
     retain_local_attached_pane_states as retain_local_attached_pane_states_inner,
-    retarget_local_attached_client_ids,
+    retarget_local_attached_client_ids_for_tab,
 };
 use crate::remote_state::{ClientState, State};
 
@@ -362,16 +362,16 @@ impl RemoteServer {
         )
     }
 
-    pub fn send_session_list(&self, client_id: u64, sessions: &[RemoteSessionInfo]) {
-        send_cached_session_list(&self.state, client_id, sessions);
+    pub fn send_tab_list(&self, client_id: u64, tabs: &[RemoteSessionInfo]) {
+        send_cached_tab_list(&self.state, client_id, tabs);
     }
 
-    pub fn reply_session_list(&self, client_id: u64, sessions: &[RemoteSessionInfo]) {
-        send_reply_session_list(&self.state, client_id, sessions);
+    pub fn reply_tab_list(&self, client_id: u64, tabs: &[RemoteSessionInfo]) {
+        send_reply_tab_list(&self.state, client_id, tabs);
     }
 
-    pub fn send_session_list_to_local_clients(&self, sessions: &[RemoteSessionInfo]) {
-        send_cached_session_list_to_local_clients(&self.state, sessions);
+    pub fn send_tab_list_to_local_clients(&self, tabs: &[RemoteSessionInfo]) {
+        send_cached_tab_list_to_local_clients(&self.state, tabs);
     }
 
     pub fn send_attached(&self, client_id: u64, session_id: u32, attachment_id: Option<u64>) {
@@ -455,22 +455,22 @@ impl RemoteServer {
 
     pub fn send_ui_runtime_state_to_local_attached(
         &self,
-        session_id: u32,
+        tab_id: u32,
         state: &crate::control::UiRuntimeState,
     ) {
-        send_ui_runtime_state_to_attached_locals(&self.state, session_id, state);
+        send_ui_runtime_state_to_attached_locals(&self.state, tab_id, state);
     }
 
-    pub fn retarget_local_attached_to_session(&self, session_id: u32) -> bool {
+    pub fn retarget_local_attached_to_tab(&self, tab_id: u32) -> bool {
         let client_ids = {
             let state_guard = self.state.lock().expect("remote server state poisoned");
-            retarget_local_attached_client_ids(&state_guard, session_id)
+            retarget_local_attached_client_ids_for_tab(&state_guard, tab_id)
         };
         if client_ids.is_empty() {
             return false;
         }
         for client_id in client_ids {
-            self.send_attached(client_id, session_id, None);
+            self.send_attached(client_id, tab_id, None);
         }
         true
     }
@@ -490,28 +490,28 @@ impl RemoteServer {
         send_ui_appearance_to_all_local_clients(&self.state, appearance);
     }
 
-    pub fn send_full_state_to_attached(&self, session_id: u32, state: Arc<RemoteFullState>) {
-        let client_ids = self.clients_for_session(session_id);
+    pub fn send_full_state_to_attached(&self, tab_id: u32, state: Arc<RemoteFullState>) {
+        let client_ids = self.clients_for_tab(tab_id);
         for client_id in client_ids {
-            publish_state_to_client(&self.state, client_id, session_id, Arc::clone(&state));
+            publish_state_to_client(&self.state, client_id, tab_id, Arc::clone(&state));
         }
     }
 
     pub fn send_pane_state_to_local_attached(
         &self,
-        session_id: u32,
+        tab_id: u32,
         pane_id: u64,
         state: Arc<RemoteFullState>,
     ) {
         let client_ids = {
             let state_guard = self.state.lock().expect("remote server state poisoned");
-            local_attached_client_ids(&state_guard, session_id)
+            local_attached_client_ids_for_tab(&state_guard, tab_id)
         };
         for client_id in client_ids {
             publish_pane_state_to_client(
                 &self.state,
                 client_id,
-                session_id,
+                tab_id,
                 pane_id,
                 Arc::clone(&state),
             );
@@ -520,15 +520,15 @@ impl RemoteServer {
 
     pub fn retain_local_attached_pane_states(
         &self,
-        session_id: u32,
+        tab_id: u32,
         visible_pane_ids: &[u64],
     ) {
         let mut guard = self.state.lock().expect("remote server state poisoned");
-        retain_local_attached_pane_states_inner(&mut guard, session_id, visible_pane_ids);
+        retain_local_attached_pane_states_inner(&mut guard, tab_id, visible_pane_ids);
     }
 
     pub fn send_session_exited(&self, session_id: u32) {
-        let client_ids = self.clients_for_session(session_id);
+        let client_ids = self.clients_for_tab(session_id);
         for client_id in client_ids {
             self.send_to_client(
                 client_id,
@@ -552,9 +552,29 @@ impl RemoteServer {
         });
     }
 
-    fn clients_for_session(&self, session_id: u32) -> Vec<u64> {
+    fn clients_for_tab(&self, tab_id: u32) -> Vec<u64> {
         let state = self.state.lock().expect("remote server state poisoned");
-        client_ids_for_session(&state, session_id)
+        client_ids_for_tab(&state, tab_id)
+    }
+
+    #[allow(dead_code)]
+    pub fn send_session_list(&self, client_id: u64, sessions: &[RemoteSessionInfo]) {
+        self.send_tab_list(client_id, sessions);
+    }
+
+    #[allow(dead_code)]
+    pub fn reply_session_list(&self, client_id: u64, sessions: &[RemoteSessionInfo]) {
+        self.reply_tab_list(client_id, sessions);
+    }
+
+    #[allow(dead_code)]
+    pub fn send_session_list_to_local_clients(&self, sessions: &[RemoteSessionInfo]) {
+        self.send_tab_list_to_local_clients(sessions);
+    }
+
+    #[allow(dead_code)]
+    pub fn retarget_local_attached_to_session(&self, session_id: u32) -> bool {
+        self.retarget_local_attached_to_tab(session_id)
     }
 
     fn update_client(&self, client_id: u64, mut update: impl FnMut(&mut ClientState)) {

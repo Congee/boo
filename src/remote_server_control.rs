@@ -1,10 +1,10 @@
 //! Cached control-payload helpers for local remote clients.
 
-use crate::remote::{RemoteSessionInfo};
+use crate::remote::RemoteTabInfo;
 use crate::remote_batcher::OutboundMessage;
-use crate::remote_server_targets::{local_attached_client_ids, local_client_ids};
+use crate::remote_server_targets::{local_attached_client_ids_for_tab, local_client_ids};
 use crate::remote_state::{ClientState, State};
-use crate::remote_wire::{MessageType, encode_message, encode_session_list};
+use crate::remote_wire::{MessageType, encode_message, encode_tab_list};
 use std::sync::{Arc, Mutex};
 
 pub(crate) enum CachedControlPayload {
@@ -13,37 +13,37 @@ pub(crate) enum CachedControlPayload {
     UiAppearance,
 }
 
-pub(crate) fn send_session_list(
+pub(crate) fn send_tab_list(
     state: &Arc<Mutex<State>>,
     client_id: u64,
-    sessions: &[RemoteSessionInfo],
+    tabs: &[RemoteTabInfo],
 ) {
     send_cached_control_payload_bytes(
         state,
         client_id,
         MessageType::SessionList,
-        &encode_session_list(sessions),
+        &encode_tab_list(tabs),
         CachedControlPayload::SessionList,
     );
 }
 
-pub(crate) fn reply_session_list(
+pub(crate) fn reply_tab_list(
     state: &Arc<Mutex<State>>,
     client_id: u64,
-    sessions: &[RemoteSessionInfo],
+    tabs: &[RemoteTabInfo],
 ) {
-    let frame = encode_message(MessageType::SessionList, &encode_session_list(sessions));
+    let frame = encode_message(MessageType::SessionList, &encode_tab_list(tabs));
     let guard = state.lock().expect("remote server state poisoned");
     if let Some(client) = guard.clients.get(&client_id) {
         let _ = client.outbound.send(OutboundMessage::Frame(frame));
     }
 }
 
-pub(crate) fn send_session_list_to_local_clients(
+pub(crate) fn send_tab_list_to_local_clients(
     state: &Arc<Mutex<State>>,
-    sessions: &[RemoteSessionInfo],
+    tabs: &[RemoteTabInfo],
 ) {
-    let payload = encode_session_list(sessions);
+    let payload = encode_tab_list(tabs);
     let client_ids = {
         let guard = state.lock().expect("remote server state poisoned");
         local_client_ids(&guard)
@@ -88,7 +88,7 @@ pub(crate) fn send_ui_runtime_state(
 
 pub(crate) fn send_ui_runtime_state_to_local_attached(
     state: &Arc<Mutex<State>>,
-    session_id: u32,
+    tab_id: u32,
     runtime_state: &crate::control::UiRuntimeState,
 ) {
     let Ok(payload) = serde_json::to_vec(runtime_state) else {
@@ -96,7 +96,7 @@ pub(crate) fn send_ui_runtime_state_to_local_attached(
     };
     let client_ids = {
         let guard = state.lock().expect("remote server state poisoned");
-        local_attached_client_ids(&guard, session_id)
+        local_attached_client_ids_for_tab(&guard, tab_id)
     };
     for client_id in client_ids {
         send_cached_control_payload_bytes(
@@ -107,6 +107,32 @@ pub(crate) fn send_ui_runtime_state_to_local_attached(
             CachedControlPayload::UiRuntimeState,
         );
     }
+}
+
+#[allow(dead_code)]
+pub(crate) fn send_session_list(
+    state: &Arc<Mutex<State>>,
+    client_id: u64,
+    sessions: &[RemoteTabInfo],
+) {
+    send_tab_list(state, client_id, sessions);
+}
+
+#[allow(dead_code)]
+pub(crate) fn reply_session_list(
+    state: &Arc<Mutex<State>>,
+    client_id: u64,
+    sessions: &[RemoteTabInfo],
+) {
+    reply_tab_list(state, client_id, sessions);
+}
+
+#[allow(dead_code)]
+pub(crate) fn send_session_list_to_local_clients(
+    state: &Arc<Mutex<State>>,
+    sessions: &[RemoteTabInfo],
+) {
+    send_tab_list_to_local_clients(state, sessions);
 }
 
 pub(crate) fn send_ui_appearance(

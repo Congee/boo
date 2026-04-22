@@ -25,11 +25,13 @@ pub struct RunningCommand {
 }
 
 #[derive(Clone)]
-pub struct TabSessionInfo {
+pub struct TabIdentityInfo {
     pub id: u32,
     pub index: usize,
     pub title: String,
 }
+
+pub type TabSessionInfo = TabIdentityInfo;
 
 impl TabManager {
     pub fn new() -> Self {
@@ -174,8 +176,13 @@ impl TabManager {
         self.active
     }
 
-    pub fn active_session_id(&self) -> Option<u32> {
+    pub fn active_tab_id(&self) -> Option<u32> {
         self.tabs.get(self.active).map(|tab| tab.id)
+    }
+
+    #[allow(dead_code)]
+    pub fn active_session_id(&self) -> Option<u32> {
+        self.active_tab_id()
     }
 
     pub fn set_active_title(&mut self, title: String) {
@@ -349,11 +356,11 @@ impl TabManager {
         self.tabs.get(index).map(|tab| tab.layout.clone())
     }
 
-    pub fn tab_session_info(&self) -> Vec<TabSessionInfo> {
+    pub fn tab_identity_info(&self) -> Vec<TabIdentityInfo> {
         self.tabs
             .iter()
             .enumerate()
-            .map(|(index, tab)| TabSessionInfo {
+            .map(|(index, tab)| TabIdentityInfo {
                 id: tab.id,
                 index,
                 title: self.display_title(index, None),
@@ -361,12 +368,27 @@ impl TabManager {
             .collect()
     }
 
-    pub fn session_id_for_index(&self, index: usize) -> Option<u32> {
+    #[allow(dead_code)]
+    pub fn tab_session_info(&self) -> Vec<TabSessionInfo> {
+        self.tab_identity_info()
+    }
+
+    pub fn tab_id_for_index(&self, index: usize) -> Option<u32> {
         self.tabs.get(index).map(|tab| tab.id)
     }
 
+    #[allow(dead_code)]
+    pub fn session_id_for_index(&self, index: usize) -> Option<u32> {
+        self.tab_id_for_index(index)
+    }
+
+    pub fn find_index_by_tab_id(&self, tab_id: u32) -> Option<usize> {
+        self.tabs.iter().position(|tab| tab.id == tab_id)
+    }
+
+    #[allow(dead_code)]
     pub fn find_index_by_session_id(&self, session_id: u32) -> Option<usize> {
-        self.tabs.iter().position(|tab| tab.id == session_id)
+        self.find_index_by_tab_id(session_id)
     }
 
     pub fn find_pane_location(
@@ -382,9 +404,14 @@ impl TabManager {
         })
     }
 
-    pub fn session_id_for_pane_id(&self, pane_id: crate::pane::PaneId) -> Option<u32> {
+    pub fn tab_id_for_pane_id(&self, pane_id: crate::pane::PaneId) -> Option<u32> {
         self.find_pane_location(pane_id)
-            .and_then(|(tab_index, _)| self.session_id_for_index(tab_index))
+            .and_then(|(tab_index, _)| self.tab_id_for_index(tab_index))
+    }
+
+    #[allow(dead_code)]
+    pub fn session_id_for_pane_id(&self, pane_id: crate::pane::PaneId) -> Option<u32> {
+        self.tab_id_for_pane_id(pane_id)
     }
 
     pub fn remove_pane_by_id(&mut self, pane_id: crate::pane::PaneId) -> Option<PaneHandle> {

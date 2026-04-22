@@ -94,10 +94,10 @@ mod tests {
             .heartbeat_round_trip(b"unix-heartbeat")
             .expect("heartbeat round trip");
         assert!(heartbeat_rtt_ms <= 5_000);
-        let sessions = client.list_sessions().expect("list sessions over unix stream");
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].id, 21);
-        assert_eq!(sessions[0].name, "unix");
+        let tabs = client.list_tabs().expect("list tabs over unix stream");
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs[0].id, 21);
+        assert_eq!(tabs[0].name, "unix");
         assert_eq!(client.server_identity_id.as_deref(), Some("unix-daemon"));
         assert_eq!(client.server_instance_id.as_deref(), Some("unix-instance"));
 

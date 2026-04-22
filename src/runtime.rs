@@ -132,7 +132,7 @@ impl BooApp {
         let (cell_width, cell_height) =
             terminal_metrics(appearance.font_size, appearance.font_families.first().copied());
         let initial_dirty_remote_sessions =
-            server.tabs.active_session_id().into_iter().collect::<Vec<_>>();
+            server.tabs.active_tab_id().into_iter().collect::<Vec<_>>();
 
         #[cfg(target_os = "linux")]
         {
@@ -310,30 +310,45 @@ impl BooApp {
 }
 
 impl BooApp {
+    pub(crate) fn current_remote_tabs(&mut self) -> std::sync::Arc<[remote::RemoteTabInfo]> {
+        if let Some(cached) = self.cached_remote_sessions.as_ref() {
+            return std::sync::Arc::clone(cached);
+        }
+        let tabs = std::sync::Arc::<[remote::RemoteTabInfo]>::from(self.remote_tabs());
+        self.cached_remote_sessions = Some(std::sync::Arc::clone(&tabs));
+        tabs
+    }
+
     pub(crate) fn invalidate_remote_sessions_cache(&mut self) {
         self.cached_remote_sessions = None;
     }
 
+    #[allow(dead_code)]
     pub(crate) fn current_remote_sessions(&mut self) -> std::sync::Arc<[remote::RemoteSessionInfo]> {
-        if let Some(cached) = self.cached_remote_sessions.as_ref() {
-            return std::sync::Arc::clone(cached);
-        }
-        let sessions = std::sync::Arc::<[remote::RemoteSessionInfo]>::from(self.remote_sessions());
-        self.cached_remote_sessions = Some(std::sync::Arc::clone(&sessions));
-        sessions
+        self.current_remote_tabs()
     }
 
-    pub(crate) fn mark_remote_session_dirty(&mut self, session_id: u32) {
-        if !self.dirty_remote_sessions.contains(&session_id) {
-            self.dirty_remote_sessions.push(session_id);
+    pub(crate) fn mark_remote_tab_dirty(&mut self, tab_id: u32) {
+        if !self.dirty_remote_sessions.contains(&tab_id) {
+            self.dirty_remote_sessions.push(tab_id);
         }
         self.invalidate_remote_sessions_cache();
     }
 
-    pub(crate) fn mark_active_remote_session_dirty(&mut self) {
-        if let Some(session_id) = self.server.tabs.active_session_id() {
-            self.mark_remote_session_dirty(session_id);
+    pub(crate) fn mark_active_remote_tab_dirty(&mut self) {
+        if let Some(tab_id) = self.server.tabs.active_tab_id() {
+            self.mark_remote_tab_dirty(tab_id);
         }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn mark_remote_session_dirty(&mut self, session_id: u32) {
+        self.mark_remote_tab_dirty(session_id);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn mark_active_remote_session_dirty(&mut self) {
+        self.mark_active_remote_tab_dirty();
     }
 
     pub(crate) fn invoke_status_component(&mut self, source: &str, id: &str) -> bool {
@@ -552,7 +567,7 @@ impl BooApp {
         for pane_id in poll.exited_panes {
             self.status_components
                 .clear(&crate::status_components::osc_source_for_pane(pane_id), None);
-            if let Some(session_id) = self.server.tabs.session_id_for_pane_id(pane_id) {
+            if let Some(session_id) = self.server.tabs.tab_id_for_pane_id(pane_id) {
                 for server in self.remote_servers() {
                     server.send_session_exited(session_id);
                 }
@@ -561,7 +576,7 @@ impl BooApp {
             remote_dirty = true;
         }
         if remote_dirty && self.has_attached_stream_sessions() {
-            self.mark_active_remote_session_dirty();
+            self.mark_active_remote_tab_dirty();
         }
     }
 
@@ -684,7 +699,7 @@ impl BooApp {
                 crate::profiling::scope("server.publish_remote_state", crate::profiling::Kind::Cpu);
             let dirty_sessions = std::mem::take(&mut self.dirty_remote_sessions);
             for session_id in dirty_sessions {
-                self.publish_remote_session(session_id);
+                self.publish_remote_tab(session_id);
             }
         }
         if more_server_cmds_pending {

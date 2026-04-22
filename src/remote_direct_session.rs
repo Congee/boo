@@ -2,7 +2,7 @@
 
 use std::io::{Read, Write};
 
-use crate::remote_types::{RemoteAttachedSummary, RemoteDirectSessionInfo};
+use crate::remote_types::{RemoteAttachedSummary, RemoteDirectSessionInfo, RemoteDirectTabInfo};
 use crate::remote_wire::{
     MessageType, RemoteFullState, decode_auth_ok_payload, decode_session_list_payload,
     encode_message, parse_session_id, read_attach_bootstrap, read_probe_auth_reply,
@@ -93,7 +93,7 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
         Ok(heartbeat_start.elapsed().as_millis() as u64)
     }
 
-    pub(crate) fn list_sessions(&mut self) -> Result<Vec<RemoteDirectSessionInfo>, String> {
+    pub(crate) fn list_tabs(&mut self) -> Result<Vec<RemoteDirectTabInfo>, String> {
         self.stream
             .write_all(&encode_message(MessageType::ListSessions, &[]))
             .map_err(|error| {
@@ -110,6 +110,11 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
                 self.host, self.port
             )
         })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn list_sessions(&mut self) -> Result<Vec<RemoteDirectSessionInfo>, String> {
+        self.list_tabs()
     }
 
     pub(crate) fn attach(
@@ -140,7 +145,7 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
         read_attach_bootstrap(&mut self.stream, &self.host, self.port)
     }
 
-    pub(crate) fn create_session(&mut self, cols: u16, rows: u16) -> Result<u32, String> {
+    pub(crate) fn create_tab(&mut self, cols: u16, rows: u16) -> Result<u32, String> {
         let mut payload = Vec::with_capacity(4);
         payload.extend_from_slice(&cols.to_le_bytes());
         payload.extend_from_slice(&rows.to_le_bytes());
@@ -160,5 +165,10 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
                 self.host, self.port
             )
         })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn create_session(&mut self, cols: u16, rows: u16) -> Result<u32, String> {
+        self.create_tab(cols, rows)
     }
 }

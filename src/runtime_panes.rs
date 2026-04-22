@@ -135,7 +135,7 @@ impl BooApp {
     }
 
     pub(crate) fn resize_viewport_cells(&mut self, cols: u16, rows: u16) -> bool {
-        let (width, terminal_height) = self.session_size_pixels(cols, rows);
+        let (width, terminal_height) = self.tab_size_pixels(cols, rows);
         self.resize_viewport_points(
             width as f64,
             terminal_height as f64 + self.status_bar_height(),
@@ -359,12 +359,14 @@ impl BooApp {
 
     pub(crate) fn new_tab(&mut self) -> Option<u32> {
         let Some(frame) = self.pane_parent_frame() else {
+            log::warn!("new_tab_no_parent_frame headless={}", self.headless);
             return None;
         };
         let Some(pane) = self.create_pane(
             frame,
             ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_TAB,
         ) else {
+            log::warn!("new_tab_create_pane_failed headless={}", self.headless);
             return None;
         };
         let old = self.server.tabs.focused_pane();
@@ -373,8 +375,12 @@ impl BooApp {
         let idx = self.server.tabs.new_tab(pane);
         self.set_pane_focus(pane, true);
         self.relayout();
-        log::info!("new tab {idx} (total: {})", self.server.tabs.len());
-        self.server.tabs.session_id_for_index(idx)
+        log::info!(
+            "new_tab_created idx={idx} session_id={:?} total_tabs={}",
+            self.server.tabs.tab_id_for_index(idx),
+            self.server.tabs.len()
+        );
+        self.server.tabs.tab_id_for_index(idx)
     }
 
     pub(crate) fn load_session(&mut self, name: &str) {

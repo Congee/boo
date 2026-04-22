@@ -11,7 +11,7 @@ pub enum DirectTransportKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RemoteSessionInfo {
+pub struct RemoteTabInfo {
     pub id: u32,
     pub name: String,
     pub title: String,
@@ -19,6 +19,8 @@ pub struct RemoteSessionInfo {
     pub attached: bool,
     pub child_exited: bool,
 }
+
+pub type RemoteSessionInfo = RemoteTabInfo;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct RemoteClientInfo {
@@ -92,7 +94,7 @@ pub struct RemoteProbeSummary {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct RemoteDirectSessionInfo {
+pub struct RemoteDirectTabInfo {
     pub id: u32,
     pub name: String,
     pub title: String,
@@ -101,8 +103,10 @@ pub struct RemoteDirectSessionInfo {
     pub child_exited: bool,
 }
 
+pub type RemoteDirectSessionInfo = RemoteDirectTabInfo;
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct RemoteSessionListSummary {
+pub struct RemoteTabListSummary {
     pub host: String,
     pub port: u16,
     pub protocol_version: u16,
@@ -111,8 +115,10 @@ pub struct RemoteSessionListSummary {
     pub server_instance_id: Option<String>,
     pub server_identity_id: Option<String>,
     pub heartbeat_rtt_ms: u64,
-    pub sessions: Vec<RemoteDirectSessionInfo>,
+    pub tabs: Vec<RemoteDirectTabInfo>,
 }
+
+pub type RemoteSessionListSummary = RemoteTabListSummary;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct RemoteAttachedSummary {

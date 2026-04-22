@@ -922,6 +922,10 @@ pub fn encode_session_list(sessions: &[RemoteSessionInfo]) -> Vec<u8> {
     payload
 }
 
+pub fn encode_tab_list(tabs: &[RemoteSessionInfo]) -> Vec<u8> {
+    encode_session_list(tabs)
+}
+
 pub fn encode_full_state(
     state: &RemoteFullState,
     latest_input_seq: Option<u64>,

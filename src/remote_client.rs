@@ -4,7 +4,7 @@
 use crate::remote::DirectTransportSession;
 use crate::remote_types::{
     DirectTransportKind, RemoteAttachSummary, RemoteCreateSummary, RemoteProbeSummary,
-    RemoteSessionListSummary, RemoteUpgradeProbeSummary,
+    RemoteSessionListSummary, RemoteTabListSummary, RemoteUpgradeProbeSummary,
 };
 
 pub fn select_direct_transport(
@@ -61,10 +61,10 @@ pub fn probe_selected_direct_transport(
 fn list_summary_from_session(
     client: &mut DirectTransportSession<crate::remote_quic::QuicDirectStream>,
     port: u16,
-) -> Result<RemoteSessionListSummary, String> {
+) -> Result<RemoteTabListSummary, String> {
     let heartbeat_rtt_ms = client.heartbeat_round_trip(b"boo-remote-list")?;
-    let sessions = client.list_sessions()?;
-    Ok(RemoteSessionListSummary {
+    let tabs = client.list_tabs()?;
+    Ok(RemoteTabListSummary {
         host: client.host.clone(),
         port,
         protocol_version: client.protocol_version,
@@ -73,7 +73,7 @@ fn list_summary_from_session(
         server_instance_id: client.server_instance_id.clone(),
         server_identity_id: client.server_identity_id.clone(),
         heartbeat_rtt_ms,
-        sessions,
+        tabs,
     })
 }
 
@@ -134,7 +134,7 @@ fn create_summary_from_session(
     rows: u16,
 ) -> Result<RemoteCreateSummary, String> {
     let heartbeat_rtt_ms = client.heartbeat_round_trip(b"boo-remote-create")?;
-    let session_id = client.create_session(cols, rows)?;
+    let session_id = client.create_tab(cols, rows)?;
     Ok(RemoteCreateSummary {
         host: client.host.clone(),
         port,
@@ -246,11 +246,11 @@ mod tests {
         assert_eq!(summary.protocol_version, REMOTE_PROTOCOL_VERSION);
         assert_eq!(summary.server_identity_id.as_deref(), Some("test-daemon"));
         assert_eq!(summary.server_instance_id.as_deref(), Some("test-instance"));
-        assert_eq!(summary.sessions.len(), 1);
-        assert_eq!(summary.sessions[0].id, 11);
-        assert_eq!(summary.sessions[0].name, "dev");
-        assert_eq!(summary.sessions[0].pwd, "/home/example/dev/boo");
-        assert!(summary.sessions[0].attached);
+        assert_eq!(summary.tabs.len(), 1);
+        assert_eq!(summary.tabs[0].id, 11);
+        assert_eq!(summary.tabs[0].name, "dev");
+        assert_eq!(summary.tabs[0].pwd, "/home/example/dev/boo");
+        assert!(summary.tabs[0].attached);
 
         server.join().expect("list server thread");
     }

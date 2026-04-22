@@ -113,8 +113,8 @@ mod tests {
             child_exited: false,
         }];
 
-        server.send_session_list(1, &sessions);
-        server.send_session_list(1, &sessions);
+        server.send_tab_list(1, &sessions);
+        server.send_tab_list(1, &sessions);
 
         match rx.recv().expect("session list frame") {
             OutboundMessage::Frame(frame) => {
@@ -141,8 +141,8 @@ mod tests {
             child_exited: false,
         }];
 
-        server.reply_session_list(1, &sessions);
-        server.reply_session_list(1, &sessions);
+        server.reply_tab_list(1, &sessions);
+        server.reply_tab_list(1, &sessions);
 
         for _ in 0..2 {
             match rx.recv().expect("session list frame") {
