@@ -2,7 +2,7 @@
 
 use std::io::{Read, Write};
 
-use crate::remote_types::{RemoteAttachedSummary, RemoteDirectSessionInfo, RemoteDirectTabInfo};
+use crate::remote_types::{RemoteAttachedSummary, RemoteDirectTabInfo};
 use crate::remote_wire::{
     MessageType, RemoteFullState, decode_auth_ok_payload, decode_tab_list_payload,
     encode_message, parse_created_tab_id, read_attach_bootstrap, read_probe_auth_reply,
@@ -113,7 +113,7 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn list_sessions(&mut self) -> Result<Vec<RemoteDirectSessionInfo>, String> {
+    pub(crate) fn list_sessions(&mut self) -> Result<Vec<RemoteDirectTabInfo>, String> {
         self.list_tabs()
     }
 

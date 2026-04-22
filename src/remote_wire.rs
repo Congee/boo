@@ -131,10 +131,10 @@ impl RemoteErrorCode {
         match self {
             Self::Unknown => "remote error",
             Self::AuthenticationFailed => "Authentication failed",
-            Self::UnknownSession => "unknown session",
-            Self::FailedCreateSession => "failed to create session",
+            Self::UnknownSession => "unknown tab",
+            Self::FailedCreateSession => "failed to create tab",
             Self::NotAttached => "not attached",
-            Self::CannotDestroyLastSession => "cannot destroy last session",
+            Self::CannotDestroyLastSession => "cannot destroy last tab",
             Self::AttachmentAlreadyActive => "attachment already active",
             Self::AttachmentBelongsToDifferentSession => "attachment belongs to different session",
             Self::AttachmentResumeTokenMismatch => "attachment resume token mismatch",
@@ -859,7 +859,7 @@ pub(crate) fn decode_tab_list_payload(payload: &[u8]) -> Result<Vec<RemoteDirect
 }
 
 pub(crate) fn parse_attach_request(payload: &[u8]) -> Option<(u32, Option<u64>, Option<u64>)> {
-    let session_id = parse_session_id(payload)?;
+    let tab_id = parse_session_id(payload)?;
     let attachment_id = (payload.len() >= 12).then(|| {
         u64::from_le_bytes([
             payload[4], payload[5], payload[6], payload[7], payload[8], payload[9], payload[10],
@@ -878,7 +878,7 @@ pub(crate) fn parse_attach_request(payload: &[u8]) -> Option<(u32, Option<u64>, 
             payload[19],
         ])
     });
-    Some((session_id, attachment_id, resume_token))
+    Some((tab_id, attachment_id, resume_token))
 }
 
 pub(crate) fn parse_pane_id(payload: &[u8]) -> Option<u64> {

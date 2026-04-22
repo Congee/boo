@@ -3913,7 +3913,7 @@ mod tests {
     #[test]
     fn attached_mode_tab_list_does_not_force_reattach_to_existing_active_tab() {
         let tabs = vec![
-            remote::RemoteSessionInfo {
+            remote::RemoteTabInfo {
                 id: 7,
                 name: "one".to_string(),
                 title: "".to_string(),
@@ -3921,7 +3921,7 @@ mod tests {
                 attached: true,
                 child_exited: false,
             },
-            remote::RemoteSessionInfo {
+            remote::RemoteTabInfo {
                 id: 8,
                 name: "two".to_string(),
                 title: "".to_string(),
@@ -3940,7 +3940,7 @@ mod tests {
     #[test]
     fn recovering_mode_tab_list_reattaches_to_existing_active_tab() {
         let tabs = vec![
-            remote::RemoteSessionInfo {
+            remote::RemoteTabInfo {
                 id: 7,
                 name: "one".to_string(),
                 title: "".to_string(),
@@ -3948,7 +3948,7 @@ mod tests {
                 attached: true,
                 child_exited: false,
             },
-            remote::RemoteSessionInfo {
+            remote::RemoteTabInfo {
                 id: 8,
                 name: "two".to_string(),
                 title: "".to_string(),

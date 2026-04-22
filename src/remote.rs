@@ -13,7 +13,7 @@ pub(crate) use crate::remote_direct_session::DirectTransportSession;
 #[allow(unused_imports)]
 pub use crate::remote_types::{
     DirectTransportKind, RemoteAttachSummary, RemoteAttachedSummary, RemoteClientInfo,
-    RemoteClientsSnapshot, RemoteCreateSummary, RemoteDirectSessionInfo, RemoteDirectTabInfo,
+    RemoteClientsSnapshot, RemoteCreateSummary, RemoteDirectTabInfo,
     RemoteProbeSummary, RemoteServerInfo, RemoteSessionInfo, RemoteSessionListSummary,
     RemoteTabInfo, RemoteTabListSummary, RemoteUpgradeProbeSummary, RevivableAttachmentInfo,
 };
