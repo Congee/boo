@@ -44,7 +44,7 @@ pub(crate) fn prepare_attachment(
                 "remote revive rejected: client_id={client_id} attachment_id={attachment_id} reason=session-mismatch expected={} actual={tab_id}",
                 revive.tab_id
             );
-            return Err(RemoteErrorCode::AttachmentBelongsToDifferentSession);
+            return Err(RemoteErrorCode::AttachmentBelongsToDifferentTab);
         }
         if resume_token != Some(revive.resume_token) {
             log::warn!(
