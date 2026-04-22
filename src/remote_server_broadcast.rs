@@ -5,19 +5,14 @@ mod tests {
     use crate::control;
     use crate::remote::{RemoteServer, RemoteSessionInfo};
     use crate::remote_batcher::OutboundMessage;
-    use crate::remote_state::{ClientState, State};
+    use crate::remote_state::{ClientRuntimeSubscription, ClientState, State};
     use crate::remote_wire::{MAGIC, MessageType, RemoteCell, RemoteFullState};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex, mpsc};
     use std::time::Instant;
 
     fn empty_state() -> State {
-        State {
-            clients: HashMap::new(),
-            revivable_attachments: HashMap::new(),
-            server_identity_id: "test-daemon".to_string(),
-            server_instance_id: "test-instance".to_string(),
-        }
+        State::test_empty()
     }
 
     fn test_client(
@@ -31,15 +26,11 @@ mod tests {
             connected_at: Instant::now(),
             authenticated_at: Some(Instant::now()),
             last_heartbeat_at: None,
-            attached_tab,
-            attachment_id: None,
-            resume_token: None,
-            last_tab_list_payload: None,
-            last_ui_runtime_state_payload: None,
-            last_ui_appearance_payload: None,
-            last_state: None,
-            pane_states: HashMap::new(),
-            latest_input_seq: None,
+            runtime_subscription: ClientRuntimeSubscription {
+                tab_id: attached_tab,
+                ..ClientRuntimeSubscription::detached()
+            },
+            attachment_lease: None,
             is_local,
         }
     }
@@ -194,7 +185,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let mut state = empty_state();
         let mut client = test_client(tx, Some(11), true);
-        client.pane_states = HashMap::from([
+        client.runtime_subscription.pane_states = HashMap::from([
             (
                 10,
                 Arc::new(RemoteFullState {
@@ -242,7 +233,7 @@ mod tests {
 
         let guard = state.lock().expect("remote server state poisoned");
         let client = guard.clients.get(&1).expect("client state");
-        assert!(!client.pane_states.contains_key(&10));
-        assert!(client.pane_states.contains_key(&20));
+        assert!(!client.runtime_subscription.pane_states.contains_key(&10));
+        assert!(client.runtime_subscription.pane_states.contains_key(&20));
     }
 }

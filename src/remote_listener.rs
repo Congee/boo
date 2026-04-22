@@ -4,7 +4,6 @@
 //! which registers a `ClientState`, spawns the writer thread, and hands
 //! the reader off to the blocking `read_loop` in `remote_auth`.
 
-use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -13,7 +12,7 @@ use std::time::Instant;
 use crate::remote::RemoteCmd;
 use crate::remote_auth::read_loop;
 use crate::remote_batcher::writer_loop;
-use crate::remote_state::{ClientState, State};
+use crate::remote_state::{ClientRuntimeSubscription, ClientState, State};
 
 /// Monotonic client-id allocator. Shared across transports so diagnostics can
 /// cross-reference a client_id in the clients snapshot with the reader/writer
@@ -42,15 +41,8 @@ pub(crate) fn run_remote_client_session<R, W>(
                 connected_at: Instant::now(),
                 authenticated_at: Some(Instant::now()),
                 last_heartbeat_at: None,
-                attached_tab: None,
-                attachment_id: None,
-                resume_token: None,
-                last_tab_list_payload: None,
-                last_ui_runtime_state_payload: None,
-                last_ui_appearance_payload: None,
-                last_state: None,
-                pane_states: HashMap::new(),
-                latest_input_seq: None,
+                runtime_subscription: ClientRuntimeSubscription::detached(),
+                attachment_lease: None,
                 is_local: false,
             },
         );

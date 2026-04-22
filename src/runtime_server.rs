@@ -120,7 +120,7 @@ impl BooApp {
     }
 
     pub(crate) fn has_attached_stream_sessions(&self) -> bool {
-        self.remote_servers().any(|server| server.has_attached_sessions())
+        self.remote_servers().any(|server| server.has_runtime_subscribers())
     }
 
     fn remote_server_for_client(&self, client_id: u64) -> Option<&remote::RemoteServer> {
@@ -870,7 +870,7 @@ impl BooApp {
                         .unwrap_or_default(),
                     attached: self
                         .remote_servers()
-                        .any(|server| server.attached_to_tab(tab.id)),
+                        .any(|server| server.subscribed_to_tab(tab.id)),
                     child_exited: pane.id() == 0 || terminal.is_none(),
                 }
             })
@@ -923,7 +923,7 @@ impl BooApp {
         };
         let needs_local_pane_states = servers
             .iter()
-            .any(|server| server.local_attached_to_tab(tab_id));
+            .any(|server| server.local_subscribed_to_tab(tab_id));
         let pane_states = if needs_local_pane_states {
             self.server
                 .tabs

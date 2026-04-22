@@ -107,6 +107,25 @@ model.
 This layer can exist as a temporary compatibility mechanism while moving to a
 runtime subscription model, but it should no longer drive UX semantics.
 
+Current internal split after the first transport cleanup:
+
+- `ClientRuntimeSubscription`
+  - current subscribed tab id for this client stream
+  - cached tab-list/runtime/appearance payloads
+  - cached terminal full state and pane states
+  - latest acknowledged input sequence
+- `ClientAttachmentLease`
+  - attachment id
+  - optional resume token
+- `RevivableRuntimeSubscription`
+  - tab id plus cached stream state parked during reconnect
+
+This is intentionally narrower than the old `attached_session` model:
+
+- tab/runtime identity lives in the runtime
+- subscription state lives in transport plumbing
+- revive/lease state is now explicitly transport-only
+
 ### Category C: Obsolete client/session-pool model that should be removed
 
 These represent the wrong product abstraction and should be deleted, not merely
@@ -207,11 +226,33 @@ Preferred compromise:
 - document where `session` currently means `tab id`
 - isolate transport-only attachment state
 
+Phase 1 output should be:
+
+- no new code uses `session` to mean tab identity
+- internal transport state is split into:
+  - runtime subscription
+  - attachment lease
+  - revivable subscription cache
+- diagnostics can still expose legacy field names for compatibility, but server
+  state should stop mixing them together in one struct
+
 ### Phase 2: Runtime-first client bootstrap
 
 - iOS should bootstrap from runtime state, not `listSessions`
 - local GUI remote path should prefer runtime state too
 - session-list logic becomes compatibility-only
+
+Phase 2 protocol shape:
+
+- client connects and authenticates
+- server publishes:
+  - tab list / runtime state
+  - active tab
+  - focused pane
+  - pane snapshots for the visible runtime
+- client does not pick from a session pool
+- if a client needs a current stream target, it derives it from runtime state
+  rather than `listSessions`
 
 ### Phase 3: Pane/runtime action model
 
@@ -226,6 +267,33 @@ When runtime-view tests are green:
 - remove session-list payloads
 - remove session attach selection from clients
 - rename remaining transport internals to runtime/tab terms or delete them
+
+## Remaining Protocol Surfaces To Remove
+
+These are the main seams where the old session-shaped transport still leaks
+through and needs replacement:
+
+- wire opcodes
+  - `ListSessions`
+  - `SessionList`
+  - `SessionCreated`
+  - `SessionExited`
+- client bootstrap
+  - iOS `listSessions()` and attach heuristics
+  - local GUI remote stream handling that still starts from a tab/session list
+- error text
+  - `UnknownSession`
+  - `FailedCreateSession`
+  - `CannotDestroyLastSession`
+- direct-client helpers
+  - compatibility wrappers named `*_session*`
+
+The next protocol step is to preserve wire compatibility while shifting
+internals and client bootstrap to:
+
+- runtime subscription
+- semantic tab/pane actions
+- compatibility wrappers only at the wire boundary
 
 ## Acceptance Criteria
 

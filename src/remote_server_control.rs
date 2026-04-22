@@ -212,8 +212,8 @@ fn cache_slot_mut(
     cache_slot: CachedControlPayload,
 ) -> &mut Option<Vec<u8>> {
     match cache_slot {
-        CachedControlPayload::SessionList => &mut client.last_tab_list_payload,
-        CachedControlPayload::UiRuntimeState => &mut client.last_ui_runtime_state_payload,
-        CachedControlPayload::UiAppearance => &mut client.last_ui_appearance_payload,
+        CachedControlPayload::SessionList => &mut client.runtime_subscription.last_tab_list_payload,
+        CachedControlPayload::UiRuntimeState => &mut client.runtime_subscription.last_ui_runtime_state_payload,
+        CachedControlPayload::UiAppearance => &mut client.runtime_subscription.last_ui_appearance_payload,
     }
 }

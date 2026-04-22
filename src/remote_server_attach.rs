@@ -3,7 +3,9 @@
 //! This module owns the revive-or-attach state transition that runs before the
 //! server sends `Attached` frames to remote clients.
 
-use crate::remote_state::{State, prune_revivable_attachments};
+use crate::remote_state::{
+    ClientAttachmentLease, State, prune_revivable_attachments,
+};
 use crate::remote_wire::RemoteErrorCode;
 
 pub(crate) fn prepare_attachment(
@@ -24,15 +26,18 @@ pub(crate) fn prepare_attachment(
     if state.clients.iter().any(|(other_client_id, other_client)| {
         *other_client_id != client_id
             && !other_client.is_local
-            && other_client.attachment_id == Some(attachment_id)
-            && other_client.attached_tab.is_some()
+            && other_client
+                .attachment_lease
+                .as_ref()
+                .is_some_and(|lease| lease.attachment_id == attachment_id)
+            && other_client.runtime_subscription.tab_id.is_some()
     }) {
         log::warn!(
             "remote revive rejected: client_id={client_id} attachment_id={attachment_id} reason=already-active"
         );
         return Err(RemoteErrorCode::AttachmentAlreadyActive);
     }
-    let revive = state.revivable_attachments.get(&attachment_id).cloned();
+    let revive = state.revivable_runtime_subscriptions.get(&attachment_id).cloned();
     if let Some(revive) = revive {
         if revive.tab_id != tab_id {
             log::warn!(
@@ -47,16 +52,18 @@ pub(crate) fn prepare_attachment(
             );
             return Err(RemoteErrorCode::AttachmentResumeTokenMismatch);
         }
-        let _ = state.revivable_attachments.remove(&attachment_id);
+        let _ = state.revivable_runtime_subscriptions.remove(&attachment_id);
         let Some(client) = state.clients.get_mut(&client_id) else {
             return Err(RemoteErrorCode::Unknown);
         };
-        client.attached_tab = Some(tab_id);
-        client.attachment_id = Some(attachment_id);
-        client.resume_token = Some(revive.resume_token);
-        client.last_state = revive.last_state;
-        client.pane_states = revive.pane_states;
-        client.latest_input_seq = revive.latest_input_seq;
+        client.runtime_subscription.tab_id = Some(tab_id);
+        client.attachment_lease = Some(ClientAttachmentLease {
+            attachment_id,
+            resume_token: Some(revive.resume_token),
+        });
+        client.runtime_subscription.last_state = revive.last_state;
+        client.runtime_subscription.pane_states = revive.pane_states;
+        client.runtime_subscription.latest_input_seq = revive.latest_input_seq;
         log::info!(
             "remote revive restored: client_id={client_id} tab_id={tab_id} attachment_id={attachment_id}"
         );
@@ -70,7 +77,10 @@ pub(crate) fn prepare_attachment(
         let Some(client) = state.clients.get_mut(&client_id) else {
             return Err(RemoteErrorCode::Unknown);
         };
-        client.resume_token = None;
+        client.attachment_lease = Some(ClientAttachmentLease {
+            attachment_id,
+            resume_token: None,
+        });
         log::info!(
             "remote attach prepared without revive: client_id={client_id} tab_id={tab_id} attachment_id={attachment_id}"
         );
@@ -83,39 +93,21 @@ mod tests {
     use super::prepare_attachment;
     use crate::remote::RemoteServer;
     use crate::remote_batcher::OutboundMessage;
-    use crate::remote_state::{ClientState, REVIVABLE_ATTACHMENT_WINDOW, RevivableAttachment, State};
+    use crate::remote_state::{
+        ClientAttachmentLease, ClientState, REVIVABLE_ATTACHMENT_WINDOW,
+        RevivableRuntimeSubscription, State,
+    };
     use crate::remote_wire::{MAGIC, MessageType, RemoteCell, RemoteErrorCode, RemoteFullState, read_message};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex, mpsc};
     use std::time::Instant;
 
     fn empty_state() -> State {
-        State {
-            clients: HashMap::new(),
-            revivable_attachments: HashMap::new(),
-            server_identity_id: "test-daemon".to_string(),
-            server_instance_id: "test-instance".to_string(),
-        }
+        State::test_empty()
     }
 
     fn remote_client(outbound: mpsc::Sender<crate::remote_batcher::OutboundMessage>) -> ClientState {
-        ClientState {
-            outbound,
-            authenticated: true,
-            connected_at: Instant::now(),
-            authenticated_at: Some(Instant::now()),
-            last_heartbeat_at: None,
-            attached_tab: None,
-            attachment_id: None,
-            resume_token: None,
-            last_tab_list_payload: None,
-            last_ui_runtime_state_payload: None,
-            last_ui_appearance_payload: None,
-            last_state: None,
-            pane_states: HashMap::new(),
-            latest_input_seq: None,
-            is_local: false,
-        }
+        ClientState::test_client(outbound, true, false)
     }
 
     fn local_client(outbound: mpsc::Sender<crate::remote_batcher::OutboundMessage>) -> ClientState {
@@ -146,9 +138,9 @@ mod tests {
         });
         let mut state = empty_state();
         state.clients.insert(1, remote_client(tx));
-        state.revivable_attachments.insert(
+        state.revivable_runtime_subscriptions.insert(
             0xabc,
-            RevivableAttachment {
+            RevivableRuntimeSubscription {
                 tab_id: 11,
                 resume_token: 0xdef,
                 last_state: Some(Arc::clone(&restored_state)),
@@ -162,12 +154,18 @@ mod tests {
             .expect("prepare attachment");
 
         let client = state.clients.get(&1).expect("client state");
-        assert_eq!(client.attached_tab, Some(11));
-        assert_eq!(client.attachment_id, Some(0xabc));
-        assert_eq!(client.resume_token, Some(0xdef));
-        assert_eq!(client.latest_input_seq, Some(9));
-        assert_eq!(client.last_state.as_deref(), Some(restored_state.as_ref()));
-        assert!(!state.revivable_attachments.contains_key(&0xabc));
+        assert_eq!(client.runtime_subscription.tab_id, Some(11));
+        assert_eq!(
+            client.attachment_lease.as_ref().map(|lease| lease.attachment_id),
+            Some(0xabc)
+        );
+        assert_eq!(
+            client.attachment_lease.as_ref().and_then(|lease| lease.resume_token),
+            Some(0xdef)
+        );
+        assert_eq!(client.runtime_subscription.latest_input_seq, Some(9));
+        assert_eq!(client.runtime_subscription.last_state.as_deref(), Some(restored_state.as_ref()));
+        assert!(!state.revivable_runtime_subscriptions.contains_key(&0xabc));
     }
 
     #[test]
@@ -176,8 +174,11 @@ mod tests {
         let (new_tx, _new_rx) = mpsc::channel();
         let mut state = empty_state();
         let mut active = remote_client(active_tx);
-        active.attached_tab = Some(11);
-        active.attachment_id = Some(0xabc);
+        active.runtime_subscription.tab_id = Some(11);
+        active.attachment_lease = Some(ClientAttachmentLease {
+            attachment_id: 0xabc,
+            resume_token: None,
+        });
         state.clients.insert(1, active);
         state.clients.insert(2, remote_client(new_tx));
 
@@ -191,9 +192,9 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let mut state = empty_state();
         state.clients.insert(1, remote_client(tx));
-        state.revivable_attachments.insert(
+        state.revivable_runtime_subscriptions.insert(
             0xabc,
-            RevivableAttachment {
+            RevivableRuntimeSubscription {
                 tab_id: 11,
                 resume_token: 0xdef,
                 last_state: None,
@@ -206,7 +207,7 @@ mod tests {
         let error = prepare_attachment(&mut state, 1, 11, Some(0xabc), Some(0x123))
             .expect_err("wrong resume token should fail");
         assert_eq!(error, RemoteErrorCode::AttachmentResumeTokenMismatch);
-        assert!(state.revivable_attachments.contains_key(&0xabc));
+        assert!(state.revivable_runtime_subscriptions.contains_key(&0xabc));
     }
 
     #[test]
@@ -220,9 +221,8 @@ mod tests {
         assert_eq!(error, RemoteErrorCode::AttachmentResumeWindowExpired);
 
         let client = state.clients.get(&1).expect("client state");
-        assert!(client.attached_tab.is_none());
-        assert!(client.attachment_id.is_none());
-        assert!(client.resume_token.is_none());
+        assert!(client.runtime_subscription.tab_id.is_none());
+        assert!(client.attachment_lease.is_none());
     }
 
     #[test]
@@ -240,8 +240,8 @@ mod tests {
         let (outbound, outbound_rx) = mpsc::channel();
         let mut state = empty_state();
         let mut client = local_client(outbound);
-        client.attached_tab = Some(11);
-        client.last_state = Some(Arc::new(RemoteFullState {
+        client.runtime_subscription.tab_id = Some(11);
+        client.runtime_subscription.last_state = Some(Arc::new(RemoteFullState {
             rows: 1,
             cols: 1,
             cursor_x: 0,
@@ -257,7 +257,7 @@ mod tests {
                 wide: false,
             }],
         }));
-        client.latest_input_seq = Some(42);
+        client.runtime_subscription.latest_input_seq = Some(42);
         state.clients.insert(7, client);
         let state = Arc::new(Mutex::new(state));
         let server = RemoteServer::for_test(Arc::clone(&state));
@@ -266,9 +266,9 @@ mod tests {
 
         let guard = state.lock().expect("remote server state poisoned");
         let client = guard.clients.get(&7).expect("client state");
-        assert_eq!(client.attached_tab, Some(11));
-        assert_eq!(client.latest_input_seq, Some(42));
-        assert!(client.last_state.is_some());
+        assert_eq!(client.runtime_subscription.tab_id, Some(11));
+        assert_eq!(client.runtime_subscription.latest_input_seq, Some(42));
+        assert!(client.runtime_subscription.last_state.is_some());
         drop(guard);
 
         match outbound_rx.recv().expect("attached frame") {
@@ -292,7 +292,11 @@ mod tests {
 
         let guard = state.lock().expect("remote server state poisoned");
         let client = guard.clients.get(&7).expect("client state");
-        let resume_token = client.resume_token.expect("resume token");
+        let resume_token = client
+            .attachment_lease
+            .as_ref()
+            .and_then(|lease| lease.resume_token)
+            .expect("resume token");
         assert_ne!(resume_token, 0);
         drop(guard);
 

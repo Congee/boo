@@ -6,7 +6,7 @@
 //! * [`read_loop`] — runs on the per-client reader thread. Pulls frames off the
 //!   socket, routes `Auth` / `Heartbeat` inline, translates every other message
 //!   into a `RemoteCmd`, and on exit parks the client's pane state into
-//!   `State::revivable_attachments` so a reconnect can resume.
+//!   `State::revivable_runtime_subscriptions` so a reconnect can resume.
 //!
 //! Policy lives in `remote_state` (the window constants); wire encoding lives
 //! in `remote_wire`. This module is the glue between them.
@@ -19,7 +19,8 @@ use crate::remote::RemoteCmd;
 use crate::remote_batcher::OutboundMessage;
 use crate::remote_state::{
     AUTH_CHALLENGE_WINDOW, DIRECT_CLIENT_HEARTBEAT_WINDOW, REVIVABLE_ATTACHMENT_WINDOW,
-    RevivableAttachment, State, prune_revivable_attachments, send_direct_error, send_direct_frame,
+    RevivableRuntimeSubscription, State, prune_revivable_attachments, send_direct_error,
+    send_direct_frame,
     should_disconnect_idle_client,
 };
 use crate::remote_wire::{
@@ -118,7 +119,7 @@ pub(crate) fn read_loop(
         }
 
         let command = match ty {
-            MessageType::ListSessions => Some(RemoteCmd::ListSessions { client_id }),
+            MessageType::ListSessions => Some(RemoteCmd::ListTabs { client_id }),
             MessageType::Attach => {
                 parse_attach_request(&payload).map(|(tab_id, attachment_id, resume_token)| RemoteCmd::Attach {
                     client_id,
@@ -197,22 +198,23 @@ pub(crate) fn read_loop(
     if let Some(client) = state.clients.remove(&client_id) {
         prune_revivable_attachments(&mut state);
         if !client.is_local
-            && let (Some(tab_id), Some(attachment_id), Some(resume_token)) =
-                (client.attached_tab, client.attachment_id, client.resume_token)
+            && let Some(tab_id) = client.runtime_subscription.tab_id
+            && let Some(lease) = client.attachment_lease
         {
-            state.revivable_attachments.insert(
-                attachment_id,
-                RevivableAttachment {
+            state.revivable_runtime_subscriptions.insert(
+                lease.attachment_id,
+                RevivableRuntimeSubscription {
                     tab_id,
-                    resume_token,
-                    last_state: client.last_state,
-                    pane_states: client.pane_states,
-                    latest_input_seq: client.latest_input_seq,
+                    resume_token: lease.resume_token.unwrap_or_default(),
+                    last_state: client.runtime_subscription.last_state,
+                    pane_states: client.runtime_subscription.pane_states,
+                    latest_input_seq: client.runtime_subscription.latest_input_seq,
                     expires_at: Instant::now() + REVIVABLE_ATTACHMENT_WINDOW,
                 },
             );
             log::info!(
-                "remote client disconnected with revivable attachment: client_id={client_id} tab_id={tab_id} attachment_id={attachment_id}"
+                "remote client disconnected with revivable attachment: client_id={client_id} tab_id={tab_id} attachment_id={}",
+                lease.attachment_id
             );
         } else {
             log::info!("remote client disconnected: client_id={client_id}");
@@ -281,33 +283,19 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
+    fn remote_client(
+        outbound: mpsc::Sender<crate::remote_batcher::OutboundMessage>,
+        authenticated: bool,
+    ) -> ClientState {
+        ClientState::test_client(outbound, authenticated, false)
+    }
+
     #[test]
     fn read_loop_emits_list_sessions_for_authenticated_client() {
         let (outbound_tx, _outbound_rx) = mpsc::channel();
         let state = Arc::new(Mutex::new(State {
-            clients: HashMap::from([(
-                1,
-                ClientState {
-                    outbound: outbound_tx,
-                    authenticated: true,
-                    connected_at: Instant::now(),
-                    authenticated_at: Some(Instant::now()),
-                    last_heartbeat_at: None,
-                    attached_tab: None,
-                    attachment_id: None,
-                    resume_token: None,
-                    last_tab_list_payload: None,
-                    last_ui_runtime_state_payload: None,
-                    last_ui_appearance_payload: None,
-                    last_state: None,
-                    pane_states: HashMap::new(),
-                    latest_input_seq: None,
-                    is_local: false,
-                },
-            )]),
-            revivable_attachments: HashMap::new(),
-            server_identity_id: "test-daemon".to_string(),
-            server_instance_id: "test-instance".to_string(),
+            clients: HashMap::from([(1, remote_client(outbound_tx, true))]),
+            ..State::test_empty()
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let mut frames = Vec::new();
@@ -316,7 +304,7 @@ mod tests {
         read_loop(std::io::Cursor::new(frames), 1, state, cmd_tx);
 
         match cmd_rx.recv().expect("remote command") {
-            RemoteCmd::ListSessions { client_id } => assert_eq!(client_id, 1),
+            RemoteCmd::ListTabs { client_id } => assert_eq!(client_id, 1),
             other => panic!("unexpected remote command: {other:?}"),
         }
     }
@@ -325,29 +313,8 @@ mod tests {
     fn read_loop_replies_to_heartbeat_without_runtime_command() {
         let (outbound_tx, outbound_rx) = mpsc::channel();
         let state = Arc::new(Mutex::new(State {
-            clients: HashMap::from([(
-                1,
-                ClientState {
-                    outbound: outbound_tx,
-                    authenticated: true,
-                    connected_at: Instant::now(),
-                    authenticated_at: Some(Instant::now()),
-                    last_heartbeat_at: None,
-                    attached_tab: None,
-                    attachment_id: None,
-                    resume_token: None,
-                    last_tab_list_payload: None,
-                    last_ui_runtime_state_payload: None,
-                    last_ui_appearance_payload: None,
-                    last_state: None,
-                    pane_states: HashMap::new(),
-                    latest_input_seq: None,
-                    is_local: false,
-                },
-            )]),
-            revivable_attachments: HashMap::new(),
-            server_identity_id: "test-daemon".to_string(),
-            server_instance_id: "test-instance".to_string(),
+            clients: HashMap::from([(1, remote_client(outbound_tx, true))]),
+            ..State::test_empty()
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let frame = encode_message(MessageType::Heartbeat, b"ping");
@@ -373,26 +340,12 @@ mod tests {
             clients: HashMap::from([(
                 1,
                 ClientState {
-                    outbound: outbound_tx,
-                    authenticated: false,
                     connected_at: Instant::now() - AUTH_CHALLENGE_WINDOW - Duration::from_secs(1),
                     authenticated_at: None,
-                    last_heartbeat_at: None,
-                    attached_tab: None,
-                    attachment_id: None,
-                    resume_token: None,
-                    last_tab_list_payload: None,
-                    last_ui_runtime_state_payload: None,
-                    last_ui_appearance_payload: None,
-                    last_state: None,
-                    pane_states: HashMap::new(),
-                    latest_input_seq: None,
-                    is_local: false,
+                    ..remote_client(outbound_tx, false)
                 },
             )]),
-            revivable_attachments: HashMap::new(),
-            server_identity_id: "test-daemon".to_string(),
-            server_instance_id: "test-instance".to_string(),
+            ..State::test_empty()
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let reader = TimeoutScriptedReader::new([Err(io::ErrorKind::TimedOut)]);
@@ -420,8 +373,6 @@ mod tests {
             clients: HashMap::from([(
                 1,
                 ClientState {
-                    outbound: outbound_tx,
-                    authenticated: true,
                     connected_at: Instant::now()
                         - DIRECT_CLIENT_HEARTBEAT_WINDOW
                         - Duration::from_secs(2),
@@ -430,22 +381,10 @@ mod tests {
                             - DIRECT_CLIENT_HEARTBEAT_WINDOW
                             - Duration::from_secs(2),
                     ),
-                    last_heartbeat_at: None,
-                    attached_tab: None,
-                    attachment_id: None,
-                    resume_token: None,
-                    last_tab_list_payload: None,
-                    last_ui_runtime_state_payload: None,
-                    last_ui_appearance_payload: None,
-                    last_state: None,
-                    pane_states: HashMap::new(),
-                    latest_input_seq: None,
-                    is_local: false,
+                    ..remote_client(outbound_tx, true)
                 },
             )]),
-            revivable_attachments: HashMap::new(),
-            server_identity_id: "test-daemon".to_string(),
-            server_instance_id: "test-instance".to_string(),
+            ..State::test_empty()
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let reader = TimeoutScriptedReader::new([Err(io::ErrorKind::TimedOut)]);

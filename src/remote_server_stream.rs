@@ -17,13 +17,13 @@ pub(crate) fn send_state_to_client(
         let Some(client) = guard.clients.get(&client_id) else {
             return;
         };
-        if client.attached_tab != Some(tab_id) {
+        if client.runtime_subscription.tab_id != Some(tab_id) {
             return;
         }
         (
             client.outbound.clone(),
-            client.last_state.clone(),
-            client.latest_input_seq,
+            client.runtime_subscription.last_state.clone(),
+            client.runtime_subscription.latest_input_seq,
             client.is_local,
         )
     };
@@ -46,10 +46,10 @@ pub(crate) fn send_state_to_client(
         let Some(client) = guard.clients.get_mut(&client_id) else {
             return;
         };
-        if client.attached_tab != Some(tab_id) {
+        if client.runtime_subscription.tab_id != Some(tab_id) {
             false
         } else {
-            client.last_state = Some(Arc::clone(&next_state));
+            client.runtime_subscription.last_state = Some(Arc::clone(&next_state));
             true
         }
     };
@@ -83,10 +83,10 @@ pub(crate) fn send_pane_state_to_client(
         let Some(client) = guard.clients.get(&client_id) else {
             return;
         };
-        if client.attached_tab != Some(tab_id) {
+        if client.runtime_subscription.tab_id != Some(tab_id) {
             return;
         }
-        (client.outbound.clone(), client.pane_states.get(&pane_id).cloned())
+        (client.outbound.clone(), client.runtime_subscription.pane_states.get(&pane_id).cloned())
     };
     let (ty, payload) =
         match previous_state
@@ -104,10 +104,10 @@ pub(crate) fn send_pane_state_to_client(
         let Some(client) = guard.clients.get_mut(&client_id) else {
             return;
         };
-        if client.attached_tab != Some(tab_id) {
+        if client.runtime_subscription.tab_id != Some(tab_id) {
             false
         } else {
-            client.pane_states.insert(pane_id, Arc::clone(&next_state));
+            client.runtime_subscription.pane_states.insert(pane_id, Arc::clone(&next_state));
             true
         }
     };

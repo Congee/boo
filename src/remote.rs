@@ -66,7 +66,7 @@ pub enum RemoteCmd {
     Connected {
         client_id: u64,
     },
-    ListSessions {
+    ListTabs {
         client_id: u64,
     },
     Attach {
@@ -148,7 +148,9 @@ use crate::remote_server_targets::{
     retain_local_attached_pane_states as retain_local_attached_pane_states_inner,
     retarget_local_attached_client_ids_for_tab,
 };
-use crate::remote_state::{ClientState, State};
+use crate::remote_state::{
+    ClientAttachmentLease, ClientRuntimeSubscription, ClientState, State,
+};
 
 pub struct RemoteServer {
     state: Arc<Mutex<State>>,
@@ -165,7 +167,7 @@ impl RemoteServer {
         let bind_address = config.effective_bind_address().to_string();
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::new(),
-            revivable_attachments: HashMap::new(),
+            revivable_runtime_subscriptions: HashMap::new(),
             server_identity_id: random_instance_id(),
             server_instance_id: random_instance_id(),
         }));
@@ -213,7 +215,7 @@ impl RemoteServer {
         let listener = UnixListener::bind(&socket_path)?;
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::new(),
-            revivable_attachments: HashMap::new(),
+            revivable_runtime_subscriptions: HashMap::new(),
             server_identity_id: random_instance_id(),
             server_instance_id: random_instance_id(),
         }));
@@ -238,15 +240,8 @@ impl RemoteServer {
                             connected_at: Instant::now(),
                             authenticated_at: Some(Instant::now()),
                             last_heartbeat_at: None,
-                            attached_tab: None,
-                            attachment_id: None,
-                            resume_token: None,
-                            last_tab_list_payload: None,
-                            last_ui_runtime_state_payload: None,
-                            last_ui_appearance_payload: None,
-                            last_state: None,
-                            pane_states: HashMap::new(),
-                            latest_input_seq: None,
+                            runtime_subscription: ClientRuntimeSubscription::detached(),
+                            attachment_lease: None,
                             is_local: true,
                         },
                     );
@@ -297,25 +292,51 @@ impl RemoteServer {
         ))
     }
 
-    pub fn has_attached_tabs(&self) -> bool {
+    pub fn has_runtime_subscribers(&self) -> bool {
         let state = self.state.lock().expect("remote server state poisoned");
         state
             .clients
             .values()
-            .any(|client| client.attached_tab.is_some())
+            .any(|client| client.runtime_subscription.tab_id.is_some())
+    }
+
+    pub fn subscribed_to_tab(&self, tab_id: u32) -> bool {
+        let state = self.state.lock().expect("remote server state poisoned");
+        state
+            .clients
+            .values()
+            .any(|client| client.runtime_subscription.tab_id == Some(tab_id))
+    }
+
+    pub fn local_subscribed_to_tab(&self, tab_id: u32) -> bool {
+        let state = self.state.lock().expect("remote server state poisoned");
+        state
+            .clients
+            .values()
+            .any(|client| client.is_local && client.runtime_subscription.tab_id == Some(tab_id))
+    }
+
+    pub fn client_subscription_tab(&self, client_id: u64) -> Option<u32> {
+        let state = self.state.lock().expect("remote server state poisoned");
+        state
+            .clients
+            .get(&client_id)
+            .and_then(|client| client.runtime_subscription.tab_id)
+    }
+
+    #[allow(dead_code)]
+    pub fn has_attached_tabs(&self) -> bool {
+        self.has_runtime_subscribers()
     }
 
     #[allow(dead_code)]
     pub fn has_attached_sessions(&self) -> bool {
-        self.has_attached_tabs()
+        self.has_runtime_subscribers()
     }
 
+    #[allow(dead_code)]
     pub fn attached_to_tab(&self, tab_id: u32) -> bool {
-        let state = self.state.lock().expect("remote server state poisoned");
-        state
-            .clients
-            .values()
-            .any(|client| client.attached_tab == Some(tab_id))
+        self.subscribed_to_tab(tab_id)
     }
 
     #[allow(dead_code)]
@@ -324,11 +345,7 @@ impl RemoteServer {
     }
 
     pub fn local_attached_to_tab(&self, tab_id: u32) -> bool {
-        let state = self.state.lock().expect("remote server state poisoned");
-        state
-            .clients
-            .values()
-            .any(|client| client.is_local && client.attached_tab == Some(tab_id))
+        self.local_subscribed_to_tab(tab_id)
     }
 
     #[allow(dead_code)]
@@ -337,11 +354,7 @@ impl RemoteServer {
     }
 
     pub fn client_tab(&self, client_id: u64) -> Option<u32> {
-        let state = self.state.lock().expect("remote server state poisoned");
-        state
-            .clients
-            .get(&client_id)
-            .and_then(|client| client.attached_tab)
+        self.client_subscription_tab(client_id)
     }
 
     #[allow(dead_code)]
@@ -404,18 +417,22 @@ impl RemoteServer {
             payload.extend_from_slice(&attachment_id.to_le_bytes());
         }
         self.update_client(client_id, |client| {
-            let same_tab = client.attached_tab == Some(tab_id);
-            client.attached_tab = Some(tab_id);
-            client.attachment_id = attachment_id;
-            client.resume_token = attachment_id.map(|_| {
-                let token = client.resume_token.unwrap_or_else(random_u64_nonzero);
+            let same_tab = client.runtime_subscription.tab_id == Some(tab_id);
+            client.runtime_subscription.tab_id = Some(tab_id);
+            client.attachment_lease = attachment_id.map(|attachment_id| {
+                let token = client
+                    .attachment_lease
+                    .as_ref()
+                    .and_then(|lease| lease.resume_token)
+                    .unwrap_or_else(random_u64_nonzero);
                 attached_resume_token = Some(token);
-                token
+                ClientAttachmentLease {
+                    attachment_id,
+                    resume_token: Some(token),
+                }
             });
             if !same_tab {
-                client.last_state = None;
-                client.pane_states.clear();
-                client.latest_input_seq = None;
+                client.runtime_subscription.clear_stream_state();
             }
         });
         log::info!(
@@ -446,12 +463,9 @@ impl RemoteServer {
 
     pub fn send_detached(&self, client_id: u64) {
         self.update_client(client_id, |client| {
-            client.attached_tab = None;
-            client.attachment_id = None;
-            client.resume_token = None;
-            client.last_state = None;
-            client.pane_states.clear();
-            client.latest_input_seq = None;
+            client.runtime_subscription.tab_id = None;
+            client.attachment_lease = None;
+            client.runtime_subscription.clear_stream_state();
         });
         log::info!("remote detached: client_id={client_id}");
         self.send_to_client(client_id, MessageType::Detached, Vec::new());
@@ -564,10 +578,8 @@ impl RemoteServer {
                 tab_id.to_le_bytes().to_vec(),
             );
             self.update_client(client_id, |client| {
-                client.attached_tab = None;
-                client.last_state = None;
-                client.pane_states.clear();
-                client.latest_input_seq = None;
+                client.runtime_subscription.tab_id = None;
+                client.runtime_subscription.clear_stream_state();
             });
         }
     }
@@ -580,7 +592,7 @@ impl RemoteServer {
     pub fn record_input_seq(&self, client_id: u64, input_seq: Option<u64>) {
         self.update_client(client_id, |client| {
             if let Some(input_seq) = input_seq {
-                client.latest_input_seq = Some(input_seq);
+                client.runtime_subscription.latest_input_seq = Some(input_seq);
             }
         });
     }

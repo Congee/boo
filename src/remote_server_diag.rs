@@ -25,14 +25,14 @@ pub(crate) fn clients_snapshot(
     let attached_clients = state
         .clients
         .values()
-        .filter(|client| client.attached_tab.is_some())
+        .filter(|client| client.runtime_subscription.tab_id.is_some())
         .count();
     let pending_auth_clients = state
         .clients
         .values()
         .filter(|client| !client.authenticated)
         .count();
-    let revivable_attachments = state.revivable_attachments.len();
+    let revivable_attachments = state.revivable_runtime_subscriptions.len();
     let servers = vec![RemoteServerInfo {
         local_socket_path: local_socket_path.map(|path| path.display().to_string()),
         bind_address: bind_address.map(str::to_string),
@@ -58,7 +58,7 @@ pub(crate) fn clients_snapshot(
     clients.sort_by_key(|client| client.client_id);
 
     let mut revivable_attachments = state
-        .revivable_attachments
+        .revivable_runtime_subscriptions
         .iter()
         .map(|(attachment_id, attachment)| RevivableAttachmentInfo {
             attachment_id: *attachment_id,
@@ -105,12 +105,19 @@ fn client_info_for_client(
         },
         server_socket_path: local_socket_path.map(|path| path.display().to_string()),
         challenge_pending: false,
-        attached_tab: client.attached_tab,
-        attachment_id: client.attachment_id,
-        resume_token_present: client.resume_token.is_some(),
-        has_cached_state: client.last_state.is_some(),
-        pane_state_count: client.pane_states.len(),
-        latest_input_seq: client.latest_input_seq,
+        attached_tab: client.runtime_subscription.tab_id,
+        attachment_id: client
+            .attachment_lease
+            .as_ref()
+            .map(|lease| lease.attachment_id),
+        resume_token_present: client
+            .attachment_lease
+            .as_ref()
+            .and_then(|lease| lease.resume_token)
+            .is_some(),
+        has_cached_state: client.runtime_subscription.last_state.is_some(),
+        pane_state_count: client.runtime_subscription.pane_states.len(),
+        latest_input_seq: client.runtime_subscription.latest_input_seq,
         connection_age_ms: elapsed_ms(now, client.connected_at),
         authenticated_age_ms: client
             .authenticated_at
@@ -128,8 +135,8 @@ fn client_info_for_client(
 mod tests {
     use super::clients_snapshot;
     use crate::remote_state::{
-        AUTH_CHALLENGE_WINDOW, ClientState, DIRECT_CLIENT_HEARTBEAT_WINDOW,
-        REVIVABLE_ATTACHMENT_WINDOW, RevivableAttachment, State,
+        ClientAttachmentLease, ClientRuntimeSubscription, ClientState, DIRECT_CLIENT_HEARTBEAT_WINDOW,
+        REVIVABLE_ATTACHMENT_WINDOW, RevivableRuntimeSubscription, State,
     };
     use crate::remote_wire::{REMOTE_CAPABILITIES, REMOTE_PROTOCOL_VERSION, RemoteCell, RemoteFullState};
     use std::collections::HashMap;
@@ -137,12 +144,11 @@ mod tests {
     use std::time::{Duration, Instant};
 
     fn empty_state() -> State {
-        State {
-            clients: HashMap::new(),
-            revivable_attachments: HashMap::new(),
-            server_identity_id: "test-daemon".to_string(),
-            server_instance_id: "test-instance".to_string(),
-        }
+        State::test_empty()
+    }
+
+    fn remote_client(outbound: mpsc::Sender<crate::remote_batcher::OutboundMessage>) -> ClientState {
+        ClientState::test_client(outbound, true, false)
     }
 
     #[test]
@@ -152,36 +158,10 @@ mod tests {
         state.clients.insert(
             7,
             ClientState {
-                outbound: tx,
-                authenticated: true,
-                connected_at: Instant::now(),
-                authenticated_at: Some(Instant::now()),
                 last_heartbeat_at: Some(Instant::now()),
-                attached_tab: Some(11),
-                attachment_id: Some(0xabc),
-                resume_token: Some(0xdef),
-                last_tab_list_payload: None,
-                last_ui_runtime_state_payload: None,
-                last_ui_appearance_payload: None,
-                last_state: Some(Arc::new(RemoteFullState {
-                    rows: 1,
-                    cols: 1,
-                    cursor_x: 0,
-                    cursor_y: 0,
-                    cursor_visible: true,
-                    cursor_blinking: false,
-                    cursor_style: 1,
-                    cells: vec![RemoteCell {
-                        codepoint: u32::from('x'),
-                        fg: [1, 2, 3],
-                        bg: [0, 0, 0],
-                        style_flags: 0,
-                        wide: false,
-                    }],
-                })),
-                pane_states: HashMap::from([(
-                    22,
-                    Arc::new(RemoteFullState {
+                runtime_subscription: ClientRuntimeSubscription {
+                    tab_id: Some(11),
+                    last_state: Some(Arc::new(RemoteFullState {
                         rows: 1,
                         cols: 1,
                         cursor_x: 0,
@@ -189,11 +169,35 @@ mod tests {
                         cursor_visible: true,
                         cursor_blinking: false,
                         cursor_style: 1,
-                        cells: vec![],
-                    }),
-                )]),
-                latest_input_seq: Some(9),
-                is_local: false,
+                        cells: vec![RemoteCell {
+                            codepoint: u32::from('x'),
+                            fg: [1, 2, 3],
+                            bg: [0, 0, 0],
+                            style_flags: 0,
+                            wide: false,
+                        }],
+                    })),
+                    pane_states: HashMap::from([(
+                        22,
+                        Arc::new(RemoteFullState {
+                            rows: 1,
+                            cols: 1,
+                            cursor_x: 0,
+                            cursor_y: 0,
+                            cursor_visible: true,
+                            cursor_blinking: false,
+                            cursor_style: 1,
+                            cells: vec![],
+                        }),
+                    )]),
+                    latest_input_seq: Some(9),
+                    ..ClientRuntimeSubscription::detached()
+                },
+                attachment_lease: Some(ClientAttachmentLease {
+                    attachment_id: 0xabc,
+                    resume_token: Some(0xdef),
+                }),
+                ..remote_client(tx)
             },
         );
 
@@ -241,9 +245,9 @@ mod tests {
     #[test]
     fn clients_snapshot_includes_revivable_attachments() {
         let mut state = empty_state();
-        state.revivable_attachments.insert(
+        state.revivable_runtime_subscriptions.insert(
             0xabc,
-            RevivableAttachment {
+            RevivableRuntimeSubscription {
                 tab_id: 11,
                 resume_token: 0xdef,
                 last_state: Some(Arc::new(RemoteFullState {
@@ -300,8 +304,6 @@ mod tests {
         state.clients.insert(
             1,
             ClientState {
-                outbound: tx,
-                authenticated: true,
                 connected_at: Instant::now() - Duration::from_secs(30),
                 authenticated_at: Some(
                     Instant::now() - DIRECT_CLIENT_HEARTBEAT_WINDOW - Duration::from_secs(1),
@@ -309,16 +311,7 @@ mod tests {
                 last_heartbeat_at: Some(
                     Instant::now() - DIRECT_CLIENT_HEARTBEAT_WINDOW - Duration::from_secs(1),
                 ),
-                attached_tab: None,
-                attachment_id: None,
-                resume_token: None,
-                last_tab_list_payload: None,
-                last_ui_runtime_state_payload: None,
-                last_ui_appearance_payload: None,
-                last_state: None,
-                pane_states: HashMap::new(),
-                latest_input_seq: None,
-                is_local: false,
+                ..remote_client(tx)
             },
         );
 
@@ -343,8 +336,6 @@ mod tests {
         state.lock().expect("remote server state poisoned").clients.insert(
             1,
             ClientState {
-                outbound: tx,
-                authenticated: true,
                 connected_at: Instant::now() - Duration::from_secs(30),
                 authenticated_at: Some(
                     Instant::now() - DIRECT_CLIENT_HEARTBEAT_WINDOW - Duration::from_secs(1),
@@ -352,16 +343,7 @@ mod tests {
                 last_heartbeat_at: Some(
                     Instant::now() - DIRECT_CLIENT_HEARTBEAT_WINDOW - Duration::from_secs(1),
                 ),
-                attached_tab: None,
-                attachment_id: None,
-                resume_token: None,
-                last_tab_list_payload: None,
-                last_ui_runtime_state_payload: None,
-                last_ui_appearance_payload: None,
-                last_state: None,
-                pane_states: HashMap::new(),
-                latest_input_seq: None,
-                is_local: false,
+                ..remote_client(tx)
             },
         );
 

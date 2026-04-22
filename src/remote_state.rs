@@ -30,26 +30,86 @@ pub(crate) const AUTH_CHALLENGE_WINDOW: Duration = Duration::from_secs(30);
 /// treats it as stale and tears the connection down.
 pub(crate) const DIRECT_CLIENT_HEARTBEAT_WINDOW: Duration = Duration::from_secs(20);
 
-pub(crate) struct ClientState {
-    pub(crate) outbound: mpsc::Sender<OutboundMessage>,
-    pub(crate) authenticated: bool,
-    pub(crate) connected_at: Instant,
-    pub(crate) authenticated_at: Option<Instant>,
-    pub(crate) last_heartbeat_at: Option<Instant>,
-    pub(crate) attached_tab: Option<u32>,
-    pub(crate) attachment_id: Option<u64>,
+/// Transport-only resume/attachment identity for a live client stream.
+///
+/// This is the part of the old "session" model that is still real: a direct
+/// client may hold a resumable attachment lease. It is intentionally separate
+/// from runtime identity and terminal state caches.
+pub(crate) struct ClientAttachmentLease {
+    pub(crate) attachment_id: u64,
     pub(crate) resume_token: Option<u64>,
+}
+
+/// Runtime-view subscription state cached per connected client.
+///
+/// The authoritative tab/pane/runtime model lives in the server runtime. This
+/// struct only tracks which tab a given stream is currently subscribed to plus
+/// the cached payloads/full states needed for efficient transport updates.
+pub(crate) struct ClientRuntimeSubscription {
+    pub(crate) tab_id: Option<u32>,
     pub(crate) last_tab_list_payload: Option<Vec<u8>>,
     pub(crate) last_ui_runtime_state_payload: Option<Vec<u8>>,
     pub(crate) last_ui_appearance_payload: Option<Vec<u8>>,
     pub(crate) last_state: Option<Arc<RemoteFullState>>,
     pub(crate) pane_states: HashMap<u64, Arc<RemoteFullState>>,
     pub(crate) latest_input_seq: Option<u64>,
+}
+
+impl ClientRuntimeSubscription {
+    pub(crate) fn detached() -> Self {
+        Self {
+            tab_id: None,
+            last_tab_list_payload: None,
+            last_ui_runtime_state_payload: None,
+            last_ui_appearance_payload: None,
+            last_state: None,
+            pane_states: HashMap::new(),
+            latest_input_seq: None,
+        }
+    }
+
+    pub(crate) fn clear_stream_state(&mut self) {
+        self.last_state = None;
+        self.pane_states.clear();
+        self.latest_input_seq = None;
+    }
+}
+
+#[cfg(test)]
+impl ClientState {
+    pub(crate) fn test_client(
+        outbound: mpsc::Sender<OutboundMessage>,
+        authenticated: bool,
+        is_local: bool,
+    ) -> Self {
+        Self {
+            outbound,
+            authenticated,
+            connected_at: Instant::now(),
+            authenticated_at: authenticated.then(Instant::now),
+            last_heartbeat_at: None,
+            runtime_subscription: ClientRuntimeSubscription::detached(),
+            attachment_lease: None,
+            is_local,
+        }
+    }
+}
+
+pub(crate) struct ClientState {
+    pub(crate) outbound: mpsc::Sender<OutboundMessage>,
+    pub(crate) authenticated: bool,
+    pub(crate) connected_at: Instant,
+    pub(crate) authenticated_at: Option<Instant>,
+    pub(crate) last_heartbeat_at: Option<Instant>,
+    pub(crate) runtime_subscription: ClientRuntimeSubscription,
+    pub(crate) attachment_lease: Option<ClientAttachmentLease>,
     pub(crate) is_local: bool,
 }
 
 #[derive(Clone)]
-pub(crate) struct RevivableAttachment {
+/// Cached runtime-view state parked while a resumable direct attachment is
+/// briefly disconnected.
+pub(crate) struct RevivableRuntimeSubscription {
     pub(crate) tab_id: u32,
     pub(crate) resume_token: u64,
     pub(crate) last_state: Option<Arc<RemoteFullState>>,
@@ -60,15 +120,27 @@ pub(crate) struct RevivableAttachment {
 
 pub(crate) struct State {
     pub(crate) clients: HashMap<u64, ClientState>,
-    pub(crate) revivable_attachments: HashMap<u64, RevivableAttachment>,
+    pub(crate) revivable_runtime_subscriptions: HashMap<u64, RevivableRuntimeSubscription>,
     pub(crate) server_identity_id: String,
     pub(crate) server_instance_id: String,
+}
+
+#[cfg(test)]
+impl State {
+    pub(crate) fn test_empty() -> Self {
+        Self {
+            clients: HashMap::new(),
+            revivable_runtime_subscriptions: HashMap::new(),
+            server_identity_id: "test-daemon".to_string(),
+            server_instance_id: "test-instance".to_string(),
+        }
+    }
 }
 
 pub(crate) fn prune_revivable_attachments(state: &mut State) {
     let now = Instant::now();
     state
-        .revivable_attachments
+        .revivable_runtime_subscriptions
         .retain(|_, attachment| attachment.expires_at > now);
 }
 
