@@ -1,11 +1,11 @@
-//! Sync direct-client session transport for remote daemon RPCs.
+//! Sync direct-client tab transport for the remote daemon.
 
 use std::io::{Read, Write};
 
 use crate::remote_types::{RemoteAttachedSummary, RemoteDirectSessionInfo, RemoteDirectTabInfo};
 use crate::remote_wire::{
-    MessageType, RemoteFullState, decode_auth_ok_payload, decode_session_list_payload,
-    encode_message, parse_session_id, read_attach_bootstrap, read_probe_auth_reply,
+    MessageType, RemoteFullState, decode_auth_ok_payload, decode_tab_list_payload,
+    encode_message, parse_created_tab_id, read_attach_bootstrap, read_probe_auth_reply,
     read_probe_reply, validate_auth_ok_payload,
 };
 
@@ -98,15 +98,15 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
             .write_all(&encode_message(MessageType::ListSessions, &[]))
             .map_err(|error| {
                 format!(
-                    "failed to send list sessions request to {}:{}: {error}",
+                    "failed to send list tabs request to {}:{}: {error}",
                     self.host, self.port
                 )
             })?;
         let (_reply_ty, payload) =
             read_probe_reply(&mut self.stream, &self.host, self.port, MessageType::SessionList)?;
-        decode_session_list_payload(&payload).map_err(|error| {
+        decode_tab_list_payload(&payload).map_err(|error| {
             format!(
-                "failed to decode remote session list from {}:{}: {error}",
+                "failed to decode remote tab list from {}:{}: {error}",
                 self.host, self.port
             )
         })
@@ -119,11 +119,11 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
 
     pub(crate) fn attach(
         &mut self,
-        session_id: u32,
+        tab_id: u32,
         attachment_id: Option<u64>,
         resume_token: Option<u64>,
     ) -> Result<(RemoteAttachedSummary, RemoteFullState), String> {
-        let mut attach_payload = session_id.to_le_bytes().to_vec();
+        let mut attach_payload = tab_id.to_le_bytes().to_vec();
         if let Some(attachment_id) = attachment_id {
             attach_payload.extend_from_slice(&attachment_id.to_le_bytes());
         }
@@ -159,9 +159,9 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
             })?;
         let (_reply_ty, payload) =
             read_probe_reply(&mut self.stream, &self.host, self.port, MessageType::SessionCreated)?;
-        parse_session_id(&payload).ok_or_else(|| {
+        parse_created_tab_id(&payload).ok_or_else(|| {
             format!(
-                "invalid session-created payload from remote endpoint {}:{}",
+                "invalid tab-created payload from remote endpoint {}:{}",
                 self.host, self.port
             )
         })

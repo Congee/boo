@@ -277,7 +277,7 @@ mod tests {
                         child_exited: false,
                     }]),
                 ))
-                .expect("write session list");
+                .expect("write tab list");
         });
 
         let summary = list_remote_daemon_sessions("127.0.0.1", port, None)

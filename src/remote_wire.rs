@@ -12,7 +12,7 @@
 use std::io::{self, Read};
 use std::time::{Duration, Instant};
 
-use crate::remote_types::{RemoteAttachedSummary, RemoteDirectSessionInfo, RemoteTabInfo};
+use crate::remote_types::{RemoteAttachedSummary, RemoteDirectTabInfo, RemoteTabInfo};
 
 pub(crate) const MAGIC: [u8; 2] = [0x47, 0x53];
 pub(crate) const HEADER_LEN: usize = 7;
@@ -660,7 +660,7 @@ pub(crate) fn read_probe_auth_reply(
 
 pub(crate) fn decode_session_list_payload(
     payload: &[u8],
-) -> Result<Vec<RemoteDirectSessionInfo>, String> {
+) -> Result<Vec<RemoteDirectTabInfo>, String> {
     if payload.len() < 4 {
         return Err("payload too short".to_string());
     }
@@ -720,7 +720,7 @@ pub(crate) fn decode_session_list_payload(
             .get(offset)
             .ok_or_else(|| "payload truncated".to_string())?;
         offset += 1;
-        sessions.push(RemoteDirectSessionInfo {
+        sessions.push(RemoteDirectTabInfo {
             id,
             name,
             title,
@@ -848,6 +848,14 @@ pub(crate) fn parse_session_id(payload: &[u8]) -> Option<u32> {
 
 pub(crate) fn parse_tab_id(payload: &[u8]) -> Option<u32> {
     parse_session_id(payload)
+}
+
+pub(crate) fn parse_created_tab_id(payload: &[u8]) -> Option<u32> {
+    parse_session_id(payload)
+}
+
+pub(crate) fn decode_tab_list_payload(payload: &[u8]) -> Result<Vec<RemoteDirectTabInfo>, String> {
+    decode_session_list_payload(payload)
 }
 
 pub(crate) fn parse_attach_request(payload: &[u8]) -> Option<(u32, Option<u64>, Option<u64>)> {

@@ -418,7 +418,7 @@ impl BooApp {
                     .or(self.server.local_gui_server.as_ref())
                     .or(self.server.remote_server.as_ref())
                 {
-                    server.send_error(client_id, RemoteErrorCode::UnknownSession, "unknown session");
+                    server.send_error(client_id, RemoteErrorCode::UnknownSession, "unknown tab");
                 }
             }
             server::Command::RemoteDetach { client_id } => {
@@ -454,7 +454,7 @@ impl BooApp {
                         server.send_error(
                             client_id,
                             RemoteErrorCode::FailedCreateSession,
-                            "failed to create session",
+                            "failed to create tab",
                         );
                     }
                     return;
@@ -798,7 +798,7 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_error(client_id, RemoteErrorCode::UnknownSession, "unknown session");
+                        server.send_error(client_id, RemoteErrorCode::UnknownSession, "unknown tab");
                     }
                     return;
                 };
