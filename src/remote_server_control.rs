@@ -109,32 +109,6 @@ pub(crate) fn send_ui_runtime_state_to_local_attached(
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn send_session_list(
-    state: &Arc<Mutex<State>>,
-    client_id: u64,
-    sessions: &[RemoteTabInfo],
-) {
-    send_tab_list(state, client_id, sessions);
-}
-
-#[allow(dead_code)]
-pub(crate) fn reply_session_list(
-    state: &Arc<Mutex<State>>,
-    client_id: u64,
-    sessions: &[RemoteTabInfo],
-) {
-    reply_tab_list(state, client_id, sessions);
-}
-
-#[allow(dead_code)]
-pub(crate) fn send_session_list_to_local_clients(
-    state: &Arc<Mutex<State>>,
-    sessions: &[RemoteTabInfo],
-) {
-    send_tab_list_to_local_clients(state, sessions);
-}
-
 pub(crate) fn send_ui_appearance(
     state: &Arc<Mutex<State>>,
     client_id: u64,

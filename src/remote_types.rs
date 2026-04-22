@@ -20,6 +20,7 @@ pub struct RemoteTabInfo {
     pub child_exited: bool,
 }
 
+#[allow(dead_code)]
 pub type RemoteSessionInfo = RemoteTabInfo;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -105,6 +106,7 @@ pub struct RemoteDirectTabInfo {
     pub child_exited: bool,
 }
 
+#[allow(dead_code)]
 pub type RemoteDirectSessionInfo = RemoteDirectTabInfo;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]

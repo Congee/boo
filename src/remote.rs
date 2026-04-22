@@ -330,36 +330,13 @@ impl RemoteServer {
     }
 
     #[allow(dead_code)]
-    pub fn has_attached_sessions(&self) -> bool {
-        self.has_runtime_subscribers()
-    }
-
-    #[allow(dead_code)]
-    pub fn attached_to_tab(&self, tab_id: u32) -> bool {
-        self.subscribed_to_tab(tab_id)
-    }
-
-    #[allow(dead_code)]
-    pub fn attached_to_session(&self, tab_id: u32) -> bool {
-        self.attached_to_tab(tab_id)
-    }
-
     pub fn local_attached_to_tab(&self, tab_id: u32) -> bool {
         self.local_subscribed_to_tab(tab_id)
     }
 
     #[allow(dead_code)]
-    pub fn local_attached_to_session(&self, tab_id: u32) -> bool {
-        self.local_attached_to_tab(tab_id)
-    }
-
     pub fn client_tab(&self, client_id: u64) -> Option<u32> {
         self.client_subscription_tab(client_id)
-    }
-
-    #[allow(dead_code)]
-    pub fn client_session(&self, client_id: u64) -> Option<u32> {
-        self.client_tab(client_id)
     }
 
     pub fn send_tab_created(&self, client_id: u64, tab_id: u32) {
@@ -479,11 +456,6 @@ impl RemoteServer {
         self.send_to_client(client_id, MessageType::Detached, Vec::new());
     }
 
-    #[allow(dead_code)]
-    pub fn send_session_created(&self, client_id: u64, tab_id: u32) {
-        self.send_tab_created(client_id, tab_id);
-    }
-
     pub fn send_error(&self, client_id: u64, code: RemoteErrorCode, message: &str) {
         self.send_to_client(
             client_id,
@@ -589,10 +561,6 @@ impl RemoteServer {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn send_session_exited(&self, tab_id: u32) {
-        self.send_tab_exited(tab_id);
-    }
 
     pub fn record_input_seq(&self, client_id: u64, input_seq: Option<u64>) {
         self.update_client(client_id, |client| {
@@ -605,26 +573,6 @@ impl RemoteServer {
     fn clients_for_tab(&self, tab_id: u32) -> Vec<u64> {
         let state = self.state.lock().expect("remote server state poisoned");
         client_ids_for_tab(&state, tab_id)
-    }
-
-    #[allow(dead_code)]
-    pub fn send_session_list(&self, client_id: u64, sessions: &[RemoteSessionInfo]) {
-        self.send_tab_list(client_id, sessions);
-    }
-
-    #[allow(dead_code)]
-    pub fn reply_session_list(&self, client_id: u64, sessions: &[RemoteSessionInfo]) {
-        self.reply_tab_list(client_id, sessions);
-    }
-
-    #[allow(dead_code)]
-    pub fn send_session_list_to_local_clients(&self, sessions: &[RemoteSessionInfo]) {
-        self.send_tab_list_to_local_clients(sessions);
-    }
-
-    #[allow(dead_code)]
-    pub fn retarget_local_attached_to_session(&self, tab_id: u32) -> bool {
-        self.retarget_local_attached_to_tab(tab_id)
     }
 
     fn update_client(&self, client_id: u64, mut update: impl FnMut(&mut ClientState)) {

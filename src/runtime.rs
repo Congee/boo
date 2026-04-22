@@ -323,11 +323,6 @@ impl BooApp {
         self.cached_remote_tabs = None;
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn current_remote_tabs_compat(&mut self) -> std::sync::Arc<[remote::RemoteTabInfo]> {
-        self.current_remote_tabs()
-    }
-
     pub(crate) fn mark_remote_tab_dirty(&mut self, tab_id: u32) {
         if !self.dirty_remote_tabs.contains(&tab_id) {
             self.dirty_remote_tabs.push(tab_id);
@@ -339,11 +334,6 @@ impl BooApp {
         if let Some(tab_id) = self.server.tabs.active_tab_id() {
             self.mark_remote_tab_dirty(tab_id);
         }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn mark_remote_tab_dirty_compat(&mut self, session_id: u32) {
-        self.mark_remote_tab_dirty(session_id);
     }
 
     #[allow(dead_code)]
