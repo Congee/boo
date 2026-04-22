@@ -30,7 +30,8 @@ pub struct RemoteClientInfo {
     pub transport_kind: String,
     pub server_socket_path: Option<String>,
     pub challenge_pending: bool,
-    pub attached_session: Option<u32>,
+    #[serde(rename = "attached_session", alias = "attached_tab")]
+    pub attached_tab: Option<u32>,
     pub attachment_id: Option<u64>,
     pub resume_token_present: bool,
     pub has_cached_state: bool,
@@ -47,7 +48,8 @@ pub struct RemoteClientInfo {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct RevivableAttachmentInfo {
     pub attachment_id: u64,
-    pub session_id: u32,
+    #[serde(rename = "session_id", alias = "tab_id")]
+    pub tab_id: u32,
     pub resume_token_present: bool,
     pub has_cached_state: bool,
     pub pane_state_count: usize,
@@ -118,11 +120,13 @@ pub struct RemoteTabListSummary {
     pub tabs: Vec<RemoteDirectTabInfo>,
 }
 
+#[allow(dead_code)]
 pub type RemoteSessionListSummary = RemoteTabListSummary;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct RemoteAttachedSummary {
-    pub session_id: u32,
+    #[serde(rename = "session_id", alias = "tab_id")]
+    pub tab_id: u32,
     pub attachment_id: Option<u64>,
     pub resume_token: Option<u64>,
 }
@@ -157,7 +161,8 @@ pub struct RemoteCreateSummary {
     pub server_instance_id: Option<String>,
     pub server_identity_id: Option<String>,
     pub heartbeat_rtt_ms: u64,
-    pub session_id: u32,
+    #[serde(rename = "session_id", alias = "tab_id")]
+    pub tab_id: u32,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]

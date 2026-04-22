@@ -18,7 +18,7 @@ pub fn select_direct_transport(
     }
 }
 
-fn probe_summary_from_session(
+fn probe_summary_from_transport(
     client: &mut DirectTransportSession<crate::remote_quic::QuicDirectStream>,
     port: u16,
 ) -> Result<RemoteProbeSummary, String> {
@@ -41,7 +41,7 @@ pub fn probe_remote_endpoint(
     expected_server_identity: Option<&str>,
 ) -> Result<RemoteProbeSummary, String> {
     let mut client = crate::remote_quic::connect_direct(host, port, expected_server_identity)?;
-    probe_summary_from_session(&mut client, port)
+    probe_summary_from_transport(&mut client, port)
 }
 
 pub fn probe_selected_direct_transport(
@@ -58,7 +58,7 @@ pub fn probe_selected_direct_transport(
     }
 }
 
-fn list_summary_from_session(
+fn list_summary_from_transport(
     client: &mut DirectTransportSession<crate::remote_quic::QuicDirectStream>,
     port: u16,
 ) -> Result<RemoteTabListSummary, String> {
@@ -77,24 +77,33 @@ fn list_summary_from_session(
     })
 }
 
+#[allow(dead_code)]
 pub fn list_remote_daemon_sessions(
     host: &str,
     port: u16,
     expected_server_identity: Option<&str>,
 ) -> Result<RemoteSessionListSummary, String> {
-    let mut client = crate::remote_quic::connect_direct(host, port, expected_server_identity)?;
-    list_summary_from_session(&mut client, port)
+    list_remote_daemon_tabs(host, port, expected_server_identity)
 }
 
-fn attach_summary_from_session(
+pub fn list_remote_daemon_tabs(
+    host: &str,
+    port: u16,
+    expected_server_identity: Option<&str>,
+) -> Result<RemoteTabListSummary, String> {
+    let mut client = crate::remote_quic::connect_direct(host, port, expected_server_identity)?;
+    list_summary_from_transport(&mut client, port)
+}
+
+fn attach_summary_from_transport(
     client: &mut DirectTransportSession<crate::remote_quic::QuicDirectStream>,
     port: u16,
-    session_id: u32,
+    tab_id: u32,
     attachment_id: Option<u64>,
     resume_token: Option<u64>,
 ) -> Result<RemoteAttachSummary, String> {
     let heartbeat_rtt_ms = client.heartbeat_round_trip(b"boo-remote-attach")?;
-    let (attached, full_state) = client.attach(session_id, attachment_id, resume_token)?;
+    let (attached, full_state) = client.attach(tab_id, attachment_id, resume_token)?;
     Ok(RemoteAttachSummary {
         host: client.host.clone(),
         port,
@@ -115,6 +124,7 @@ fn attach_summary_from_session(
     })
 }
 
+#[allow(dead_code)]
 pub fn attach_remote_daemon_session(
     host: &str,
     port: u16,
@@ -123,18 +133,36 @@ pub fn attach_remote_daemon_session(
     attachment_id: Option<u64>,
     resume_token: Option<u64>,
 ) -> Result<RemoteAttachSummary, String> {
-    let mut client = crate::remote_quic::connect_direct(host, port, expected_server_identity)?;
-    attach_summary_from_session(&mut client, port, session_id, attachment_id, resume_token)
+    attach_remote_daemon_tab(
+        host,
+        port,
+        expected_server_identity,
+        session_id,
+        attachment_id,
+        resume_token,
+    )
 }
 
-fn create_summary_from_session(
+pub fn attach_remote_daemon_tab(
+    host: &str,
+    port: u16,
+    expected_server_identity: Option<&str>,
+    tab_id: u32,
+    attachment_id: Option<u64>,
+    resume_token: Option<u64>,
+) -> Result<RemoteAttachSummary, String> {
+    let mut client = crate::remote_quic::connect_direct(host, port, expected_server_identity)?;
+    attach_summary_from_transport(&mut client, port, tab_id, attachment_id, resume_token)
+}
+
+fn create_summary_from_transport(
     client: &mut DirectTransportSession<crate::remote_quic::QuicDirectStream>,
     port: u16,
     cols: u16,
     rows: u16,
 ) -> Result<RemoteCreateSummary, String> {
     let heartbeat_rtt_ms = client.heartbeat_round_trip(b"boo-remote-create")?;
-    let session_id = client.create_tab(cols, rows)?;
+    let tab_id = client.create_tab(cols, rows)?;
     Ok(RemoteCreateSummary {
         host: client.host.clone(),
         port,
@@ -144,10 +172,11 @@ fn create_summary_from_session(
         server_instance_id: client.server_instance_id.clone(),
         server_identity_id: client.server_identity_id.clone(),
         heartbeat_rtt_ms,
-        session_id,
+        tab_id,
     })
 }
 
+#[allow(dead_code)]
 pub fn create_remote_daemon_session(
     host: &str,
     port: u16,
@@ -155,8 +184,18 @@ pub fn create_remote_daemon_session(
     cols: u16,
     rows: u16,
 ) -> Result<RemoteCreateSummary, String> {
+    create_remote_daemon_tab(host, port, expected_server_identity, cols, rows)
+}
+
+pub fn create_remote_daemon_tab(
+    host: &str,
+    port: u16,
+    expected_server_identity: Option<&str>,
+    cols: u16,
+    rows: u16,
+) -> Result<RemoteCreateSummary, String> {
     let mut client = crate::remote_quic::connect_direct(host, port, expected_server_identity)?;
-    create_summary_from_session(&mut client, port, cols, rows)
+    create_summary_from_transport(&mut client, port, cols, rows)
 }
 
 #[cfg(test)]
@@ -365,7 +404,7 @@ mod tests {
         assert_eq!(summary.protocol_version, REMOTE_PROTOCOL_VERSION);
         assert_eq!(summary.server_identity_id.as_deref(), Some("test-daemon"));
         assert_eq!(summary.server_instance_id.as_deref(), Some("test-instance"));
-        assert_eq!(summary.attached.session_id, 7);
+        assert_eq!(summary.attached.tab_id, 7);
         assert_eq!(summary.attached.attachment_id, Some(99));
         assert_eq!(summary.attached.resume_token, Some(1234));
         assert_eq!(summary.rows, 1);
@@ -422,7 +461,7 @@ mod tests {
         assert_eq!(summary.protocol_version, REMOTE_PROTOCOL_VERSION);
         assert_eq!(summary.server_identity_id.as_deref(), Some("test-daemon"));
         assert_eq!(summary.server_instance_id.as_deref(), Some("test-instance"));
-        assert_eq!(summary.session_id, 77);
+        assert_eq!(summary.tab_id, 77);
 
         server.join().expect("create server thread");
     }

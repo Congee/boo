@@ -102,7 +102,7 @@ pub enum Command {
     },
     RemoteAttach {
         client_id: u64,
-        session_id: u32,
+        tab_id: u32,
         attachment_id: Option<u64>,
         resume_token: Option<u64>,
     },
@@ -151,7 +151,7 @@ pub enum Command {
     },
     RemoteDestroy {
         client_id: u64,
-        session_id: Option<u32>,
+        tab_id: Option<u32>,
     },
 }
 
@@ -283,12 +283,12 @@ impl From<remote::RemoteCmd> for Command {
             remote::RemoteCmd::ListSessions { client_id } => Self::RemoteListSessions { client_id },
             remote::RemoteCmd::Attach {
                 client_id,
-                session_id,
+                tab_id,
                 attachment_id,
                 resume_token,
             } => Self::RemoteAttach {
                 client_id,
-                session_id,
+                tab_id: tab_id,
                 attachment_id,
                 resume_token,
             },
@@ -346,10 +346,10 @@ impl From<remote::RemoteCmd> for Command {
             }
             remote::RemoteCmd::Destroy {
                 client_id,
-                session_id,
+                tab_id,
             } => Self::RemoteDestroy {
                 client_id,
-                session_id,
+                tab_id: tab_id,
             },
         }
     }
@@ -384,18 +384,18 @@ mod tests {
     fn remote_commands_map_to_server_surface() {
         match Command::from(remote::RemoteCmd::Attach {
             client_id: 7,
-            session_id: 11,
+            tab_id: 11,
             attachment_id: Some(42),
             resume_token: Some(99),
         }) {
             Command::RemoteAttach {
                 client_id,
-                session_id,
+                tab_id,
                 attachment_id,
                 resume_token,
             } => {
                 assert_eq!(client_id, 7);
-                assert_eq!(session_id, 11);
+                assert_eq!(tab_id, 11);
                 assert_eq!(attachment_id, Some(42));
                 assert_eq!(resume_token, Some(99));
             }

@@ -122,10 +122,10 @@ mod tests {
                             - Duration::from_secs(2),
                     ),
                     last_heartbeat_at: None,
-                    attached_session: None,
+                    attached_tab: None,
                     attachment_id: None,
                     resume_token: None,
-                    last_session_list_payload: None,
+                    last_tab_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
                     last_state: None,
@@ -186,10 +186,10 @@ mod tests {
                             - Duration::from_secs(2),
                     ),
                     last_heartbeat_at: None,
-                    attached_session: Some(11),
+                    attached_tab: Some(11),
                     attachment_id: Some(0xabc),
                     resume_token: Some(0xdef),
-                    last_session_list_payload: None,
+                    last_tab_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
                     last_state: Some(Arc::clone(&cached_state)),
@@ -225,7 +225,7 @@ mod tests {
             .revivable_attachments
             .get(&0xabc)
             .expect("revivable attachment preserved");
-        assert_eq!(attachment.session_id, 11);
+        assert_eq!(attachment.tab_id, 11);
         assert_eq!(attachment.resume_token, 0xdef);
         assert_eq!(attachment.latest_input_seq, Some(9));
         assert_eq!(attachment.last_state.as_ref(), Some(&cached_state));

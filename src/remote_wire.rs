@@ -766,7 +766,7 @@ pub(crate) fn decode_attached_payload(payload: &[u8]) -> Result<RemoteAttachedSu
         return Err("payload has unexpected length".to_string());
     }
     Ok(RemoteAttachedSummary {
-        session_id,
+        tab_id: session_id,
         attachment_id,
         resume_token,
     })
@@ -844,6 +844,10 @@ pub(crate) fn decode_remote_full_state_payload(payload: &[u8]) -> Result<RemoteF
 pub(crate) fn parse_session_id(payload: &[u8]) -> Option<u32> {
     (payload.len() >= 4)
         .then(|| u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]))
+}
+
+pub(crate) fn parse_tab_id(payload: &[u8]) -> Option<u32> {
+    parse_session_id(payload)
 }
 
 pub(crate) fn parse_attach_request(payload: &[u8]) -> Option<(u32, Option<u64>, Option<u64>)> {
@@ -1542,7 +1546,7 @@ mod tests {
     #[test]
     fn decode_attached_payload_accepts_legacy_and_resume_forms() {
         let legacy = decode_attached_payload(&7_u32.to_le_bytes()).expect("legacy attached");
-        assert_eq!(legacy.session_id, 7);
+        assert_eq!(legacy.tab_id, 7);
         assert_eq!(legacy.attachment_id, None);
         assert_eq!(legacy.resume_token, None);
 
@@ -1550,7 +1554,7 @@ mod tests {
         resumed.extend_from_slice(&99_u64.to_le_bytes());
         resumed.extend_from_slice(&1234_u64.to_le_bytes());
         let resumed = decode_attached_payload(&resumed).expect("resumed attached");
-        assert_eq!(resumed.session_id, 7);
+        assert_eq!(resumed.tab_id, 7);
         assert_eq!(resumed.attachment_id, Some(99));
         assert_eq!(resumed.resume_token, Some(1234));
     }

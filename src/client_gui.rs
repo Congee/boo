@@ -754,7 +754,7 @@ impl ClientApp {
                 let attached = snapshot
                     .clients
                     .iter()
-                    .filter(|client| client.attached_session.is_some())
+                    .filter(|client| client.attached_tab.is_some())
                     .count();
                 let pending = snapshot
                     .clients
@@ -986,7 +986,7 @@ impl ClientApp {
                     tab_list_attach_target(self.mode, self.active_remote_tab_id, &live_tabs)
                 {
                     self.should_exit = false;
-                    self.send_stream_command(StreamCommand::Attach(tab_id));
+                    self.send_stream_command(StreamCommand::AttachTab(tab_id));
                 } else if matches!(self.mode, ClientMode::Attached)
                     && self
                         .active_remote_tab_id
@@ -1005,9 +1005,9 @@ impl ClientApp {
                     self.should_exit = true;
                 }
             }
-            LocalStreamEvent::Attached(session_id) => {
-                self.active_remote_tab_id = Some(session_id);
-                self.ui_state.mark_active_tab(Some(session_id));
+            LocalStreamEvent::TabAttached(tab_id) => {
+                self.active_remote_tab_id = Some(tab_id);
+                self.ui_state.mark_active_tab(Some(tab_id));
             }
             LocalStreamEvent::UiRuntimeState(state) => {
                 self.apply_ui_runtime_state(state);
@@ -1044,8 +1044,8 @@ impl ClientApp {
                 self.pending_input_latencies.clear();
                 self.send_stream_command(StreamCommand::ListTabs);
             }
-            LocalStreamEvent::SessionExited(session_id) => {
-                if self.active_remote_tab_id == Some(session_id) {
+            LocalStreamEvent::TabExited(tab_id) => {
+                if self.active_remote_tab_id == Some(tab_id) {
                     self.active_remote_tab_id = None;
                 }
                 self.mode = ClientMode::Recovering;
@@ -1137,7 +1137,7 @@ impl ClientApp {
         let track_stream = matches!(
             &event,
             LocalStreamEvent::TabList(_)
-                | LocalStreamEvent::Attached(_)
+                | LocalStreamEvent::TabAttached(_)
                 | LocalStreamEvent::UiRuntimeState(_)
                 | LocalStreamEvent::UiAppearance(_)
                 | LocalStreamEvent::FullState { .. }
@@ -1145,7 +1145,7 @@ impl ClientApp {
                 | LocalStreamEvent::UiPaneFullState { .. }
                 | LocalStreamEvent::UiPaneDelta { .. }
                 | LocalStreamEvent::Detached
-                | LocalStreamEvent::SessionExited(_)
+                | LocalStreamEvent::TabExited(_)
         ) || matches!(
             &event,
             LocalStreamEvent::UiPaneFullState { pane_id, .. }
@@ -1977,7 +1977,7 @@ impl Widget<Message, Theme, iced::Renderer> for TerminalInputMethodLayer {
 #[derive(Clone, Debug)]
 pub(crate) enum LocalStreamEvent {
     TabList(Vec<remote::RemoteTabInfo>),
-    Attached(u32),
+    TabAttached(u32),
     UiRuntimeState(control::UiRuntimeState),
     UiAppearance(control::UiAppearanceSnapshot),
     UiPaneFullState {
@@ -1989,7 +1989,7 @@ pub(crate) enum LocalStreamEvent {
         delta: RemoteDelta,
     },
     Detached,
-    SessionExited(u32),
+    TabExited(u32),
     Disconnected,
     FullState {
         ack_input_seq: Option<u64>,
@@ -2168,7 +2168,7 @@ pub(crate) struct RemoteRowDelta {
 #[derive(Clone, Debug)]
 pub(crate) enum StreamCommand {
     ListTabs,
-    Attach(u32),
+    AttachTab(u32),
     AppKeyEvent { event: AppKeyEvent },
     AppMouseEvent { event: AppMouseEvent },
     ExecuteCommand { input: String },
@@ -2220,10 +2220,10 @@ fn local_stream_subscription(
                                 remote::MessageType::ListSessions,
                                 &[],
                             ),
-                            StreamCommand::Attach(session_id) => write_stream_message(
+                            StreamCommand::AttachTab(tab_id) => write_stream_message(
                                 &mut write,
                                 remote::MessageType::Attach,
-                                &session_id.to_le_bytes(),
+                                &tab_id.to_le_bytes(),
                             ),
                             StreamCommand::AppKeyEvent { event } => {
                                 let Ok(payload) = serde_json::to_vec(&event) else {
@@ -2559,7 +2559,7 @@ fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStream
             remote::MessageType::SessionList => {
                 decode_remote_tab_list(&payload).map(LocalStreamEvent::TabList)
             }
-            remote::MessageType::Attached => decode_u32(&payload).map(LocalStreamEvent::Attached),
+            remote::MessageType::Attached => decode_u32(&payload).map(LocalStreamEvent::TabAttached),
             remote::MessageType::UiRuntimeState => serde_json::from_slice(&payload)
                 .ok()
                 .map(LocalStreamEvent::UiRuntimeState),
@@ -2578,7 +2578,7 @@ fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStream
             }
             remote::MessageType::Detached => Some(LocalStreamEvent::Detached),
             remote::MessageType::SessionExited => {
-                decode_u32(&payload).map(LocalStreamEvent::SessionExited)
+                decode_u32(&payload).map(LocalStreamEvent::TabExited)
             }
             remote::MessageType::FullState => {
                 decode_remote_full_state(&payload).map(|(ack_input_seq, state)| {
@@ -3009,8 +3009,8 @@ fn build_status_right(
                 right_parts.push(format!("{remote_prefix}: bootstrapping"))
             }
             ClientMode::Recovering => {
-                if let Some(session_id) = active_remote_tab_id {
-                    right_parts.push(format!("{remote_prefix}: recovering tab {session_id}"))
+                if let Some(tab_id) = active_remote_tab_id {
+                    right_parts.push(format!("{remote_prefix}: recovering tab {tab_id}"))
                 } else {
                     right_parts.push(format!("{remote_prefix}: recovering"))
                 }
@@ -3336,7 +3336,7 @@ mod tests {
     fn full_state_bootstraps_without_ui_pane_terminals() {
         let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
 
-        app.handle_stream_event(LocalStreamEvent::Attached(7));
+        app.handle_stream_event(LocalStreamEvent::TabAttached(7));
         app.handle_stream_event(LocalStreamEvent::UiRuntimeState(control::UiRuntimeState {
             active_tab: 0,
             focused_pane: 7,
@@ -3561,7 +3561,7 @@ mod tests {
                 changed_rows: Vec::new(),
             },
         };
-        let barrier = LocalStreamEvent::Attached(7);
+        let barrier = LocalStreamEvent::TabAttached(7);
 
         let mut batch = Vec::new();
         let mut pending = PendingCoalescedStreamEvents::with_passive_screen_coalescing(true);
@@ -3586,7 +3586,7 @@ mod tests {
                 ..
             }
         ));
-        assert!(matches!(batch[2], LocalStreamEvent::Attached(7)));
+        assert!(matches!(batch[2], LocalStreamEvent::TabAttached(7)));
     }
 
     #[test]
@@ -3689,7 +3689,7 @@ mod tests {
         });
         let appearance_a = LocalStreamEvent::UiAppearance(appearance("A"));
         let appearance_b = LocalStreamEvent::UiAppearance(appearance("B"));
-        let barrier = LocalStreamEvent::Attached(7);
+        let barrier = LocalStreamEvent::TabAttached(7);
 
         let mut batch = Vec::new();
         let mut pending = PendingCoalescedStreamEvents::with_passive_screen_coalescing(true);
@@ -3714,7 +3714,7 @@ mod tests {
             }
             other => panic!("expected coalesced appearance, got {other:?}"),
         }
-        assert!(matches!(batch[2], LocalStreamEvent::Attached(7)));
+        assert!(matches!(batch[2], LocalStreamEvent::TabAttached(7)));
     }
 
     #[test]
@@ -3974,7 +3974,7 @@ mod tests {
         app.should_exit = true;
         app.last_error = Some("stale".to_string());
 
-        app.handle_stream_event(LocalStreamEvent::SessionExited(7));
+        app.handle_stream_event(LocalStreamEvent::TabExited(7));
 
         assert!(matches!(app.mode, ClientMode::Recovering));
         assert_eq!(app.active_remote_tab_id, None);

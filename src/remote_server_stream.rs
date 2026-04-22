@@ -17,7 +17,7 @@ pub(crate) fn send_state_to_client(
         let Some(client) = guard.clients.get(&client_id) else {
             return;
         };
-        if client.attached_session != Some(tab_id) {
+        if client.attached_tab != Some(tab_id) {
             return;
         }
         (
@@ -46,7 +46,7 @@ pub(crate) fn send_state_to_client(
         let Some(client) = guard.clients.get_mut(&client_id) else {
             return;
         };
-        if client.attached_session != Some(tab_id) {
+        if client.attached_tab != Some(tab_id) {
             false
         } else {
             client.last_state = Some(Arc::clone(&next_state));
@@ -83,7 +83,7 @@ pub(crate) fn send_pane_state_to_client(
         let Some(client) = guard.clients.get(&client_id) else {
             return;
         };
-        if client.attached_session != Some(tab_id) {
+        if client.attached_tab != Some(tab_id) {
             return;
         }
         (client.outbound.clone(), client.pane_states.get(&pane_id).cloned())
@@ -104,7 +104,7 @@ pub(crate) fn send_pane_state_to_client(
         let Some(client) = guard.clients.get_mut(&client_id) else {
             return;
         };
-        if client.attached_session != Some(tab_id) {
+        if client.attached_tab != Some(tab_id) {
             false
         } else {
             client.pane_states.insert(pane_id, Arc::clone(&next_state));

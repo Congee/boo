@@ -226,37 +226,37 @@ fn probe_remote_daemon_dispatch(
     crate::remote::probe_remote_endpoint(host, port, expected_identity)
 }
 
-fn list_remote_daemon_sessions_dispatch(
+fn list_remote_daemon_tabs_dispatch(
     host: &str,
     port: u16,
     expected_identity: Option<&str>,
-) -> Result<crate::remote::RemoteSessionListSummary, String> {
-    crate::remote::list_remote_daemon_sessions(host, port, expected_identity)
+) -> Result<crate::remote::RemoteTabListSummary, String> {
+    crate::remote::list_remote_daemon_tabs(host, port, expected_identity)
 }
 
-fn create_remote_daemon_session_dispatch(
+fn create_remote_daemon_tab_dispatch(
     host: &str,
     port: u16,
     expected_identity: Option<&str>,
     cols: u16,
     rows: u16,
 ) -> Result<crate::remote::RemoteCreateSummary, String> {
-    crate::remote::create_remote_daemon_session(host, port, expected_identity, cols, rows)
+    crate::remote::create_remote_daemon_tab(host, port, expected_identity, cols, rows)
 }
 
-fn attach_remote_daemon_session_dispatch(
+fn attach_remote_daemon_tab_dispatch(
     host: &str,
     port: u16,
     expected_identity: Option<&str>,
-    session_id: u32,
+    tab_id: u32,
     attachment_id: Option<u64>,
     resume_token: Option<u64>,
 ) -> Result<crate::remote::RemoteAttachSummary, String> {
-    crate::remote::attach_remote_daemon_session(
+    crate::remote::attach_remote_daemon_tab(
         host,
         port,
         expected_identity,
-        session_id,
+        tab_id,
         attachment_id,
         resume_token,
     )
@@ -377,7 +377,7 @@ where
             host,
             port,
             expect_server_identity,
-        } => match list_remote_daemon_sessions_dispatch(
+        } => match list_remote_daemon_tabs_dispatch(
             host,
             *port,
             expect_server_identity.as_deref(),
@@ -404,7 +404,7 @@ where
             expect_server_identity,
             cols,
             rows,
-        } => match create_remote_daemon_session_dispatch(
+        } => match create_remote_daemon_tab_dispatch(
             host,
             *port,
             expect_server_identity.as_deref(),
@@ -539,7 +539,7 @@ where
             expect_server_identity,
             attachment_id,
             resume_token,
-        } => match attach_remote_daemon_session_dispatch(
+        } => match attach_remote_daemon_tab_dispatch(
             host,
             *port,
             expect_server_identity.as_deref(),

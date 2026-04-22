@@ -20,8 +20,10 @@ pub use crate::remote_types::{
 
 // Re-export the direct-client RPCs so existing callers of
 // `crate::remote::probe_remote_endpoint` etc. keep working unchanged.
+#[allow(unused_imports)]
 pub use crate::remote_client::{
-    attach_remote_daemon_session, create_remote_daemon_session, list_remote_daemon_sessions,
+    attach_remote_daemon_session, attach_remote_daemon_tab, create_remote_daemon_session,
+    create_remote_daemon_tab, list_remote_daemon_sessions, list_remote_daemon_tabs,
     probe_remote_endpoint, probe_selected_direct_transport, select_direct_transport,
 };
 
@@ -69,7 +71,7 @@ pub enum RemoteCmd {
     },
     Attach {
         client_id: u64,
-        session_id: u32,
+        tab_id: u32,
         attachment_id: Option<u64>,
         resume_token: Option<u64>,
     },
@@ -118,7 +120,7 @@ pub enum RemoteCmd {
     },
     Destroy {
         client_id: u64,
-        session_id: Option<u32>,
+        tab_id: Option<u32>,
     },
 }
 
@@ -236,10 +238,10 @@ impl RemoteServer {
                             connected_at: Instant::now(),
                             authenticated_at: Some(Instant::now()),
                             last_heartbeat_at: None,
-                            attached_session: None,
+                            attached_tab: None,
                             attachment_id: None,
                             resume_token: None,
-                            last_session_list_payload: None,
+                            last_tab_list_payload: None,
                             last_ui_runtime_state_payload: None,
                             last_ui_appearance_payload: None,
                             last_state: None,
@@ -295,35 +297,56 @@ impl RemoteServer {
         ))
     }
 
+    pub fn has_attached_tabs(&self) -> bool {
+        let state = self.state.lock().expect("remote server state poisoned");
+        state
+            .clients
+            .values()
+            .any(|client| client.attached_tab.is_some())
+    }
+
+    #[allow(dead_code)]
     pub fn has_attached_sessions(&self) -> bool {
+        self.has_attached_tabs()
+    }
+
+    pub fn attached_to_tab(&self, tab_id: u32) -> bool {
         let state = self.state.lock().expect("remote server state poisoned");
         state
             .clients
             .values()
-            .any(|client| client.attached_session.is_some())
+            .any(|client| client.attached_tab == Some(tab_id))
     }
 
-    pub fn attached_to_session(&self, session_id: u32) -> bool {
+    #[allow(dead_code)]
+    pub fn attached_to_session(&self, tab_id: u32) -> bool {
+        self.attached_to_tab(tab_id)
+    }
+
+    pub fn local_attached_to_tab(&self, tab_id: u32) -> bool {
         let state = self.state.lock().expect("remote server state poisoned");
         state
             .clients
             .values()
-            .any(|client| client.attached_session == Some(session_id))
+            .any(|client| client.is_local && client.attached_tab == Some(tab_id))
     }
 
-    pub fn local_attached_to_session(&self, session_id: u32) -> bool {
-        let state = self.state.lock().expect("remote server state poisoned");
-        state.clients.values().any(|client| {
-            client.is_local && client.attached_session == Some(session_id)
-        })
+    #[allow(dead_code)]
+    pub fn local_attached_to_session(&self, tab_id: u32) -> bool {
+        self.local_attached_to_tab(tab_id)
     }
 
-    pub fn client_session(&self, client_id: u64) -> Option<u32> {
+    pub fn client_tab(&self, client_id: u64) -> Option<u32> {
         let state = self.state.lock().expect("remote server state poisoned");
         state
             .clients
             .get(&client_id)
-            .and_then(|client| client.attached_session)
+            .and_then(|client| client.attached_tab)
+    }
+
+    #[allow(dead_code)]
+    pub fn client_session(&self, client_id: u64) -> Option<u32> {
+        self.client_tab(client_id)
     }
 
     #[cfg(test)]
@@ -374,29 +397,29 @@ impl RemoteServer {
         send_cached_tab_list_to_local_clients(&self.state, tabs);
     }
 
-    pub fn send_attached(&self, client_id: u64, session_id: u32, attachment_id: Option<u64>) {
-        let mut payload = session_id.to_le_bytes().to_vec();
+    pub fn send_tab_attached(&self, client_id: u64, tab_id: u32, attachment_id: Option<u64>) {
+        let mut payload = tab_id.to_le_bytes().to_vec();
         let mut attached_resume_token = None;
         if let Some(attachment_id) = attachment_id {
             payload.extend_from_slice(&attachment_id.to_le_bytes());
         }
         self.update_client(client_id, |client| {
-            let same_session = client.attached_session == Some(session_id);
-            client.attached_session = Some(session_id);
+            let same_tab = client.attached_tab == Some(tab_id);
+            client.attached_tab = Some(tab_id);
             client.attachment_id = attachment_id;
             client.resume_token = attachment_id.map(|_| {
                 let token = client.resume_token.unwrap_or_else(random_u64_nonzero);
                 attached_resume_token = Some(token);
                 token
             });
-            if !same_session {
+            if !same_tab {
                 client.last_state = None;
                 client.pane_states.clear();
                 client.latest_input_seq = None;
             }
         });
         log::info!(
-            "remote attach sent: client_id={client_id} session_id={session_id} attachment_id={attachment_id:?} resume_token_present={}",
+            "remote attach sent: client_id={client_id} tab_id={tab_id} attachment_id={attachment_id:?} resume_token_present={}",
             attached_resume_token.is_some()
         );
         if let Some(resume_token) = attached_resume_token {
@@ -405,20 +428,25 @@ impl RemoteServer {
         self.send_to_client(client_id, MessageType::Attached, payload);
     }
 
+    #[allow(dead_code)]
+    pub fn send_attached(&self, client_id: u64, tab_id: u32, attachment_id: Option<u64>) {
+        self.send_tab_attached(client_id, tab_id, attachment_id);
+    }
+
     pub fn prepare_attachment(
         &self,
         client_id: u64,
-        session_id: u32,
+        tab_id: u32,
         attachment_id: Option<u64>,
         resume_token: Option<u64>,
     ) -> Result<(), RemoteErrorCode> {
         let mut state = self.state.lock().expect("remote server state poisoned");
-        prepare_remote_attachment(&mut state, client_id, session_id, attachment_id, resume_token)
+        prepare_remote_attachment(&mut state, client_id, tab_id, attachment_id, resume_token)
     }
 
     pub fn send_detached(&self, client_id: u64) {
         self.update_client(client_id, |client| {
-            client.attached_session = None;
+            client.attached_tab = None;
             client.attachment_id = None;
             client.resume_token = None;
             client.last_state = None;
@@ -429,11 +457,11 @@ impl RemoteServer {
         self.send_to_client(client_id, MessageType::Detached, Vec::new());
     }
 
-    pub fn send_session_created(&self, client_id: u64, session_id: u32) {
+    pub fn send_session_created(&self, client_id: u64, tab_id: u32) {
         self.send_to_client(
             client_id,
             MessageType::SessionCreated,
-            session_id.to_le_bytes().to_vec(),
+            tab_id.to_le_bytes().to_vec(),
         );
     }
 
@@ -470,7 +498,7 @@ impl RemoteServer {
             return false;
         }
         for client_id in client_ids {
-            self.send_attached(client_id, tab_id, None);
+            self.send_tab_attached(client_id, tab_id, None);
         }
         true
     }
@@ -527,21 +555,26 @@ impl RemoteServer {
         retain_local_attached_pane_states_inner(&mut guard, tab_id, visible_pane_ids);
     }
 
-    pub fn send_session_exited(&self, session_id: u32) {
-        let client_ids = self.clients_for_tab(session_id);
+    pub fn send_tab_exited(&self, tab_id: u32) {
+        let client_ids = self.clients_for_tab(tab_id);
         for client_id in client_ids {
             self.send_to_client(
                 client_id,
                 MessageType::SessionExited,
-                session_id.to_le_bytes().to_vec(),
+                tab_id.to_le_bytes().to_vec(),
             );
             self.update_client(client_id, |client| {
-                client.attached_session = None;
+                client.attached_tab = None;
                 client.last_state = None;
                 client.pane_states.clear();
                 client.latest_input_seq = None;
             });
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn send_session_exited(&self, tab_id: u32) {
+        self.send_tab_exited(tab_id);
     }
 
     pub fn record_input_seq(&self, client_id: u64, input_seq: Option<u64>) {
@@ -573,8 +606,8 @@ impl RemoteServer {
     }
 
     #[allow(dead_code)]
-    pub fn retarget_local_attached_to_session(&self, session_id: u32) -> bool {
-        self.retarget_local_attached_to_tab(session_id)
+    pub fn retarget_local_attached_to_session(&self, tab_id: u32) -> bool {
+        self.retarget_local_attached_to_tab(tab_id)
     }
 
     fn update_client(&self, client_id: u64, mut update: impl FnMut(&mut ClientState)) {

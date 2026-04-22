@@ -9,7 +9,7 @@ use crate::remote_wire::RemoteErrorCode;
 pub(crate) fn prepare_attachment(
     state: &mut State,
     client_id: u64,
-    session_id: u32,
+    tab_id: u32,
     attachment_id: Option<u64>,
     resume_token: Option<u64>,
 ) -> Result<(), RemoteErrorCode> {
@@ -25,7 +25,7 @@ pub(crate) fn prepare_attachment(
         *other_client_id != client_id
             && !other_client.is_local
             && other_client.attachment_id == Some(attachment_id)
-            && other_client.attached_session.is_some()
+            && other_client.attached_tab.is_some()
     }) {
         log::warn!(
             "remote revive rejected: client_id={client_id} attachment_id={attachment_id} reason=already-active"
@@ -34,10 +34,10 @@ pub(crate) fn prepare_attachment(
     }
     let revive = state.revivable_attachments.get(&attachment_id).cloned();
     if let Some(revive) = revive {
-        if revive.session_id != session_id {
+        if revive.tab_id != tab_id {
             log::warn!(
-                "remote revive rejected: client_id={client_id} attachment_id={attachment_id} reason=session-mismatch expected={} actual={session_id}",
-                revive.session_id
+                "remote revive rejected: client_id={client_id} attachment_id={attachment_id} reason=session-mismatch expected={} actual={tab_id}",
+                revive.tab_id
             );
             return Err(RemoteErrorCode::AttachmentBelongsToDifferentSession);
         }
@@ -51,14 +51,14 @@ pub(crate) fn prepare_attachment(
         let Some(client) = state.clients.get_mut(&client_id) else {
             return Err(RemoteErrorCode::Unknown);
         };
-        client.attached_session = Some(session_id);
+        client.attached_tab = Some(tab_id);
         client.attachment_id = Some(attachment_id);
         client.resume_token = Some(revive.resume_token);
         client.last_state = revive.last_state;
         client.pane_states = revive.pane_states;
         client.latest_input_seq = revive.latest_input_seq;
         log::info!(
-            "remote revive restored: client_id={client_id} session_id={session_id} attachment_id={attachment_id}"
+            "remote revive restored: client_id={client_id} tab_id={tab_id} attachment_id={attachment_id}"
         );
     } else {
         if resume_token.is_some() {
@@ -72,7 +72,7 @@ pub(crate) fn prepare_attachment(
         };
         client.resume_token = None;
         log::info!(
-            "remote attach prepared without revive: client_id={client_id} session_id={session_id} attachment_id={attachment_id}"
+            "remote attach prepared without revive: client_id={client_id} tab_id={tab_id} attachment_id={attachment_id}"
         );
     }
     Ok(())
@@ -105,10 +105,10 @@ mod tests {
             connected_at: Instant::now(),
             authenticated_at: Some(Instant::now()),
             last_heartbeat_at: None,
-            attached_session: None,
+            attached_tab: None,
             attachment_id: None,
             resume_token: None,
-            last_session_list_payload: None,
+            last_tab_list_payload: None,
             last_ui_runtime_state_payload: None,
             last_ui_appearance_payload: None,
             last_state: None,
@@ -149,7 +149,7 @@ mod tests {
         state.revivable_attachments.insert(
             0xabc,
             RevivableAttachment {
-                session_id: 11,
+                tab_id: 11,
                 resume_token: 0xdef,
                 last_state: Some(Arc::clone(&restored_state)),
                 pane_states: HashMap::new(),
@@ -162,7 +162,7 @@ mod tests {
             .expect("prepare attachment");
 
         let client = state.clients.get(&1).expect("client state");
-        assert_eq!(client.attached_session, Some(11));
+        assert_eq!(client.attached_tab, Some(11));
         assert_eq!(client.attachment_id, Some(0xabc));
         assert_eq!(client.resume_token, Some(0xdef));
         assert_eq!(client.latest_input_seq, Some(9));
@@ -176,7 +176,7 @@ mod tests {
         let (new_tx, _new_rx) = mpsc::channel();
         let mut state = empty_state();
         let mut active = remote_client(active_tx);
-        active.attached_session = Some(11);
+        active.attached_tab = Some(11);
         active.attachment_id = Some(0xabc);
         state.clients.insert(1, active);
         state.clients.insert(2, remote_client(new_tx));
@@ -194,7 +194,7 @@ mod tests {
         state.revivable_attachments.insert(
             0xabc,
             RevivableAttachment {
-                session_id: 11,
+                tab_id: 11,
                 resume_token: 0xdef,
                 last_state: None,
                 pane_states: HashMap::new(),
@@ -220,7 +220,7 @@ mod tests {
         assert_eq!(error, RemoteErrorCode::AttachmentResumeWindowExpired);
 
         let client = state.clients.get(&1).expect("client state");
-        assert!(client.attached_session.is_none());
+        assert!(client.attached_tab.is_none());
         assert!(client.attachment_id.is_none());
         assert!(client.resume_token.is_none());
     }
@@ -240,7 +240,7 @@ mod tests {
         let (outbound, outbound_rx) = mpsc::channel();
         let mut state = empty_state();
         let mut client = local_client(outbound);
-        client.attached_session = Some(11);
+        client.attached_tab = Some(11);
         client.last_state = Some(Arc::new(RemoteFullState {
             rows: 1,
             cols: 1,
@@ -266,7 +266,7 @@ mod tests {
 
         let guard = state.lock().expect("remote server state poisoned");
         let client = guard.clients.get(&7).expect("client state");
-        assert_eq!(client.attached_session, Some(11));
+        assert_eq!(client.attached_tab, Some(11));
         assert_eq!(client.latest_input_seq, Some(42));
         assert!(client.last_state.is_some());
         drop(guard);

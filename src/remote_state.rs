@@ -36,10 +36,10 @@ pub(crate) struct ClientState {
     pub(crate) connected_at: Instant,
     pub(crate) authenticated_at: Option<Instant>,
     pub(crate) last_heartbeat_at: Option<Instant>,
-    pub(crate) attached_session: Option<u32>,
+    pub(crate) attached_tab: Option<u32>,
     pub(crate) attachment_id: Option<u64>,
     pub(crate) resume_token: Option<u64>,
-    pub(crate) last_session_list_payload: Option<Vec<u8>>,
+    pub(crate) last_tab_list_payload: Option<Vec<u8>>,
     pub(crate) last_ui_runtime_state_payload: Option<Vec<u8>>,
     pub(crate) last_ui_appearance_payload: Option<Vec<u8>>,
     pub(crate) last_state: Option<Arc<RemoteFullState>>,
@@ -50,7 +50,7 @@ pub(crate) struct ClientState {
 
 #[derive(Clone)]
 pub(crate) struct RevivableAttachment {
-    pub(crate) session_id: u32,
+    pub(crate) tab_id: u32,
     pub(crate) resume_token: u64,
     pub(crate) last_state: Option<Arc<RemoteFullState>>,
     pub(crate) pane_states: HashMap<u64, Arc<RemoteFullState>>,

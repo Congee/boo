@@ -1082,7 +1082,7 @@ mod tests {
                                 transport_kind: "tcp".to_string(),
                                 server_socket_path: Some("/tmp/boo.sock".to_string()),
                                 challenge_pending: false,
-                                attached_session: Some(11),
+                                attached_tab: Some(11),
                                 attachment_id: Some(0xabc),
                                 resume_token_present: true,
                                 has_cached_state: true,
@@ -1110,7 +1110,7 @@ mod tests {
             Response::RemoteClients { snapshot } => {
                 assert_eq!(snapshot.clients.len(), 1);
                 assert_eq!(snapshot.clients[0].client_id, 7);
-                assert_eq!(snapshot.clients[0].attached_session, Some(11));
+                assert_eq!(snapshot.clients[0].attached_tab, Some(11));
                 assert!(snapshot.clients[0].resume_token_present);
                 assert!(snapshot.revivable_attachments.is_empty());
             }

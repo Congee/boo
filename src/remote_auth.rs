@@ -24,7 +24,7 @@ use crate::remote_state::{
 };
 use crate::remote_wire::{
     MessageType, RemoteErrorCode, encode_auth_ok_payload, encode_message, parse_attach_request,
-    parse_input_payload, parse_key_payload, parse_pane_id, parse_resize, parse_session_id,
+    parse_input_payload, parse_key_payload, parse_pane_id, parse_resize, parse_tab_id,
     read_message_retrying,
 };
 
@@ -120,9 +120,9 @@ pub(crate) fn read_loop(
         let command = match ty {
             MessageType::ListSessions => Some(RemoteCmd::ListSessions { client_id }),
             MessageType::Attach => {
-                parse_attach_request(&payload).map(|(session_id, attachment_id, resume_token)| RemoteCmd::Attach {
+                parse_attach_request(&payload).map(|(tab_id, attachment_id, resume_token)| RemoteCmd::Attach {
                     client_id,
-                    session_id,
+                    tab_id,
                     attachment_id,
                     resume_token,
                 })
@@ -173,7 +173,7 @@ pub(crate) fn read_loop(
             }
             MessageType::Destroy => Some(RemoteCmd::Destroy {
                 client_id,
-                session_id: parse_session_id(&payload),
+                tab_id: parse_tab_id(&payload),
             }),
             _ => None,
         };
@@ -197,13 +197,13 @@ pub(crate) fn read_loop(
     if let Some(client) = state.clients.remove(&client_id) {
         prune_revivable_attachments(&mut state);
         if !client.is_local
-            && let (Some(session_id), Some(attachment_id), Some(resume_token)) =
-                (client.attached_session, client.attachment_id, client.resume_token)
+            && let (Some(tab_id), Some(attachment_id), Some(resume_token)) =
+                (client.attached_tab, client.attachment_id, client.resume_token)
         {
             state.revivable_attachments.insert(
                 attachment_id,
                 RevivableAttachment {
-                    session_id,
+                    tab_id,
                     resume_token,
                     last_state: client.last_state,
                     pane_states: client.pane_states,
@@ -212,7 +212,7 @@ pub(crate) fn read_loop(
                 },
             );
             log::info!(
-                "remote client disconnected with revivable attachment: client_id={client_id} session_id={session_id} attachment_id={attachment_id}"
+                "remote client disconnected with revivable attachment: client_id={client_id} tab_id={tab_id} attachment_id={attachment_id}"
             );
         } else {
             log::info!("remote client disconnected: client_id={client_id}");
@@ -293,10 +293,10 @@ mod tests {
                     connected_at: Instant::now(),
                     authenticated_at: Some(Instant::now()),
                     last_heartbeat_at: None,
-                    attached_session: None,
+                    attached_tab: None,
                     attachment_id: None,
                     resume_token: None,
-                    last_session_list_payload: None,
+                    last_tab_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
                     last_state: None,
@@ -333,10 +333,10 @@ mod tests {
                     connected_at: Instant::now(),
                     authenticated_at: Some(Instant::now()),
                     last_heartbeat_at: None,
-                    attached_session: None,
+                    attached_tab: None,
                     attachment_id: None,
                     resume_token: None,
-                    last_session_list_payload: None,
+                    last_tab_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
                     last_state: None,
@@ -378,10 +378,10 @@ mod tests {
                     connected_at: Instant::now() - AUTH_CHALLENGE_WINDOW - Duration::from_secs(1),
                     authenticated_at: None,
                     last_heartbeat_at: None,
-                    attached_session: None,
+                    attached_tab: None,
                     attachment_id: None,
                     resume_token: None,
-                    last_session_list_payload: None,
+                    last_tab_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
                     last_state: None,
@@ -431,10 +431,10 @@ mod tests {
                             - Duration::from_secs(2),
                     ),
                     last_heartbeat_at: None,
-                    attached_session: None,
+                    attached_tab: None,
                     attachment_id: None,
                     resume_token: None,
-                    last_session_list_payload: None,
+                    last_tab_list_payload: None,
                     last_ui_runtime_state_payload: None,
                     last_ui_appearance_payload: None,
                     last_state: None,

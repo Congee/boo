@@ -25,7 +25,7 @@ pub(crate) fn clients_snapshot(
     let attached_clients = state
         .clients
         .values()
-        .filter(|client| client.attached_session.is_some())
+        .filter(|client| client.attached_tab.is_some())
         .count();
     let pending_auth_clients = state
         .clients
@@ -62,7 +62,7 @@ pub(crate) fn clients_snapshot(
         .iter()
         .map(|(attachment_id, attachment)| RevivableAttachmentInfo {
             attachment_id: *attachment_id,
-            session_id: attachment.session_id,
+            tab_id: attachment.tab_id,
             resume_token_present: true,
             has_cached_state: attachment.last_state.is_some(),
             pane_state_count: attachment.pane_states.len(),
@@ -105,7 +105,7 @@ fn client_info_for_client(
         },
         server_socket_path: local_socket_path.map(|path| path.display().to_string()),
         challenge_pending: false,
-        attached_session: client.attached_session,
+        attached_tab: client.attached_tab,
         attachment_id: client.attachment_id,
         resume_token_present: client.resume_token.is_some(),
         has_cached_state: client.last_state.is_some(),
@@ -157,10 +157,10 @@ mod tests {
                 connected_at: Instant::now(),
                 authenticated_at: Some(Instant::now()),
                 last_heartbeat_at: Some(Instant::now()),
-                attached_session: Some(11),
+                attached_tab: Some(11),
                 attachment_id: Some(0xabc),
                 resume_token: Some(0xdef),
-                last_session_list_payload: None,
+                last_tab_list_payload: None,
                 last_ui_runtime_state_payload: None,
                 last_ui_appearance_payload: None,
                 last_state: Some(Arc::new(RemoteFullState {
@@ -222,7 +222,7 @@ mod tests {
         assert_eq!(client.transport_kind, "tcp");
         assert_eq!(client.server_socket_path, None);
         assert!(!client.challenge_pending);
-        assert_eq!(client.attached_session, Some(11));
+        assert_eq!(client.attached_tab, Some(11));
         assert_eq!(client.attachment_id, Some(0xabc));
         assert!(client.resume_token_present);
         assert!(client.has_cached_state);
@@ -244,7 +244,7 @@ mod tests {
         state.revivable_attachments.insert(
             0xabc,
             RevivableAttachment {
-                session_id: 11,
+                tab_id: 11,
                 resume_token: 0xdef,
                 last_state: Some(Arc::new(RemoteFullState {
                     rows: 1,
@@ -284,7 +284,7 @@ mod tests {
         assert_eq!(snapshot.revivable_attachments.len(), 1);
         let attachment = &snapshot.revivable_attachments[0];
         assert_eq!(attachment.attachment_id, 0xabc);
-        assert_eq!(attachment.session_id, 11);
+        assert_eq!(attachment.tab_id, 11);
         assert!(attachment.resume_token_present);
         assert!(attachment.has_cached_state);
         assert_eq!(attachment.pane_state_count, 1);
@@ -309,10 +309,10 @@ mod tests {
                 last_heartbeat_at: Some(
                     Instant::now() - DIRECT_CLIENT_HEARTBEAT_WINDOW - Duration::from_secs(1),
                 ),
-                attached_session: None,
+                attached_tab: None,
                 attachment_id: None,
                 resume_token: None,
-                last_session_list_payload: None,
+                last_tab_list_payload: None,
                 last_ui_runtime_state_payload: None,
                 last_ui_appearance_payload: None,
                 last_state: None,
@@ -352,10 +352,10 @@ mod tests {
                 last_heartbeat_at: Some(
                     Instant::now() - DIRECT_CLIENT_HEARTBEAT_WINDOW - Duration::from_secs(1),
                 ),
-                attached_session: None,
+                attached_tab: None,
                 attachment_id: None,
                 resume_token: None,
-                last_session_list_payload: None,
+                last_tab_list_payload: None,
                 last_ui_runtime_state_payload: None,
                 last_ui_appearance_payload: None,
                 last_state: None,

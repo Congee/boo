@@ -569,7 +569,7 @@ impl BooApp {
                 .clear(&crate::status_components::osc_source_for_pane(pane_id), None);
             if let Some(session_id) = self.server.tabs.tab_id_for_pane_id(pane_id) {
                 for server in self.remote_servers() {
-                    server.send_session_exited(session_id);
+                    server.send_tab_exited(session_id);
                 }
             }
             self.close_pane_by_id(pane_id);

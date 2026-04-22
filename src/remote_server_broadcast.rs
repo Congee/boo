@@ -22,7 +22,7 @@ mod tests {
 
     fn test_client(
         outbound: mpsc::Sender<OutboundMessage>,
-        attached_session: Option<u32>,
+        attached_tab: Option<u32>,
         is_local: bool,
     ) -> ClientState {
         ClientState {
@@ -31,10 +31,10 @@ mod tests {
             connected_at: Instant::now(),
             authenticated_at: Some(Instant::now()),
             last_heartbeat_at: None,
-            attached_session,
+            attached_tab,
             attachment_id: None,
             resume_token: None,
-            last_session_list_payload: None,
+            last_tab_list_payload: None,
             last_ui_runtime_state_payload: None,
             last_ui_appearance_payload: None,
             last_state: None,
