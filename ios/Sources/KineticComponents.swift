@@ -221,6 +221,8 @@ struct KineticCardRow: View {
     let subtitle: String
     var trailingText: String? = nil
     var trailingAccessibilityIdentifier: String? = nil
+    var subtitleAccessoryText: String? = nil
+    var subtitleAccessoryColor: Color = KineticColor.onSurfaceVariant
     var onTap: (() -> Void)? = nil
     var accessibilityIdentifier: String? = nil
 
@@ -264,11 +266,20 @@ struct KineticCardRow: View {
                                 .accessibilityIdentifier(trailingAccessibilityIdentifier ?? "\(title)-metric")
                         }
                     }
-                    Text(subtitle)
-                        .font(KineticFont.caption)
-                        .foregroundStyle(KineticColor.onSurfaceVariant)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    HStack(alignment: .firstTextBaseline, spacing: KineticSpacing.sm) {
+                        Text(subtitle)
+                            .font(KineticFont.caption)
+                            .foregroundStyle(KineticColor.onSurfaceVariant)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        if let subtitleAccessoryText, !subtitleAccessoryText.isEmpty {
+                            Text(subtitleAccessoryText)
+                                .font(KineticFont.caption)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(subtitleAccessoryColor)
+                                .fixedSize(horizontal: true, vertical: true)
+                        }
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 if onTap != nil {

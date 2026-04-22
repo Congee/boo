@@ -188,7 +188,7 @@ private final class DashboardProbeMonitor: ObservableObject {
                 let status: TailscalePeerProbeStatus
                 if let latency {
                     status = .reachable
-                } else if attempts >= 3 && consecutiveFailures >= 3 {
+                } else if attempts > 0 && consecutiveFailures > 0 {
                     status = .unreachable
                 } else {
                     status = .probing
@@ -465,8 +465,6 @@ struct ConnectScreen: View {
         }
         .onDisappear {
             browser.stopBrowsing()
-            tailscaleBrowser.stop()
-            dashboardProbeMonitor.stop()
         }
         .onChange(of: store.tailscaleDiscoverySettings) { _, _ in
             tailscaleBrowser.refresh(store: store)
@@ -638,7 +636,7 @@ struct ConnectScreen: View {
     private var tailscaleSection: some View {
         VStack(alignment: .leading, spacing: KineticSpacing.sm) {
             KineticSectionLabel(text: "Tailscale Devices")
-            Text("Devices in your tailnet from the Tailscale API. Boo still needs to be running on the configured port, and this iPad must be connected to Tailscale to reach them.")
+            Text("Devices in your tailnet from the Tailscale API. Boo still needs to be running on the configured port, and this iPad must be connected to Tailscale to reach them. Without embedded Tailscale, Boo iOS cannot run true `tailscale ping`, so these rows use a Boo-port probe instead.")
                 .font(KineticFont.caption)
                 .foregroundStyle(KineticColor.onSurfaceVariant)
             if !store.hasTailscaleAPIToken {
@@ -668,6 +666,8 @@ struct ConnectScreen: View {
                     subtitle: rowSubtitle(base: detail, host: peer.host, port: peer.port, nodeName: peer.name),
                     trailingText: liveMetrics(host: peer.host, port: peer.port, nodeName: peer.name),
                     trailingAccessibilityIdentifier: rowMetricAccessibilityIdentifier(nodeName: peer.name),
+                    subtitleAccessoryText: tailscalePortStatusText(peer),
+                    subtitleAccessoryColor: tailscalePortStatusColor(peer),
                     onTap: peer.online ? {
                         connectToHost(peer.host, port: peer.port, nodeName: peer.name, routeKind: .tailscale)
                     } : nil,
@@ -795,7 +795,7 @@ struct ConnectScreen: View {
             parts.append("unreachable from this iPad")
         }
         if let metrics = tailscaleBrowser.probeMetrics[peer.id],
-           metrics.status == .reachable,
+           metrics.hostStatus == .reachable,
            let loss = metrics.lossRate,
            loss > 0 {
             parts.append("\(String(format: "%.0f", loss))% loss")
@@ -810,7 +810,7 @@ struct ConnectScreen: View {
         }
         if let peer = tailscaleBrowser.peers.first(where: { $0.name == nodeName && $0.port == port }) {
             if let metrics = tailscaleBrowser.probeMetrics[peer.id] {
-                switch metrics.status {
+                switch metrics.hostStatus {
                 case .reachable:
                     if let latency = metrics.latencyMs {
                         return String(format: "%.0f ms", latency)
@@ -838,6 +838,25 @@ struct ConnectScreen: View {
             }
         }
         return nil
+    }
+
+    private func tailscalePortStatusText(_ peer: TailscalePeer) -> String? {
+        guard tailscaleBrowser.probeMetrics[peer.id] != nil else { return nil }
+        return ":\(peer.port)"
+    }
+
+    private func tailscalePortStatusColor(_ peer: TailscalePeer) -> Color {
+        guard let metrics = tailscaleBrowser.probeMetrics[peer.id] else {
+            return KineticColor.tertiary
+        }
+        switch metrics.portStatus {
+        case .probing:
+            return KineticColor.tertiary
+        case .open:
+            return KineticColor.success
+        case .closed:
+            return KineticColor.error
+        }
     }
 
     private func rowSubtitle(base: String, host: String, port: UInt16, nodeName: String) -> String {

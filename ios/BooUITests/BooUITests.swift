@@ -430,6 +430,10 @@ final class BooAppLaunchTests: BooUITestCase {
             "expected discovered-host metric badge to contain latency text, got '\(metricBadge.label)'"
         )
 
+        // Let the dashboard sit long enough to catch transient row-state regressions
+        // before taking the acceptance screenshot.
+        sleep(5)
+
         let screenshotAttachment = XCTAttachment(screenshot: app.screenshot())
         screenshotAttachment.name = "dashboard-row-metrics"
         screenshotAttachment.lifetime = .keepAlways
@@ -467,6 +471,14 @@ final class BooAppLaunchTests: BooUITestCase {
             .completed,
             "expected visible Tailscale metric badge state, got '\(metricBadge.label)'"
         )
+
+        // Allow probe state to settle before capturing evidence.
+        sleep(5)
+
+        let screenshotAttachment = XCTAttachment(screenshot: app.screenshot())
+        screenshotAttachment.name = "tailscale-row-metrics"
+        screenshotAttachment.lifetime = .keepAlways
+        add(screenshotAttachment)
     }
 
     func testOfflineTailscaleRowIsNotTappable() {
@@ -491,6 +503,30 @@ final class BooAppLaunchTests: BooUITestCase {
 
         let screenshotAttachment = XCTAttachment(screenshot: app.screenshot())
         screenshotAttachment.name = "offline-tailscale-row"
+        screenshotAttachment.lifetime = .keepAlways
+        add(screenshotAttachment)
+    }
+
+    func testLiveDashboardScreenshot() {
+        let app = XCUIApplication()
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        let sessionsTab = app.buttons["sessions-tab"]
+        if sessionsTab.waitForExistence(timeout: 5) {
+            sessionsTab.tap()
+        }
+
+        let title = app.staticTexts["screen-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 10), "expected app to reach first screen")
+        XCTAssertEqual(title.label, "Connect to Server", "expected dashboard screen, got '\(title.label)'")
+
+        // Give live Bonjour/Tailscale rows time to settle before capturing.
+        sleep(8)
+
+        let screenshotAttachment = XCTAttachment(screenshot: app.screenshot())
+        screenshotAttachment.name = "live-dashboard"
         screenshotAttachment.lifetime = .keepAlways
         add(screenshotAttachment)
     }

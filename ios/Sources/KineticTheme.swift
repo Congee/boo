@@ -12,6 +12,7 @@ enum KineticColor {
     static let onSurface = Color.white
     static let onSurfaceVariant = Color(red: 173/255, green: 170/255, blue: 170/255)
     static let error = Color(red: 255/255, green: 113/255, blue: 108/255)
+    static let success = Color(red: 110/255, green: 231/255, blue: 183/255)
     static let tertiary = Color(red: 118/255, green: 150/255, blue: 253/255)
 }
 

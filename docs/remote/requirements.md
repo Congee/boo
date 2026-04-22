@@ -25,6 +25,20 @@ time, even though rollout and UX differ today.
   `authorized_keys`-style model and use platform keychain or agent integration
   client-side rather than storing private keys inside Boo
 
+## Tailscale Constraint
+
+- Boo iOS currently uses the Tailscale API only for device discovery.
+- Boo iOS cannot call true `tailscale ping` through the installed Tailscale iOS
+  app.
+- Using `libtailscale` / `TailscaleKit` would mean running a second embedded
+  Tailscale node inside Boo rather than reusing the official Tailscale app.
+- Without a supported API from the installed Tailscale app, Boo iOS cannot
+  surface Tailscale-native direct-vs-DERP path telemetry.
+- Until that changes, Tailscale dashboard metrics should be treated as
+  application-level Boo service probes against the configured Boo port, roughly
+  equivalent to an app-driven `nc -zv -u <tailscale-host> <boo-port>` check,
+  not as authoritative Tailscale path RTT.
+
 ## Verification Layers
 
 The remote product should preserve three verification layers:

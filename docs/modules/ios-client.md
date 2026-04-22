@@ -30,6 +30,9 @@ It handles:
 - can list tailnet devices when a Tailscale API access token is configured in Settings
 - does not reuse the installed Tailscale app's authenticated session
 - stores the Tailscale API access token in the iOS Keychain rather than plain app settings
+- cannot call true `tailscale ping` through the installed Tailscale iOS app
+- using `libtailscale` / `TailscaleKit` would mean running a second embedded Tailscale node inside Boo, which is a different architecture from reusing the official Tailscale app
+- therefore current Tailscale dashboard metrics are app-level Boo service probes on the configured port, not Tailscale-native peer/path telemetry
 - connects through resolved Network framework endpoints
 - supports saved nodes and connection history
 - supports attachment resume and trusted server identity pinning

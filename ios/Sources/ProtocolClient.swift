@@ -129,23 +129,36 @@ enum TailscalePeerProbeStatus: Equatable {
     case unreachable
 }
 
+enum BooPortProbeStatus: Equatable {
+    case probing
+    case open
+    case closed
+}
+
 struct TailscalePeerProbeMetrics: Equatable {
-    let status: TailscalePeerProbeStatus
+    let hostStatus: TailscalePeerProbeStatus
     let latencyMs: Double?
     let lossRate: Double?
+    let portStatus: BooPortProbeStatus
 }
 
 func measureBooQUICHandshakeLatency(endpoint: NWEndpoint) async -> Double? {
     await withCheckedContinuation { continuation in
         let queue = DispatchQueue(label: "boo-ios.endpoint-probe.\(endpoint)")
         let options = NWProtocolQUIC.Options(alpn: ["boo-remote"])
+        options.direction = .bidirectional
+        options.idleTimeout = 12_000
+        sec_protocol_options_set_verify_block(options.securityProtocolOptions, { _, _, complete in
+            complete(true)
+        }, queue)
         let params = NWParameters(quic: options)
+        params.allowLocalEndpointReuse = true
         params.includePeerToPeer = true
         let connection = NWConnection(to: endpoint, using: params)
         let start = Date()
         var finished = false
 
-        func resolve(_ value: Double?) {
+        @Sendable func resolve(_ value: Double?) {
             guard !finished else { return }
             finished = true
             connection.stateUpdateHandler = nil
@@ -392,13 +405,15 @@ final class TailscalePeerBrowser: ObservableObject {
         var successes: Int = 0
         var consecutiveFailures: Int = 0
         var lastLatencyMs: Double?
+        var portAttempted = false
+        var lastPortReachable = false
 
         var metrics: TailscalePeerProbeMetrics {
-            let status: TailscalePeerProbeStatus = {
+            let hostStatus: TailscalePeerProbeStatus = {
                 if lastLatencyMs != nil {
                     return .reachable
                 }
-                if attempts >= 3 && consecutiveFailures >= 3 {
+                if attempts > 0 && consecutiveFailures > 0 {
                     return .unreachable
                 }
                 return .probing
@@ -407,10 +422,15 @@ final class TailscalePeerBrowser: ObservableObject {
                 guard attempts >= 5, successes > 0 else { return nil }
                 return (Double(failures) / Double(attempts)) * 100
             }()
+            let portStatus: BooPortProbeStatus = {
+                guard portAttempted else { return .probing }
+                return lastPortReachable ? .open : .closed
+            }()
             return TailscalePeerProbeMetrics(
-                status: status,
+                hostStatus: hostStatus,
                 latencyMs: lastLatencyMs,
-                lossRate: loss
+                lossRate: loss,
+                portStatus: portStatus
             )
         }
     }
@@ -650,10 +670,14 @@ final class TailscalePeerBrowser: ObservableObject {
                     state.successes += 1
                     state.consecutiveFailures = 0
                     state.lastLatencyMs = latency
+                    state.lastPortReachable = true
                 } else {
                     state.failures += 1
                     state.consecutiveFailures += 1
+                    state.lastLatencyMs = nil
+                    state.lastPortReachable = false
                 }
+                state.portAttempted = true
                 self.probeState[peer.id] = state
                 self.probeMetrics[peer.id] = state.metrics
             }
