@@ -112,11 +112,6 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
         })
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn list_sessions(&mut self) -> Result<Vec<RemoteDirectTabInfo>, String> {
-        self.list_tabs()
-    }
-
     pub(crate) fn attach(
         &mut self,
         tab_id: u32,
@@ -167,8 +162,4 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
         })
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn create_session(&mut self, cols: u16, rows: u16) -> Result<u32, String> {
-        self.create_tab(cols, rows)
-    }
 }

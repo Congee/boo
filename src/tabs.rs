@@ -180,11 +180,6 @@ impl TabManager {
         self.tabs.get(self.active).map(|tab| tab.id)
     }
 
-    #[allow(dead_code)]
-    pub fn active_session_id(&self) -> Option<u32> {
-        self.active_tab_id()
-    }
-
     pub fn set_active_title(&mut self, title: String) {
         if let Some(tab) = self.tabs.get_mut(self.active) {
             tab.title = title;
@@ -377,18 +372,8 @@ impl TabManager {
         self.tabs.get(index).map(|tab| tab.id)
     }
 
-    #[allow(dead_code)]
-    pub fn session_id_for_index(&self, index: usize) -> Option<u32> {
-        self.tab_id_for_index(index)
-    }
-
     pub fn find_index_by_tab_id(&self, tab_id: u32) -> Option<usize> {
         self.tabs.iter().position(|tab| tab.id == tab_id)
-    }
-
-    #[allow(dead_code)]
-    pub fn find_index_by_session_id(&self, session_id: u32) -> Option<usize> {
-        self.find_index_by_tab_id(session_id)
     }
 
     pub fn find_pane_location(
@@ -407,11 +392,6 @@ impl TabManager {
     pub fn tab_id_for_pane_id(&self, pane_id: crate::pane::PaneId) -> Option<u32> {
         self.find_pane_location(pane_id)
             .and_then(|(tab_index, _)| self.tab_id_for_index(tab_index))
-    }
-
-    #[allow(dead_code)]
-    pub fn session_id_for_pane_id(&self, pane_id: crate::pane::PaneId) -> Option<u32> {
-        self.tab_id_for_pane_id(pane_id)
     }
 
     pub fn remove_pane_by_id(&mut self, pane_id: crate::pane::PaneId) -> Option<PaneHandle> {
