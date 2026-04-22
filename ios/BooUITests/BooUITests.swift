@@ -7,6 +7,8 @@ final class BooAppLaunchTests: BooUITestCase {
         let connectStatus = app.staticTexts["connect-status-banner"].exists ? app.staticTexts["connect-status-banner"].label : "<none>"
         let connectError = app.staticTexts["connect-error-label"].exists ? app.staticTexts["connect-error-label"].label : "<none>"
         let bonjourError = app.staticTexts["bonjour-error-label"].exists ? app.staticTexts["bonjour-error-label"].label : "<none>"
+        let connectHostExists = app.textFields["connect-host-input"].exists
+        let connectHostValue = connectHostExists ? String(describing: app.textFields["connect-host-input"].value ?? "<nil>") : "<none>"
         let terminalBanner = app.staticTexts["terminal-banner-label"].exists ? app.staticTexts["terminal-banner-label"].label : "<none>"
         let terminal = app.otherElements["terminal-screen"]
         let terminalExists = terminal.exists
@@ -19,6 +21,8 @@ final class BooAppLaunchTests: BooUITestCase {
         connectStatus=\(connectStatus)
         connectError=\(connectError)
         bonjourError=\(bonjourError)
+        connectHostExists=\(connectHostExists)
+        connectHostValue=\(connectHostValue)
         terminalBanner=\(terminalBanner)
         terminalExists=\(terminalExists)
         terminalLabel=\(terminalLabel)
@@ -85,6 +89,20 @@ final class BooAppLaunchTests: BooUITestCase {
     private func assertTerminalCanType(_ app: XCUIApplication, marker: String, file: StaticString = #filePath, line: UInt = #line) {
         let terminal = app.otherElements["terminal-screen"]
         XCTAssertTrue(terminal.waitForExistence(timeout: 10), file: file, line: line)
+
+        let attachedExpectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label BEGINSWITH %@", "attached-"),
+            object: terminal
+        )
+        let attachedResult = XCTWaiter.wait(for: [attachedExpectation], timeout: 10)
+        XCTAssertEqual(
+            attachedResult,
+            .completed,
+            "terminal never reached attached state before typing: \(attachStateSnapshot(app))\n\(uiStateSnapshot(app))",
+            file: file,
+            line: line
+        )
+
         terminal.tap()
 
         let keyboard = app.keyboards.firstMatch
@@ -106,9 +124,7 @@ final class BooAppLaunchTests: BooUITestCase {
             file: file,
             line: line
         )
-
-        let attachedPrefix = NSPredicate(format: "label BEGINSWITH %@", "attached-")
-        XCTAssertTrue(attachedPrefix.evaluate(with: terminal), "terminal lost attachment after typing: \(attachStateSnapshot(app))", file: file, line: line)
+        XCTAssertTrue(attachedExpectation.predicate.evaluate(with: terminal), "terminal lost attachment after typing: \(attachStateSnapshot(app))", file: file, line: line)
     }
 
     func testConnectScreenShowsMockTailscaleDevices() {
@@ -316,6 +332,46 @@ final class BooAppLaunchTests: BooUITestCase {
 
         let banner = app.staticTexts["connect-status-banner"].label
         XCTFail("discovered daemon tap never left connect screen; status='\(banner)'")
+    }
+
+    func testTappingDiscoveredDaemonConnectsAndTypes() {
+        let app = makeApp(autoConnect: false, resetStorage: true, includeConfiguredHost: false)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        navigateToConnectScreen(app)
+
+        let discoveredRows = discoveredDaemonRows(in: app)
+        let firstRow = discoveredRows.firstMatch
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 12))
+        firstRow.tap()
+
+        waitForTerminalScreen(app)
+        assertTerminalCanType(app, marker: "BOO_DISCOVERED_TYPED")
+    }
+
+    func testFloatingDisconnectButtonClosesHostSession() {
+        let app = makeApp(autoConnect: false, resetStorage: true, includeConfiguredHost: false)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        navigateToConnectScreen(app)
+
+        let discoveredRows = discoveredDaemonRows(in: app)
+        let firstRow = discoveredRows.firstMatch
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 12))
+        firstRow.tap()
+
+        waitForTerminalScreen(app)
+
+        let disconnectButton = app.buttons["floating-disconnect-button"]
+        XCTAssertTrue(disconnectButton.waitForExistence(timeout: 5))
+        disconnectButton.tap()
+
+        waitForConnectScreen(app)
+        XCTAssertFalse(app.otherElements["terminal-screen"].exists)
     }
 
     func testTappingTailscaleDeviceConnects() {

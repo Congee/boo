@@ -671,6 +671,7 @@ struct ConnectScreen: View {
 
     private func connectManual() {
         guard !host.isEmpty else { return }
+        dismissConnectScreenKeyboard()
         let parsed = parseHost(host)
         connectToHost(parsed.0, port: parsed.1, nodeName: parsed.0, routeKind: .manual)
     }
@@ -689,6 +690,7 @@ struct ConnectScreen: View {
     }
 
     private func connectToEndpoint(_ endpoint: NWEndpoint) {
+        dismissConnectScreenKeyboard()
         let display = endpointDisplayTarget(endpoint)
         if shouldReuseActiveConnection(host: display.host, port: display.port, nodeName: display.nodeName) {
             DispatchQueue.main.async {
@@ -731,6 +733,7 @@ struct ConnectScreen: View {
     }
 
     private func connectToHost(_ host: String, port: UInt16, nodeName: String, routeKind: ConnectionRouteKind = .manual) {
+        dismissConnectScreenKeyboard()
         if shouldReuseActiveConnection(host: host, port: port, nodeName: nodeName) {
             DispatchQueue.main.async {
                 onPresentConnectedTerminal()
@@ -742,6 +745,15 @@ struct ConnectScreen: View {
             host: formatConnectionTarget(host: host, port: port)
         )
         monitor.connect(host: host, port: port, routeKind: routeKind, displayName: nodeName, historyId: historyId)
+    }
+
+    private func dismissConnectScreenKeyboard() {
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
     }
 
     private func decorateStatusMessage(_ raw: String) -> String {
@@ -759,8 +771,10 @@ struct ConnectScreen: View {
         let sameDisplayName = monitor.lastDisplayName == nodeName && monitor.lastPort == port
         guard sameEndpoint || sameDisplayName else { return false }
         switch monitor.status {
-        case .connecting, .connected, .authenticated, .attached, .connectionLost:
+        case .connecting, .connected, .authenticated, .attached:
             return true
+        case .connectionLost:
+            return false
         case .disconnected:
             return false
         }
@@ -930,10 +944,7 @@ struct TerminalSessionScreen: View {
         if let attachedSessionId = client.attachedSessionId {
             return visibleSessions.first(where: { $0.id == attachedSessionId })
         }
-        if let inUseSession = visibleSessions.first(where: { $0.attached }) {
-            return inUseSession
-        }
-        return visibleSessions.first
+        return visibleSessions.first(where: { !$0.attached })
     }
 
     var body: some View {
@@ -961,12 +972,16 @@ struct TerminalSessionScreen: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
 
-            if store.terminalDisplaySettings.showFloatingBackButton {
-                floatingBackButton
-                    .padding(.leading, KineticSpacing.md)
-                    .padding(.top, 14)
-                    .zIndex(10)
+            HStack {
+                if store.terminalDisplaySettings.showFloatingBackButton {
+                    floatingBackButton
+                }
+                Spacer()
+                floatingDisconnectButton
             }
+            .padding(.horizontal, KineticSpacing.md)
+            .padding(.top, 14)
+            .zIndex(10)
         }
         .onAppear {
             if client.authenticated {
@@ -1013,6 +1028,23 @@ struct TerminalSessionScreen: View {
         VStack(spacing: 0) {
             terminalBanner
             terminalView
+        }
+    }
+
+    @ViewBuilder
+    private var attachmentOverlay: some View {
+        if !isDisconnected, client.attachedSessionId == nil {
+            VStack(spacing: KineticSpacing.sm) {
+                ProgressView()
+                    .tint(KineticColor.primary)
+                Text("Opening session…")
+                    .font(KineticFont.caption)
+                    .foregroundStyle(KineticColor.onSurfaceVariant)
+            }
+            .padding(KineticSpacing.lg)
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+            .accessibilityIdentifier("terminal-attaching-overlay")
         }
     }
 
@@ -1080,6 +1112,9 @@ struct TerminalSessionScreen: View {
             .id("terminal-keyboard-\(client.connectionDebugGeneration)-\(client.attachedSessionId ?? 0)")
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
+        }
+        .overlay {
+            attachmentOverlay
         }
     }
 
@@ -1204,6 +1239,46 @@ struct TerminalSessionScreen: View {
         .accessibilityLabel("Back")
     }
 
+    private var floatingDisconnectButton: some View {
+        Button {
+            closeHostSession()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(KineticColor.onSurface)
+                .frame(width: 38, height: 38)
+                .background(
+                    ZStack {
+                        Circle()
+                            .fill(.ultraThinMaterial)
+                        Circle()
+                            .fill(
+                                RadialGradient(
+                                    colors: [
+                                        Color.red.opacity(0.22),
+                                        Color.red.opacity(0.12),
+                                        Color.clear
+                                    ],
+                                    center: .center,
+                                    startRadius: 6,
+                                    endRadius: 38
+                                )
+                            )
+                            .scaleEffect(1.75)
+                    }
+                )
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(0.30), lineWidth: 0.8)
+                )
+                .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 8)
+        }
+        .buttonStyle(.plain)
+        .contentShape(Circle())
+        .accessibilityIdentifier("floating-disconnect-button")
+        .accessibilityLabel("Disconnect")
+    }
+
     private func forgetResumeAttachment() {
         client.clearResumeAttachmentState()
         if let host = monitor.lastHost, let port = monitor.lastPort {
@@ -1216,6 +1291,19 @@ struct TerminalSessionScreen: View {
         ctrlActive = false
         altActive = false
         metaActive = false
+        DispatchQueue.main.async {
+            onBack()
+        }
+    }
+
+    private func closeHostSession() {
+        keyboardFocused = false
+        ctrlActive = false
+        altActive = false
+        metaActive = false
+        forgetResumeAttachment()
+        client.clearErrorState()
+        monitor.disconnect()
         DispatchQueue.main.async {
             onBack()
         }
@@ -1235,7 +1323,7 @@ struct TerminalSessionScreen: View {
     private func autoAttachPreferredSessionIfNeeded() {
         guard client.connected, client.authenticated else { return }
         guard client.attachedSessionId == nil, client.pendingAttachedSessionId == nil else { return }
-        if visibleSessions.isEmpty {
+        if visibleSessions.isEmpty || preferredSessionToAttach == nil {
             guard !requestedInitialSession else { return }
             requestedInitialSession = true
             client.createSession()
