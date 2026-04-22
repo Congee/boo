@@ -376,7 +376,7 @@ impl BooApp {
         self.set_pane_focus(pane, true);
         self.relayout();
         log::info!(
-            "new_tab_created idx={idx} session_id={:?} total_tabs={}",
+            "new_tab_created idx={idx} tab_id={:?} total_tabs={}",
             self.server.tabs.tab_id_for_index(idx),
             self.server.tabs.len()
         );

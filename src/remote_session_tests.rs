@@ -55,7 +55,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_transport_session_lists_sessions_over_unix_stream() {
+    fn direct_transport_session_lists_tabs_over_unix_stream() {
         let (client_stream, mut server_stream) =
             UnixStream::pair().expect("create unix stream pair");
         let server = std::thread::spawn(move || {
@@ -76,7 +76,7 @@ mod tests {
                 .write_all(&encode_message(MessageType::HeartbeatAck, &payload))
                 .expect("write heartbeat ack");
 
-            let (ty, payload) = read_message(&mut server_stream).expect("read list sessions");
+            let (ty, payload) = read_message(&mut server_stream).expect("read list tabs");
             assert_eq!(ty, MessageType::ListSessions);
             assert!(payload.is_empty());
             server_stream
@@ -91,7 +91,7 @@ mod tests {
                         child_exited: false,
                     }]),
                 ))
-                .expect("write session list");
+                .expect("write tab list");
         });
 
         let mut client = DirectTransportSession::connect_over_stream(

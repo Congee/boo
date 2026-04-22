@@ -90,7 +90,7 @@ mod tests {
     }
 
     #[test]
-    fn send_session_list_skips_unchanged_payloads() {
+    fn send_tab_list_skips_unchanged_payloads() {
         let (tx, rx) = mpsc::channel();
         let mut state = empty_state();
         state.clients.insert(1, test_client(tx, Some(11), true));
@@ -107,7 +107,7 @@ mod tests {
         server.send_tab_list(1, &sessions);
         server.send_tab_list(1, &sessions);
 
-        match rx.recv().expect("session list frame") {
+        match rx.recv().expect("tab list frame") {
             OutboundMessage::Frame(frame) => {
                 assert_eq!(&frame[..2], &MAGIC);
                 assert_eq!(frame[2], MessageType::SessionList as u8);
@@ -118,7 +118,7 @@ mod tests {
     }
 
     #[test]
-    fn reply_session_list_does_not_skip_unchanged_payloads() {
+    fn reply_tab_list_does_not_skip_unchanged_payloads() {
         let (tx, rx) = mpsc::channel();
         let mut state = empty_state();
         state.clients.insert(1, test_client(tx, Some(11), true));
@@ -136,7 +136,7 @@ mod tests {
         server.reply_tab_list(1, &sessions);
 
         for _ in 0..2 {
-            match rx.recv().expect("session list frame") {
+            match rx.recv().expect("tab list frame") {
                 OutboundMessage::Frame(frame) => {
                     assert_eq!(&frame[..2], &MAGIC);
                     assert_eq!(frame[2], MessageType::SessionList as u8);

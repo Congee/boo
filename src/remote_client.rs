@@ -129,7 +129,7 @@ pub fn attach_remote_daemon_session(
     host: &str,
     port: u16,
     expected_server_identity: Option<&str>,
-    session_id: u32,
+    tab_id: u32,
     attachment_id: Option<u64>,
     resume_token: Option<u64>,
 ) -> Result<RemoteAttachSummary, String> {
@@ -137,7 +137,7 @@ pub fn attach_remote_daemon_session(
         host,
         port,
         expected_server_identity,
-        session_id,
+        tab_id,
         attachment_id,
         resume_token,
     )
@@ -355,9 +355,9 @@ mod tests {
 
             let (ty, payload) = read_message(&mut stream).expect("read attach");
             assert_eq!(ty, MessageType::Attach);
-            let (session_id, attachment_id, resume_token) =
+            let (tab_id, attachment_id, resume_token) =
                 parse_attach_request(&payload).expect("decoded attach");
-            assert_eq!(session_id, 7);
+            assert_eq!(tab_id, 7);
             assert_eq!(attachment_id, Some(99));
             assert_eq!(resume_token, Some(1234));
 

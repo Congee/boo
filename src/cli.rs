@@ -146,7 +146,7 @@ pub enum Command {
         #[arg(long = "expect-server-identity")]
         expect_server_identity: Option<String>,
     },
-    /// List sessions from a Boo-native QUIC remote daemon directly
+    /// List tabs from a Boo-native QUIC remote daemon directly
     RemoteDaemonSessions {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
@@ -155,7 +155,7 @@ pub enum Command {
         #[arg(long = "expect-server-identity")]
         expect_server_identity: Option<String>,
     },
-    /// Create a session on a Boo-native QUIC remote daemon directly
+    /// Create a tab on a Boo-native QUIC remote daemon directly
     RemoteDaemonCreate {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
@@ -172,7 +172,7 @@ pub enum Command {
     RemoteUpgradeTarget,
     /// Bootstrap a remote Boo host over SSH, resolve its canonical native endpoint, and probe the direct transport
     RemoteUpgradeProbe,
-    /// Attach to a session on a Boo-native QUIC remote daemon directly
+    /// Attach to a tab on a Boo-native QUIC remote daemon directly
     RemoteDaemonAttach {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
