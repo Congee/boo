@@ -369,7 +369,7 @@ impl ClientApp {
             Message::StreamReady(tx) => {
                 self.stream_tx = Some(tx);
                 if matches!(self.mode, ClientMode::Recovering) {
-                    self.send_stream_command(StreamCommand::ListSessions);
+                    self.send_stream_command(StreamCommand::ListTabs);
                 }
             }
             Message::StreamEvent(event) => {
@@ -976,7 +976,7 @@ impl ClientApp {
 
     fn handle_stream_event(&mut self, event: LocalStreamEvent) {
         match event {
-            LocalStreamEvent::SessionList(tabs) => {
+            LocalStreamEvent::TabList(tabs) => {
                 let live_tabs: Vec<_> = tabs
                     .iter()
                     .filter(|tab| !tab.child_exited)
@@ -1000,7 +1000,7 @@ impl ClientApp {
                     && !self.has_paintable_terminal()
                 {
                     let _ = self.client.send(&control::Request::NewTab);
-                    self.send_stream_command(StreamCommand::ListSessions);
+                    self.send_stream_command(StreamCommand::ListTabs);
                 } else {
                     self.should_exit = true;
                 }
@@ -1042,7 +1042,7 @@ impl ClientApp {
                 self.mode = ClientMode::Recovering;
                 self.active_remote_tab_id = None;
                 self.pending_input_latencies.clear();
-                self.send_stream_command(StreamCommand::ListSessions);
+                self.send_stream_command(StreamCommand::ListTabs);
             }
             LocalStreamEvent::SessionExited(session_id) => {
                 if self.active_remote_tab_id == Some(session_id) {
@@ -1052,7 +1052,7 @@ impl ClientApp {
                 self.should_exit = false;
                 self.last_error = None;
                 self.pending_input_latencies.clear();
-                self.send_stream_command(StreamCommand::ListSessions);
+                self.send_stream_command(StreamCommand::ListTabs);
             }
             LocalStreamEvent::Disconnected => {
                 self.stream_tx = None;
@@ -1136,7 +1136,7 @@ impl ClientApp {
     fn handle_stream_delivery(&mut self, event: LocalStreamEvent) -> Option<Task<Message>> {
         let track_stream = matches!(
             &event,
-            LocalStreamEvent::SessionList(_)
+            LocalStreamEvent::TabList(_)
                 | LocalStreamEvent::Attached(_)
                 | LocalStreamEvent::UiRuntimeState(_)
                 | LocalStreamEvent::UiAppearance(_)
@@ -1976,7 +1976,7 @@ impl Widget<Message, Theme, iced::Renderer> for TerminalInputMethodLayer {
 
 #[derive(Clone, Debug)]
 pub(crate) enum LocalStreamEvent {
-    SessionList(Vec<remote::RemoteSessionInfo>),
+    TabList(Vec<remote::RemoteTabInfo>),
     Attached(u32),
     UiRuntimeState(control::UiRuntimeState),
     UiAppearance(control::UiAppearanceSnapshot),
@@ -2030,7 +2030,7 @@ fn is_passive_screen_event(event: &LocalStreamEvent) -> bool {
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CoalescedStreamKind {
-    SessionList,
+    TabList,
     UiAppearance,
     UiRuntimeState,
     PassiveScreen,
@@ -2041,7 +2041,7 @@ enum CoalescedStreamKind {
 struct PendingCoalescedStreamEvents {
     coalesce_passive_screen: bool,
     order: Vec<CoalescedStreamKind>,
-    session_list: Option<LocalStreamEvent>,
+    tab_list: Option<LocalStreamEvent>,
     ui_appearance: Option<LocalStreamEvent>,
     ui_runtime_state: Option<LocalStreamEvent>,
     passive_screen: Option<LocalStreamEvent>,
@@ -2062,9 +2062,9 @@ impl PendingCoalescedStreamEvents {
         }
     }
 
-    fn set_session_list(&mut self, event: LocalStreamEvent) {
-        self.push_kind_once(CoalescedStreamKind::SessionList);
-        self.session_list = Some(event);
+    fn set_tab_list(&mut self, event: LocalStreamEvent) {
+        self.push_kind_once(CoalescedStreamKind::TabList);
+        self.tab_list = Some(event);
     }
 
     fn set_ui_appearance(&mut self, event: LocalStreamEvent) {
@@ -2086,7 +2086,7 @@ impl PendingCoalescedStreamEvents {
         let mut flushed = Vec::with_capacity(self.order.len());
         for kind in self.order.drain(..) {
             let event = match kind {
-                CoalescedStreamKind::SessionList => self.session_list.take(),
+                CoalescedStreamKind::TabList => self.tab_list.take(),
                 CoalescedStreamKind::UiAppearance => self.ui_appearance.take(),
                 CoalescedStreamKind::UiRuntimeState => self.ui_runtime_state.take(),
                 CoalescedStreamKind::PassiveScreen => self.passive_screen.take(),
@@ -2106,8 +2106,8 @@ fn push_coalesced_stream_event(
     event: LocalStreamEvent,
 ) {
     match &event {
-        LocalStreamEvent::SessionList(_) => {
-            pending.set_session_list(event);
+        LocalStreamEvent::TabList(_) => {
+            pending.set_tab_list(event);
             return;
         }
         LocalStreamEvent::UiAppearance(_) => {
@@ -2167,7 +2167,7 @@ pub(crate) struct RemoteRowDelta {
 
 #[derive(Clone, Debug)]
 pub(crate) enum StreamCommand {
-    ListSessions,
+    ListTabs,
     Attach(u32),
     AppKeyEvent { event: AppKeyEvent },
     AppMouseEvent { event: AppMouseEvent },
@@ -2215,7 +2215,7 @@ fn local_stream_subscription(
                     let mut write = write;
                     while let Ok(command) = cmd_rx.recv() {
                         let result = match command {
-                            StreamCommand::ListSessions => write_stream_message(
+                            StreamCommand::ListTabs => write_stream_message(
                                 &mut write,
                                 remote::MessageType::ListSessions,
                                 &[],
@@ -2557,7 +2557,7 @@ fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStream
         scope.add_bytes(payload.len() as u64);
         let event = match ty {
             remote::MessageType::SessionList => {
-                decode_remote_session_list(&payload).map(LocalStreamEvent::SessionList)
+                decode_remote_tab_list(&payload).map(LocalStreamEvent::TabList)
             }
             remote::MessageType::Attached => decode_u32(&payload).map(LocalStreamEvent::Attached),
             remote::MessageType::UiRuntimeState => serde_json::from_slice(&payload)
@@ -2613,13 +2613,13 @@ fn decode_u32(payload: &[u8]) -> Option<u32> {
         .then(|| u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]))
 }
 
-fn decode_remote_session_list(payload: &[u8]) -> Option<Vec<remote::RemoteSessionInfo>> {
+fn decode_remote_tab_list(payload: &[u8]) -> Option<Vec<remote::RemoteTabInfo>> {
     if payload.len() < 4 {
         return None;
     }
     let count = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
     let mut offset = 4usize;
-    let mut sessions = Vec::with_capacity(count);
+    let mut tabs = Vec::with_capacity(count);
     for _ in 0..count {
         if offset + 4 > payload.len() {
             return None;
@@ -2639,7 +2639,7 @@ fn decode_remote_session_list(payload: &[u8]) -> Option<Vec<remote::RemoteSessio
         }
         let flags = payload[offset];
         offset += 1;
-        sessions.push(remote::RemoteSessionInfo {
+        tabs.push(remote::RemoteTabInfo {
             id,
             name,
             title,
@@ -2648,7 +2648,7 @@ fn decode_remote_session_list(payload: &[u8]) -> Option<Vec<remote::RemoteSessio
             child_exited: (flags & 0x02) != 0,
         });
     }
-    Some(sessions)
+    Some(tabs)
 }
 
 fn decode_remote_string(payload: &[u8], offset: &mut usize) -> Option<String> {
@@ -3911,7 +3911,7 @@ mod tests {
     }
 
     #[test]
-    fn attached_mode_session_list_does_not_force_reattach_to_existing_active_session() {
+    fn attached_mode_tab_list_does_not_force_reattach_to_existing_active_tab() {
         let tabs = vec![
             remote::RemoteSessionInfo {
                 id: 7,
@@ -3938,7 +3938,7 @@ mod tests {
     }
 
     #[test]
-    fn recovering_mode_session_list_reattaches_to_existing_active_session() {
+    fn recovering_mode_tab_list_reattaches_to_existing_active_tab() {
         let tabs = vec![
             remote::RemoteSessionInfo {
                 id: 7,
@@ -3965,7 +3965,7 @@ mod tests {
     }
 
     #[test]
-    fn session_exit_relists_sessions_instead_of_immediately_exiting() {
+    fn session_exit_relists_tabs_instead_of_immediately_exiting() {
         let (mut app, _) = ClientApp::new("/tmp/test.sock".to_string());
         let (tx, _rx) = std::sync::mpsc::channel();
         app.stream_tx = Some(tx);
@@ -4001,7 +4001,7 @@ mod tests {
     }
 
     #[test]
-    fn stream_ready_relists_sessions_while_recovering() {
+    fn stream_ready_relists_tabs_while_recovering() {
         let (mut app, _) = ClientApp::new("/tmp/test.sock".to_string());
         let (tx, rx) = std::sync::mpsc::channel();
         app.mode = ClientMode::Recovering;
@@ -4010,7 +4010,7 @@ mod tests {
         drop(task);
 
         match rx.recv().unwrap() {
-            StreamCommand::ListSessions => {}
+            StreamCommand::ListTabs => {}
             other => panic!("unexpected stream command: {other:?}"),
         }
     }
