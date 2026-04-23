@@ -5,7 +5,7 @@ import UIKit
 
 enum GSPMessageType: UInt8 {
     case auth = 0x01
-    case listSessions = 0x02
+    case listTabs = 0x02
     case attach = 0x03
     case detach = 0x04
     case create = 0x05
@@ -18,14 +18,14 @@ enum GSPMessageType: UInt8 {
 
     case authOk = 0x80
     case authFail = 0x81
-    case sessionList = 0x82
+    case tabList = 0x82
     case fullState = 0x83
     case delta = 0x84
     case attached = 0x85
     case detached = 0x86
     case errorMsg = 0x87
-    case sessionCreated = 0x88
-    case sessionExited = 0x89
+    case tabCreated = 0x88
+    case tabExited = 0x89
     case scrollData = 0x8a
     case clipboard = 0x8b
     case image = 0x8c
@@ -33,10 +33,10 @@ enum GSPMessageType: UInt8 {
 }
 
 extension GSPMessageType {
-    static var listTabs: Self { .listSessions }
-    static var tabList: Self { .sessionList }
-    static var tabCreated: Self { .sessionCreated }
-    static var tabExited: Self { .sessionExited }
+    static var listSessions: Self { .listTabs }
+    static var sessionList: Self { .tabList }
+    static var sessionCreated: Self { .tabCreated }
+    static var sessionExited: Self { .tabExited }
 }
 
 private struct OutboundWheelScrolledLinesPayload: Encodable {
