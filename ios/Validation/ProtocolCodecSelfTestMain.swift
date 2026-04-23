@@ -35,6 +35,13 @@ struct ProtocolCodecSelfTestMain {
             "resume metadata legacy decode"
         )
         assertEqual(decodedResumeMetadata.tabId, 42, "resume metadata legacy sessionId decode")
+        let encodedResumeMetadata = tryOrExit(
+            encoder.encode(decodedResumeMetadata),
+            "resume metadata canonical encode"
+        )
+        let encodedResumeJson = String(data: encodedResumeMetadata, encoding: .utf8) ?? ""
+        assertEqual(encodedResumeJson.contains("\"tabId\""), true, "resume metadata encodes canonical tabId")
+        assertEqual(encodedResumeJson.contains("\"sessionId\""), false, "resume metadata omits legacy sessionId on encode")
 
         let legacyHostMetadata = """
         {

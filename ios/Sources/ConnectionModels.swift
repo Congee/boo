@@ -467,6 +467,8 @@ final class ConnectionStore: ObservableObject {
         guard let data = UserDefaults.standard.data(forKey: resumeAttachmentsKey),
               let attachments = try? JSONDecoder().decode([String: ResumeAttachmentMetadata].self, from: data) else { return }
         resumeAttachments = attachments
+        // Rewrite any legacy sessionId-based payloads into canonical tabId storage.
+        saveResumeAttachments()
     }
 
     private func saveResumeAttachments() {
@@ -479,6 +481,8 @@ final class ConnectionStore: ObservableObject {
         guard let data = defaults.data(forKey: hostTabsKey) ?? defaults.data(forKey: legacyHostTabsKey),
               let tabs = try? JSONDecoder().decode([String: HostTabMetadata].self, from: data) else { return }
         hostTabs = tabs
+        // Rewrite any legacy hostSessions/sessionId payloads into canonical hostTabs/tabId storage.
+        saveHostTabs()
     }
 
     private func saveHostTabs() {
