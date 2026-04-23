@@ -25,6 +25,7 @@ static KEY_EVENT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<KeyEvent>> =
 static COMMAND_DRAG_MONITOR_INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 static TEXT_INPUT_BRIDGE_INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 static TEXT_INPUT_BRIDGE_VIEW: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+static CONTENT_VIEW_HANDLE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 static MARKED_TEXT: std::sync::OnceLock<std::sync::Mutex<String>> = std::sync::OnceLock::new();
 static IME_RECT: std::sync::OnceLock<std::sync::Mutex<Rect>> = std::sync::OnceLock::new();
 
@@ -448,10 +449,21 @@ pub fn content_view() -> Option<Retained<NSView>> {
 }
 
 /// Get the content view as an opaque pointer, or null.
+///
+/// The returned handle owns a single app-lifetime Objective-C retain. Do not
+/// derive it from `as_ptr` on a temporary `Retained`; dropping that temporary
+/// would make the raw pointer look invalid to static analysis and would weaken
+/// the handle ownership contract.
 pub fn content_view_handle() -> ViewHandle {
-    content_view()
-        .map(|cv| Retained::as_ptr(&cv) as ViewHandle)
-        .unwrap_or(std::ptr::null_mut())
+    if let Some(handle) = CONTENT_VIEW_HANDLE.get().copied() {
+        return handle as ViewHandle;
+    }
+    let Some(content_view) = content_view() else {
+        return std::ptr::null_mut();
+    };
+    let handle = Retained::into_raw(content_view) as usize;
+    let _ = CONTENT_VIEW_HANDLE.set(handle);
+    CONTENT_VIEW_HANDLE.get().copied().unwrap_or(handle) as ViewHandle
 }
 
 pub fn set_window_transparent() {
@@ -464,15 +476,16 @@ pub fn set_window_transparent() {
 }
 
 pub fn create_focusable_child_view(parent: ViewHandle, frame: Rect) -> ViewHandle {
+    if parent.is_null() {
+        return std::ptr::null_mut();
+    }
     let ns_frame = to_nsrect(frame);
     unsafe {
         let parent_view = &*(parent as *const NSView);
         let child: Retained<FocusableView> =
             msg_send![mtm().alloc::<FocusableView>(), initWithFrame: ns_frame];
         parent_view.addSubview_positioned_relativeTo(&child, NSWindowOrderingMode::Above, None);
-        let ptr = Retained::as_ptr(&child) as *mut c_void;
-        std::mem::forget(child);
-        ptr
+        Retained::into_raw(child) as *mut c_void
     }
 }
 
