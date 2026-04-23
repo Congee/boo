@@ -2,6 +2,7 @@
 name = "boo"
 version = "0.1.0"
 edition = "2024"
+license = "BSD-4-Clause"
 
 [dependencies]
 iced = { version = "0.14", features = ["wgpu", "tokio", "image", "canvas", "advanced"] }
