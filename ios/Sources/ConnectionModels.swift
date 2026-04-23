@@ -53,7 +53,27 @@ struct ResumeAttachmentMetadata: Codable, Equatable {
     var attachmentId: UInt64
     var resumeToken: UInt64
     var recordedAt: Date
+
+    var tabId: UInt32 {
+        get { sessionId }
+        set { sessionId = newValue }
+    }
 }
+
+struct HostSessionMetadata: Codable, Equatable {
+    var sessionId: UInt32
+    var recordedAt: Date
+    var modelVersion: Int?
+
+    var tabId: UInt32 {
+        get { sessionId }
+        set { sessionId = newValue }
+    }
+}
+
+typealias HostTabMetadata = HostSessionMetadata
+
+private let BooHostSessionMetadataModelVersion = 2
 
 struct TailscaleDiscoverySettings: Codable, Equatable {
     var defaultPort: UInt16 = BooDefaultRemotePort
@@ -167,11 +187,13 @@ final class ConnectionStore: ObservableObject {
     private let storageNamespaceSuffix: String
     private var trustedServerIdentities: [String: String] = [:]
     private var resumeAttachments: [String: ResumeAttachmentMetadata] = [:]
+    private var hostSessions: [String: HostSessionMetadata] = [:]
 
     private var nodesKey: String { "boo.remote.savedNodes\(storageNamespaceSuffix)" }
     private var historyKey: String { "boo.remote.connectionHistory\(storageNamespaceSuffix)" }
     private var trustedIdentitiesKey: String { "boo.remote.trustedServerIdentities\(storageNamespaceSuffix)" }
     private var resumeAttachmentsKey: String { "boo.remote.resumeAttachments\(storageNamespaceSuffix)" }
+    private var hostSessionsKey: String { "boo.remote.hostSessions\(storageNamespaceSuffix)" }
     private var tailscaleSettingsKey: String { "boo.remote.tailscale.discovery\(storageNamespaceSuffix)" }
     private var terminalDisplaySettingsKey: String { "boo.remote.terminalDisplay\(storageNamespaceSuffix)" }
     private var tailscaleTokenService: String { "me.congee.boo.tailscale\(storageNamespaceSuffix)" }
@@ -184,6 +206,7 @@ final class ConnectionStore: ObservableObject {
         loadHistory()
         loadTrustedServerIdentities()
         loadResumeAttachments()
+        loadHostSessions()
         loadTailscaleSettings()
         loadTerminalDisplaySettings()
         refreshTailscaleTokenStatus()
@@ -249,7 +272,7 @@ final class ConnectionStore: ObservableObject {
     }
 
     func recordResumeAttachment(host: String, port: UInt16, sessionId: UInt32, attachmentId: UInt64, resumeToken: UInt64) {
-        resumeAttachments["\(host):\(port)"] = ResumeAttachmentMetadata(
+        resumeAttachments[targetKey(host: host, port: port)] = ResumeAttachmentMetadata(
             sessionId: sessionId,
             attachmentId: attachmentId,
             resumeToken: resumeToken,
@@ -259,12 +282,49 @@ final class ConnectionStore: ObservableObject {
     }
 
     func resumeAttachment(host: String, port: UInt16) -> ResumeAttachmentMetadata? {
-        resumeAttachments["\(host):\(port)"]
+        resumeAttachments[targetKey(host: host, port: port)]
     }
 
     func clearResumeAttachment(host: String, port: UInt16) {
-        resumeAttachments.removeValue(forKey: "\(host):\(port)")
+        resumeAttachments.removeValue(forKey: targetKey(host: host, port: port))
         saveResumeAttachments()
+    }
+
+    func recordHostSession(host: String, port: UInt16, sessionId: UInt32) {
+        hostSessions[targetKey(host: host, port: port)] = HostSessionMetadata(
+            sessionId: sessionId,
+            recordedAt: Date(),
+            modelVersion: BooHostSessionMetadataModelVersion
+        )
+        saveHostSessions()
+    }
+
+    func hostSession(host: String, port: UInt16) -> HostSessionMetadata? {
+        let key = targetKey(host: host, port: port)
+        guard let metadata = hostSessions[key] else { return nil }
+        guard metadata.modelVersion == BooHostSessionMetadataModelVersion else {
+            hostSessions.removeValue(forKey: key)
+            saveHostSessions()
+            return nil
+        }
+        return metadata
+    }
+
+    func clearHostSession(host: String, port: UInt16) {
+        hostSessions.removeValue(forKey: targetKey(host: host, port: port))
+        saveHostSessions()
+    }
+
+    func recordHostTab(host: String, port: UInt16, tabId: UInt32) {
+        recordHostSession(host: host, port: port, sessionId: tabId)
+    }
+
+    func hostTab(host: String, port: UInt16) -> HostTabMetadata? {
+        hostSession(host: host, port: port)
+    }
+
+    func clearHostTab(host: String, port: UInt16) {
+        clearHostSession(host: host, port: port)
     }
 
     var hasTailscaleAPIToken: Bool {
@@ -374,6 +434,17 @@ final class ConnectionStore: ObservableObject {
         UserDefaults.standard.set(data, forKey: resumeAttachmentsKey)
     }
 
+    private func loadHostSessions() {
+        guard let data = UserDefaults.standard.data(forKey: hostSessionsKey),
+              let sessions = try? JSONDecoder().decode([String: HostSessionMetadata].self, from: data) else { return }
+        hostSessions = sessions
+    }
+
+    private func saveHostSessions() {
+        guard let data = try? JSONEncoder().encode(hostSessions) else { return }
+        UserDefaults.standard.set(data, forKey: hostSessionsKey)
+    }
+
     private func loadTailscaleSettings() {
         guard let data = UserDefaults.standard.data(forKey: tailscaleSettingsKey),
               let settings = try? JSONDecoder().decode(TailscaleDiscoverySettings.self, from: data) else { return }
@@ -404,6 +475,7 @@ final class ConnectionStore: ObservableObject {
             UserDefaults.standard.removeObject(forKey: historyKey)
             UserDefaults.standard.removeObject(forKey: trustedIdentitiesKey)
             UserDefaults.standard.removeObject(forKey: resumeAttachmentsKey)
+            UserDefaults.standard.removeObject(forKey: hostSessionsKey)
             UserDefaults.standard.removeObject(forKey: tailscaleSettingsKey)
             UserDefaults.standard.removeObject(forKey: terminalDisplaySettingsKey)
             try? KeychainStringStore.delete(service: tailscaleTokenService, account: tailscaleTokenAccount)
@@ -434,6 +506,10 @@ final class ConnectionStore: ObservableObject {
         guard let data = try? JSONEncoder().encode([node]) else { return }
         UserDefaults.standard.set(data, forKey: nodesKey)
     }
+
+    private func targetKey(host: String, port: UInt16) -> String {
+        "\(host):\(port)"
+    }
 }
 
 enum ConnectionStatus: Equatable {
@@ -443,6 +519,15 @@ enum ConnectionStatus: Equatable {
     case authenticated
     case attached(sessionId: UInt32)
     case connectionLost(reason: String)
+}
+
+extension ConnectionStatus {
+    var attachedTabId: UInt32? {
+        if case .attached(let sessionId) = self {
+            return sessionId
+        }
+        return nil
+    }
 }
 
 enum TransportHealth: Equatable {
@@ -684,6 +769,7 @@ final class ConnectionMonitor: ObservableObject {
 
     private func startClientConnection(host: String, port: UInt16) {
         client.configureTrustedServerIdentity(store.trustedServerIdentity(host: host, port: port))
+        client.configurePreferredHostSession(sessionId: store.hostSession(host: host, port: port)?.sessionId)
         if let resume = store.resumeAttachment(host: host, port: port) {
             client.configureResumeAttachment(
                 sessionId: resume.sessionId,
@@ -696,6 +782,7 @@ final class ConnectionMonitor: ObservableObject {
 
     private func startClientConnection(endpoint: NWEndpoint, host: String, port: UInt16) {
         client.configureTrustedServerIdentity(store.trustedServerIdentity(host: host, port: port))
+        client.configurePreferredHostSession(sessionId: store.hostSession(host: host, port: port)?.sessionId)
         if let resume = store.resumeAttachment(host: host, port: port) {
             client.configureResumeAttachment(
                 sessionId: resume.sessionId,
