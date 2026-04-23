@@ -32,6 +32,27 @@ struct DecodedWireScreenState: Equatable {
     var cursorStyle: Int32
 }
 
+struct RemoteRuntimeTabSnapshot: Decodable, Equatable {
+    let tabId: UInt32
+    let index: Int
+    let active: Bool
+    let title: String
+    let paneCount: Int
+}
+
+struct RemoteRuntimeStateSnapshot: Decodable, Equatable {
+    let activeTab: Int
+    let focusedPane: UInt64
+    let tabs: [RemoteRuntimeTabSnapshot]
+    let pwd: String
+}
+
+func decodeRemoteRuntimeState(_ payload: Data) -> RemoteRuntimeStateSnapshot? {
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    return try? decoder.decode(RemoteRuntimeStateSnapshot.self, from: payload)
+}
+
 enum WireCodec {
     private static let cellEncodedLen = 12
     private static let remoteFullStateHeaderLen = 14

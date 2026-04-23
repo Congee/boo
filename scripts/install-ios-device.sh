@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEVICE_ID="${BOO_IOS_DEVICE_ID:-${1:-}}"
-DERIVED_DATA="${BOO_IOS_DERIVED_DATA_PATH:-$ROOT/ios/.derived-device}"
+DERIVED_DATA="${BOO_IOS_DERIVED_DATA_PATH:-/tmp/boo-ios-derived}"
 APP_PATH="${BOO_IOS_APP_PATH:-$DERIVED_DATA/Build/Products/Debug-iphoneos/Boo.app}"
 
 if [[ -z "$DEVICE_ID" ]]; then

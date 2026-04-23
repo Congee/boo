@@ -153,14 +153,14 @@ for _ in $(seq 1 $((READY_TIMEOUT * 10))); do
   if [[ -f "$GUI_TEST_STATUS" ]]; then
     STATUS="$(cat "$GUI_TEST_STATUS")"
   fi
-  if [[ "$STATUS" == *"mode=attached"* && "$STATUS" == *"stream_ready=1"* ]]; then
+  if [[ "$STATUS" == *"mode=active"* && "$STATUS" == *"stream_ready=1"* ]]; then
     break
   fi
   sleep 0.1
 done
 
-if [[ "${STATUS:-}" != *"mode=attached"* || "${STATUS:-}" != *"stream_ready=1"* ]]; then
-  echo "GUI client did not reach attached stream state: ${STATUS:-<none>}" >&2
+if [[ "${STATUS:-}" != *"mode=active"* || "${STATUS:-}" != *"stream_ready=1"* ]]; then
+  echo "GUI client did not reach active stream state: ${STATUS:-<none>}" >&2
   exit 1
 fi
 

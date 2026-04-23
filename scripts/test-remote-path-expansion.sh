@@ -13,7 +13,7 @@ control_path="/tmp/boo-${host//[^A-Za-z0-9._-]/_}.ssh-ctl"
 
 rm -f "${local_socket}" "${local_socket}.stream" "${control_path}"
 
-./target/debug/boo new-session \
+./target/debug/boo new-tab \
   --host "$host" \
   --remote-binary "~/dev/boo/target/debug/boo" \
   --remote-workdir '$HOME/dev/boo' \

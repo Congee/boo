@@ -30,8 +30,6 @@ if not isinstance(data, dict):
     raise SystemExit(f"expected object JSON from remote-clients, got: {type(data).__name__}")
 if not isinstance(data.get("clients"), list):
     raise SystemExit("expected 'clients' list in remote-clients JSON")
-if not isinstance(data.get("revivable_attachments"), list):
-    raise SystemExit("expected 'revivable_attachments' list in remote-clients JSON")
 PY
 
 echo "remote clients snapshot: ${out_json}"

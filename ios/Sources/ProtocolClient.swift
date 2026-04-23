@@ -113,27 +113,6 @@ struct DiscoveredDaemon: Identifiable, Hashable {
     let endpoint: NWEndpoint
 }
 
-struct RemoteRuntimeTabSnapshot: Decodable, Equatable {
-    let tabId: UInt32
-    let index: Int
-    let active: Bool
-    let title: String
-    let paneCount: Int
-}
-
-struct RemoteRuntimeStateSnapshot: Decodable, Equatable {
-    let activeTab: Int
-    let focusedPane: UInt64
-    let tabs: [RemoteRuntimeTabSnapshot]
-    let pwd: String
-}
-
-func decodeRemoteRuntimeState(_ payload: Data) -> RemoteRuntimeStateSnapshot? {
-    let decoder = JSONDecoder()
-    decoder.keyDecodingStrategy = .convertFromSnakeCase
-    return try? decoder.decode(RemoteRuntimeStateSnapshot.self, from: payload)
-}
-
 struct TailscalePeer: Identifiable, Hashable {
     let id: String
     let name: String
@@ -1370,7 +1349,7 @@ final class GSPClient: ObservableObject {
             lastError: lastError
         )
         let wasAuthenticated = authenticated
-        let effect = ClientWireReducer.reduce(message: message, payload: payload, state: &state)
+        ClientWireReducer.reduce(message: message, payload: payload, state: &state)
         authenticated = state.authenticated
         if state.authenticated && !wasAuthenticated {
             startHeartbeatLoop()
@@ -1403,11 +1382,6 @@ final class GSPClient: ObservableObject {
            ) {
             protocolError("Server identity changed; connection rejected")
             return
-        }
-
-        switch effect {
-        case .none:
-            break
         }
 
         if message == .authOk {

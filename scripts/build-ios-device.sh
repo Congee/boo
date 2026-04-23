@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEAM_ID="${BOO_IOS_TEAM_ID:-${1:-}}"
 DEVICE_ID="${BOO_IOS_DEVICE_ID:-${2:-}}"
-DERIVED_DATA="${BOO_IOS_DERIVED_DATA_PATH:-$ROOT/ios/.derived-device}"
+DERIVED_DATA="${BOO_IOS_DERIVED_DATA_PATH:-/tmp/boo-ios-derived}"
 CONFIGURATION="${BOO_IOS_CONFIGURATION:-Debug}"
 
 discover_team_id() {

@@ -20,10 +20,6 @@ enum ClientWireErrorCode: UInt16, Equatable {
     case heartbeatTimeout = 11
 }
 
-enum ClientWireEffect: Equatable {
-    case none
-}
-
 enum ClientWireErrorKind: Equatable {
     case authenticationFailed
     case unknownTab
@@ -236,7 +232,7 @@ func serverIdentityMismatch(expectedIdentityId: String?, actualIdentityId: Strin
 }
 
 enum ClientWireReducer {
-    static func reduce(message: ClientWireMessageType, payload: Data, state: inout ClientWireState) -> ClientWireEffect {
+    static func reduce(message: ClientWireMessageType, payload: Data, state: inout ClientWireState) {
         switch message {
         case .authOk:
             state.authenticated = true
@@ -249,29 +245,23 @@ enum ClientWireReducer {
             }
             state.lastErrorKind = nil
             state.lastError = nil
-            return .none
         case .authFail:
             state.lastErrorKind = .authenticationFailed
             state.lastError = ClientWireErrorKind.authenticationFailed.message
-            return .none
         case .tabList:
             state.tabs = WireCodec.decodeTabList(payload)
-            return .none
         case .tabExited:
-            return .none
+            break
         case .fullState:
             state.screen = WireCodec.decodeFullState(payload)
-            return .none
         case .delta:
-            guard var screen = state.screen else { return .none }
-            guard WireCodec.applyDelta(payload, to: &screen) else { return .none }
+            guard var screen = state.screen else { return }
+            guard WireCodec.applyDelta(payload, to: &screen) else { return }
             state.screen = screen
-            return .none
         case .errorMsg:
             let kind = decodeClientWireError(payload)
             state.lastErrorKind = kind
             state.lastError = kind.message
-            return .none
         }
     }
 }

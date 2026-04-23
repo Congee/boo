@@ -63,7 +63,7 @@ Examples:
 
 Notes:
   - Starts one Boo server and one Boo GUI client on isolated sockets.
-  - Waits for the control socket and GUI attachment state to become ready.
+  - Waits for the control socket and GUI active stream state to become ready.
   - Injects the workload through the control socket.
   - Can optionally drive repeated control-socket key input after launching the workload.
   - On Linux, video recording is optional and not part of this profiling helper.
@@ -245,14 +245,14 @@ for _ in $(seq 1 $((READY_TIMEOUT * 10))); do
   if [[ -f "$GUI_TEST_STATUS" ]]; then
     STATUS="$(cat "$GUI_TEST_STATUS")"
   fi
-  if [[ "$STATUS" == *"mode=attached"* && "$STATUS" == *"stream_ready=1"* ]]; then
+  if [[ "$STATUS" == *"mode=active"* && "$STATUS" == *"stream_ready=1"* ]]; then
     break
   fi
   sleep 0.1
 done
 
-if [[ "${STATUS:-}" != *"mode=attached"* || "${STATUS:-}" != *"stream_ready=1"* ]]; then
-  echo "GUI client did not reach attached stream state: ${STATUS:-<none>}" >&2
+if [[ "${STATUS:-}" != *"mode=active"* || "${STATUS:-}" != *"stream_ready=1"* ]]; then
+  echo "GUI client did not reach active stream state: ${STATUS:-<none>}" >&2
   exit 1
 fi
 

@@ -65,9 +65,12 @@ Some uses of the word "session" are unrelated to the removed remote model:
 
 - Swift `URLSession`
 - XCTest screenshot attachment API (`XCTAttachment`)
+- AVFoundation recording API (`startSession`)
 - tmux protocol session events
 - saved layouts in `src/layout.rs` and the `--layout` flag, which are startup
   layout presets rather than runtime lifecycle objects
+- JSON compatibility assertions that old `session_id` / `attached_tab` fields
+  are absent
 
 These should not be confused with remote runtime-view architecture.
 

@@ -4,10 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${BOO_IOS_REMOTE_PORT:-}"
 SOCKET_PATH="${BOO_IOS_REMOTE_SOCKET:-/tmp/boo-ios-remote-validation.sock}"
-XCODE_LOG="$ROOT/ios/.derived-validate/xcodebuild.log"
-SWIFT_MODULE_CACHE="$ROOT/ios/.swift-module-cache"
-VALIDATOR_BIN="$ROOT/ios/.derived-validate/remote-validator"
-SELFTEST_BIN="$ROOT/ios/.derived-validate/protocol-codec-selftest"
+DERIVED_DIR="${BOO_IOS_VALIDATE_DERIVED:-/tmp/boo-ios-validate-derived}"
+XCODE_LOG="$DERIVED_DIR/xcodebuild.log"
+SWIFT_MODULE_CACHE="${BOO_IOS_SWIFT_MODULE_CACHE:-/tmp/boo-ios-swift-module-cache}"
+VALIDATOR_BIN="$DERIVED_DIR/remote-validator"
+SELFTEST_BIN="$DERIVED_DIR/protocol-codec-selftest"
 
 cleanup() {
   local pid="${SERVER_PID:-}"
@@ -50,8 +51,8 @@ swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
 
 swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
   ios/Sources/ClientWireState.swift \
-  ios/Sources/SessionModels.swift \
-  ios/Sources/SessionHealth.swift \
+  ios/Sources/TabModels.swift \
+  ios/Sources/TabHealth.swift \
   ios/Sources/WireCodec.swift \
   ios/Validation/ProtocolCodecSelfTest.swift \
   ios/Validation/ProtocolCodecSelfTestMain.swift \
@@ -65,7 +66,7 @@ if ! xcodebuild \
   -scheme Boo \
   -configuration Debug \
   -destination 'generic/platform=iOS' \
-  -derivedDataPath ios/.derived-validate \
+  -derivedDataPath "$DERIVED_DIR" \
   CODE_SIGNING_ALLOWED=NO \
   build >"$XCODE_LOG" 2>&1
 then

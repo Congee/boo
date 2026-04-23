@@ -72,7 +72,7 @@ def decode_tab_list(payload: bytes) -> list[dict[str, object]]:
                 "name": name,
                 "title": title,
                 "pwd": pwd,
-                "attached": bool(flags & 0x01),
+                "active": bool(flags & 0x01),
                 "child_exited": bool(flags & 0x02),
             }
         )

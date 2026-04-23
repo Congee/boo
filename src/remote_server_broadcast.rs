@@ -180,6 +180,26 @@ mod tests {
     }
 
     #[test]
+    fn send_tab_created_acknowledges_explicit_create_request() {
+        let (tx, rx) = mpsc::channel();
+        let mut state = empty_state();
+        state.clients.insert(1, test_client(tx, Some(11), false));
+        let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
+
+        server.send_tab_created(1, 42);
+
+        match rx.recv().expect("tab-created frame") {
+            OutboundMessage::Frame(frame) => {
+                assert_eq!(&frame[..2], &MAGIC);
+                assert_eq!(frame[2], MessageType::TabCreated as u8);
+                assert_eq!(u32::from_le_bytes(frame[7..11].try_into().unwrap()), 42);
+            }
+            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
     fn retarget_viewers_to_tab_skips_same_tab_and_unsubscribed_clients() {
         let (local_viewer_tx, local_viewer_rx) = mpsc::channel();
         let (local_viewer_two_tx, local_viewer_two_rx) = mpsc::channel();

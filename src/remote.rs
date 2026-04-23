@@ -422,6 +422,14 @@ impl RemoteServer {
         );
     }
 
+    pub fn send_tab_created(&self, client_id: u64, tab_id: u32) {
+        self.send_to_client(
+            client_id,
+            MessageType::TabCreated,
+            tab_id.to_le_bytes().to_vec(),
+        );
+    }
+
     pub fn send_ui_runtime_state(
         &self,
         client_id: u64,

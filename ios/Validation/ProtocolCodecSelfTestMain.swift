@@ -12,6 +12,7 @@ struct ProtocolCodecSelfTestMain {
                 name: "Tab 1",
                 title: "shell",
                 pwd: "/tmp",
+                active: true,
                 childExited: false
             ),
             "tab list decoding"
@@ -89,8 +90,7 @@ struct ProtocolCodecSelfTestMain {
             (identityLengthOffset + 2)..<(identityLengthOffset + 2 + serverIdentityId.utf8.count),
             with: serverIdentityId.utf8
         )
-        let authEffect = ClientWireReducer.reduce(message: .authOk, payload: authOkPayload, state: &clientState)
-        assertEqual(authEffect, .listTabs, "auth ok triggers tab refresh")
+        ClientWireReducer.reduce(message: .authOk, payload: authOkPayload, state: &clientState)
         assertEqual(clientState.authenticated, true, "auth ok sets authenticated")
         assertEqual(clientState.protocolVersion, 1, "auth ok protocol version decode")
         assertEqual(clientState.transportCapabilities, 0x7f, "auth ok capability decode")
@@ -132,7 +132,7 @@ struct ProtocolCodecSelfTestMain {
 
         var missingIdentityCapabilityPayload = authOkPayload
         missingIdentityCapabilityPayload.withUnsafeMutableBytes { bytes in
-            bytes.storeBytes(of: UInt32(0x5f).littleEndian, toByteOffset: 2, as: UInt32.self)
+            bytes.storeBytes(of: UInt32(0x3f).littleEndian, toByteOffset: 2, as: UInt32.self)
         }
         assertEqual(
             validateAuthOkMetadata(missingIdentityCapabilityPayload),
@@ -155,22 +155,15 @@ struct ProtocolCodecSelfTestMain {
             "server identity mismatch ignores unknown trusted identity"
         )
 
-        let listEffect = ClientWireReducer.reduce(message: .tabList, payload: makeTabListPayload(), state: &clientState)
-        assertEqual(listEffect, .none, "tab list has no side effect")
+        ClientWireReducer.reduce(message: .tabList, payload: makeTabListPayload(), state: &clientState)
         assertEqual(clientState.tabs, tabs, "tab list reducer decode")
 
-        let createdPayload = UInt32(42).littleEndianBytes
-        let createdEffect = ClientWireReducer.reduce(message: .tabCreated, payload: Data(createdPayload), state: &clientState)
-        assertEqual(createdEffect, .none, "tab created no longer triggers client-side attach")
-
         clientState.screen = state
-        let deltaEffect = ClientWireReducer.reduce(message: .delta, payload: makeDeltaPayload(), state: &clientState)
-        assertEqual(deltaEffect, .none, "delta has no side effect")
+        ClientWireReducer.reduce(message: .delta, payload: makeDeltaPayload(), state: &clientState)
         assertEqual(clientState.screen.map(WireCodec.screenText(from:)), "BC", "delta reducer applies screen update")
 
         clientState.activeTabId = 42
-        let tabExitedEffect = ClientWireReducer.reduce(message: .tabExited, payload: Data(), state: &clientState)
-        assertEqual(tabExitedEffect, .none, "tab exited has no side effect")
+        ClientWireReducer.reduce(message: .tabExited, payload: Data(), state: &clientState)
         assertEqual(clientState.activeTabId, 42, "tab exited does not mutate active tab directly")
 
         let reachableTabs = [
@@ -179,6 +172,7 @@ struct ProtocolCodecSelfTestMain {
                 name: "Tab 1",
                 title: "shell",
                 pwd: "/tmp",
+                active: true,
                 childExited: false
             )
         ]
@@ -206,6 +200,7 @@ struct ProtocolCodecSelfTestMain {
                         name: "Tab 9",
                         title: "shell",
                         pwd: "/tmp",
+                        active: false,
                         childExited: true
                     )
                 ]

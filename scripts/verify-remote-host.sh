@@ -26,13 +26,13 @@ fi
 rm -f "${local_socket}" "${local_socket}.stream" "/tmp/boo-${host//[^A-Za-z0-9._-]/_}.ssh-ctl"
 
 if [[ "$prefer_nix_profile_binary" -eq 1 ]]; then
-  ./target/debug/boo new-session \
+  ./target/debug/boo new-tab \
     --host "$host" \
     --remote-prefer-nix-profile-binary \
     --remote-socket "$remote_socket" \
     --socket "$local_socket"
 else
-  ./target/debug/boo new-session \
+  ./target/debug/boo new-tab \
     --host "$host" \
     --remote-binary "$remote_binary" \
     --remote-socket "$remote_socket" \

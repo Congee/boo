@@ -494,7 +494,13 @@ impl BooApp {
                     "remote_create_succeeded client_id={client_id} created_tab_id={created_tab_id} tabs_after={}",
                     self.server.tabs.len()
                 );
-                let _ = client_id;
+                if let Some(server) = self
+                    .remote_server_for_client(client_id)
+                    .or(self.server.local_gui_server.as_ref())
+                    .or(self.server.remote_server.as_ref())
+                {
+                    server.send_tab_created(client_id, created_tab_id);
+                }
                 self.broadcast_runtime_view_to_all_viewers();
             }
             server::Command::RemoteInput {
