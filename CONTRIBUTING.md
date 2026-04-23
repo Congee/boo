@@ -73,8 +73,8 @@ socket-level validation over focus-sensitive GUI automation.
 ## Repo Conventions
 
 - Keep new code paths testable with deterministic harnesses where possible.
-- Preserve the session-server ownership model; do not push PTY/session
-  authority into the GUI.
+- Preserve the runtime-server ownership model; do not push PTY, tab, pane, or
+  focus authority into GUI or remote clients.
 - Keep platform-specific code thin when shared runtime logic is possible.
 - Prefer crate-private interfaces for internal subsystem boundaries.
 - Keep user-facing docs in canonical locations rather than scattering notes

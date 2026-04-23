@@ -73,7 +73,6 @@ struct ClientWireState: Equatable {
     var serverIdentityId: String?
     var tabs: [DecodedWireTabInfo] = []
     var screen: DecodedWireScreenState?
-    var activeTabId: UInt32?
     var lastErrorKind: ClientWireErrorKind?
     var lastError: String?
 
@@ -87,7 +86,6 @@ struct ClientWireState: Equatable {
         tabs: [DecodedWireTabInfo] = [],
         legacyTabs: [DecodedWireTabInfo]? = nil,
         screen: DecodedWireScreenState? = nil,
-        activeTabId: UInt32? = nil,
         lastErrorKind: ClientWireErrorKind? = nil,
         lastError: String? = nil
     ) {
@@ -99,7 +97,6 @@ struct ClientWireState: Equatable {
         self.serverIdentityId = serverIdentityId
         self.tabs = legacyTabs ?? tabs
         self.screen = screen
-        self.activeTabId = activeTabId
         self.lastErrorKind = lastErrorKind
         self.lastError = lastError
     }

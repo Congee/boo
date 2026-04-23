@@ -17,7 +17,7 @@ pub(crate) fn send_state_to_client(
         let Some(client) = guard.clients.get(&client_id) else {
             return;
         };
-        if client.runtime_view.current_tab_id.is_none() {
+        if !client.runtime_view.subscribed_to_runtime {
             return;
         }
         (
@@ -46,7 +46,7 @@ pub(crate) fn send_state_to_client(
         let Some(client) = guard.clients.get_mut(&client_id) else {
             return;
         };
-        if client.runtime_view.current_tab_id.is_none() {
+        if !client.runtime_view.subscribed_to_runtime {
             false
         } else {
             client.runtime_view.last_state = Some(Arc::clone(&next_state));
@@ -83,7 +83,7 @@ pub(crate) fn send_pane_state_to_client(
         let Some(client) = guard.clients.get(&client_id) else {
             return;
         };
-        if client.runtime_view.current_tab_id.is_none() {
+        if !client.runtime_view.subscribed_to_runtime {
             return;
         }
         (client.outbound.clone(), client.runtime_view.pane_states.get(&pane_id).cloned())
@@ -104,7 +104,7 @@ pub(crate) fn send_pane_state_to_client(
         let Some(client) = guard.clients.get_mut(&client_id) else {
             return;
         };
-        if client.runtime_view.current_tab_id.is_none() {
+        if !client.runtime_view.subscribed_to_runtime {
             false
         } else {
             client.runtime_view.pane_states.insert(pane_id, Arc::clone(&next_state));

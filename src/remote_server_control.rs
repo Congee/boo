@@ -78,7 +78,6 @@ pub(crate) fn send_ui_runtime_state(
 
 pub(crate) fn send_ui_runtime_state_to_local_viewers(
     state: &Arc<Mutex<State>>,
-    _current_tab_id: u32,
     runtime_state: &crate::control::UiRuntimeState,
 ) {
     let Ok(payload) = serde_json::to_vec(runtime_state) else {

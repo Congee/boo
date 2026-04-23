@@ -1183,9 +1183,6 @@ final class GSPClient: ObservableObject {
             guard let decodedRuntimeState = decodeRemoteRuntimeState(payload) else { return }
             runtimeState = decodedRuntimeState
             activeTabId = runtimeActiveTabId
-            if authenticated {
-                bootstrapCanonicalHostTab(trigger: "runtimeState")
-            }
         case .uiAppearance:
             break
         default:
@@ -1195,10 +1192,6 @@ final class GSPClient: ObservableObject {
 
     private func validateAuthOkPayload(_ payload: Data) -> String? {
         validateAuthOkMetadata(payload)
-    }
-
-    private var shouldPreserveRemoteStateOnReconnect: Bool {
-        !tabs.isEmpty
     }
 
     private func protocolError(_ message: String) {
@@ -1215,17 +1208,15 @@ final class GSPClient: ObservableObject {
         connectStartedAt = nil
         authRequestedAt = nil
         tabListRequestedAt = nil
-        if !shouldPreserveRemoteStateOnReconnect {
-            protocolVersion = nil
-            transportCapabilities = 0
-            serverBuildId = nil
-            serverInstanceId = nil
-            serverIdentityId = nil
-            activeTabId = nil
-            tabs = []
-            runtimeState = nil
-            screen = ScreenState()
-        }
+        protocolVersion = nil
+        transportCapabilities = 0
+        serverBuildId = nil
+        serverInstanceId = nil
+        serverIdentityId = nil
+        activeTabId = nil
+        tabs = []
+        runtimeState = nil
+        screen = ScreenState()
         if message == "Remote heartbeat timed out" {
             heartbeatTimeoutCount &+= 1
         }
@@ -1270,40 +1261,6 @@ final class GSPClient: ObservableObject {
         screen.cursorStyle = decoded.cursorStyle
     }
 
-    private func bootstrapCanonicalHostTab(trigger: String) {
-        guard authenticated else { return }
-        guard activeTabId == nil else { return }
-
-        if let runtimeState,
-           runtimeState.tabs.indices.contains(runtimeState.activeTab) {
-            let runtimeActiveTabId = runtimeState.tabs[runtimeState.activeTab].tabId
-            debugLog("bootstrapCanonicalHostTab trigger=\(trigger) wait runtime active tabId=\(runtimeActiveTabId)")
-            return
-        }
-
-        if let fallbackTabId = tabs.first(where: { $0.active && !$0.childExited })?.id
-            ?? tabs.last(where: { !$0.childExited })?.id {
-            debugLog("bootstrapCanonicalHostTab trigger=\(trigger) fallback existing tabId=\(fallbackTabId)")
-            activeTabId = fallbackTabId
-            if matchesRecoverableMissingActiveTabError(lastErrorKind) {
-                lastErrorKind = nil
-                lastError = nil
-            }
-            return
-        }
-
-        debugLog("bootstrapCanonicalHostTab trigger=\(trigger) waiting for server runtime tab")
-    }
-
-    private func matchesRecoverableMissingActiveTabError(_ kind: ClientWireErrorKind?) -> Bool {
-        switch kind {
-        case .noActiveTab, .unknownTab:
-            return true
-        default:
-            return false
-        }
-    }
-
     private func applyReducedMessage(_ message: ClientWireMessageType, payload: Data) {
         var state = ClientWireState(
             authenticated: authenticated,
@@ -1344,7 +1301,6 @@ final class GSPClient: ObservableObject {
                 cursorBlinking: screen.cursorBlinking,
                 cursorStyle: screen.cursorStyle
             ),
-            activeTabId: activeTabId,
             lastErrorKind: lastErrorKind,
             lastError: lastError
         )
@@ -1367,10 +1323,8 @@ final class GSPClient: ObservableObject {
         }
         lastErrorKind = state.lastErrorKind
         lastError = state.lastError
-        let fallbackActiveTabId = state.activeTabId
-        let nextActiveTabId = runtimeActiveTabId ?? fallbackActiveTabId
         applyDecodedTabs(state.tabs)
-        activeTabId = nextActiveTabId
+        activeTabId = runtimeActiveTabId
         if let decodedScreen = state.screen {
             applyDecodedScreen(decodedScreen)
             screen.objectWillChange.send()
@@ -1395,19 +1349,6 @@ final class GSPClient: ObservableObject {
             return
         }
 
-        if message == .tabList, runtimeState == nil {
-            bootstrapCanonicalHostTab(trigger: "tabList")
-            return
-        }
-
-        if message == .errorMsg {
-            switch lastErrorKind {
-            case .unknownTab, .noActiveTab:
-                bootstrapCanonicalHostTab(trigger: "errorRecovery")
-            default:
-                break
-            }
-        }
     }
 
     private func handleClipboard(_ data: Data) {

@@ -17,7 +17,7 @@ mod tests {
 
     fn test_client(
         outbound: mpsc::Sender<OutboundMessage>,
-        current_tab: Option<u32>,
+        subscribed_to_runtime: bool,
         is_local: bool,
     ) -> ClientState {
         ClientState {
@@ -27,7 +27,7 @@ mod tests {
             authenticated_at: Some(Instant::now()),
             last_heartbeat_at: None,
             runtime_view: ClientRuntimeView {
-                current_tab_id: current_tab,
+                subscribed_to_runtime,
                 ..ClientRuntimeView::idle()
             },
             is_local,
@@ -47,15 +47,15 @@ mod tests {
     }
 
     #[test]
-    fn send_ui_runtime_state_to_local_viewers_only_targets_matching_tab() {
+    fn send_ui_runtime_state_to_local_viewers_targets_subscribed_clients() {
         let (viewer_tx, viewer_rx) = mpsc::channel();
         let (idle_tx, idle_rx) = mpsc::channel();
         let mut state = empty_state();
-        state.clients.insert(1, test_client(viewer_tx, Some(11), true));
-        state.clients.insert(2, test_client(idle_tx, None, true));
+        state.clients.insert(1, test_client(viewer_tx, true, true));
+        state.clients.insert(2, test_client(idle_tx, false, true));
         let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
 
-        server.send_ui_runtime_state_to_local_viewers(11, &sample_ui_state());
+        server.send_ui_runtime_state_to_local_viewers(&sample_ui_state());
 
         match viewer_rx.recv().expect("viewer frame") {
             OutboundMessage::Frame(frame) => {
@@ -71,7 +71,7 @@ mod tests {
     fn send_ui_runtime_state_skips_unchanged_payloads() {
         let (tx, rx) = mpsc::channel();
         let mut state = empty_state();
-        state.clients.insert(1, test_client(tx, Some(11), true));
+        state.clients.insert(1, test_client(tx, true, true));
         let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
         let ui_state = sample_ui_state();
 
@@ -92,7 +92,7 @@ mod tests {
     fn send_tab_list_skips_unchanged_payloads() {
         let (tx, rx) = mpsc::channel();
         let mut state = empty_state();
-        state.clients.insert(1, test_client(tx, Some(11), true));
+        state.clients.insert(1, test_client(tx, true, true));
         let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
         let tabs = vec![RemoteTabInfo {
             id: 11,
@@ -122,9 +122,9 @@ mod tests {
         let (local_b_tx, local_b_rx) = mpsc::channel();
         let (remote_tx, remote_rx) = mpsc::channel();
         let mut state = empty_state();
-        state.clients.insert(1, test_client(local_a_tx, Some(11), true));
-        state.clients.insert(2, test_client(local_b_tx, None, true));
-        state.clients.insert(3, test_client(remote_tx, Some(11), false));
+        state.clients.insert(1, test_client(local_a_tx, true, true));
+        state.clients.insert(2, test_client(local_b_tx, false, true));
+        state.clients.insert(3, test_client(remote_tx, true, false));
         let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
         let tabs = vec![RemoteTabInfo {
             id: 11,
@@ -153,7 +153,7 @@ mod tests {
     fn reply_tab_list_does_not_skip_unchanged_payloads() {
         let (tx, rx) = mpsc::channel();
         let mut state = empty_state();
-        state.clients.insert(1, test_client(tx, Some(11), true));
+        state.clients.insert(1, test_client(tx, true, true));
         let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
         let tabs = vec![RemoteTabInfo {
             id: 11,
@@ -183,7 +183,7 @@ mod tests {
     fn send_tab_created_acknowledges_explicit_create_request() {
         let (tx, rx) = mpsc::channel();
         let mut state = empty_state();
-        state.clients.insert(1, test_client(tx, Some(11), false));
+        state.clients.insert(1, test_client(tx, true, false));
         let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
 
         server.send_tab_created(1, 42);
@@ -200,49 +200,25 @@ mod tests {
     }
 
     #[test]
-    fn retarget_viewers_to_tab_skips_same_tab_and_unsubscribed_clients() {
-        let (local_viewer_tx, local_viewer_rx) = mpsc::channel();
-        let (local_viewer_two_tx, local_viewer_two_rx) = mpsc::channel();
-        let (local_idle_tx, local_idle_rx) = mpsc::channel();
-        let (local_same_tab_tx, local_same_tab_rx) = mpsc::channel();
-        let (remote_viewer_tx, remote_viewer_rx) = mpsc::channel();
+    fn subscribe_client_to_runtime_is_boolean_not_tab_targeted() {
+        let (viewer_tx, viewer_rx) = mpsc::channel();
         let mut state = empty_state();
-        state
-            .clients
-            .insert(1, test_client(local_viewer_tx, Some(11), true));
-        state
-            .clients
-            .insert(5, test_client(local_viewer_two_tx, Some(11), true));
-        state.clients.insert(2, test_client(local_idle_tx, None, true));
-        state
-            .clients
-            .insert(3, test_client(local_same_tab_tx, Some(22), true));
-        state
-            .clients
-            .insert(4, test_client(remote_viewer_tx, Some(11), false));
+        state.clients.insert(1, test_client(viewer_tx, false, true));
         let state = Arc::new(Mutex::new(state));
         let server = RemoteServer::for_test(Arc::clone(&state));
 
-        server.retarget_viewers_to_tab(22);
+        server.subscribe_client_to_runtime(1);
 
         let guard = state.lock().expect("remote server state poisoned");
-        assert_eq!(guard.clients.get(&1).and_then(|c| c.runtime_view.current_tab_id), Some(22));
-        assert_eq!(guard.clients.get(&5).and_then(|c| c.runtime_view.current_tab_id), Some(22));
-        assert_eq!(guard.clients.get(&2).and_then(|c| c.runtime_view.current_tab_id), None);
-        assert_eq!(guard.clients.get(&3).and_then(|c| c.runtime_view.current_tab_id), Some(22));
-        assert_eq!(guard.clients.get(&4).and_then(|c| c.runtime_view.current_tab_id), Some(22));
-        assert!(local_idle_rx.try_recv().is_err());
-        assert!(local_same_tab_rx.try_recv().is_err());
-        assert!(remote_viewer_rx.try_recv().is_err());
-        assert!(local_viewer_rx.try_recv().is_err());
-        assert!(local_viewer_two_rx.try_recv().is_err());
+        assert!(guard.clients.get(&1).is_some_and(|c| c.runtime_view.subscribed_to_runtime));
+        assert!(viewer_rx.try_recv().is_err());
     }
 
     #[test]
     fn retain_local_viewer_pane_states_prunes_invisible_panes() {
         let (tx, _rx) = mpsc::channel();
         let mut state = empty_state();
-        let mut client = test_client(tx, Some(11), true);
+        let mut client = test_client(tx, true, true);
         client.runtime_view.pane_states = HashMap::from([
             (
                 10,

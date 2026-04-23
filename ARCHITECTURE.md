@@ -10,7 +10,7 @@ boo has four major layers:
 
 1. App shell and UI orchestration
 2. Shared VT runtime and rendering
-3. Local session server and control/stream IPC
+3. Local runtime server and control/stream IPC
 4. Remote transport layers for desktop SSH and Boo-native TCP
 
 ```text
@@ -26,7 +26,7 @@ boo has four major layers:
         └─────────────┬─────────────┘
                       │
         ┌─────────────▼─────────────┐
-        │ Session server            │
+        │ Runtime server            │
         │ panes, tabs, control IPC, │
         │ stream IPC, lifecycle     │
         └───────┬─────────┬─────────┘
@@ -42,11 +42,12 @@ boo has four major layers:
 There are three important runtime modes:
 
 - Desktop app: local native GUI with auto-attach to a local or forwarded server
-- Session server: `boo server`, the long-lived owner of sessions, PTYs, and tabs
+- Runtime server: `boo server`, the long-lived owner of PTYs, tabs, panes, and runtime state
 - Headless server: `boo --headless`, optionally with `--remote-port` for native remote clients
 
-The key architectural rule is that PTYs and session ownership belong to the
-server/runtime side, not to the GUI process.
+The key architectural rule is that PTYs, tabs, panes, focus, and terminal state
+belong to the server/runtime side, not to a GUI or remote client. Clients are
+views/controllers of that authoritative runtime.
 
 ## Core Subsystems
 
@@ -88,7 +89,7 @@ Responsibilities:
 
 See [docs/modules/vt-backend-core.md](./docs/modules/vt-backend-core.md).
 
-### Session Server And IPC
+### Runtime Server And IPC
 
 Primary files:
 
@@ -99,13 +100,13 @@ Primary files:
 
 Responsibilities:
 
-- long-lived session ownership
+- long-lived runtime ownership
 - local Unix control socket
 - local Unix `.stream` socket
-- request/response RPCs and live UI/session updates
+- request/response RPCs and live UI/runtime updates
 
 See [docs/modules/control-socket.md](./docs/modules/control-socket.md).
-See [docs/modules/session-server.md](./docs/modules/session-server.md).
+See [docs/modules/runtime-server.md](./docs/modules/runtime-server.md).
 
 ### Remote Transport
 
@@ -132,7 +133,7 @@ See:
 
 ### Shared
 
-- pane/session/runtime model
+- tab/pane/runtime model
 - VT ownership
 - renderer
 - remote server/client logic

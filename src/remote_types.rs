@@ -28,7 +28,7 @@ pub struct RemoteClientInfo {
     pub transport_kind: String,
     pub server_socket_path: Option<String>,
     pub challenge_pending: bool,
-    pub current_tab: Option<u32>,
+    pub subscribed_to_runtime: bool,
     pub has_cached_state: bool,
     pub pane_state_count: usize,
     pub latest_input_seq: Option<u64>,
@@ -122,7 +122,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn remote_client_info_serializes_canonical_current_tab_field() {
+    fn remote_client_info_serializes_runtime_subscription_field() {
         let value = serde_json::to_value(RemoteClientInfo {
             client_id: 7,
             authenticated: true,
@@ -130,7 +130,7 @@ mod tests {
             transport_kind: "quic-direct".into(),
             server_socket_path: None,
             challenge_pending: false,
-            current_tab: Some(42),
+            subscribed_to_runtime: true,
             has_cached_state: true,
             pane_state_count: 2,
             latest_input_seq: Some(11),
@@ -143,7 +143,8 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(value.get("current_tab").and_then(|v| v.as_u64()), Some(42));
+        assert_eq!(value.get("subscribed_to_runtime").and_then(|v| v.as_bool()), Some(true));
+        assert!(value.get("current_tab").is_none());
         assert!(value.get("attached_tab").is_none());
     }
 

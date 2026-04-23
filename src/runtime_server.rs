@@ -34,7 +34,7 @@ use std::sync::Arc;
 
 #[derive(Clone, PartialEq, Eq)]
 struct LocalGuiTransportState {
-    current_tab_id: Option<u32>,
+    active_tab_id: Option<u32>,
     focused_pane_id: u64,
     pane_frames: Vec<(u64, u64, u64, u64, u64)>,
 }
@@ -46,7 +46,7 @@ impl BooApp {
             .or(self.server.remote_server.as_ref())
     }
 
-    fn sync_remote_client_runtime_view(&mut self, client_id: u64, next_current_tab_id: Option<u32>) {
+    fn sync_remote_client_runtime_view(&mut self, client_id: u64, subscribe: bool) {
         let tabs = self.current_remote_tabs();
         let ui_runtime_state = self.ui_runtime_state();
         let ui_appearance = self.ui_appearance_snapshot();
@@ -56,21 +56,18 @@ impl BooApp {
         server.send_tab_list(client_id, tabs.as_ref());
         server.send_ui_runtime_state(client_id, &ui_runtime_state);
         server.send_ui_appearance(client_id, &ui_appearance);
-        if let Some(current_tab_id) = next_current_tab_id {
-            server.set_client_current_tab(client_id, current_tab_id);
-            self.publish_remote_tab(current_tab_id);
+        if subscribe {
+            server.subscribe_client_to_runtime(client_id);
+            if let Some(active_tab_id) = self.active_runtime_tab_id() {
+                self.publish_remote_tab(active_tab_id);
+            }
         } else {
-            server.clear_client_current_tab(client_id);
+            server.unsubscribe_client_from_runtime(client_id);
         }
     }
 
     fn recover_remote_client_runtime_view(&mut self, client_id: u64) {
-        let focused_tab_id = self
-            .server
-            .tabs
-            .active_tab_id()
-            .filter(|tab_id| self.pane_for_tab(*tab_id).is_some());
-        self.sync_remote_client_runtime_view(client_id, focused_tab_id);
+        self.sync_remote_client_runtime_view(client_id, self.active_runtime_tab_id().is_some());
     }
 
     fn active_runtime_tab_id(&self) -> Option<u32> {
@@ -94,21 +91,8 @@ impl BooApp {
         true
     }
 
-    fn sync_all_runtime_viewers_to_active_tab(&mut self) -> Option<u32> {
-        let focused_tab_id = self.active_runtime_tab_id();
-        if let Some(active_tab_id) = focused_tab_id {
-            let retargeted = self
-                .remote_servers()
-                .any(|server| server.retarget_viewers_to_tab(active_tab_id));
-            if retargeted {
-                self.invalidate_remote_tabs_cache();
-            }
-        }
-        focused_tab_id
-    }
-
     fn broadcast_runtime_view_to_all_viewers(&mut self) -> Option<u32> {
-        let focused_tab_id = self.sync_all_runtime_viewers_to_active_tab();
+        let focused_tab_id = self.active_runtime_tab_id();
         let tabs = self.current_remote_tabs();
         let ui_runtime_state = self.ui_runtime_state();
         let ui_appearance = self.ui_appearance_snapshot();
@@ -132,31 +116,24 @@ impl BooApp {
     }
 
     fn publish_local_gui_runtime_state_for_active_tab(&mut self) {
-        let Some(current_tab_id) = self.server.tabs.active_tab_id() else {
+        if self.server.tabs.active_tab_id().is_none() {
             return;
         };
         if self.server.local_gui_server.is_none() {
             return;
         }
         let ui_state = self.ui_runtime_state();
-        let retargeted = {
-            let server = self.server.local_gui_server.as_ref().expect("local gui server");
-            server.retarget_viewers_to_tab(current_tab_id)
-        };
-        if retargeted {
-            self.invalidate_remote_tabs_cache();
-        }
         let tabs = self.current_remote_tabs();
         let server = self.server.local_gui_server.as_ref().expect("local gui server");
-        server.send_ui_runtime_state_to_local_viewers(current_tab_id, &ui_state);
+        server.send_ui_runtime_state_to_local_viewers(&ui_state);
         server.send_tab_list_to_local_clients(tabs.as_ref());
     }
 
     fn local_gui_transport_state(&self) -> LocalGuiTransportState {
-        let current_tab_id = self.server.tabs.active_tab_id();
+        let active_tab_id = self.server.tabs.active_tab_id();
         let focused_pane_id = self.server.tabs.focused_pane().id();
-        let pane_frames = current_tab_id
-            .and_then(|current_tab_id| self.server.tabs.find_index_by_tab_id(current_tab_id))
+        let pane_frames = active_tab_id
+            .and_then(|active_tab_id| self.server.tabs.find_index_by_tab_id(active_tab_id))
             .and_then(|tab_index| self.server.tabs.tab_tree(tab_index))
             .map(|tree| {
                 tree.export_panes_with_frames(self.terminal_frame())
@@ -175,7 +152,7 @@ impl BooApp {
             })
             .unwrap_or_default();
         LocalGuiTransportState {
-            current_tab_id,
+            active_tab_id,
             focused_pane_id,
             pane_frames,
         }
@@ -184,15 +161,9 @@ impl BooApp {
     fn publish_local_gui_after_ui_action(&mut self, before: &LocalGuiTransportState) {
         self.publish_local_gui_runtime_state_for_active_tab();
         let after = self.local_gui_transport_state();
-        if after != *before && let Some(current_tab_id) = after.current_tab_id {
-            self.publish_remote_tab(current_tab_id);
+        if after != *before && let Some(active_tab_id) = after.active_tab_id {
+            self.publish_remote_tab(active_tab_id);
         }
-    }
-
-    fn bootstrap_local_stream_client(&self, server: &remote::RemoteServer, client_id: u64, current_tab_id: u32) {
-        server.set_client_current_tab(client_id, current_tab_id);
-        server.send_ui_appearance(client_id, &self.ui_appearance_snapshot());
-        server.send_ui_runtime_state(client_id, &self.ui_runtime_state());
     }
 
     pub(crate) fn remote_servers(&self) -> impl Iterator<Item = &remote::RemoteServer> {
@@ -392,69 +363,20 @@ impl BooApp {
                 self.publish_local_gui_after_ui_action(&before);
             }
             server::Command::RemoteConnected { client_id } => {
-                let bootstrap_tab_id = self.server.tabs.active_tab_id().filter(|tab_id| {
-                    self.pane_for_tab(*tab_id).is_some()
-                        && self
-                            .remote_server_for_client(client_id)
-                            .or(self.server.local_gui_server.as_ref())
-                            .or(self.server.remote_server.as_ref())
-                            .is_some_and(|server| server.client_current_tab(client_id).is_none())
-                });
-                if let Some(bootstrap_tab_id) = bootstrap_tab_id
-                    && let Some(server) = self
-                        .remote_server_for_client(client_id)
-                        .or(self.server.local_gui_server.as_ref())
-                        .or(self.server.remote_server.as_ref())
-                {
-                    if server.client_is_local(client_id) {
-                        self.bootstrap_local_stream_client(server, client_id, bootstrap_tab_id);
-                    } else {
-                        server.set_client_current_tab(client_id, bootstrap_tab_id);
-                    }
-                    self.publish_remote_tab(bootstrap_tab_id);
-                }
-                let tabs = self.current_remote_tabs();
-                if let Some(server) = self
-                    .remote_server_for_client(client_id)
-                    .or(self.server.local_gui_server.as_ref())
-                    .or(self.server.remote_server.as_ref())
-                {
-                    server.reply_tab_list(client_id, tabs.as_ref());
-                    server.send_ui_runtime_state(client_id, &self.ui_runtime_state());
-                    server.send_ui_appearance(client_id, &self.ui_appearance_snapshot());
-                }
+                self.sync_remote_client_runtime_view(client_id, self.active_runtime_tab_id().is_some());
             }
             server::Command::RemoteListTabs { client_id } => {
-                let bootstrap_tab_id = self.server.tabs.active_tab_id().filter(|tab_id| {
-                    self.pane_for_tab(*tab_id).is_some()
-                        && self
-                            .remote_server_for_client(client_id)
-                            .or(self.server.local_gui_server.as_ref())
-                            .or(self.server.remote_server.as_ref())
-                            .is_some_and(|server| server.client_current_tab(client_id).is_none())
-                });
-                if let Some(bootstrap_tab_id) = bootstrap_tab_id
-                    && let Some(server) = self
-                        .remote_server_for_client(client_id)
-                        .or(self.server.local_gui_server.as_ref())
-                        .or(self.server.remote_server.as_ref())
-                {
-                    if server.client_is_local(client_id) {
-                        self.bootstrap_local_stream_client(server, client_id, bootstrap_tab_id);
-                    } else {
-                        server.set_client_current_tab(client_id, bootstrap_tab_id);
-                    }
-                    self.publish_remote_tab(bootstrap_tab_id);
-                }
+                // Compatibility request: reply with tab metadata, but do not
+                // let ListTabs choose or retarget a client-owned lifecycle
+                // object. Runtime subscription/bootstrap is owned by
+                // RemoteConnected and UiRuntimeState.
                 let tabs = self.current_remote_tabs();
-                if let Some(server) = self
-                    .remote_server_for_client(client_id)
-                    .or(self.server.local_gui_server.as_ref())
-                    .or(self.server.remote_server.as_ref())
-                {
+                let ui_runtime_state = self.ui_runtime_state();
+                let ui_appearance = self.ui_appearance_snapshot();
+                if let Some(server) = self.remote_server_for_delivery(client_id) {
                     server.reply_tab_list(client_id, tabs.as_ref());
-                    server.send_ui_runtime_state(client_id, &self.ui_runtime_state());
-                    server.send_ui_appearance(client_id, &self.ui_appearance_snapshot());
+                    server.send_ui_runtime_state(client_id, &ui_runtime_state);
+                    server.send_ui_appearance(client_id, &ui_appearance);
                 }
             }
             server::Command::RemoteCreate {
@@ -766,7 +688,7 @@ impl BooApp {
         };
         let needs_local_pane_states = servers
             .iter()
-            .any(|server| server.local_current_tab(tab_id));
+            .any(|server| server.has_local_runtime_viewers());
         let pane_states = if needs_local_pane_states {
             self.server
                 .tabs

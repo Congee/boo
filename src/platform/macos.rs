@@ -6,7 +6,7 @@ use super::{
 };
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{ClassType, class, define_class, msg_send, sel};
+use objc2::{ClassType, Message, class, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSEvent, NSEventMask, NSResponder, NSView, NSWindow, NSWindowOrderingMode,
 };
@@ -476,12 +476,11 @@ pub fn set_window_transparent() {
 }
 
 pub fn create_focusable_child_view(parent: ViewHandle, frame: Rect) -> ViewHandle {
-    if parent.is_null() {
+    let Some(parent_view) = retained_nsview(parent) else {
         return std::ptr::null_mut();
-    }
+    };
     let ns_frame = to_nsrect(frame);
     unsafe {
-        let parent_view = &*(parent as *const NSView);
         let child: Retained<FocusableView> =
             msg_send![mtm().alloc::<FocusableView>(), initWithFrame: ns_frame];
         parent_view.addSubview_positioned_relativeTo(&child, NSWindowOrderingMode::Above, None);
@@ -490,57 +489,57 @@ pub fn create_focusable_child_view(parent: ViewHandle, frame: Rect) -> ViewHandl
 }
 
 pub fn view_bounds(view: ViewHandle) -> Rect {
-    if view.is_null() {
-        return Rect::default();
-    }
-    unsafe {
-        let view = &*(view as *const NSView);
-        from_nsrect(view.bounds())
-    }
+    retained_nsview(view)
+        .map(|view| from_nsrect(view.bounds()))
+        .unwrap_or_default()
 }
 
 pub fn set_view_frame(view: ViewHandle, frame: Rect) {
-    if view.is_null() {
-        return;
-    }
-    unsafe {
-        let view = &*(view as *const NSView);
+    if let Some(view) = retained_nsview(view) {
         view.setFrame(to_nsrect(frame));
     }
 }
 
 pub fn set_view_hidden(view: ViewHandle, hidden: bool) {
-    if view.is_null() {
-        return;
-    }
-    unsafe {
-        let view = &*(view as *const NSView);
+    if let Some(view) = retained_nsview(view) {
         view.setHidden(hidden);
     }
 }
 
 pub fn remove_view(view: ViewHandle) {
-    if view.is_null() {
-        return;
-    }
-    unsafe {
-        let view = &*(view as *const NSView);
+    if let Some(view) = retained_nsview(view) {
         view.removeFromSuperview();
     }
 }
 
 pub fn focus_view(view: ViewHandle) {
-    if view.is_null() {
+    let Some(view) = retained_nsview(view) else {
         return;
+    };
+    let responder: &NSResponder = view.as_super();
+    let _ = responder.becomeFirstResponder();
+    if let Some(window) = view.window() {
+        let _ = window.makeFirstResponder(Some(responder));
     }
-    unsafe {
-        let view = &*(view as *const NSView);
-        let responder: &NSResponder = &*(view as *const NSView as *const NSResponder);
-        let _ = responder.becomeFirstResponder();
-        if let Some(window) = view.window() {
-            let _ = window.makeFirstResponder(Some(responder));
-        }
+}
+
+fn retained_nsview(view: ViewHandle) -> Option<Retained<NSView>> {
+    retained_objc_view_handle::<NSView>(view)
+}
+
+fn retained_objc_view_handle<T>(view: ViewHandle) -> Option<Retained<T>>
+where
+    T: Message,
+{
+    if view.is_null() {
+        return None;
     }
+    // SAFETY: Boo only creates ViewHandle values from retained NSView objects
+    // (`content_view_handle` and `create_focusable_child_view`). Convert the
+    // opaque handle back into a temporary owned retain before sending AppKit
+    // messages so this boundary does not manufacture borrowed references from
+    // raw pointers. The retain is released when the returned Retained drops.
+    unsafe { Retained::retain(view.cast::<T>()) }
 }
 
 pub fn set_text_input_cursor_rect(rect: Rect) {
@@ -661,10 +660,10 @@ pub fn create_scrollbar_layer() -> LayerHandle {
     let layer = CALayer::new();
     layer.setCornerRadius(3.0);
     layer.setOpacity(0.0);
-    if let Some(cv) = content_view() {
-        if let Some(parent_layer) = cv.layer() {
-            parent_layer.addSublayer(&layer);
-        }
+    if let Some(cv) = content_view()
+        && let Some(parent_layer) = cv.layer()
+    {
+        parent_layer.addSublayer(&layer);
     }
     let ptr = objc2::rc::Retained::as_ptr(&layer) as *mut c_void;
     std::mem::forget(layer);
@@ -703,10 +702,10 @@ pub fn create_highlight_layer() -> LayerHandle {
 
     let layer = CALayer::new();
     layer.setOpacity(0.0);
-    if let Some(cv) = content_view() {
-        if let Some(parent) = cv.layer() {
-            parent.addSublayer(&layer);
-        }
+    if let Some(cv) = content_view()
+        && let Some(parent) = cv.layer()
+    {
+        parent.addSublayer(&layer);
     }
     let ptr = objc2::rc::Retained::as_ptr(&layer) as *mut c_void;
     std::mem::forget(layer);

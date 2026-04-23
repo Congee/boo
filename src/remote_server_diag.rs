@@ -22,7 +22,7 @@ pub(crate) fn clients_snapshot(
     let viewing_clients = state
         .clients
         .values()
-        .filter(|client| client.runtime_view.current_tab_id.is_some())
+        .filter(|client| client.runtime_view.subscribed_to_runtime)
         .count();
     let pending_auth_clients = state
         .clients
@@ -83,7 +83,7 @@ fn client_info_for_client(
         },
         server_socket_path: local_socket_path.map(|path| path.display().to_string()),
         challenge_pending: false,
-        current_tab: client.runtime_view.current_tab_id,
+        subscribed_to_runtime: client.runtime_view.subscribed_to_runtime,
         has_cached_state: client.runtime_view.last_state.is_some(),
         pane_state_count: client.runtime_view.pane_states.len(),
         latest_input_seq: client.runtime_view.latest_input_seq,
@@ -128,7 +128,7 @@ mod tests {
             ClientState {
                 last_heartbeat_at: Some(Instant::now()),
                 runtime_view: ClientRuntimeView {
-                    current_tab_id: Some(11),
+                    subscribed_to_runtime: true,
                     last_state: Some(Arc::new(RemoteFullState {
                         rows: 1,
                         cols: 1,
@@ -188,7 +188,7 @@ mod tests {
         assert_eq!(client.transport_kind, "tcp");
         assert_eq!(client.server_socket_path, None);
         assert!(!client.challenge_pending);
-        assert_eq!(client.current_tab, Some(11));
+        assert!(client.subscribed_to_runtime);
         assert!(client.has_cached_state);
         assert_eq!(client.pane_state_count, 1);
         assert_eq!(client.latest_input_seq, Some(9));

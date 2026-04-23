@@ -137,7 +137,7 @@ use crate::remote_server_stream::{
 use crate::remote_server_targets::{
     local_viewer_client_ids,
     retain_local_viewer_pane_states as retain_local_viewer_pane_states_inner,
-    retarget_viewer_client_ids_to_tab, viewer_client_ids,
+    viewer_client_ids,
 };
 use crate::remote_state::{ClientRuntimeView, ClientState, State};
 
@@ -307,28 +307,28 @@ impl RemoteServer {
         state
             .clients
             .values()
-            .any(|client| client.runtime_view.current_tab_id.is_some())
+            .any(|client| client.runtime_view.subscribed_to_runtime)
     }
 
-    pub fn local_current_tab(&self, current_tab_id: u32) -> bool {
+    pub fn has_local_runtime_viewers(&self) -> bool {
         let state = self.state.lock().expect("remote server state poisoned");
         state
             .clients
             .values()
-            .any(|client| client.is_local && client.runtime_view.current_tab_id == Some(current_tab_id))
+            .any(|client| client.is_local && client.runtime_view.subscribed_to_runtime)
     }
 
-    pub fn client_current_tab(&self, client_id: u64) -> Option<u32> {
+    pub fn client_subscribed_to_runtime(&self, client_id: u64) -> bool {
         let state = self.state.lock().expect("remote server state poisoned");
         state
             .clients
             .get(&client_id)
-            .and_then(|client| client.runtime_view.current_tab_id)
+            .is_some_and(|client| client.runtime_view.subscribed_to_runtime)
     }
 
     #[allow(dead_code)]
-    pub fn client_tab(&self, client_id: u64) -> Option<u32> {
-        self.client_current_tab(client_id)
+    pub fn client_is_viewer(&self, client_id: u64) -> bool {
+        self.client_subscribed_to_runtime(client_id)
     }
 
     #[cfg(test)]
@@ -347,14 +347,6 @@ impl RemoteServer {
     pub fn has_client(&self, client_id: u64) -> bool {
         let state = self.state.lock().expect("remote server state poisoned");
         state.clients.contains_key(&client_id)
-    }
-
-    pub fn client_is_local(&self, client_id: u64) -> bool {
-        let state = self.state.lock().expect("remote server state poisoned");
-        state
-            .clients
-            .get(&client_id)
-            .is_some_and(|client| client.is_local)
     }
 
     pub fn clients_snapshot(&self) -> RemoteClientsSnapshot {
@@ -386,7 +378,7 @@ impl RemoteServer {
                 .clients
                 .iter()
                 .filter_map(|(client_id, client)| {
-                    client.runtime_view.current_tab_id.is_some().then_some(*client_id)
+                    client.runtime_view.subscribed_to_runtime.then_some(*client_id)
                 })
                 .collect::<Vec<_>>()
         };
@@ -395,20 +387,19 @@ impl RemoteServer {
         }
     }
 
-    pub fn set_client_current_tab(&self, client_id: u64, current_tab_id: u32) {
+    pub fn subscribe_client_to_runtime(&self, client_id: u64) {
         self.update_client(client_id, |client| {
-            let same_tab = client.runtime_view.current_tab_id == Some(current_tab_id);
-            client.runtime_view.current_tab_id = Some(current_tab_id);
-            if !same_tab {
+            if !client.runtime_view.subscribed_to_runtime {
+                client.runtime_view.subscribed_to_runtime = true;
                 client.runtime_view.clear_stream_state();
             }
         });
-        log::info!("remote runtime viewer retargeted: client_id={client_id} current_tab_id={current_tab_id}");
+        log::info!("remote runtime viewer subscribed: client_id={client_id}");
     }
 
-    pub fn clear_client_current_tab(&self, client_id: u64) {
+    pub fn unsubscribe_client_from_runtime(&self, client_id: u64) {
         self.update_client(client_id, |client| {
-            client.runtime_view.current_tab_id = None;
+            client.runtime_view.subscribed_to_runtime = false;
             client.runtime_view.clear_stream_state();
         });
         log::info!("remote runtime view cleared: client_id={client_id}");
@@ -440,10 +431,9 @@ impl RemoteServer {
 
     pub fn send_ui_runtime_state_to_local_viewers(
         &self,
-        current_tab_id: u32,
         state: &crate::control::UiRuntimeState,
     ) {
-        send_ui_runtime_state_to_local_viewers_inner(&self.state, current_tab_id, state);
+        send_ui_runtime_state_to_local_viewers_inner(&self.state, state);
     }
 
     pub fn send_ui_runtime_state_to_viewers(&self, state: &crate::control::UiRuntimeState) {
@@ -453,27 +443,13 @@ impl RemoteServer {
                 .clients
                 .iter()
                 .filter_map(|(client_id, client)| {
-                    client.runtime_view.current_tab_id.is_some().then_some(*client_id)
+                    client.runtime_view.subscribed_to_runtime.then_some(*client_id)
                 })
                 .collect::<Vec<_>>()
         };
         for client_id in client_ids {
             send_local_ui_runtime_state(&self.state, client_id, state);
         }
-    }
-
-    pub fn retarget_viewers_to_tab(&self, current_tab_id: u32) -> bool {
-        let client_ids = {
-            let state_guard = self.state.lock().expect("remote server state poisoned");
-            retarget_viewer_client_ids_to_tab(&state_guard, current_tab_id)
-        };
-        if client_ids.is_empty() {
-            return false;
-        }
-        for client_id in client_ids {
-            self.set_client_current_tab(client_id, current_tab_id);
-        }
-        true
     }
 
     pub fn send_ui_appearance(
@@ -501,7 +477,7 @@ impl RemoteServer {
                 .clients
                 .iter()
                 .filter_map(|(client_id, client)| {
-                    client.runtime_view.current_tab_id.is_some().then_some(*client_id)
+                    client.runtime_view.subscribed_to_runtime.then_some(*client_id)
                 })
                 .collect::<Vec<_>>()
         };

@@ -1081,7 +1081,7 @@ mod tests {
                                 transport_kind: "tcp".to_string(),
                                 server_socket_path: Some("/tmp/boo.sock".to_string()),
                                 challenge_pending: false,
-                                current_tab: Some(11),
+                                subscribed_to_runtime: true,
                                 has_cached_state: true,
                                 pane_state_count: 1,
                                 latest_input_seq: Some(9),
@@ -1106,7 +1106,7 @@ mod tests {
             Response::RemoteClients { snapshot } => {
                 assert_eq!(snapshot.clients.len(), 1);
                 assert_eq!(snapshot.clients[0].client_id, 7);
-                assert_eq!(snapshot.clients[0].current_tab, Some(11));
+                assert!(snapshot.clients[0].subscribed_to_runtime);
             }
             other => panic!("unexpected response: {other:?}"),
         }

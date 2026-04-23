@@ -29,10 +29,10 @@ pub(crate) const DIRECT_CLIENT_HEARTBEAT_WINDOW: Duration = Duration::from_secs(
 /// Runtime-view state cached per connected client.
 ///
 /// The authoritative tab/pane/runtime model lives in the server runtime. This
-/// struct only tracks which tab a given viewer is currently showing plus the
-/// cached payloads/full states needed for efficient transport updates.
+/// struct only tracks whether a client is subscribed to the runtime stream plus
+/// the cached payloads/full states needed for efficient transport updates.
 pub(crate) struct ClientRuntimeView {
-    pub(crate) current_tab_id: Option<u32>,
+    pub(crate) subscribed_to_runtime: bool,
     pub(crate) last_tab_list_payload: Option<Vec<u8>>,
     pub(crate) last_ui_runtime_state_payload: Option<Vec<u8>>,
     pub(crate) last_ui_appearance_payload: Option<Vec<u8>>,
@@ -44,7 +44,7 @@ pub(crate) struct ClientRuntimeView {
 impl ClientRuntimeView {
     pub(crate) fn idle() -> Self {
         Self {
-            current_tab_id: None,
+            subscribed_to_runtime: false,
             last_tab_list_payload: None,
             last_ui_runtime_state_payload: None,
             last_ui_appearance_payload: None,

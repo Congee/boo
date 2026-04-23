@@ -1,14 +1,14 @@
 # boo
 
 boo is a Rust terminal multiplexer and terminal UI built on `iced` and a shared
-`libghostty-vt` runtime on macOS and Linux. It combines tmux-like session and
-pane management with a native GUI, a long-lived session server, SSH-backed
+`libghostty-vt` runtime on macOS and Linux. It combines tmux-like tab and
+pane management with a native GUI, a long-lived runtime server, SSH-backed
 desktop remote mode, and a Boo-native remote daemon for iOS.
 
 ## Current Status
 
 - Shared VT runtime on macOS and Linux
-- Long-lived local session server via `boo server`
+- Long-lived local runtime server via `boo server`
 - Native desktop GUI client
 - SSH-backed desktop remote mode via `boo --host <ssh-host>`
 - Boo-native TCP remote daemon for the iOS client via `--remote-port`
@@ -18,10 +18,10 @@ desktop remote mode, and a Boo-native remote daemon for iOS.
 
 - Multiple tabs with nested split panes
 - Copy mode, command prompt, and configurable keybindings
-- Declarative session layouts and session persistence
-- Local control socket and stream socket for GUI/session coordination
+- Declarative startup layouts
+- Local control socket and stream socket for GUI/runtime coordination
 - Headless mode and control-socket automation
-- iOS client with Bonjour discovery and remote tab attach
+- iOS client with Bonjour discovery and runtime-view subscription
 
 ## Quick Start
 
@@ -115,7 +115,7 @@ High-value repo scripts:
 
 Key top-level areas:
 
-- `src/`: Rust application, session server, transport, and platform code
+- `src/`: Rust application, runtime server, transport, and platform code
 - `ios/`: SwiftUI iOS remote viewer
 - `scripts/`: verification, profiling, benchmarking, and workflow helpers
 - `shell-integration/`: shell-side integration helpers

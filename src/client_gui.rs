@@ -756,7 +756,7 @@ impl ClientApp {
                 let viewing = snapshot
                     .clients
                     .iter()
-                    .filter(|client| client.current_tab.is_some())
+                    .filter(|client| client.subscribed_to_runtime)
                     .count();
                 let pending = snapshot
                     .clients
@@ -3888,7 +3888,7 @@ mod tests {
     }
 
     #[test]
-    fn tab_exit_relists_tabs_instead_of_immediately_exiting() {
+    fn tab_exit_does_not_recover_a_client_owned_target() {
         let (mut app, _) = ClientApp::new("/tmp/test.sock".to_string());
         let (tx, _rx) = std::sync::mpsc::channel();
         app.stream_tx = Some(tx);
@@ -3899,10 +3899,10 @@ mod tests {
 
         app.handle_stream_event(LocalStreamEvent::TabExited);
 
-        assert!(matches!(app.mode, ClientMode::Recovering));
-        assert_eq!(app.active_remote_tab_id, None);
-        assert!(!app.should_exit);
-        assert_eq!(app.last_error, None);
+        assert!(matches!(app.mode, ClientMode::Active));
+        assert_eq!(app.active_remote_tab_id, Some(7));
+        assert!(app.should_exit);
+        assert_eq!(app.last_error.as_deref(), Some("stale"));
     }
 
     #[test]

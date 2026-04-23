@@ -181,7 +181,7 @@ mod tests {
                             - Duration::from_secs(2),
                     ),
                     runtime_view: ClientRuntimeView {
-                        current_tab_id: Some(11),
+                        subscribed_to_runtime: true,
                         last_state: Some(Arc::clone(&cached_state)),
                         latest_input_seq: Some(9),
                         ..ClientRuntimeView::idle()
