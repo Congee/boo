@@ -1013,6 +1013,7 @@ struct TerminalTabScreen: View {
     private var terminalTabBody: some View {
         VStack(spacing: 0) {
             terminalBanner
+            runtimeTabBar
             terminalView
             if UITestLaunchConfiguration.current() != nil {
                 Color.clear
@@ -1020,6 +1021,51 @@ struct TerminalTabScreen: View {
                     .accessibilityIdentifier("terminal-debug-state")
                     .accessibilityLabel(client.uiTestTabDebugSummary)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var runtimeTabBar: some View {
+        if let runtimeState = client.runtimeState, !runtimeState.tabs.isEmpty {
+            VStack(spacing: KineticSpacing.xs) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: KineticSpacing.sm) {
+                        ForEach(runtimeState.tabs, id: \.tabId) { tab in
+                            Button {
+                                client.setViewedTab(tab.tabId)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(tab.title.isEmpty ? "Tab \(tab.index + 1)" : tab.title)
+                                        .font(KineticFont.caption)
+                                        .lineLimit(1)
+                                    Text("\(tab.paneCount) pane\(tab.paneCount == 1 ? "" : "s")")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(KineticColor.onSurfaceVariant)
+                                }
+                                .padding(.horizontal, KineticSpacing.sm)
+                                .padding(.vertical, 6)
+                                .background(tab.tabId == runtimeState.viewedTabId ? KineticColor.primary.opacity(0.18) : KineticColor.surfaceVariant)
+                                .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("runtime-tab-\(tab.tabId)")
+                        }
+                    }
+                    .padding(.horizontal, KineticSpacing.md)
+                }
+
+                HStack(spacing: KineticSpacing.sm) {
+                    Button("Prev") { client.prevTab() }
+                    Button("Next") { client.nextTab() }
+                    Button("New") { client.newTab() }
+                    Button("Close") { client.closeViewedTab() }
+                }
+                .buttonStyle(KineticSecondaryButtonStyle())
+                .padding(.horizontal, KineticSpacing.md)
+                .padding(.bottom, KineticSpacing.xs)
+            }
+            .padding(.top, KineticSpacing.xs)
+            .background(KineticColor.surface)
         }
     }
 

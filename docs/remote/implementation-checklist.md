@@ -50,7 +50,7 @@ runtime plus per-screen view state.
 - [x] keep shared runtime truth for tab/pane lifecycle and layout
 - [x] allow different screens to track different viewed tabs server-side
 - [x] allow different screens to track different focused panes server-side
-- [ ] deterministically resolve viewed-tab fallback when a viewed tab closes
+- [x] deterministically resolve viewed-tab fallback when a viewed tab closes
 - [ ] keep iOS view/session alive after UI close until timeout
 - [ ] implement idle cleanup timeout semantics
 
@@ -58,11 +58,11 @@ runtime plus per-screen view state.
 
 - [x] decode richer runtime metadata on the client wire model
 - [x] preserve compatibility with the current single-screen bootstrap flow
-- [ ] add iOS-side `RuntimeAction`-driven semantic interactions in the main UI
+- [x] add iOS-side `RuntimeAction`-driven semantic interactions in the main UI
 - [ ] render all visible panes for the viewed tab on iOS
-- [ ] render server-owned status/tab UI from runtime metadata on iOS
+- [x] render server-owned status/tab UI from runtime metadata on iOS
 - [ ] drive pane hit-testing/focus changes from server-provided pane frames
-- [ ] drive tab/status-bar interactions semantically instead of by raw
+- [x] drive tab/status-bar interactions semantically instead of by raw
       coordinates
 - [ ] drive divider resize semantically using normalized split ratios
 - [ ] keep focused pane interaction hottest without local prediction

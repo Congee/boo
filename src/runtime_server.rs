@@ -129,6 +129,50 @@ impl BooApp {
         }
     }
 
+    fn repair_all_remote_views(&mut self, closed_tab_index: Option<usize>) {
+        let client_ids = self
+            .remote_servers()
+            .flat_map(|server| server.clients_snapshot().clients.into_iter().map(|client| client.client_id))
+            .collect::<Vec<_>>();
+        for client_id in client_ids {
+            let Some(server) = self.remote_server_for_client(client_id) else {
+                continue;
+            };
+            let Some(view) = server.client_runtime_view(client_id) else {
+                continue;
+            };
+            let viewed_tab_id = match view
+                .viewed_tab_id
+                .filter(|tab_id| self.server.tabs.find_index_by_tab_id(*tab_id).is_some())
+            {
+                Some(tab_id) => Some(tab_id),
+                None if self.server.tabs.is_empty() => None,
+                None => {
+                    let fallback_index =
+                        closed_tab_index.map_or(self.server.tabs.active_index(), |index| {
+                            index.min(self.server.tabs.len().saturating_sub(1))
+                        });
+                    self.server.tabs.tab_id_for_index(fallback_index)
+                }
+            };
+            let focused_pane_id = viewed_tab_id.and_then(|tab_id| {
+                let pane_ids = self.pane_ids_for_tab(tab_id);
+                view.focused_pane_id
+                    .filter(|pane_id| pane_ids.contains(pane_id))
+                    .or_else(|| self.default_focused_pane_for_tab(tab_id))
+            });
+            let visible_pane_ids = viewed_tab_id
+                .map(|tab_id| self.pane_ids_for_tab(tab_id))
+                .unwrap_or_default();
+            server.update_client_view(client_id, |remote_view| {
+                remote_view.viewed_tab_id = viewed_tab_id;
+                remote_view.focused_pane_id = focused_pane_id;
+                remote_view.visible_pane_ids = visible_pane_ids.clone();
+                remote_view.touch_view();
+            });
+        }
+    }
+
     fn pane_handle_by_id_any(&self, pane_id: u64) -> Option<PaneHandle> {
         let (tab_index, _) = self.server.tabs.find_pane_location(pane_id)?;
         self.server
@@ -769,6 +813,7 @@ impl BooApp {
                     self.recover_remote_client_runtime_view(client_id);
                     return;
                 };
+                let closed_tab_index = tab_index;
                 let was_active = tab_index == self.server.tabs.active_index();
                 let panes = self.server.tabs.remove_tab(tab_index);
                 for pane in panes {
@@ -778,6 +823,7 @@ impl BooApp {
                     self.sync_after_tab_change();
                 }
                 self.invalidate_remote_tabs_cache();
+                self.repair_all_remote_views(Some(closed_tab_index));
                 let focused_tab_id = self.broadcast_runtime_view_to_all_viewers();
                 log::info!(
                     "remote_destroy_done client_id={client_id} destroyed_tab={target} tabs_after={} focused_after={focused_tab_id:?}",
