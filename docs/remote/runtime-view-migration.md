@@ -57,7 +57,7 @@ This means Boo already has the foundation for a runtime-view protocol.
 The main architectural problem is that iOS is still mostly wired through the
 older attached-session terminal protocol.
 
-## Session Audit
+## Legacy Session Audit
 
 ### Category A: Actually tab identity and should be renamed away from `session`
 
@@ -117,7 +117,7 @@ surface:
 - subscription state lives in transport plumbing
 - revive/lease state is now explicitly transport-only
 
-### Category C: Obsolete client/session-pool model that should be removed
+### Category C: Obsolete legacy-session-pool model that should be removed
 
 These represent the wrong product abstraction and should be deleted, not merely
 renamed.
@@ -140,7 +140,8 @@ Examples:
 
 ### One runtime subscription per client
 
-A remote client should connect to the Boo runtime, not attach to a session.
+A remote client should connect to the Boo runtime, not attach through the
+legacy session layer.
 
 The runtime subscription should carry:
 

@@ -33,11 +33,11 @@ For iOS, the product direction is now:
 - reconnecting to the same host should reopen or recover that same host-owned
   tab/runtime state rather than listing multiple candidate tabs heuristically
 - the client should connect to runtime state, not pick from a host-local
-  session pool
+  legacy session pool
 
 Two architectural models are worth keeping explicit:
 
-1. Rejected current-style model:
+1. Rejected legacy model:
    one host -> `listSessions()` -> choose a session heuristically -> attach
 2. Desired host-scoped model:
    one host -> one canonical Boo runtime view for iOS -> reopen or recover that
