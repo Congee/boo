@@ -73,6 +73,39 @@ impl BooApp {
         self.sync_remote_client_runtime_view(client_id, focused_tab_id);
     }
 
+    fn sync_all_runtime_viewers_to_active_tab(&mut self) -> Option<u32> {
+        let focused_tab_id = self
+            .server
+            .tabs
+            .active_tab_id()
+            .filter(|visible_tab_id| self.pane_for_tab(*visible_tab_id).is_some());
+        if let Some(visible_tab_id) = focused_tab_id {
+            let retargeted = self
+                .remote_servers()
+                .any(|server| server.retarget_viewing_tab(visible_tab_id));
+            if retargeted {
+                self.invalidate_remote_tabs_cache();
+            }
+        }
+        focused_tab_id
+    }
+
+    fn broadcast_runtime_view_to_all_viewers(&mut self) -> Option<u32> {
+        let focused_tab_id = self.sync_all_runtime_viewers_to_active_tab();
+        let tabs = self.current_remote_tabs();
+        let ui_runtime_state = self.ui_runtime_state();
+        let ui_appearance = self.ui_appearance_snapshot();
+        self.remote_servers().for_each(|server| {
+            server.send_tab_list_to_viewers(tabs.as_ref());
+            server.send_ui_runtime_state_to_viewers(&ui_runtime_state);
+            server.send_ui_appearance_to_viewers(&ui_appearance);
+        });
+        if let Some(visible_tab_id) = focused_tab_id {
+            self.publish_remote_tab(visible_tab_id);
+        }
+        focused_tab_id
+    }
+
     fn remote_full_state_for_pane(&self, pane_id: u64) -> Option<Arc<remote::RemoteFullState>> {
         if let Some(snapshot) = self.backend.render_snapshot(pane_id) {
             return Some(Arc::new(remote::full_state_from_terminal(&snapshot)));
@@ -91,7 +124,7 @@ impl BooApp {
         let ui_state = self.ui_runtime_state();
         let retargeted = {
             let server = self.server.local_gui_server.as_ref().expect("local gui server");
-            server.retarget_local_viewing_tab(visible_tab_id)
+            server.retarget_viewing_tab(visible_tab_id)
         };
         if retargeted {
             self.invalidate_remote_tabs_cache();
@@ -444,7 +477,8 @@ impl BooApp {
                     "remote_create_succeeded client_id={client_id} visible_tab_id={visible_tab_id} tabs_after={}",
                     self.server.tabs.len()
                 );
-                self.sync_remote_client_runtime_view(client_id, Some(visible_tab_id));
+                let _ = client_id;
+                self.broadcast_runtime_view_to_all_viewers();
             }
             server::Command::RemoteInput {
                 client_id,
@@ -546,21 +580,8 @@ impl BooApp {
             server::Command::RemoteExecuteCommand { client_id, input } => {
                 self.invalidate_remote_tabs_cache();
                 self.execute_command(&input);
-                let focused_tab_id = self.server.tabs.active_tab_id();
-                let ui_state = self.ui_runtime_state();
-                let tabs = self.current_remote_tabs();
-                if let Some(server) = self
-                    .remote_server_for_client(client_id)
-                    .or(self.server.local_gui_server.as_ref())
-                    .or(self.server.remote_server.as_ref())
-                {
-                    server.send_ui_runtime_state(client_id, &ui_state);
-                    server.send_tab_list(client_id, tabs.as_ref());
-                    if let Some(visible_tab_id) = focused_tab_id {
-                        server.set_client_visible_tab(client_id, visible_tab_id);
-                        self.publish_remote_tab(visible_tab_id);
-                    }
-                }
+                let _ = client_id;
+                self.broadcast_runtime_view_to_all_viewers();
             }
             server::Command::RemoteAppKeyEvent { client_id, event } => {
                 let Some(visible_tab_id) = self
@@ -592,21 +613,7 @@ impl BooApp {
                 }
                 let consumed = self.handle_app_key_event(event);
                 if consumed {
-                    let focused_tab_id = self.server.tabs.active_tab_id();
-                    let ui_state = self.ui_runtime_state();
-                    let tabs = self.current_remote_tabs();
-                    if let Some(server) = self
-                        .remote_server_for_client(client_id)
-                        .or(self.server.local_gui_server.as_ref())
-                        .or(self.server.remote_server.as_ref())
-                    {
-                        server.send_ui_runtime_state(client_id, &ui_state);
-                        server.send_tab_list(client_id, tabs.as_ref());
-                        if let Some(visible_tab_id) = focused_tab_id {
-                            server.set_client_visible_tab(client_id, visible_tab_id);
-                            self.publish_remote_tab(visible_tab_id);
-                        }
-                    }
+                    self.broadcast_runtime_view_to_all_viewers();
                 }
             }
             server::Command::RemoteAppMouseEvent { client_id, event } => {
@@ -640,40 +647,16 @@ impl BooApp {
                     self.set_pane_focus(new, true);
                 }
                 let changed_ui = self.handle_app_mouse_event(event);
-                let ui_state = self.ui_runtime_state();
-                let tabs = self.current_remote_tabs();
-                if let Some(server) = self
-                    .remote_server_for_client(client_id)
-                    .or(self.server.local_gui_server.as_ref())
-                    .or(self.server.remote_server.as_ref())
-                {
-                    if changed_ui {
-                        server.send_ui_runtime_state(client_id, &ui_state);
-                        server.send_tab_list(client_id, tabs.as_ref());
-                    }
-                    if changed_ui || should_republish_tab {
-                        server.set_client_visible_tab(client_id, visible_tab_id);
-                        self.publish_remote_tab(visible_tab_id);
-                    }
+                if changed_ui || should_republish_tab {
+                    let _ = self
+                        .broadcast_runtime_view_to_all_viewers()
+                        .unwrap_or(visible_tab_id);
                 }
             }
             server::Command::RemoteAppAction { client_id, action } => {
                 self.dispatch_binding_action(action);
-                let focused_tab_id = self.server.tabs.active_tab_id();
-                let ui_state = self.ui_runtime_state();
-                let tabs = self.current_remote_tabs();
-                if let Some(server) = self
-                    .remote_server_for_client(client_id)
-                    .or(self.server.local_gui_server.as_ref())
-                    .or(self.server.remote_server.as_ref())
-                {
-                    server.send_ui_runtime_state(client_id, &ui_state);
-                    server.send_tab_list(client_id, tabs.as_ref());
-                    if let Some(visible_tab_id) = focused_tab_id {
-                        server.set_client_visible_tab(client_id, visible_tab_id);
-                        self.publish_remote_tab(visible_tab_id);
-                    }
-                }
+                let _ = client_id;
+                self.broadcast_runtime_view_to_all_viewers();
             }
             server::Command::RemoteFocusPane { client_id, pane_id } => {
                 let Some(visible_tab_id) = self
@@ -702,18 +685,8 @@ impl BooApp {
                 }
                 if self.focus_pane_by_id(pane_id)
                 {
-                    let ui_state = self.ui_runtime_state();
-                    let tabs = self.current_remote_tabs();
-                    if let Some(server) = self
-                        .remote_server_for_client(client_id)
-                        .or(self.server.local_gui_server.as_ref())
-                        .or(self.server.remote_server.as_ref())
-                    {
-                    server.send_ui_runtime_state(client_id, &ui_state);
-                    server.send_tab_list(client_id, tabs.as_ref());
-                    server.set_client_visible_tab(client_id, visible_tab_id);
-                    self.publish_remote_tab(visible_tab_id);
-                    }
+                    let _ = client_id;
+                    self.broadcast_runtime_view_to_all_viewers();
                 }
             }
             server::Command::RemoteDestroy {
@@ -751,24 +724,12 @@ impl BooApp {
                     self.sync_after_tab_change();
                 }
                 self.invalidate_remote_tabs_cache();
-                let tabs = self.current_remote_tabs();
-                let focused_tab_id = self.server.tabs.active_tab_id();
-                let ui_state = self.ui_runtime_state();
+                let focused_tab_id = self.broadcast_runtime_view_to_all_viewers();
                 log::info!(
                     "remote_destroy_done client_id={client_id} destroyed_tab={target} tabs_after={} focused_after={focused_tab_id:?}",
                     self.server.tabs.len()
                 );
-                if let Some(server) = self.remote_server_for_delivery(client_id) {
-                    server.send_ui_runtime_state(client_id, &ui_state);
-                    server.send_tab_list(client_id, tabs.as_ref());
-                    server.send_ui_appearance(client_id, &self.ui_appearance_snapshot());
-                    if let Some(visible_tab_id) = focused_tab_id {
-                        server.set_client_visible_tab(client_id, visible_tab_id);
-                        self.publish_remote_tab(visible_tab_id);
-                    } else {
-                        server.clear_client_visible_tab(client_id);
-                    }
-                }
+                let _ = client_id;
             }
         }
     }

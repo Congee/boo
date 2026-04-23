@@ -13,13 +13,12 @@ pub(crate) fn local_subscribed_client_ids_for_tab(state: &State, visible_tab_id:
         .collect()
 }
 
-pub(crate) fn retarget_local_subscribed_client_ids_for_tab(state: &State, visible_tab_id: u32) -> Vec<u64> {
+pub(crate) fn retarget_subscribed_client_ids_for_tab(state: &State, visible_tab_id: u32) -> Vec<u64> {
     state
         .clients
         .iter()
         .filter_map(|(client_id, client)| {
-            (client.is_local
-                && client.runtime_view.visible_tab_id.is_some()
+            (client.runtime_view.visible_tab_id.is_some()
                 && client.runtime_view.visible_tab_id != Some(visible_tab_id))
             .then_some(*client_id)
         })
