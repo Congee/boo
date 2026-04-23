@@ -32,7 +32,7 @@ pub(crate) const DIRECT_CLIENT_HEARTBEAT_WINDOW: Duration = Duration::from_secs(
 /// struct only tracks which tab a given viewer is currently showing plus the
 /// cached payloads/full states needed for efficient transport updates.
 pub(crate) struct ClientRuntimeView {
-    pub(crate) viewing_tab_id: Option<u32>,
+    pub(crate) current_tab_id: Option<u32>,
     pub(crate) last_tab_list_payload: Option<Vec<u8>>,
     pub(crate) last_ui_runtime_state_payload: Option<Vec<u8>>,
     pub(crate) last_ui_appearance_payload: Option<Vec<u8>>,
@@ -44,7 +44,7 @@ pub(crate) struct ClientRuntimeView {
 impl ClientRuntimeView {
     pub(crate) fn idle() -> Self {
         Self {
-            viewing_tab_id: None,
+            current_tab_id: None,
             last_tab_list_payload: None,
             last_ui_runtime_state_payload: None,
             last_ui_appearance_payload: None,

@@ -8,18 +8,18 @@ pub(crate) fn local_viewer_client_ids(state: &State) -> Vec<u64> {
         .clients
         .iter()
         .filter_map(|(client_id, client)| {
-            (client.is_local && client.runtime_view.viewing_tab_id.is_some()).then_some(*client_id)
+            (client.is_local && client.runtime_view.current_tab_id.is_some()).then_some(*client_id)
         })
         .collect()
 }
 
-pub(crate) fn retarget_viewer_client_ids_to_tab(state: &State, viewing_tab_id: u32) -> Vec<u64> {
+pub(crate) fn retarget_viewer_client_ids_to_tab(state: &State, current_tab_id: u32) -> Vec<u64> {
     state
         .clients
         .iter()
         .filter_map(|(client_id, client)| {
-            (client.runtime_view.viewing_tab_id.is_some()
-                && client.runtime_view.viewing_tab_id != Some(viewing_tab_id))
+            (client.runtime_view.current_tab_id.is_some()
+                && client.runtime_view.current_tab_id != Some(current_tab_id))
             .then_some(*client_id)
         })
         .collect()
@@ -38,7 +38,7 @@ pub(crate) fn viewer_client_ids(state: &State) -> Vec<u64> {
         .clients
         .iter()
         .filter_map(|(client_id, client)| {
-            client.runtime_view.viewing_tab_id.is_some().then_some(*client_id)
+            client.runtime_view.current_tab_id.is_some().then_some(*client_id)
         })
         .collect()
 }
@@ -49,7 +49,7 @@ pub(crate) fn retain_local_viewer_pane_states(
 ) {
     let visible = visible_pane_ids.iter().copied().collect::<HashSet<_>>();
     for client in state.clients.values_mut() {
-        if client.is_local && client.runtime_view.viewing_tab_id.is_some() {
+        if client.is_local && client.runtime_view.current_tab_id.is_some() {
             client.runtime_view.pane_states.retain(|pane_id, _| visible.contains(pane_id));
         }
     }

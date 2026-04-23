@@ -27,7 +27,7 @@ mod tests {
             authenticated_at: Some(Instant::now()),
             last_heartbeat_at: None,
             runtime_view: ClientRuntimeView {
-                viewing_tab_id: viewing_tab,
+                current_tab_id: viewing_tab,
                 ..ClientRuntimeView::idle()
             },
             is_local,
@@ -177,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn retarget_viewing_tab_skips_same_tab_and_unsubscribed_clients() {
+    fn retarget_viewers_to_tab_skips_same_tab_and_unsubscribed_clients() {
         let (local_viewer_tx, local_viewer_rx) = mpsc::channel();
         let (local_viewer_two_tx, local_viewer_two_rx) = mpsc::channel();
         let (local_idle_tx, local_idle_rx) = mpsc::channel();
@@ -200,14 +200,14 @@ mod tests {
         let state = Arc::new(Mutex::new(state));
         let server = RemoteServer::for_test(Arc::clone(&state));
 
-        server.retarget_viewing_tab(22);
+        server.retarget_viewers_to_tab(22);
 
         let guard = state.lock().expect("remote server state poisoned");
-        assert_eq!(guard.clients.get(&1).and_then(|c| c.runtime_view.viewing_tab_id), Some(22));
-        assert_eq!(guard.clients.get(&5).and_then(|c| c.runtime_view.viewing_tab_id), Some(22));
-        assert_eq!(guard.clients.get(&2).and_then(|c| c.runtime_view.viewing_tab_id), None);
-        assert_eq!(guard.clients.get(&3).and_then(|c| c.runtime_view.viewing_tab_id), Some(22));
-        assert_eq!(guard.clients.get(&4).and_then(|c| c.runtime_view.viewing_tab_id), Some(22));
+        assert_eq!(guard.clients.get(&1).and_then(|c| c.runtime_view.current_tab_id), Some(22));
+        assert_eq!(guard.clients.get(&5).and_then(|c| c.runtime_view.current_tab_id), Some(22));
+        assert_eq!(guard.clients.get(&2).and_then(|c| c.runtime_view.current_tab_id), None);
+        assert_eq!(guard.clients.get(&3).and_then(|c| c.runtime_view.current_tab_id), Some(22));
+        assert_eq!(guard.clients.get(&4).and_then(|c| c.runtime_view.current_tab_id), Some(22));
         assert!(local_idle_rx.try_recv().is_err());
         assert!(local_same_tab_rx.try_recv().is_err());
         assert!(remote_viewer_rx.try_recv().is_err());

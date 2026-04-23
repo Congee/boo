@@ -283,28 +283,28 @@ impl RemoteServer {
         state
             .clients
             .values()
-            .any(|client| client.runtime_view.viewing_tab_id.is_some())
+            .any(|client| client.runtime_view.current_tab_id.is_some())
     }
 
-    pub fn local_viewing_tab(&self, viewing_tab_id: u32) -> bool {
+    pub fn local_current_tab(&self, current_tab_id: u32) -> bool {
         let state = self.state.lock().expect("remote server state poisoned");
         state
             .clients
             .values()
-            .any(|client| client.is_local && client.runtime_view.viewing_tab_id == Some(viewing_tab_id))
+            .any(|client| client.is_local && client.runtime_view.current_tab_id == Some(current_tab_id))
     }
 
-    pub fn client_viewing_tab(&self, client_id: u64) -> Option<u32> {
+    pub fn client_current_tab(&self, client_id: u64) -> Option<u32> {
         let state = self.state.lock().expect("remote server state poisoned");
         state
             .clients
             .get(&client_id)
-            .and_then(|client| client.runtime_view.viewing_tab_id)
+            .and_then(|client| client.runtime_view.current_tab_id)
     }
 
     #[allow(dead_code)]
     pub fn client_tab(&self, client_id: u64) -> Option<u32> {
-        self.client_viewing_tab(client_id)
+        self.client_current_tab(client_id)
     }
 
     #[cfg(test)]
@@ -362,7 +362,7 @@ impl RemoteServer {
                 .clients
                 .iter()
                 .filter_map(|(client_id, client)| {
-                    client.runtime_view.viewing_tab_id.is_some().then_some(*client_id)
+                    client.runtime_view.current_tab_id.is_some().then_some(*client_id)
                 })
                 .collect::<Vec<_>>()
         };
@@ -371,20 +371,20 @@ impl RemoteServer {
         }
     }
 
-    pub fn set_client_viewing_tab(&self, client_id: u64, viewing_tab_id: u32) {
+    pub fn set_client_current_tab(&self, client_id: u64, current_tab_id: u32) {
         self.update_client(client_id, |client| {
-            let same_tab = client.runtime_view.viewing_tab_id == Some(viewing_tab_id);
-            client.runtime_view.viewing_tab_id = Some(viewing_tab_id);
+            let same_tab = client.runtime_view.current_tab_id == Some(current_tab_id);
+            client.runtime_view.current_tab_id = Some(current_tab_id);
             if !same_tab {
                 client.runtime_view.clear_stream_state();
             }
         });
-        log::info!("remote runtime viewer retargeted: client_id={client_id} viewing_tab_id={viewing_tab_id}");
+        log::info!("remote runtime viewer retargeted: client_id={client_id} current_tab_id={current_tab_id}");
     }
 
-    pub fn clear_client_viewing_tab(&self, client_id: u64) {
+    pub fn clear_client_current_tab(&self, client_id: u64) {
         self.update_client(client_id, |client| {
-            client.runtime_view.viewing_tab_id = None;
+            client.runtime_view.current_tab_id = None;
             client.runtime_view.clear_stream_state();
         });
         log::info!("remote runtime view cleared: client_id={client_id}");
@@ -421,7 +421,7 @@ impl RemoteServer {
                 .clients
                 .iter()
                 .filter_map(|(client_id, client)| {
-                    client.runtime_view.viewing_tab_id.is_some().then_some(*client_id)
+                    client.runtime_view.current_tab_id.is_some().then_some(*client_id)
                 })
                 .collect::<Vec<_>>()
         };
@@ -430,16 +430,16 @@ impl RemoteServer {
         }
     }
 
-    pub fn retarget_viewing_tab(&self, viewing_tab_id: u32) -> bool {
+    pub fn retarget_viewers_to_tab(&self, current_tab_id: u32) -> bool {
         let client_ids = {
             let state_guard = self.state.lock().expect("remote server state poisoned");
-            retarget_viewer_client_ids_to_tab(&state_guard, viewing_tab_id)
+            retarget_viewer_client_ids_to_tab(&state_guard, current_tab_id)
         };
         if client_ids.is_empty() {
             return false;
         }
         for client_id in client_ids {
-            self.set_client_viewing_tab(client_id, viewing_tab_id);
+            self.set_client_current_tab(client_id, current_tab_id);
         }
         true
     }
@@ -469,7 +469,7 @@ impl RemoteServer {
                 .clients
                 .iter()
                 .filter_map(|(client_id, client)| {
-                    client.runtime_view.viewing_tab_id.is_some().then_some(*client_id)
+                    client.runtime_view.current_tab_id.is_some().then_some(*client_id)
                 })
                 .collect::<Vec<_>>()
         };

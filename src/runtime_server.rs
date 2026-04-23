@@ -46,7 +46,7 @@ impl BooApp {
             .or(self.server.remote_server.as_ref())
     }
 
-    fn sync_remote_client_runtime_view(&mut self, client_id: u64, next_viewing_tab_id: Option<u32>) {
+    fn sync_remote_client_runtime_view(&mut self, client_id: u64, next_current_tab_id: Option<u32>) {
         let tabs = self.current_remote_tabs();
         let ui_runtime_state = self.ui_runtime_state();
         let ui_appearance = self.ui_appearance_snapshot();
@@ -56,11 +56,11 @@ impl BooApp {
         server.send_tab_list(client_id, tabs.as_ref());
         server.send_ui_runtime_state(client_id, &ui_runtime_state);
         server.send_ui_appearance(client_id, &ui_appearance);
-        if let Some(viewing_tab_id) = next_viewing_tab_id {
-            server.set_client_viewing_tab(client_id, viewing_tab_id);
-            self.publish_remote_tab(viewing_tab_id);
+        if let Some(current_tab_id) = next_current_tab_id {
+            server.set_client_current_tab(client_id, current_tab_id);
+            self.publish_remote_tab(current_tab_id);
         } else {
-            server.clear_client_viewing_tab(client_id);
+            server.clear_client_current_tab(client_id);
         }
     }
 
@@ -99,7 +99,7 @@ impl BooApp {
         if let Some(active_tab_id) = focused_tab_id {
             let retargeted = self
                 .remote_servers()
-                .any(|server| server.retarget_viewing_tab(active_tab_id));
+                .any(|server| server.retarget_viewers_to_tab(active_tab_id));
             if retargeted {
                 self.invalidate_remote_tabs_cache();
             }
@@ -141,7 +141,7 @@ impl BooApp {
         let ui_state = self.ui_runtime_state();
         let retargeted = {
             let server = self.server.local_gui_server.as_ref().expect("local gui server");
-            server.retarget_viewing_tab(current_tab_id)
+            server.retarget_viewers_to_tab(current_tab_id)
         };
         if retargeted {
             self.invalidate_remote_tabs_cache();
@@ -189,8 +189,8 @@ impl BooApp {
         }
     }
 
-    fn bootstrap_local_stream_client(&self, server: &remote::RemoteServer, client_id: u64, viewing_tab_id: u32) {
-        server.set_client_viewing_tab(client_id, viewing_tab_id);
+    fn bootstrap_local_stream_client(&self, server: &remote::RemoteServer, client_id: u64, current_tab_id: u32) {
+        server.set_client_current_tab(client_id, current_tab_id);
         server.send_ui_appearance(client_id, &self.ui_appearance_snapshot());
         server.send_ui_runtime_state(client_id, &self.ui_runtime_state());
     }
@@ -398,7 +398,7 @@ impl BooApp {
                             .remote_server_for_client(client_id)
                             .or(self.server.local_gui_server.as_ref())
                             .or(self.server.remote_server.as_ref())
-                            .is_some_and(|server| server.client_viewing_tab(client_id).is_none())
+                            .is_some_and(|server| server.client_current_tab(client_id).is_none())
                 });
                 if let Some(bootstrap_tab_id) = bootstrap_tab_id
                     && let Some(server) = self
@@ -409,7 +409,7 @@ impl BooApp {
                     if server.client_is_local(client_id) {
                         self.bootstrap_local_stream_client(server, client_id, bootstrap_tab_id);
                     } else {
-                        server.set_client_viewing_tab(client_id, bootstrap_tab_id);
+                        server.set_client_current_tab(client_id, bootstrap_tab_id);
                     }
                     self.publish_remote_tab(bootstrap_tab_id);
                 }
@@ -431,7 +431,7 @@ impl BooApp {
                             .remote_server_for_client(client_id)
                             .or(self.server.local_gui_server.as_ref())
                             .or(self.server.remote_server.as_ref())
-                            .is_some_and(|server| server.client_viewing_tab(client_id).is_none())
+                            .is_some_and(|server| server.client_current_tab(client_id).is_none())
                 });
                 if let Some(bootstrap_tab_id) = bootstrap_tab_id
                     && let Some(server) = self
@@ -442,7 +442,7 @@ impl BooApp {
                     if server.client_is_local(client_id) {
                         self.bootstrap_local_stream_client(server, client_id, bootstrap_tab_id);
                     } else {
-                        server.set_client_viewing_tab(client_id, bootstrap_tab_id);
+                        server.set_client_current_tab(client_id, bootstrap_tab_id);
                     }
                     self.publish_remote_tab(bootstrap_tab_id);
                 }
@@ -759,7 +759,7 @@ impl BooApp {
         };
         let needs_local_pane_states = servers
             .iter()
-            .any(|server| server.local_viewing_tab(tab_id));
+            .any(|server| server.local_current_tab(tab_id));
         let pane_states = if needs_local_pane_states {
             self.server
                 .tabs
