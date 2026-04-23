@@ -1,38 +1,35 @@
 import Foundation
 
 extension GSPClient {
-    var tabs: [RemoteTabInfo] {
-        get { sessions }
-        set { sessions = newValue }
+    func listSessions() {
+        listTabs()
     }
 
-    var attachedTabId: UInt32? {
-        get { attachedSessionId }
-        set { attachedSessionId = newValue }
+    func createSession(cols: UInt16 = 120, rows: UInt16 = 36) {
+        createTab(cols: cols, rows: rows)
     }
 
-    var pendingAttachedTabId: UInt32? {
-        get { pendingAttachedSessionId }
-        set { pendingAttachedSessionId = newValue }
+    func destroySession(sessionId: UInt32) {
+        destroyTab(tabId: sessionId)
     }
 
-    func listTabs() {
-        listSessions()
+    func attach(sessionId: UInt32) {
+        attach(tabId: sessionId)
     }
 
-    func createTab(cols: UInt16 = 120, rows: UInt16 = 36) {
-        createSession(cols: cols, rows: rows)
+    func configurePreferredHostSession(sessionId: UInt32?) {
+        configurePreferredHostTab(tabId: sessionId)
     }
 
-    func destroyTab(tabId: UInt32) {
-        destroySession(sessionId: tabId)
+    func clearPreferredHostSession() {
+        clearPreferredHostTab()
     }
 
-    func attach(tabId: UInt32) {
-        attach(sessionId: tabId)
+    func suppressAutomaticSessionBootstrap() {
+        suppressAutomaticTabBootstrap()
     }
 
-    func configurePreferredHostTab(tabId: UInt32?) {
-        configurePreferredHostSession(sessionId: tabId)
+    func configureResumeAttachment(sessionId: UInt32, attachmentId: UInt64, resumeToken: UInt64) {
+        configureResumeAttachment(tabId: sessionId, attachmentId: attachmentId, resumeToken: resumeToken)
     }
 }

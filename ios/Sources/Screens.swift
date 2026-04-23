@@ -289,12 +289,19 @@ struct BooRootView: View {
             activeMonitor.reconnect()
         }
         .onChange(of: client.lastError) { _, newValue in
-            guard client.lastErrorKind?.invalidatesResumeAttachment == true,
-                  newValue != nil,
+            guard newValue != nil,
                   let host = activeMonitor.lastHost,
                   let port = activeMonitor.lastPort
             else { return }
-            store.clearResumeAttachment(host: host, port: port)
+            if client.lastErrorKind?.invalidatesResumeAttachment == true {
+                store.clearResumeAttachment(host: host, port: port)
+            }
+            switch client.lastErrorKind {
+            case .unknownSession, .notAttached:
+                store.clearHostTab(host: host, port: port)
+            default:
+                break
+            }
         }
     }
 
@@ -325,14 +332,19 @@ struct BooRootView: View {
                     port: port,
                     identityId: serverIdentityId
                 )
-                if let sessionId = client.attachedSessionId,
+                if let tabId = client.attachedTabId,
                    let attachmentId = client.attachmentId,
                    let resumeToken = client.resumeToken
                 {
+                    store.recordHostTab(
+                        host: host,
+                        port: port,
+                        tabId: tabId
+                    )
                     store.recordResumeAttachment(
                         host: host,
                         port: port,
-                        sessionId: sessionId,
+                        tabId: tabId,
                         attachmentId: attachmentId,
                         resumeToken: resumeToken
                     )
@@ -699,6 +711,17 @@ struct ConnectScreen: View {
             return
         }
         if case .service = endpoint {
+            if let config = UITestLaunchConfiguration.current(),
+               let configuredHost = config.host
+            {
+                connectToHost(
+                    configuredHost,
+                    port: config.port,
+                    nodeName: display.nodeName,
+                    routeKind: .bonjourLAN
+                )
+                return
+            }
             client.lastError = nil
             resolvingBonjourService = true
             let resolver = BonjourServiceResolver()
@@ -770,6 +793,9 @@ struct ConnectScreen: View {
         let sameEndpoint = monitor.lastHost == host && monitor.lastPort == port
         let sameDisplayName = monitor.lastDisplayName == nodeName && monitor.lastPort == port
         guard sameEndpoint || sameDisplayName else { return false }
+        guard client.attachedTabId != nil || client.pendingAttachedTabId != nil else {
+            return false
+        }
         switch monitor.status {
         case .connecting, .connected, .authenticated, .attached:
             return true
@@ -911,6 +937,21 @@ struct ConnectScreen: View {
     }
 }
 
+private enum TerminalModifierState {
+    case inactive
+    case held
+    case latched
+
+    var isActive: Bool {
+        switch self {
+        case .inactive:
+            return false
+        case .held, .latched:
+            return true
+        }
+    }
+}
+
 struct TerminalSessionScreen: View {
     @ObservedObject var client: GSPClient
     @ObservedObject var monitor: ConnectionMonitor
@@ -919,32 +960,25 @@ struct TerminalSessionScreen: View {
     let onBack: () -> Void
 
     @State private var keyboardFocused = false
-    @State private var ctrlActive = false
-    @State private var altActive = false
-    @State private var metaActive = false
-    @State private var requestedInitialSession = false
+    @State private var ctrlModifierState: TerminalModifierState = .inactive
+    @State private var altModifierState: TerminalModifierState = .inactive
+    @State private var metaModifierState: TerminalModifierState = .inactive
+    @State private var ctrlModifierConsumedWhileHeld = false
+    @State private var altModifierConsumedWhileHeld = false
+    @State private var metaModifierConsumedWhileHeld = false
     @State private var didApplyUITestForcedError = false
+    @State private var closingHostSessionId: UInt32?
 
-    private var visibleSessions: [SessionInfo] {
-        client.sessions.filter { !$0.childExited }
+    private var visibleTabs: [RemoteTabInfo] {
+        client.tabs.filter { !$0.childExited }
     }
 
-    private var sessionHealth: AttachedSessionHealth {
-        resolveAttachedSessionHealth(attachedSessionId: client.attachedSessionId, sessions: client.sessions)
+    private var tabHealth: AttachedTabHealth {
+        resolveAttachedTabHealth(attachedTabId: client.attachedTabId, tabs: client.tabs)
     }
 
-    private var sessionHealthIssue: String? {
-        sessionHealth.issue
-    }
-
-    private var preferredSessionToAttach: SessionInfo? {
-        if let pendingId = client.pendingAttachedSessionId {
-            return visibleSessions.first(where: { $0.id == pendingId })
-        }
-        if let attachedSessionId = client.attachedSessionId {
-            return visibleSessions.first(where: { $0.id == attachedSessionId })
-        }
-        return visibleSessions.first(where: { !$0.attached })
+    private var tabHealthIssue: String? {
+        tabHealth.issue
     }
 
     var body: some View {
@@ -982,30 +1016,27 @@ struct TerminalSessionScreen: View {
             .padding(.horizontal, KineticSpacing.md)
             .padding(.top, 14)
             .zIndex(10)
+
         }
         .onAppear {
-            if client.authenticated {
-                client.listSessions()
-            }
-            autoAttachPreferredSessionIfNeeded()
             applyUITestForcedErrorIfNeeded()
-            guard !isDisconnected, client.attachedSessionId != nil else { return }
+            guard !isDisconnected, client.attachedTabId != nil else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 keyboardFocused = true
             }
         }
-        .onReceive(client.$sessions) { _ in
-            autoAttachPreferredSessionIfNeeded()
+        .onReceive(client.$tabs) { _ in
+            reconcileHostTabBinding()
+            if finalizeHostTabCloseIfNeeded() {
+                return
+            }
             applyUITestForcedErrorIfNeeded()
         }
-        .onChange(of: client.authenticated) { _, authenticated in
-            if !authenticated {
-                requestedInitialSession = false
+        .onChange(of: client.attachedTabId) { _, attachedTabId in
+            if finalizeHostTabCloseIfNeeded() {
+                return
             }
-        }
-        .onChange(of: client.attachedSessionId) { _, attachedSessionId in
-            if attachedSessionId != nil {
-                requestedInitialSession = false
+            if attachedTabId != nil {
                 keyboardFocused = false
                 DispatchQueue.main.async {
                     keyboardFocused = true
@@ -1015,7 +1046,6 @@ struct TerminalSessionScreen: View {
         }
         .onChange(of: isDisconnected) { _, disconnected in
             if disconnected {
-                requestedInitialSession = false
                 keyboardFocused = false
             }
         }
@@ -1028,16 +1058,22 @@ struct TerminalSessionScreen: View {
         VStack(spacing: 0) {
             terminalBanner
             terminalView
+            if UITestLaunchConfiguration.current() != nil {
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .accessibilityIdentifier("terminal-debug-state")
+                    .accessibilityLabel(client.uiTestSessionDebugSummary)
+            }
         }
     }
 
     @ViewBuilder
     private var attachmentOverlay: some View {
-        if !isDisconnected, client.attachedSessionId == nil {
+        if !isDisconnected, client.attachedTabId == nil {
             VStack(spacing: KineticSpacing.sm) {
                 ProgressView()
                     .tint(KineticColor.primary)
-                Text("Opening session…")
+                Text("Opening tab…")
                     .font(KineticFont.caption)
                     .foregroundStyle(KineticColor.onSurfaceVariant)
             }
@@ -1052,8 +1088,8 @@ struct TerminalSessionScreen: View {
     private var terminalBanner: some View {
         if let serverIdentityWarning {
             transportBanner(reason: serverIdentityWarning, color: KineticColor.error)
-        } else if let sessionHealthIssue {
-            transportBanner(reason: sessionHealthIssue, color: KineticColor.error)
+        } else if let tabHealthIssue {
+            transportBanner(reason: tabHealthIssue, color: KineticColor.error)
         } else if let lastError = client.lastError, !lastError.isEmpty {
             transportBanner(reason: monitor.contextualErrorMessage(lastError), color: KineticColor.error)
         } else if let disconnectReason {
@@ -1069,13 +1105,13 @@ struct TerminalSessionScreen: View {
         } onGestureAction: { action in
             handleTerminalGesture(action)
         }
-        .opacity(isDisconnected || client.attachedSessionId == nil ? 0.5 : 1.0)
+        .opacity(isDisconnected || client.attachedTabId == nil ? 0.5 : 1.0)
         .accessibilityIdentifier("terminal-screen")
-        .accessibilityLabel(client.attachedSessionId.map { "attached-\($0)" } ?? "detached")
+        .accessibilityLabel(client.attachedTabId.map { "attached-\($0)" } ?? "detached")
         .accessibilityValue(client.screen.accessibilityTextSnapshot)
         .contentShape(Rectangle())
         .onTapGesture {
-            guard !isDisconnected, client.attachedSessionId != nil else { return }
+            guard !isDisconnected, client.attachedTabId != nil else { return }
             keyboardFocused = true
         }
         .overlay {
@@ -1087,17 +1123,20 @@ struct TerminalSessionScreen: View {
                 onBackspace: {
                     client.sendInputBytes(Data([0x7f]))
                 },
+                onKeyCommand: { input, modifiers in
+                    handleKeyCommand(input: input, modifiers: modifiers)
+                },
                 accessoryState: TerminalKeyboardAccessoryState(
-                    ctrlActive: ctrlActive,
-                    altActive: altActive,
-                    metaActive: metaActive,
+                    ctrlActive: ctrlModifierState.isActive,
+                    altActive: altModifierState.isActive,
+                    metaActive: metaModifierState.isActive,
                     onInsertText: { text in
                         sendTypedText(text)
                     },
                     onEscape: { sendSpecialKey([0x1b]) },
-                    onToggleCtrl: { ctrlActive.toggle() },
-                    onToggleAlt: { altActive.toggle() },
-                    onToggleMeta: { metaActive.toggle() },
+                    onCtrlModifierEvent: { handleModifierEvent($0, modifier: .ctrl) },
+                    onAltModifierEvent: { handleModifierEvent($0, modifier: .alt) },
+                    onMetaModifierEvent: { handleModifierEvent($0, modifier: .meta) },
                     onTab: { sendSpecialKey([0x09]) },
                     onArrowUp: { sendSpecialKey([0x1b, 0x5b, 0x41]) },
                     onArrowDown: { sendSpecialKey([0x1b, 0x5b, 0x42]) },
@@ -1109,7 +1148,7 @@ struct TerminalSessionScreen: View {
                     onEnd: { sendSpecialKey([0x1b, 0x5b, 0x46]) }
                 )
             )
-            .id("terminal-keyboard-\(client.connectionDebugGeneration)-\(client.attachedSessionId ?? 0)")
+            .id("terminal-keyboard-\(client.connectionDebugGeneration)-\(client.attachedTabId ?? 0)")
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
         }
@@ -1119,15 +1158,15 @@ struct TerminalSessionScreen: View {
     }
 
     private var isDisconnected: Bool {
-        if sessionHealth.isDisconnected { return true }
+        if tabHealth.isDisconnected { return true }
         if case .connectionLost = monitor.status { return true }
         if case .lost = monitor.transportHealth { return true }
         return false
     }
 
     private var disconnectReason: String? {
-        if let sessionHealthIssue {
-            return sessionHealthIssue
+        if let tabHealthIssue {
+            return tabHealthIssue
         }
         if case .connectionLost(let reason) = monitor.status {
             return reason
@@ -1140,7 +1179,7 @@ struct TerminalSessionScreen: View {
 
     private var activeErrorMessage: String? {
         if let serverIdentityWarning { return serverIdentityWarning }
-        if let sessionHealthIssue { return sessionHealthIssue }
+        if let tabHealthIssue { return tabHealthIssue }
         if let lastError = client.lastError, !lastError.isEmpty { return monitor.contextualErrorMessage(lastError) }
         if let disconnectReason { return monitor.contextualErrorMessage(disconnectReason) }
         return nil
@@ -1168,23 +1207,28 @@ struct TerminalSessionScreen: View {
                     .accessibilityIdentifier("forget-resume-button")
                 }
 
-                if let attachedSessionId = client.attachedSessionId {
-                    Button("Close Session") {
+                if let attachedTabId = client.attachedTabId {
+                    Button("Close Tab") {
                         forgetResumeAttachment()
+                        forgetHostTab()
+                        client.clearPreferredHostTab()
+                        client.suppressAutomaticTabBootstrap()
                         client.clearErrorState()
-                        client.destroySession(sessionId: attachedSessionId)
+                        client.destroyTab(tabId: attachedTabId)
                     }
                     .buttonStyle(KineticSecondaryButtonStyle())
-                    .accessibilityIdentifier("close-session-button")
+                    .accessibilityIdentifier("close-tab-button")
                 }
 
-                Button("New Session") {
+                Button("New Tab") {
                     forgetResumeAttachment()
+                    forgetHostTab()
+                    client.clearPreferredHostTab()
                     client.clearErrorState()
-                    client.createSession()
+                    client.createTab()
                 }
                 .buttonStyle(KineticSecondaryButtonStyle())
-                .accessibilityIdentifier("new-session-button")
+                .accessibilityIdentifier("new-tab-button")
 
                 Button("Disconnect") {
                     monitor.disconnect()
@@ -1241,7 +1285,7 @@ struct TerminalSessionScreen: View {
 
     private var floatingDisconnectButton: some View {
         Button {
-            closeHostSession()
+            closeHostTab()
         } label: {
             Image(systemName: "xmark")
                 .font(.system(size: 15, weight: .bold))
@@ -1286,23 +1330,47 @@ struct TerminalSessionScreen: View {
         }
     }
 
+    private func forgetHostTab() {
+        if let host = monitor.lastHost, let port = monitor.lastPort {
+            store.clearHostTab(host: host, port: port)
+        }
+    }
+
     private func goBack() {
         keyboardFocused = false
-        ctrlActive = false
-        altActive = false
-        metaActive = false
+        resetModifierStates()
         DispatchQueue.main.async {
             onBack()
         }
     }
 
-    private func closeHostSession() {
+    private func closeHostTab() {
         keyboardFocused = false
-        ctrlActive = false
-        altActive = false
-        metaActive = false
+        resetModifierStates()
         forgetResumeAttachment()
+        forgetHostTab()
+        client.clearPreferredHostTab()
         client.clearErrorState()
+        let attachedTabId = client.attachedTabId
+        if let attachedTabId {
+            closingHostSessionId = attachedTabId
+            client.suppressAutomaticTabBootstrap()
+            client.destroyTab(tabId: attachedTabId)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                forceCloseHostTabIfNeeded(expectedTabId: attachedTabId)
+            }
+        } else {
+            monitor.disconnect()
+            DispatchQueue.main.async {
+                onBack()
+            }
+        }
+    }
+
+    private func forceCloseHostTabIfNeeded(expectedTabId: UInt32) {
+        guard closingHostSessionId == expectedTabId else { return }
+        closingHostSessionId = nil
+        client.detach()
         monitor.disconnect()
         DispatchQueue.main.async {
             onBack()
@@ -1311,7 +1379,7 @@ struct TerminalSessionScreen: View {
 
     private func applyUITestForcedErrorIfNeeded() {
         guard !didApplyUITestForcedError,
-              client.attachedSessionId != nil,
+              client.attachedTabId != nil,
               let rawKind = UITestLaunchConfiguration.current()?.forcedTerminalErrorKind,
               let kind = ClientWireErrorKind.uiTestNamed(rawKind)
         else { return }
@@ -1320,36 +1388,53 @@ struct TerminalSessionScreen: View {
         client.lastError = kind.message
     }
 
-    private func autoAttachPreferredSessionIfNeeded() {
-        guard client.connected, client.authenticated else { return }
-        guard client.attachedSessionId == nil, client.pendingAttachedSessionId == nil else { return }
-        if visibleSessions.isEmpty || preferredSessionToAttach == nil {
-            guard !requestedInitialSession else { return }
-            requestedInitialSession = true
-            client.createSession()
+    private func reconcileHostTabBinding() {
+        guard let host = monitor.lastHost,
+              let port = monitor.lastPort,
+              let hostTabId = store.hostTab(host: host, port: port)?.tabId
+        else {
             return
         }
-        guard let session = preferredSessionToAttach else { return }
-        client.attach(sessionId: session.id)
+        guard visibleTabs.contains(where: { $0.id == hostTabId }) else {
+            store.clearHostTab(host: host, port: port)
+            if client.attachedTabId == hostTabId {
+                client.clearResumeAttachmentState()
+            }
+            return
+        }
+    }
+
+    @discardableResult
+    private func finalizeHostTabCloseIfNeeded() -> Bool {
+        guard let closingHostSessionId else { return false }
+        let tabStillVisible = visibleTabs.contains(where: { $0.id == closingHostSessionId })
+        let tabStillAttached =
+            client.attachedTabId == closingHostSessionId ||
+            client.pendingAttachedTabId == closingHostSessionId
+        guard !tabStillVisible, !tabStillAttached else { return false }
+        self.closingHostSessionId = nil
+        monitor.disconnect()
+        DispatchQueue.main.async {
+            onBack()
+        }
+        return true
     }
 
     private func sendTypedText(_ text: String) {
         guard !text.isEmpty else { return }
 
-        if ctrlActive, text.count == 1, let first = text.first, first.isLetter,
+        if ctrlModifierState.isActive, text.count == 1, let first = text.first, first.isLetter,
            let ascii = first.uppercased().first?.asciiValue
         {
             client.sendInputBytes(Data([ascii - 64]))
-            ctrlActive = false
-            altActive = false
-            metaActive = false
+            consumeModifier(.ctrl)
             return
         }
 
-        if altActive || metaActive {
+        if altModifierState.isActive || metaModifierState.isActive {
             client.sendInputBytes(Data([0x1b]))
-            altActive = false
-            metaActive = false
+            consumeModifier(.alt)
+            consumeModifier(.meta)
         }
 
         if text == "\r" {
@@ -1370,27 +1455,191 @@ struct TerminalSessionScreen: View {
             sendSpecialKey([0x1b, 0x5b, 0x44])
         case .arrowRight:
             sendSpecialKey([0x1b, 0x5b, 0x43])
+        case .scrollLines(let lines):
+            client.sendMouseWheelLines(y: Double(lines))
         }
     }
 
     private func sendSpecialKey(_ bytes: [UInt8]) {
         var payload = Data()
-        if altActive || metaActive {
+        if altModifierState.isActive || metaModifierState.isActive {
             payload.append(0x1b)
-            altActive = false
-            metaActive = false
+            consumeModifier(.alt)
+            consumeModifier(.meta)
         }
-        if ctrlActive, bytes.count == 1, let ascii = asciiControlByte(for: bytes[0]) {
+        if ctrlModifierState.isActive, bytes.count == 1, let ascii = asciiControlByte(for: bytes[0]) {
             payload.append(ascii)
-            ctrlActive = false
+            consumeModifier(.ctrl)
         } else {
             payload.append(contentsOf: bytes)
         }
         client.sendInputBytes(payload)
     }
 
+    private func handleKeyCommand(input: String, modifiers: UIKeyModifierFlags) -> Bool {
+        let terminalModifiers = modifiers.intersection([.shift, .alphaShift, .control, .alternate, .command])
+
+        switch input {
+        case UIKeyCommand.inputUpArrow:
+            sendSpecialKey([0x1b, 0x5b, 0x41])
+            return true
+        case UIKeyCommand.inputDownArrow:
+            sendSpecialKey([0x1b, 0x5b, 0x42])
+            return true
+        case UIKeyCommand.inputLeftArrow:
+            sendSpecialKey([0x1b, 0x5b, 0x44])
+            return true
+        case UIKeyCommand.inputRightArrow:
+            sendSpecialKey([0x1b, 0x5b, 0x43])
+            return true
+        case "\t":
+            sendSpecialKey([0x09])
+            return true
+        case "\r":
+            client.sendInputBytes(Data([0x0d]))
+            return true
+        case "\u{1b}":
+            sendSpecialKey([0x1b])
+            return true
+        default:
+            break
+        }
+
+        let hasTerminalModifiers = terminalModifiers.contains(.control) || terminalModifiers.contains(.alternate) || terminalModifiers.contains(.command)
+        guard hasTerminalModifiers else {
+            return false
+        }
+
+        guard !input.isEmpty else {
+            return false
+        }
+
+        var payload = Data()
+        if terminalModifiers.contains(.alternate) || terminalModifiers.contains(.command) {
+            payload.append(0x1b)
+        }
+
+        if terminalModifiers.contains(.control), input.count == 1, let scalar = input.uppercased().unicodeScalars.first {
+            let value = scalar.value
+            if (0x40...0x5f).contains(value) {
+                payload.append(UInt8(value - 64))
+                client.sendInputBytes(payload)
+                return true
+            }
+        }
+
+        if input == "\r" || input == "\n" {
+            payload.append(0x0d)
+            client.sendInputBytes(payload)
+            return true
+        }
+
+        if let encoded = input.data(using: .utf8) {
+            payload.append(encoded)
+            client.sendInputBytes(payload)
+            return true
+        }
+
+        return false
+    }
+
+    private enum TerminalModifierKind {
+        case ctrl
+        case alt
+        case meta
+    }
+
+    private func handleModifierEvent(_ event: TerminalAssistantModifierEvent, modifier: TerminalModifierKind) {
+        switch event {
+        case .pressBegan:
+            setModifierState(.held, for: modifier)
+            setModifierConsumed(false, for: modifier)
+        case .pressEnded(let wasTap):
+            let consumed = modifierConsumed(for: modifier)
+            let state = modifierState(for: modifier)
+            if consumed {
+                if state == .held {
+                    setModifierState(.inactive, for: modifier)
+                }
+            } else if wasTap {
+                let next: TerminalModifierState = state == .latched ? .inactive : .latched
+                setModifierState(next, for: modifier)
+            } else if state == .held {
+                setModifierState(.inactive, for: modifier)
+            }
+            setModifierConsumed(false, for: modifier)
+        }
+    }
+
+    private func consumeModifier(_ modifier: TerminalModifierKind) {
+        if modifierState(for: modifier) == .latched {
+            setModifierState(.inactive, for: modifier)
+        } else if modifierState(for: modifier) == .held {
+            setModifierConsumed(true, for: modifier)
+        }
+    }
+
+    private func resetModifierStates() {
+        ctrlModifierState = .inactive
+        altModifierState = .inactive
+        metaModifierState = .inactive
+        ctrlModifierConsumedWhileHeld = false
+        altModifierConsumedWhileHeld = false
+        metaModifierConsumedWhileHeld = false
+    }
+
+    private func modifierState(for modifier: TerminalModifierKind) -> TerminalModifierState {
+        switch modifier {
+        case .ctrl:
+            return ctrlModifierState
+        case .alt:
+            return altModifierState
+        case .meta:
+            return metaModifierState
+        }
+    }
+
+    private func setModifierState(_ state: TerminalModifierState, for modifier: TerminalModifierKind) {
+        switch modifier {
+        case .ctrl:
+            ctrlModifierState = state
+        case .alt:
+            altModifierState = state
+        case .meta:
+            metaModifierState = state
+        }
+    }
+
+    private func modifierConsumed(for modifier: TerminalModifierKind) -> Bool {
+        switch modifier {
+        case .ctrl:
+            return ctrlModifierConsumedWhileHeld
+        case .alt:
+            return altModifierConsumedWhileHeld
+        case .meta:
+            return metaModifierConsumedWhileHeld
+        }
+    }
+
+    private func setModifierConsumed(_ consumed: Bool, for modifier: TerminalModifierKind) {
+        switch modifier {
+        case .ctrl:
+            ctrlModifierConsumedWhileHeld = consumed
+        case .alt:
+            altModifierConsumedWhileHeld = consumed
+        case .meta:
+            metaModifierConsumedWhileHeld = consumed
+        }
+    }
+
     private func asciiControlByte(for byte: UInt8) -> UInt8? {
         switch byte {
+        case 0x40:
+            return 0x00
+        case 0x61...0x7a:
+            return byte - 0x60
+        case 0x41...0x5a:
+            return byte - 0x40
         case 0x69, 0x49:
             return 0x09
         case 0x6d, 0x4d:

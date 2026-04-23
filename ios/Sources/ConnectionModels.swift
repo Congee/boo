@@ -271,14 +271,18 @@ final class ConnectionStore: ObservableObject {
         saveTrustedServerIdentities()
     }
 
-    func recordResumeAttachment(host: String, port: UInt16, sessionId: UInt32, attachmentId: UInt64, resumeToken: UInt64) {
+    func recordResumeAttachment(host: String, port: UInt16, tabId: UInt32, attachmentId: UInt64, resumeToken: UInt64) {
         resumeAttachments[targetKey(host: host, port: port)] = ResumeAttachmentMetadata(
-            sessionId: sessionId,
+            sessionId: tabId,
             attachmentId: attachmentId,
             resumeToken: resumeToken,
             recordedAt: Date()
         )
         saveResumeAttachments()
+    }
+
+    func recordResumeAttachment(host: String, port: UInt16, sessionId: UInt32, attachmentId: UInt64, resumeToken: UInt64) {
+        recordResumeAttachment(host: host, port: port, tabId: sessionId, attachmentId: attachmentId, resumeToken: resumeToken)
     }
 
     func resumeAttachment(host: String, port: UInt16) -> ResumeAttachmentMetadata? {
@@ -641,7 +645,7 @@ final class ConnectionMonitor: ObservableObject {
             Publishers.CombineLatest4(
                 client.$connected,
                 client.$authenticated,
-                client.$attachedSessionId,
+                client.$attachedTabId,
                 client.$lastError
             ),
             client.$lastHeartbeatAck
@@ -649,10 +653,10 @@ final class ConnectionMonitor: ObservableObject {
         .receive(on: DispatchQueue.main)
         .sink { [weak self] values, lastHeartbeatAck in
             guard let self else { return }
-            let (connected, authenticated, sessionId, error) = values
+            let (connected, authenticated, tabId, error) = values
 
-            if let sessionId {
-                self.status = .attached(sessionId: sessionId)
+            if let tabId {
+                self.status = .attached(sessionId: tabId)
             } else if let error, !connected, self.status != .disconnected {
                 self.status = .connectionLost(reason: error)
             } else if authenticated {
@@ -674,7 +678,7 @@ final class ConnectionMonitor: ObservableObject {
             self.updateReconnectState(
                 connected: connected,
                 authenticated: authenticated,
-                sessionId: sessionId,
+                sessionId: tabId,
                 error: error
             )
         }
@@ -769,10 +773,10 @@ final class ConnectionMonitor: ObservableObject {
 
     private func startClientConnection(host: String, port: UInt16) {
         client.configureTrustedServerIdentity(store.trustedServerIdentity(host: host, port: port))
-        client.configurePreferredHostSession(sessionId: store.hostSession(host: host, port: port)?.sessionId)
+        client.configurePreferredHostTab(tabId: store.hostTab(host: host, port: port)?.tabId)
         if let resume = store.resumeAttachment(host: host, port: port) {
             client.configureResumeAttachment(
-                sessionId: resume.sessionId,
+                tabId: resume.tabId,
                 attachmentId: resume.attachmentId,
                 resumeToken: resume.resumeToken
             )
@@ -782,10 +786,10 @@ final class ConnectionMonitor: ObservableObject {
 
     private func startClientConnection(endpoint: NWEndpoint, host: String, port: UInt16) {
         client.configureTrustedServerIdentity(store.trustedServerIdentity(host: host, port: port))
-        client.configurePreferredHostSession(sessionId: store.hostSession(host: host, port: port)?.sessionId)
+        client.configurePreferredHostTab(tabId: store.hostTab(host: host, port: port)?.tabId)
         if let resume = store.resumeAttachment(host: host, port: port) {
             client.configureResumeAttachment(
-                sessionId: resume.sessionId,
+                tabId: resume.tabId,
                 attachmentId: resume.attachmentId,
                 resumeToken: resume.resumeToken
             )
