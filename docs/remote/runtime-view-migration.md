@@ -110,7 +110,8 @@ Current internal split after the first transport cleanup:
 - `RevivableRuntimeSubscription`
   - tab id plus cached stream state parked during reconnect
 
-This is intentionally narrower than the old `attached_session` model:
+This is intentionally narrower than the old `attached_session` compatibility
+surface:
 
 - tab/runtime identity lives in the runtime
 - subscription state lives in transport plumbing
@@ -130,7 +131,7 @@ renamed.
 Examples:
 
 - `ios/Sources/ProtocolClient.swift`
-  - `listSessions()` as a bootstrap tool
+- `listSessions()` as a bootstrap tool in the old client model
 - `ios/Sources/Screens.swift` still has attachment-driven terminal bootstrap
 - `src/client_gui.rs` still refreshes from compatibility tab lists before a
   richer runtime-view model exists
@@ -267,6 +268,7 @@ through and needs replacement:
 - wire compatibility surface
   - legacy numeric opcodes still carrying the historical list/attach flow
   - serde decode aliases like `session_id` and `attached_session`
+    kept only for backward compatibility with older clients and cached data
 - client bootstrap
   - iOS still has compatibility tab-list handling and attached-tab recovery, but
     production bootstrap is now tab-native rather than `listSessions()`-driven

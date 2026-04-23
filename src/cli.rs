@@ -835,7 +835,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_remote_daemon_legacy_sessions_alias_subcommand() {
+    fn parse_remote_daemon_tabs_legacy_sessions_alias() {
         let cli = Cli::parse_from([
             "boo",
             "remote-daemon-sessions",
@@ -848,7 +848,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_remote_daemon_attach_legacy_session_id_alias() {
+    fn parse_remote_daemon_attach_legacy_session_id_flag_alias() {
         let cli = Cli::parse_from([
             "boo",
             "remote-daemon-attach",

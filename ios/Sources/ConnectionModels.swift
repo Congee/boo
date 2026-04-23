@@ -56,6 +56,7 @@ struct ResumeAttachmentMetadata: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case tabId
+        // Legacy decode fallback for older persisted iOS metadata.
         case sessionId
         case attachmentId
         case resumeToken
@@ -94,6 +95,7 @@ struct HostTabMetadata: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case tabId
+        // Legacy decode fallback for older persisted iOS metadata.
         case sessionId
         case recordedAt
         case modelVersion
@@ -242,6 +244,7 @@ final class ConnectionStore: ObservableObject {
     private var trustedIdentitiesKey: String { "boo.remote.trustedServerIdentities\(storageNamespaceSuffix)" }
     private var resumeAttachmentsKey: String { "boo.remote.resumeAttachments\(storageNamespaceSuffix)" }
     private var hostTabsKey: String { "boo.remote.hostTabs\(storageNamespaceSuffix)" }
+    // Legacy storage fallback while older installs still persist hostSessions.
     private var legacyHostTabsKey: String { "boo.remote.hostSessions\(storageNamespaceSuffix)" }
     private var tailscaleSettingsKey: String { "boo.remote.tailscale.discovery\(storageNamespaceSuffix)" }
     private var terminalDisplaySettingsKey: String { "boo.remote.terminalDisplay\(storageNamespaceSuffix)" }
