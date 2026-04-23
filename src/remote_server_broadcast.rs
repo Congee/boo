@@ -118,6 +118,39 @@ mod tests {
     }
 
     #[test]
+    fn send_tab_list_to_local_clients_reaches_every_local_client_only() {
+        let (local_a_tx, local_a_rx) = mpsc::channel();
+        let (local_b_tx, local_b_rx) = mpsc::channel();
+        let (remote_tx, remote_rx) = mpsc::channel();
+        let mut state = empty_state();
+        state.clients.insert(1, test_client(local_a_tx, Some(11), true));
+        state.clients.insert(2, test_client(local_b_tx, None, true));
+        state.clients.insert(3, test_client(remote_tx, Some(11), false));
+        let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
+        let tabs = vec![RemoteTabInfo {
+            id: 11,
+            name: "Tab 1".to_string(),
+            title: "boo".to_string(),
+            pwd: "/tmp".to_string(),
+            attached: true,
+            child_exited: false,
+        }];
+
+        server.send_tab_list_to_local_clients(&tabs);
+
+        for rx in [local_a_rx, local_b_rx] {
+            match rx.recv().expect("local tab list frame") {
+                OutboundMessage::Frame(frame) => {
+                    assert_eq!(&frame[..2], &MAGIC);
+                    assert_eq!(frame[2], crate::remote_wire::MESSAGE_TYPE_TAB_LIST as u8);
+                }
+                OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+            }
+        }
+        assert!(remote_rx.try_recv().is_err());
+    }
+
+    #[test]
     fn reply_tab_list_does_not_skip_unchanged_payloads() {
         let (tx, rx) = mpsc::channel();
         let mut state = empty_state();
@@ -150,6 +183,7 @@ mod tests {
     #[test]
     fn retarget_local_attached_to_tab_skips_same_tab_unattached_and_remote_clients() {
         let (local_attached_tx, local_attached_rx) = mpsc::channel();
+        let (local_attached_two_tx, local_attached_two_rx) = mpsc::channel();
         let (local_unattached_tx, local_unattached_rx) = mpsc::channel();
         let (local_same_tab_tx, local_same_tab_rx) = mpsc::channel();
         let (remote_attached_tx, remote_attached_rx) = mpsc::channel();
@@ -157,6 +191,9 @@ mod tests {
         state
             .clients
             .insert(1, test_client(local_attached_tx, Some(11), true));
+        state
+            .clients
+            .insert(5, test_client(local_attached_two_tx, Some(11), true));
         state.clients.insert(2, test_client(local_unattached_tx, None, true));
         state
             .clients
@@ -169,6 +206,13 @@ mod tests {
         server.retarget_local_attached_to_tab(22);
 
         match local_attached_rx.recv().expect("local attached frame") {
+            OutboundMessage::Frame(frame) => {
+                assert_eq!(&frame[..2], &MAGIC);
+                assert_eq!(frame[2], MessageType::Attached as u8);
+            }
+            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+        }
+        match local_attached_two_rx.recv().expect("second local attached frame") {
             OutboundMessage::Frame(frame) => {
                 assert_eq!(&frame[..2], &MAGIC);
                 assert_eq!(frame[2], MessageType::Attached as u8);

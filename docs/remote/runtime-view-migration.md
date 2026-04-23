@@ -194,6 +194,77 @@ Preferred actions:
 Raw point coordinates should be optional fallback input, not the primary remote
 API.
 
+## Runtime Payload Contract
+
+The runtime-view protocol should treat these payloads as first-class:
+
+### `UiRuntimeState`
+
+Authoritative shared runtime metadata for a client viewport:
+
+- `active_tab: usize`
+- `focused_pane: u64`
+- `tabs: [UiTabSnapshot]`
+  - `tab_id: u32`
+  - `index: usize`
+  - `active: bool`
+  - `title: String`
+  - `pane_count: usize`
+- `visible_panes: [UiPaneSnapshot]`
+  - `pane_id: u64`
+  - `focused: bool`
+  - `frame`
+  - split metadata
+- `mouse_selection`
+- `status_bar`
+- `pwd`
+
+This payload is the bootstrap truth for remote clients. Tab-list payloads are
+secondary compatibility metadata.
+
+### `UiAppearanceSnapshot`
+
+Authoritative appearance for the current runtime view:
+
+- font families / size
+- opacity settings
+- terminal colors
+- cursor style / blink settings
+- tab colors
+
+### Pane terminal payloads
+
+Pane terminal content remains streamed as full-state / delta data. Today this
+is still attached to a subscribed tab transport target; the long-term shape is:
+
+- full state for visible pane terminals
+- delta updates for pane terminals
+- pane identity carried by pane snapshots/runtime state
+
+## Semantic Action Contract
+
+Preferred runtime-view actions:
+
+- `listTabs`
+  - compatibility metadata refresh only
+- `focusTab(tabId)`
+- `focusPane(paneId)`
+- `createTab(cols, rows)`
+- `closeTab(tabId)`
+- `sendInput(bytes)` to the focused pane in the subscribed runtime view
+- `sendAppKey(event)` to the focused pane/runtime
+- `sendAppMouse(event)` to the focused pane/runtime
+- `resizeViewport(cols, rows)`
+- `scrollPane(paneId, delta)` via app mouse wheel events
+
+Temporary transport-compatibility actions that still exist:
+
+- `attach(tabId, attachmentId, resumeToken?)`
+- `detach`
+
+These are no longer product-level session selection. They only exist to keep
+terminal streaming/resume working while runtime-view delivery remains tab-scoped.
+
 ## Why not pure coordinate-driven interaction?
 
 A pure "send tap coordinates and let the server infer everything" model is
