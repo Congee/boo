@@ -128,6 +128,8 @@ enum WireMessageType: UInt8 {
     case errorMsg = 0x87
     case tabCreated = 0x88
     case tabExited = 0x89
+    case uiRuntimeState = 0x8d
+    case uiAppearance = 0x8e
     case heartbeatAck = 0x92
 }
 
@@ -500,6 +502,8 @@ final class RemoteValidator {
         case .detached, .tabExited:
             attachedTabId = nil
             attachmentId = nil
+        case .uiRuntimeState, .uiAppearance:
+            break
         case .errorMsg:
             lastError = String(data: payload, encoding: .utf8) ?? "remote error"
         default:

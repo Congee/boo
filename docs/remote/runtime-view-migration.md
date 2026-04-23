@@ -117,16 +117,17 @@ surface:
 - subscription state lives in transport plumbing
 - revive/lease state is now explicitly transport-only
 
-### Category C: Obsolete legacy-session-pool model that should be removed
+### Category C: Obsolete legacy-target-picking model that should be removed
 
 These represent the wrong product abstraction and should be deleted, not merely
 renamed.
 
-- iOS `listSessions` bootstrapping
-- heuristic attach selection
-- host-scoped stored session choice as a product concept
-- any assumption that a host presents a pool of candidate tabs that mobile
-  should choose from
+- iOS or desktop bootstrap that treats a tab list as a pool of candidate
+  targets to pick from
+- heuristic target selection before runtime state is known
+- host-scoped stored target choice as a product concept
+- any assumption that a host presents a bag of attachable tabs that mobile
+  should choose from before it has seen the runtime state
 
 Examples:
 
@@ -231,21 +232,35 @@ Phase 1 output should be:
 
 ### Phase 2: Runtime-first client bootstrap
 
-- iOS should bootstrap from runtime state, not `listSessions`
+- iOS should bootstrap from runtime state, not by picking from a tab list
 - local GUI remote path should prefer runtime state too
-- session-list logic becomes compatibility-only
+- tab-list logic becomes compatibility-only metadata, not the source of
+  bootstrap truth
 
 Phase 2 protocol shape:
 
 - client connects and authenticates
-- server publishes:
-  - tab list / runtime state
+- server publishes runtime state first-class:
   - active tab
   - focused pane
-  - pane snapshots for the visible runtime
+  - visible pane geometry
+  - tab metadata
+- tab list may still be published for compatibility, but is not the bootstrap
+  driver
 - client does not pick from a session pool
-- if a client needs a current stream target, it derives it from runtime state
-  rather than `listSessions`
+- if a client needs a current transport target, it derives it from runtime
+  state rather than a list/attach heuristic
+
+Current implementation progress:
+
+- local GUI remote bootstrap now derives its initial target from
+  `UiRuntimeState.active_tab` and `UiTabSnapshot.tab_id`
+- the runtime server now sends `UiRuntimeState` together with `TabList` during
+  remote tab-list requests so clients can bootstrap from runtime state
+- iOS has canonical runtime-state decoding and uses the active runtime tab as a
+  bootstrap fallback before creating a new tab
+- iOS no longer persists a host-scoped preferred tab as a product-level choice;
+  reconnect bootstrap now prefers resume metadata and current runtime state
 
 ### Phase 3: Pane/runtime action model
 

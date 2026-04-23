@@ -44,27 +44,26 @@ struct ProtocolCodecSelfTestMain {
         assertEqual(encodedResumeJson.contains("\"tabId\""), true, "resume metadata encodes canonical tabId")
         assertEqual(encodedResumeJson.contains("\"sessionId\""), false, "resume metadata omits legacy sessionId on encode")
 
-        let legacyHostMetadata = """
+        let runtimeStatePayload = """
         {
-          "sessionId": 7,
-          "recordedAt": "2026-04-22T12:00:00Z",
-          "modelVersion": 1
+          "active_tab": 0,
+          "focused_pane": 7,
+          "tabs": [
+            {
+              "tab_id": 42,
+              "index": 0,
+              "active": true,
+              "title": "shell",
+              "pane_count": 1
+            }
+          ],
+          "pwd": "/tmp"
         }
         """.data(using: .utf8)!
-        let normalizedHostMetadata = normalizeLegacyTabMetadataKeys(in: legacyHostMetadata) ?? legacyHostMetadata
-        let decodedHostMetadata = tryOrExit(
-            decoder.decode(HostTabMetadata.self, from: normalizedHostMetadata),
-            "host tab metadata legacy decode"
-        )
-        assertEqual(decodedHostMetadata.tabId, 7, "host tab metadata legacy sessionId decode")
-
-        let encodedHostMetadata = tryOrExit(
-            encoder.encode(decodedHostMetadata),
-            "host tab metadata canonical encode"
-        )
-        let encodedHostJson = String(data: encodedHostMetadata, encoding: .utf8) ?? ""
-        assertEqual(encodedHostJson.contains("\"tabId\""), true, "host tab metadata encodes canonical tabId")
-        assertEqual(encodedHostJson.contains("\"sessionId\""), false, "host tab metadata omits legacy sessionId on encode")
+        let runtimeState = decodeRemoteRuntimeState(runtimeStatePayload)
+        assertEqual(runtimeState?.activeTab, 0, "runtime state active tab decode")
+        assertEqual(runtimeState?.tabs.first?.tabId, 42, "runtime state tab id decode")
+        assertEqual(runtimeState?.focusedPane, 7, "runtime state focused pane decode")
 
         guard let state = WireCodec.decodeFullState(makeFullStatePayload()) else {
             fputs("failed to decode full-state payload\n", stderr)

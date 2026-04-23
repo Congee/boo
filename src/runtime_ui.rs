@@ -221,6 +221,11 @@ impl BooApp {
             .tab_info()
             .into_iter()
             .map(|tab| control::UiTabSnapshot {
+                tab_id: self
+                    .server
+                    .tabs
+                    .tab_id_for_index(tab.index)
+                    .expect("tab_info index should resolve to tab id"),
                 index: tab.index,
                 active: tab.active,
                 title: tab.title,
@@ -280,6 +285,11 @@ impl BooApp {
                 .tab_info()
                 .into_iter()
                 .map(|tab| control::UiTabSnapshot {
+                    tab_id: self
+                        .server
+                        .tabs
+                        .tab_id_for_index(tab.index)
+                        .expect("tab_info index should resolve to tab id"),
                     index: tab.index,
                     active: tab.active,
                     title: tab.title,

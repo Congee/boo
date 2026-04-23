@@ -296,12 +296,6 @@ struct BooRootView: View {
             if client.lastErrorKind?.invalidatesResumeAttachment == true {
                 store.clearResumeAttachment(host: host, port: port)
             }
-            switch client.lastErrorKind {
-            case .unknownTab, .notAttached:
-                store.clearHostTab(host: host, port: port)
-            default:
-                break
-            }
         }
     }
 
@@ -336,11 +330,6 @@ struct BooRootView: View {
                    let attachmentId = client.attachmentId,
                    let resumeToken = client.resumeToken
                 {
-                    store.recordHostTab(
-                        host: host,
-                        port: port,
-                        tabId: tabId
-                    )
                     store.recordResumeAttachment(
                         host: host,
                         port: port,
@@ -1026,7 +1015,6 @@ struct TerminalTabScreen: View {
             }
         }
         .onReceive(client.$tabs) { _ in
-            reconcileHostTabBinding()
             if finalizeHostTabCloseIfNeeded() {
                 return
             }
@@ -1210,8 +1198,6 @@ struct TerminalTabScreen: View {
                 if let attachedTabId = client.attachedTabId {
                     Button("Close Tab") {
                         forgetResumeAttachment()
-                        forgetHostTab()
-                        client.clearPreferredHostTab()
                         client.suppressAutomaticTabBootstrap()
                         client.clearErrorState()
                         client.destroyTab(tabId: attachedTabId)
@@ -1222,8 +1208,6 @@ struct TerminalTabScreen: View {
 
                 Button("New Tab") {
                     forgetResumeAttachment()
-                    forgetHostTab()
-                    client.clearPreferredHostTab()
                     client.clearErrorState()
                     client.createTab()
                 }
@@ -1330,12 +1314,6 @@ struct TerminalTabScreen: View {
         }
     }
 
-    private func forgetHostTab() {
-        if let host = monitor.lastHost, let port = monitor.lastPort {
-            store.clearHostTab(host: host, port: port)
-        }
-    }
-
     private func goBack() {
         keyboardFocused = false
         resetModifierStates()
@@ -1348,8 +1326,6 @@ struct TerminalTabScreen: View {
         keyboardFocused = false
         resetModifierStates()
         forgetResumeAttachment()
-        forgetHostTab()
-        client.clearPreferredHostTab()
         client.clearErrorState()
         let attachedTabId = client.attachedTabId
         if let attachedTabId {
@@ -1386,22 +1362,6 @@ struct TerminalTabScreen: View {
         didApplyUITestForcedError = true
         client.lastErrorKind = kind
         client.lastError = kind.message
-    }
-
-    private func reconcileHostTabBinding() {
-        guard let host = monitor.lastHost,
-              let port = monitor.lastPort,
-              let hostTabId = store.hostTab(host: host, port: port)?.tabId
-        else {
-            return
-        }
-        guard visibleTabs.contains(where: { $0.id == hostTabId }) else {
-            store.clearHostTab(host: host, port: port)
-            if client.attachedTabId == hostTabId {
-                client.clearResumeAttachmentState()
-            }
-            return
-        }
     }
 
     @discardableResult

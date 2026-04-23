@@ -375,6 +375,8 @@ impl BooApp {
                     .or(self.server.remote_server.as_ref())
                 {
                     server.reply_tab_list(client_id, tabs.as_ref());
+                    server.send_ui_runtime_state(client_id, &self.ui_runtime_state());
+                    server.send_ui_appearance(client_id, &self.ui_appearance_snapshot());
                 }
             }
             server::Command::RemoteAttach {

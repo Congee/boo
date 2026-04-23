@@ -234,10 +234,16 @@ impl ClientApp {
     }
 
     fn apply_ui_runtime_state(&mut self, state: control::UiRuntimeState) {
-        if self.active_remote_tab_id.is_none() && !matches!(self.mode, ClientMode::Attached) {
-            return;
+        let ui_state = ClientUiState::from_runtime_state(&state);
+        if self.active_remote_tab_id.is_none()
+            && !matches!(self.mode, ClientMode::Attached)
+            && let Some(active_tab_id) = ui_state.tabs.get(ui_state.active_tab).and_then(|tab| tab.tab_id)
+        {
+            self.active_remote_tab_id = Some(active_tab_id);
+            self.should_exit = false;
+            self.send_stream_command(StreamCommand::AttachTab(active_tab_id));
         }
-        self.ui_state = ClientUiState::from_runtime_state(&state);
+        self.ui_state = ui_state;
         self.visible_panes = state.visible_panes;
         self.mouse_selection = state.mouse_selection;
         self.focused_pane_id = state.focused_pane;
@@ -982,12 +988,7 @@ impl ClientApp {
                     .filter(|tab| !tab.child_exited)
                     .collect();
                 self.apply_remote_tabs(&tabs);
-                if let Some(tab_id) =
-                    tab_list_attach_target(self.mode, self.active_remote_tab_id, &live_tabs)
-                {
-                    self.should_exit = false;
-                    self.send_stream_command(StreamCommand::AttachTab(tab_id));
-                } else if matches!(self.mode, ClientMode::Attached)
+                if matches!(self.mode, ClientMode::Attached)
                     && self
                         .active_remote_tab_id
                         .map(|tab_id| {
@@ -998,11 +999,12 @@ impl ClientApp {
                     self.should_exit = false;
                 } else if matches!(self.mode, ClientMode::Bootstrapping)
                     && !self.has_paintable_terminal()
+                    && live_tabs.is_empty()
                 {
                     let _ = self.client.send(&control::Request::NewTab);
                     self.send_stream_command(StreamCommand::ListTabs);
                 } else {
-                    self.should_exit = true;
+                    self.should_exit = live_tabs.is_empty();
                 }
             }
             LocalStreamEvent::TabAttached(tab_id) => {
@@ -1454,30 +1456,6 @@ fn note_gui_test_input_method_commit() {
     gui_test_input_method_commit_seq().fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
-fn tab_list_attach_target(
-    mode: ClientMode,
-    active_remote_tab_id: Option<u32>,
-    live_tabs: &[&remote::RemoteTabInfo],
-) -> Option<u32> {
-    if matches!(mode, ClientMode::Attached)
-        && active_remote_tab_id
-            .map(|tab_id| live_tabs.iter().any(|tab| tab.id == tab_id))
-            .unwrap_or(false)
-    {
-        return None;
-    }
-
-    active_remote_tab_id
-        .and_then(|tab_id| {
-            live_tabs
-                .iter()
-                .copied()
-                .find(|tab| tab.id == tab_id)
-        })
-        .or_else(|| live_tabs.first().copied())
-        .map(|tab| tab.id)
-}
-
 impl ClientUiState {
     fn from_snapshot(snapshot: &control::UiSnapshot) -> Self {
         Self {
@@ -1545,7 +1523,7 @@ impl ClientUiState {
                 .iter()
                 .map(|tab| ClientTabState {
                     index: tab.index,
-                    tab_id: None,
+                    tab_id: Some(tab.tab_id),
                     active: tab.active,
                     title: tab.title.clone(),
                     pane_count: tab.pane_count,
@@ -3911,57 +3889,52 @@ mod tests {
     }
 
     #[test]
-    fn attached_mode_tab_list_does_not_force_reattach_to_existing_active_tab() {
-        let tabs = vec![
-            remote::RemoteTabInfo {
-                id: 7,
-                name: "one".to_string(),
-                title: "".to_string(),
-                pwd: "".to_string(),
-                attached: true,
-                child_exited: false,
-            },
-            remote::RemoteTabInfo {
-                id: 8,
-                name: "two".to_string(),
-                title: "".to_string(),
-                pwd: "".to_string(),
-                attached: false,
-                child_exited: false,
-            },
-        ];
-        let live = tabs.iter().collect::<Vec<_>>();
-        assert_eq!(
-            tab_list_attach_target(ClientMode::Attached, Some(7), &live),
-            None
-        );
+    fn runtime_state_bootstrap_attaches_active_tab() {
+        let (mut app, _rx) = ClientApp::new("/tmp/test.sock".to_string());
+        let (stream_tx, stream_rx) = std::sync::mpsc::channel();
+        app.stream_tx = Some(stream_tx);
+
+        app.handle_stream_event(LocalStreamEvent::UiRuntimeState(control::UiRuntimeState {
+            active_tab: 0,
+            focused_pane: 7,
+            tabs: vec![control::UiTabSnapshot {
+                tab_id: 7,
+                index: 0,
+                active: true,
+                title: "shell".to_string(),
+                pane_count: 1,
+            }],
+            visible_panes: vec![test_pane_with_id(7, 0.0, 0.0, 80.0, 25.0)],
+            mouse_selection: control::UiMouseSelectionSnapshot::default(),
+            status_bar: crate::status_components::UiStatusBarSnapshot::default(),
+            pwd: "/tmp".to_string(),
+        }));
+
+        assert_eq!(app.active_remote_tab_id, Some(7));
+        match stream_rx.recv().expect("attach command") {
+            StreamCommand::AttachTab(tab_id) => assert_eq!(tab_id, 7),
+            other => panic!("expected attach command, got {other:?}"),
+        }
     }
 
     #[test]
-    fn recovering_mode_tab_list_reattaches_to_existing_active_tab() {
-        let tabs = vec![
-            remote::RemoteTabInfo {
-                id: 7,
-                name: "one".to_string(),
-                title: "".to_string(),
-                pwd: "".to_string(),
-                attached: true,
-                child_exited: false,
-            },
-            remote::RemoteTabInfo {
-                id: 8,
-                name: "two".to_string(),
-                title: "".to_string(),
-                pwd: "".to_string(),
-                attached: false,
-                child_exited: false,
-            },
-        ];
-        let live = tabs.iter().collect::<Vec<_>>();
-        assert_eq!(
-            tab_list_attach_target(ClientMode::Recovering, Some(7), &live),
-            Some(7)
-        );
+    fn tab_list_bootstrap_does_not_pick_a_target_without_runtime_state() {
+        let (mut app, _rx) = ClientApp::new("/tmp/test.sock".to_string());
+        let (stream_tx, stream_rx) = std::sync::mpsc::channel();
+        app.stream_tx = Some(stream_tx);
+
+        app.handle_stream_event(LocalStreamEvent::TabList(vec![remote::RemoteTabInfo {
+            id: 7,
+            name: "shell".to_string(),
+            title: "shell".to_string(),
+            pwd: "/tmp".to_string(),
+            attached: false,
+            child_exited: false,
+        }]));
+
+        assert_eq!(app.active_remote_tab_id, None);
+        assert!(stream_rx.try_recv().is_err());
+        assert!(!app.should_exit);
     }
 
     #[test]

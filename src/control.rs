@@ -167,6 +167,7 @@ pub struct UiAppearanceSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UiTabSnapshot {
+    pub tab_id: u32,
     pub index: usize,
     pub active: bool,
     pub title: String,
@@ -1152,6 +1153,7 @@ mod tests {
                                 cursor_blink_interval_ns: 600_000_000,
                             },
                             tabs: vec![UiTabSnapshot {
+                                tab_id: 1,
                                 index: 0,
                                 active: true,
                                 title: "shell".to_string(),
@@ -1255,12 +1257,14 @@ mod tests {
                 },
                 tabs: vec![
                     UiTabSnapshot {
+                        tab_id: 1,
                         index: 0,
                         active: false,
                         title: "shell".to_string(),
                         pane_count: 1,
                     },
                     UiTabSnapshot {
+                        tab_id: 2,
                         index: 1,
                         active: true,
                         title: "logs".to_string(),

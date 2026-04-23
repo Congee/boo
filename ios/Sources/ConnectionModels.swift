@@ -62,20 +62,6 @@ struct ResumeAttachmentMetadata: Codable, Equatable {
     }
 }
 
-struct HostTabMetadata: Codable, Equatable {
-    var tabId: UInt32
-    var recordedAt: Date
-    var modelVersion: Int?
-
-    init(tabId: UInt32, recordedAt: Date, modelVersion: Int?) {
-        self.tabId = tabId
-        self.recordedAt = recordedAt
-        self.modelVersion = modelVersion
-    }
-}
-
-private let BooHostTabMetadataModelVersion = 2
-
 struct TailscaleDiscoverySettings: Codable, Equatable {
     var defaultPort: UInt16 = BooDefaultRemotePort
 }
@@ -211,15 +197,11 @@ final class ConnectionStore: ObservableObject {
     private let storageNamespaceSuffix: String
     private var trustedServerIdentities: [String: String] = [:]
     private var resumeAttachments: [String: ResumeAttachmentMetadata] = [:]
-    private var hostTabs: [String: HostTabMetadata] = [:]
 
     private var nodesKey: String { "boo.remote.savedNodes\(storageNamespaceSuffix)" }
     private var historyKey: String { "boo.remote.connectionHistory\(storageNamespaceSuffix)" }
     private var trustedIdentitiesKey: String { "boo.remote.trustedServerIdentities\(storageNamespaceSuffix)" }
     private var resumeAttachmentsKey: String { "boo.remote.resumeAttachments\(storageNamespaceSuffix)" }
-    private var hostTabsKey: String { "boo.remote.hostTabs\(storageNamespaceSuffix)" }
-    // Legacy storage fallback while older installs still persist hostSessions.
-    private var legacyHostTabsKey: String { "boo.remote.hostSessions\(storageNamespaceSuffix)" }
     private var tailscaleSettingsKey: String { "boo.remote.tailscale.discovery\(storageNamespaceSuffix)" }
     private var terminalDisplaySettingsKey: String { "boo.remote.terminalDisplay\(storageNamespaceSuffix)" }
     private var tailscaleTokenService: String { "me.congee.boo.tailscale\(storageNamespaceSuffix)" }
@@ -232,7 +214,7 @@ final class ConnectionStore: ObservableObject {
         loadHistory()
         loadTrustedServerIdentities()
         loadResumeAttachments()
-        loadHostTabs()
+        clearLegacyHostTabStorage()
         loadTailscaleSettings()
         loadTerminalDisplaySettings()
         refreshTailscaleTokenStatus()
@@ -314,31 +296,6 @@ final class ConnectionStore: ObservableObject {
     func clearResumeAttachment(host: String, port: UInt16) {
         resumeAttachments.removeValue(forKey: targetKey(host: host, port: port))
         saveResumeAttachments()
-    }
-
-    func hostTab(host: String, port: UInt16) -> HostTabMetadata? {
-        let key = targetKey(host: host, port: port)
-        guard let metadata = hostTabs[key] else { return nil }
-        guard metadata.modelVersion == BooHostTabMetadataModelVersion else {
-            hostTabs.removeValue(forKey: key)
-            saveHostTabs()
-            return nil
-        }
-        return metadata
-    }
-
-    func clearHostTab(host: String, port: UInt16) {
-        hostTabs.removeValue(forKey: targetKey(host: host, port: port))
-        saveHostTabs()
-    }
-
-    func recordHostTab(host: String, port: UInt16, tabId: UInt32) {
-        hostTabs[targetKey(host: host, port: port)] = HostTabMetadata(
-            tabId: tabId,
-            recordedAt: Date(),
-            modelVersion: BooHostTabMetadataModelVersion
-        )
-        saveHostTabs()
     }
 
     var hasTailscaleAPIToken: Bool {
@@ -450,20 +407,10 @@ final class ConnectionStore: ObservableObject {
         UserDefaults.standard.set(data, forKey: resumeAttachmentsKey)
     }
 
-    private func loadHostTabs() {
+    private func clearLegacyHostTabStorage() {
         let defaults = UserDefaults.standard
-        guard let data = defaults.data(forKey: hostTabsKey) ?? defaults.data(forKey: legacyHostTabsKey),
-              let normalized = normalizeLegacyTabMetadataKeys(in: data),
-              let tabs = try? JSONDecoder().decode([String: HostTabMetadata].self, from: normalized) else { return }
-        hostTabs = tabs
-        saveHostTabs()
-    }
-
-    private func saveHostTabs() {
-        guard let data = try? JSONEncoder().encode(hostTabs) else { return }
-        let defaults = UserDefaults.standard
-        defaults.set(data, forKey: hostTabsKey)
-        defaults.removeObject(forKey: legacyHostTabsKey)
+        defaults.removeObject(forKey: "boo.remote.hostTabs\(storageNamespaceSuffix)")
+        defaults.removeObject(forKey: "boo.remote.hostSessions\(storageNamespaceSuffix)")
     }
 
     private func loadTailscaleSettings() {
@@ -496,8 +443,8 @@ final class ConnectionStore: ObservableObject {
             UserDefaults.standard.removeObject(forKey: historyKey)
             UserDefaults.standard.removeObject(forKey: trustedIdentitiesKey)
             UserDefaults.standard.removeObject(forKey: resumeAttachmentsKey)
-            UserDefaults.standard.removeObject(forKey: hostTabsKey)
-            UserDefaults.standard.removeObject(forKey: legacyHostTabsKey)
+            UserDefaults.standard.removeObject(forKey: "boo.remote.hostTabs\(storageNamespaceSuffix)")
+            UserDefaults.standard.removeObject(forKey: "boo.remote.hostSessions\(storageNamespaceSuffix)")
             UserDefaults.standard.removeObject(forKey: tailscaleSettingsKey)
             UserDefaults.standard.removeObject(forKey: terminalDisplaySettingsKey)
             try? KeychainStringStore.delete(service: tailscaleTokenService, account: tailscaleTokenAccount)
@@ -791,7 +738,6 @@ final class ConnectionMonitor: ObservableObject {
 
     private func startClientConnection(host: String, port: UInt16) {
         client.configureTrustedServerIdentity(store.trustedServerIdentity(host: host, port: port))
-        client.configurePreferredHostTab(tabId: store.hostTab(host: host, port: port)?.tabId)
         if let resume = store.resumeAttachment(host: host, port: port) {
             client.configureResumeAttachment(
                 tabId: resume.tabId,
@@ -804,7 +750,6 @@ final class ConnectionMonitor: ObservableObject {
 
     private func startClientConnection(endpoint: NWEndpoint, host: String, port: UInt16) {
         client.configureTrustedServerIdentity(store.trustedServerIdentity(host: host, port: port))
-        client.configurePreferredHostTab(tabId: store.hostTab(host: host, port: port)?.tabId)
         if let resume = store.resumeAttachment(host: host, port: port) {
             client.configureResumeAttachment(
                 tabId: resume.tabId,
