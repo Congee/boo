@@ -244,4 +244,51 @@ mod tests {
         let decoded: RemoteCreateSummary = serde_json::from_value(value).unwrap();
         assert_eq!(decoded.tab_id, 42);
     }
+
+    #[test]
+    fn remote_client_info_serializes_canonical_attached_tab_field() {
+        let value = serde_json::to_value(RemoteClientInfo {
+            client_id: 7,
+            authenticated: true,
+            is_local: false,
+            transport_kind: "quic-direct".into(),
+            server_socket_path: None,
+            challenge_pending: false,
+            attached_tab: Some(42),
+            attachment_id: Some(9),
+            resume_token_present: true,
+            has_cached_state: true,
+            pane_state_count: 2,
+            latest_input_seq: Some(11),
+            connection_age_ms: 100,
+            authenticated_age_ms: Some(80),
+            last_heartbeat_age_ms: Some(5),
+            heartbeat_expires_in_ms: Some(50),
+            heartbeat_overdue: false,
+            challenge_expires_in_ms: None,
+        })
+        .unwrap();
+
+        assert_eq!(value.get("attached_tab").and_then(|v| v.as_u64()), Some(42));
+        assert!(value.get("attached_session").is_none());
+    }
+
+    #[test]
+    fn remote_create_summary_serializes_canonical_tab_id_field() {
+        let value = serde_json::to_value(RemoteCreateSummary {
+            host: "127.0.0.1".into(),
+            port: 7337,
+            protocol_version: 1,
+            capabilities: 0,
+            build_id: Some("debug".into()),
+            server_instance_id: Some("instance".into()),
+            server_identity_id: Some("identity".into()),
+            heartbeat_rtt_ms: 12,
+            tab_id: 42,
+        })
+        .unwrap();
+
+        assert_eq!(value.get("tab_id").and_then(|v| v.as_u64()), Some(42));
+        assert!(value.get("session_id").is_none());
+    }
 }
