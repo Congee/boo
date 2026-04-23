@@ -73,12 +73,29 @@ impl BooApp {
         self.sync_remote_client_runtime_view(client_id, focused_tab_id);
     }
 
-    fn sync_all_runtime_viewers_to_active_tab(&mut self) -> Option<u32> {
-        let focused_tab_id = self
-            .server
+    fn active_runtime_tab_id(&self) -> Option<u32> {
+        self.server
             .tabs
             .active_tab_id()
-            .filter(|visible_tab_id| self.pane_for_tab(*visible_tab_id).is_some());
+            .filter(|visible_tab_id| self.pane_for_tab(*visible_tab_id).is_some())
+    }
+
+    fn focus_runtime_tab(&mut self, visible_tab_id: u32) -> bool {
+        let Some(tab_index) = self.server.tabs.find_index_by_tab_id(visible_tab_id) else {
+            return false;
+        };
+        let old = self.server.tabs.focused_pane();
+        self.server.tabs.goto_tab(tab_index);
+        let new = self.server.tabs.focused_pane();
+        if old != new {
+            self.set_pane_focus(old, false);
+            self.set_pane_focus(new, true);
+        }
+        true
+    }
+
+    fn sync_all_runtime_viewers_to_active_tab(&mut self) -> Option<u32> {
+        let focused_tab_id = self.active_runtime_tab_id();
         if let Some(visible_tab_id) = focused_tab_id {
             let retargeted = self
                 .remote_servers()
@@ -486,10 +503,7 @@ impl BooApp {
                 input_seq,
             } => {
                 let started_at = Instant::now();
-                let Some(visible_tab_id) = self
-                    .remote_server_for_client(client_id)
-                    .and_then(|server| server.client_visible_tab(client_id))
-                else {
+                let Some(visible_tab_id) = self.active_runtime_tab_id() else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -520,10 +534,7 @@ impl BooApp {
                 input_seq,
             } => {
                 let started_at = Instant::now();
-                let Some(visible_tab_id) = self
-                    .remote_server_for_client(client_id)
-                    .and_then(|server| server.client_visible_tab(client_id))
-                else {
+                let Some(visible_tab_id) = self.active_runtime_tab_id() else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -533,16 +544,9 @@ impl BooApp {
                     }
                     return;
                 };
-                let Some(tab_index) = self.server.tabs.find_index_by_tab_id(visible_tab_id) else {
+                if !self.focus_runtime_tab(visible_tab_id) {
                     self.recover_remote_client_runtime_view(client_id);
                     return;
-                };
-                let old = self.server.tabs.focused_pane();
-                self.server.tabs.goto_tab(tab_index);
-                let new = self.server.tabs.focused_pane();
-                if old != new {
-                    self.set_pane_focus(old, false);
-                    self.set_pane_focus(new, true);
                 }
                 if let Some(server) = self.remote_server_for_client(client_id) {
                     server.record_input_seq(client_id, input_seq);
@@ -556,10 +560,7 @@ impl BooApp {
                 cols,
                 rows,
             } => {
-                let Some(visible_tab_id) = self
-                    .remote_server_for_client(client_id)
-                    .and_then(|server| server.client_visible_tab(client_id))
-                else {
+                let Some(visible_tab_id) = self.active_runtime_tab_id() else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -584,10 +585,7 @@ impl BooApp {
                 self.broadcast_runtime_view_to_all_viewers();
             }
             server::Command::RemoteAppKeyEvent { client_id, event } => {
-                let Some(visible_tab_id) = self
-                    .remote_server_for_client(client_id)
-                    .and_then(|server| server.client_visible_tab(client_id))
-                else {
+                let Some(visible_tab_id) = self.active_runtime_tab_id() else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -597,16 +595,9 @@ impl BooApp {
                     }
                     return;
                 };
-                let Some(tab_index) = self.server.tabs.find_index_by_tab_id(visible_tab_id) else {
+                if !self.focus_runtime_tab(visible_tab_id) {
                     self.recover_remote_client_runtime_view(client_id);
                     return;
-                };
-                let old = self.server.tabs.focused_pane();
-                self.server.tabs.goto_tab(tab_index);
-                let new = self.server.tabs.focused_pane();
-                if old != new {
-                    self.set_pane_focus(old, false);
-                    self.set_pane_focus(new, true);
                 }
                 if let Some(server) = self.remote_server_for_client(client_id) {
                     server.record_input_seq(client_id, event.input_seq);
@@ -622,10 +613,7 @@ impl BooApp {
                     crate::app_input::AppMouseEvent::WheelScrolledLines { .. }
                         | crate::app_input::AppMouseEvent::WheelScrolledPixels { .. }
                 );
-                let Some(visible_tab_id) = self
-                    .remote_server_for_client(client_id)
-                    .and_then(|server| server.client_visible_tab(client_id))
-                else {
+                let Some(visible_tab_id) = self.active_runtime_tab_id() else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -635,16 +623,9 @@ impl BooApp {
                     }
                     return;
                 };
-                let Some(tab_index) = self.server.tabs.find_index_by_tab_id(visible_tab_id) else {
+                if !self.focus_runtime_tab(visible_tab_id) {
                     self.recover_remote_client_runtime_view(client_id);
                     return;
-                };
-                let old = self.server.tabs.focused_pane();
-                self.server.tabs.goto_tab(tab_index);
-                let new = self.server.tabs.focused_pane();
-                if old != new {
-                    self.set_pane_focus(old, false);
-                    self.set_pane_focus(new, true);
                 }
                 let changed_ui = self.handle_app_mouse_event(event);
                 if changed_ui || should_republish_tab {
@@ -659,10 +640,7 @@ impl BooApp {
                 self.broadcast_runtime_view_to_all_viewers();
             }
             server::Command::RemoteFocusPane { client_id, pane_id } => {
-                let Some(visible_tab_id) = self
-                    .remote_server_for_client(client_id)
-                    .and_then(|server| server.client_visible_tab(client_id))
-                else {
+                let Some(visible_tab_id) = self.active_runtime_tab_id() else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -672,16 +650,9 @@ impl BooApp {
                     }
                     return;
                 };
-                let Some(tab_index) = self.server.tabs.find_index_by_tab_id(visible_tab_id) else {
+                if !self.focus_runtime_tab(visible_tab_id) {
                     self.recover_remote_client_runtime_view(client_id);
                     return;
-                };
-                let old = self.server.tabs.focused_pane();
-                self.server.tabs.goto_tab(tab_index);
-                let new = self.server.tabs.focused_pane();
-                if old != new {
-                    self.set_pane_focus(old, false);
-                    self.set_pane_focus(new, true);
                 }
                 if self.focus_pane_by_id(pane_id)
                 {
@@ -693,10 +664,7 @@ impl BooApp {
                 client_id,
                 tab_id,
             } => {
-                let target = tab_id.or_else(|| {
-                    self.remote_server_for_client(client_id)
-                        .and_then(|server| server.client_visible_tab(client_id))
-                });
+                let target = tab_id.or_else(|| self.active_runtime_tab_id());
                 let Some(target) = target else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)

@@ -177,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn retarget_local_viewing_tab_skips_same_tab_unsubscribed_and_remote_clients() {
+    fn retarget_viewing_tab_skips_same_tab_and_unsubscribed_clients() {
         let (local_subscribed_tx, local_subscribed_rx) = mpsc::channel();
         let (local_subscribed_two_tx, local_subscribed_two_rx) = mpsc::channel();
         let (local_idle_tx, local_idle_rx) = mpsc::channel();
@@ -200,14 +200,14 @@ mod tests {
         let state = Arc::new(Mutex::new(state));
         let server = RemoteServer::for_test(Arc::clone(&state));
 
-        server.retarget_local_viewing_tab(22);
+        server.retarget_viewing_tab(22);
 
         let guard = state.lock().expect("remote server state poisoned");
         assert_eq!(guard.clients.get(&1).and_then(|c| c.runtime_view.visible_tab_id), Some(22));
         assert_eq!(guard.clients.get(&5).and_then(|c| c.runtime_view.visible_tab_id), Some(22));
         assert_eq!(guard.clients.get(&2).and_then(|c| c.runtime_view.visible_tab_id), None);
         assert_eq!(guard.clients.get(&3).and_then(|c| c.runtime_view.visible_tab_id), Some(22));
-        assert_eq!(guard.clients.get(&4).and_then(|c| c.runtime_view.visible_tab_id), Some(11));
+        assert_eq!(guard.clients.get(&4).and_then(|c| c.runtime_view.visible_tab_id), Some(22));
         assert!(local_idle_rx.try_recv().is_err());
         assert!(local_same_tab_rx.try_recv().is_err());
         assert!(remote_subscribed_rx.try_recv().is_err());
