@@ -38,7 +38,7 @@ For iOS, the product direction is now:
 Two architectural models are worth keeping explicit:
 
 1. Rejected legacy model:
-   one host -> `listSessions()` -> choose a session heuristically -> attach
+   one host -> legacy `listSessions()` bootstrap -> choose a session heuristically -> attach
 2. Desired host-scoped model:
    one host -> one canonical Boo runtime view for iOS -> reopen or recover that
    same host-owned tab/runtime state until the user explicitly closes it

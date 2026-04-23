@@ -263,21 +263,23 @@ When runtime-view tests are green:
 
 ## Remaining Protocol Surfaces To Remove
 
-These are the main seams where the old session-shaped transport still leaks
-through and needs replacement:
+These are the main seams where the old session-shaped transport still appears
+as historical or migration-only code:
 
-- wire compatibility surface
-  - legacy numeric opcodes still carrying the historical list/attach flow
-  - serde decode aliases like `session_id` and `attached_session`
-    kept only for backward compatibility with older clients and cached data
+- historical protocol documentation
+  - legacy numeric opcodes still carry the old list/attach flow on the wire,
+    even though product-facing code is now tab/runtime-oriented
+- one-way migration helpers
+  - iOS still rewrites legacy persisted `sessionId` / `hostSessions` data into
+    canonical `tabId` / `hostTabs` storage on load
 - client bootstrap
   - iOS still has compatibility tab-list handling and attached-tab recovery, but
     production bootstrap is now tab-native rather than `listSessions()`-driven
   - local GUI remote stream handling still starts from compatibility tab lists
     instead of first-class runtime snapshots
 
-The next protocol step is to preserve wire compatibility while shifting
-internals and client bootstrap to:
+The next protocol step is to keep shrinking the remaining historical transport
+surface while shifting internals and client bootstrap to:
 
 - runtime subscription
 - semantic tab/pane actions
