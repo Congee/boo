@@ -408,10 +408,10 @@ impl RemoteServer {
 
     pub fn send_ui_runtime_state_to_local_viewers(
         &self,
-        visible_tab_id: u32,
+        current_tab_id: u32,
         state: &crate::control::UiRuntimeState,
     ) {
-        send_ui_runtime_state_to_local_viewers_inner(&self.state, visible_tab_id, state);
+        send_ui_runtime_state_to_local_viewers_inner(&self.state, current_tab_id, state);
     }
 
     pub fn send_ui_runtime_state_to_viewers(&self, state: &crate::control::UiRuntimeState) {
@@ -478,16 +478,16 @@ impl RemoteServer {
         }
     }
 
-    pub fn send_full_state_to_viewers(&self, visible_tab_id: u32, state: Arc<RemoteFullState>) {
+    pub fn send_full_state_to_viewers(&self, tab_id: u32, state: Arc<RemoteFullState>) {
         let client_ids = self.viewer_client_ids();
         for client_id in client_ids {
-            publish_state_to_client(&self.state, client_id, visible_tab_id, Arc::clone(&state));
+            publish_state_to_client(&self.state, client_id, tab_id, Arc::clone(&state));
         }
     }
 
     pub fn send_pane_state_to_local_viewers(
         &self,
-        visible_tab_id: u32,
+        tab_id: u32,
         pane_id: u64,
         state: Arc<RemoteFullState>,
     ) {
@@ -499,7 +499,7 @@ impl RemoteServer {
             publish_pane_state_to_client(
                 &self.state,
                 client_id,
-                visible_tab_id,
+                tab_id,
                 pane_id,
                 Arc::clone(&state),
             );

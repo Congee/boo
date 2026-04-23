@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 pub(crate) fn send_state_to_client(
     state: &Arc<Mutex<State>>,
     client_id: u64,
-    _visible_tab_id: u32,
+    _tab_id: u32,
     next_state: Arc<RemoteFullState>,
 ) {
     let _scope = crate::profiling::scope("server.stream.encode_state", crate::profiling::Kind::Cpu);
@@ -74,7 +74,7 @@ pub(crate) fn send_state_to_client(
 pub(crate) fn send_pane_state_to_client(
     state: &Arc<Mutex<State>>,
     client_id: u64,
-    _visible_tab_id: u32,
+    _tab_id: u32,
     pane_id: u64,
     next_state: Arc<RemoteFullState>,
 ) {

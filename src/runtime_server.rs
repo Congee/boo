@@ -69,7 +69,7 @@ impl BooApp {
             .server
             .tabs
             .active_tab_id()
-            .filter(|visible_tab_id| self.pane_for_tab(*visible_tab_id).is_some());
+            .filter(|tab_id| self.pane_for_tab(*tab_id).is_some());
         self.sync_remote_client_runtime_view(client_id, focused_tab_id);
     }
 
@@ -77,11 +77,11 @@ impl BooApp {
         self.server
             .tabs
             .active_tab_id()
-            .filter(|visible_tab_id| self.pane_for_tab(*visible_tab_id).is_some())
+            .filter(|tab_id| self.pane_for_tab(*tab_id).is_some())
     }
 
-    fn focus_runtime_tab(&mut self, visible_tab_id: u32) -> bool {
-        let Some(tab_index) = self.server.tabs.find_index_by_tab_id(visible_tab_id) else {
+    fn focus_runtime_tab(&mut self, tab_id: u32) -> bool {
+        let Some(tab_index) = self.server.tabs.find_index_by_tab_id(tab_id) else {
             return false;
         };
         let old = self.server.tabs.focused_pane();
@@ -96,10 +96,10 @@ impl BooApp {
 
     fn sync_all_runtime_viewers_to_active_tab(&mut self) -> Option<u32> {
         let focused_tab_id = self.active_runtime_tab_id();
-        if let Some(visible_tab_id) = focused_tab_id {
+        if let Some(active_tab_id) = focused_tab_id {
             let retargeted = self
                 .remote_servers()
-                .any(|server| server.retarget_viewing_tab(visible_tab_id));
+                .any(|server| server.retarget_viewing_tab(active_tab_id));
             if retargeted {
                 self.invalidate_remote_tabs_cache();
             }
@@ -117,8 +117,8 @@ impl BooApp {
             server.send_ui_runtime_state_to_viewers(&ui_runtime_state);
             server.send_ui_appearance_to_viewers(&ui_appearance);
         });
-        if let Some(visible_tab_id) = focused_tab_id {
-            self.publish_remote_tab(visible_tab_id);
+        if let Some(active_tab_id) = focused_tab_id {
+            self.publish_remote_tab(active_tab_id);
         }
         focused_tab_id
     }
@@ -132,7 +132,7 @@ impl BooApp {
     }
 
     fn publish_local_gui_runtime_state_for_active_tab(&mut self) {
-        let Some(visible_tab_id) = self.server.tabs.active_tab_id() else {
+        let Some(current_tab_id) = self.server.tabs.active_tab_id() else {
             return;
         };
         if self.server.local_gui_server.is_none() {
@@ -141,14 +141,14 @@ impl BooApp {
         let ui_state = self.ui_runtime_state();
         let retargeted = {
             let server = self.server.local_gui_server.as_ref().expect("local gui server");
-            server.retarget_viewing_tab(visible_tab_id)
+            server.retarget_viewing_tab(current_tab_id)
         };
         if retargeted {
             self.invalidate_remote_tabs_cache();
         }
         let tabs = self.current_remote_tabs();
         let server = self.server.local_gui_server.as_ref().expect("local gui server");
-        server.send_ui_runtime_state_to_local_viewers(visible_tab_id, &ui_state);
+        server.send_ui_runtime_state_to_local_viewers(current_tab_id, &ui_state);
         server.send_tab_list_to_local_clients(tabs.as_ref());
     }
 
@@ -392,26 +392,26 @@ impl BooApp {
                 self.publish_local_gui_after_ui_action(&before);
             }
             server::Command::RemoteConnected { client_id } => {
-                let bootstrap_tab_id = self.server.tabs.active_tab_id().filter(|visible_tab_id| {
-                    self.pane_for_tab(*visible_tab_id).is_some()
+                let bootstrap_tab_id = self.server.tabs.active_tab_id().filter(|tab_id| {
+                    self.pane_for_tab(*tab_id).is_some()
                         && self
                             .remote_server_for_client(client_id)
                             .or(self.server.local_gui_server.as_ref())
                             .or(self.server.remote_server.as_ref())
                             .is_some_and(|server| server.client_viewing_tab(client_id).is_none())
                 });
-                if let Some(visible_tab_id) = bootstrap_tab_id
+                if let Some(bootstrap_tab_id) = bootstrap_tab_id
                     && let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                 {
                     if server.client_is_local(client_id) {
-                        self.bootstrap_local_stream_client(server, client_id, visible_tab_id);
+                        self.bootstrap_local_stream_client(server, client_id, bootstrap_tab_id);
                     } else {
-                        server.set_client_viewing_tab(client_id, visible_tab_id);
+                        server.set_client_viewing_tab(client_id, bootstrap_tab_id);
                     }
-                    self.publish_remote_tab(visible_tab_id);
+                    self.publish_remote_tab(bootstrap_tab_id);
                 }
                 let tabs = self.current_remote_tabs();
                 if let Some(server) = self
@@ -425,26 +425,26 @@ impl BooApp {
                 }
             }
             server::Command::RemoteListTabs { client_id } => {
-                let bootstrap_tab_id = self.server.tabs.active_tab_id().filter(|visible_tab_id| {
-                    self.pane_for_tab(*visible_tab_id).is_some()
+                let bootstrap_tab_id = self.server.tabs.active_tab_id().filter(|tab_id| {
+                    self.pane_for_tab(*tab_id).is_some()
                         && self
                             .remote_server_for_client(client_id)
                             .or(self.server.local_gui_server.as_ref())
                             .or(self.server.remote_server.as_ref())
                             .is_some_and(|server| server.client_viewing_tab(client_id).is_none())
                 });
-                if let Some(visible_tab_id) = bootstrap_tab_id
+                if let Some(bootstrap_tab_id) = bootstrap_tab_id
                     && let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                 {
                     if server.client_is_local(client_id) {
-                        self.bootstrap_local_stream_client(server, client_id, visible_tab_id);
+                        self.bootstrap_local_stream_client(server, client_id, bootstrap_tab_id);
                     } else {
-                        server.set_client_viewing_tab(client_id, visible_tab_id);
+                        server.set_client_viewing_tab(client_id, bootstrap_tab_id);
                     }
-                    self.publish_remote_tab(visible_tab_id);
+                    self.publish_remote_tab(bootstrap_tab_id);
                 }
                 let tabs = self.current_remote_tabs();
                 if let Some(server) = self
@@ -467,7 +467,7 @@ impl BooApp {
                     self.server.tabs.len()
                 );
                 let created = self.new_tab();
-                let Some(visible_tab_id) = created else {
+                let Some(created_tab_id) = created else {
                     log::warn!(
                         "remote_create_failed client_id={client_id} cols={cols} rows={rows} tabs_after={}",
                         self.server.tabs.len()
@@ -485,13 +485,13 @@ impl BooApp {
                     }
                     return;
                 };
-                if let Some(pane) = self.pane_for_tab(visible_tab_id) {
+                if let Some(pane) = self.pane_for_tab(created_tab_id) {
                     let (width, height) = self.tab_size_pixels(cols, rows);
                     self.resize_pane_backend(pane, self.scale_factor(), width, height);
                 }
                 self.invalidate_remote_tabs_cache();
                 log::info!(
-                    "remote_create_succeeded client_id={client_id} visible_tab_id={visible_tab_id} tabs_after={}",
+                    "remote_create_succeeded client_id={client_id} created_tab_id={created_tab_id} tabs_after={}",
                     self.server.tabs.len()
                 );
                 let _ = client_id;
@@ -503,7 +503,7 @@ impl BooApp {
                 input_seq,
             } => {
                 let started_at = Instant::now();
-                let Some(visible_tab_id) = self.active_runtime_tab_id() else {
+                let Some(active_tab_id) = self.active_runtime_tab_id() else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -513,7 +513,7 @@ impl BooApp {
                     }
                     return;
                 };
-                let Some(pane) = self.pane_for_tab(visible_tab_id) else {
+                let Some(pane) = self.pane_for_tab(active_tab_id) else {
                     self.recover_remote_client_runtime_view(client_id);
                     return;
                 };
@@ -525,7 +525,7 @@ impl BooApp {
                 } else {
                     let _ = self.backend.write_input(pane, &bytes);
                 }
-                self.mark_remote_tab_dirty(visible_tab_id);
+                self.mark_remote_tab_dirty(active_tab_id);
                 log_server_latency("remote_input_applied", started_at);
             }
             server::Command::RemoteKey {
@@ -534,7 +534,7 @@ impl BooApp {
                 input_seq,
             } => {
                 let started_at = Instant::now();
-                let Some(visible_tab_id) = self.active_runtime_tab_id() else {
+                let Some(active_tab_id) = self.active_runtime_tab_id() else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -544,7 +544,7 @@ impl BooApp {
                     }
                     return;
                 };
-                if !self.focus_runtime_tab(visible_tab_id) {
+                if !self.focus_runtime_tab(active_tab_id) {
                     self.recover_remote_client_runtime_view(client_id);
                     return;
                 }
@@ -552,7 +552,7 @@ impl BooApp {
                     server.record_input_seq(client_id, input_seq);
                 }
                 self.inject_key(&keyspec);
-                self.mark_remote_tab_dirty(visible_tab_id);
+                self.mark_remote_tab_dirty(active_tab_id);
                 log_server_latency("remote_key_applied", started_at);
             }
             server::Command::RemoteResize {
@@ -560,7 +560,7 @@ impl BooApp {
                 cols,
                 rows,
             } => {
-                let Some(visible_tab_id) = self.active_runtime_tab_id() else {
+                let Some(active_tab_id) = self.active_runtime_tab_id() else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -570,12 +570,12 @@ impl BooApp {
                     }
                     return;
                 };
-                let Some(_pane) = self.pane_for_tab(visible_tab_id) else {
+                let Some(_pane) = self.pane_for_tab(active_tab_id) else {
                     self.recover_remote_client_runtime_view(client_id);
                     return;
                 };
                 if self.resize_viewport_cells(cols, rows) {
-                    self.publish_remote_tab(visible_tab_id);
+                    self.publish_remote_tab(active_tab_id);
                 }
             }
             server::Command::RemoteExecuteCommand { client_id, input } => {
@@ -585,7 +585,7 @@ impl BooApp {
                 self.broadcast_runtime_view_to_all_viewers();
             }
             server::Command::RemoteAppKeyEvent { client_id, event } => {
-                let Some(visible_tab_id) = self.active_runtime_tab_id() else {
+                let Some(active_tab_id) = self.active_runtime_tab_id() else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -595,7 +595,7 @@ impl BooApp {
                     }
                     return;
                 };
-                if !self.focus_runtime_tab(visible_tab_id) {
+                if !self.focus_runtime_tab(active_tab_id) {
                     self.recover_remote_client_runtime_view(client_id);
                     return;
                 }
@@ -613,7 +613,7 @@ impl BooApp {
                     crate::app_input::AppMouseEvent::WheelScrolledLines { .. }
                         | crate::app_input::AppMouseEvent::WheelScrolledPixels { .. }
                 );
-                let Some(visible_tab_id) = self.active_runtime_tab_id() else {
+                let Some(active_tab_id) = self.active_runtime_tab_id() else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -623,7 +623,7 @@ impl BooApp {
                     }
                     return;
                 };
-                if !self.focus_runtime_tab(visible_tab_id) {
+                if !self.focus_runtime_tab(active_tab_id) {
                     self.recover_remote_client_runtime_view(client_id);
                     return;
                 }
@@ -631,7 +631,7 @@ impl BooApp {
                 if changed_ui || should_republish_tab {
                     let _ = self
                         .broadcast_runtime_view_to_all_viewers()
-                        .unwrap_or(visible_tab_id);
+                        .unwrap_or(active_tab_id);
                 }
             }
             server::Command::RemoteAppAction { client_id, action } => {
@@ -640,7 +640,7 @@ impl BooApp {
                 self.broadcast_runtime_view_to_all_viewers();
             }
             server::Command::RemoteFocusPane { client_id, pane_id } => {
-                let Some(visible_tab_id) = self.active_runtime_tab_id() else {
+                let Some(active_tab_id) = self.active_runtime_tab_id() else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -650,7 +650,7 @@ impl BooApp {
                     }
                     return;
                 };
-                if !self.focus_runtime_tab(visible_tab_id) {
+                if !self.focus_runtime_tab(active_tab_id) {
                     self.recover_remote_client_runtime_view(client_id);
                     return;
                 }
@@ -729,8 +729,8 @@ impl BooApp {
             .collect()
     }
 
-    pub(crate) fn pane_for_tab(&self, visible_tab_id: u32) -> Option<PaneHandle> {
-        let tab_index = self.server.tabs.find_index_by_tab_id(visible_tab_id)?;
+    pub(crate) fn pane_for_tab(&self, tab_id: u32) -> Option<PaneHandle> {
+        let tab_index = self.server.tabs.find_index_by_tab_id(tab_id)?;
         self.server
             .tabs
             .tab_tree(tab_index)
@@ -743,13 +743,13 @@ impl BooApp {
         (width, height)
     }
 
-    pub(crate) fn publish_remote_tab(&self, visible_tab_id: u32) {
+    pub(crate) fn publish_remote_tab(&self, tab_id: u32) {
         let started_at = Instant::now();
         let servers = self.remote_servers().collect::<Vec<_>>();
         if servers.is_empty() {
             return;
         }
-        let Some(pane) = self.pane_for_tab(visible_tab_id) else {
+        let Some(pane) = self.pane_for_tab(tab_id) else {
             log_server_latency("publish_remote_tab", started_at);
             return;
         };
@@ -759,11 +759,11 @@ impl BooApp {
         };
         let needs_local_pane_states = servers
             .iter()
-            .any(|server| server.local_viewing_tab(visible_tab_id));
+            .any(|server| server.local_viewing_tab(tab_id));
         let pane_states = if needs_local_pane_states {
             self.server
                 .tabs
-                .find_index_by_tab_id(visible_tab_id)
+                .find_index_by_tab_id(tab_id)
                 .and_then(|tab_index| self.server.tabs.tab_tree(tab_index))
                 .map(|tree| {
                     let focused_pane_id = tree.focused_pane().id();
@@ -790,10 +790,10 @@ impl BooApp {
             }
         }
         for server in servers {
-            server.send_full_state_to_viewers(visible_tab_id, Arc::clone(&state));
+            server.send_full_state_to_viewers(tab_id, Arc::clone(&state));
             for (pane_id, pane_state) in &pane_states {
                 server.send_pane_state_to_local_viewers(
-                    visible_tab_id,
+                    tab_id,
                     *pane_id,
                     Arc::clone(pane_state),
                 );
