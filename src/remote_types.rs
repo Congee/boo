@@ -16,7 +16,6 @@ pub struct RemoteTabInfo {
     pub name: String,
     pub title: String,
     pub pwd: String,
-    pub attached: bool,
     pub child_exited: bool,
 }
 
@@ -81,7 +80,6 @@ pub struct RemoteDirectTabInfo {
     pub name: String,
     pub title: String,
     pub pwd: String,
-    pub attached: bool,
     pub child_exited: bool,
 }
 

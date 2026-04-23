@@ -92,13 +92,8 @@ pub enum RemoteErrorCode {
     AuthenticationFailed = 1,
     UnknownTab = 2,
     FailedCreateTab = 3,
-    NotAttached = 4,
+    NoActiveTab = 4,
     CannotDestroyLastTab = 5,
-    AttachmentAlreadyActive = 6,
-    AttachmentBelongsToDifferentTab = 7,
-    AttachmentResumeTokenMismatch = 8,
-    AttachmentResumeWindowExpired = 9,
-    InvalidResumeToken = 10,
     HeartbeatTimeout = 11,
 }
 
@@ -111,13 +106,8 @@ impl TryFrom<u16> for RemoteErrorCode {
             1 => Self::AuthenticationFailed,
             2 => Self::UnknownTab,
             3 => Self::FailedCreateTab,
-            4 => Self::NotAttached,
+            4 => Self::NoActiveTab,
             5 => Self::CannotDestroyLastTab,
-            6 => Self::AttachmentAlreadyActive,
-            7 => Self::AttachmentBelongsToDifferentTab,
-            8 => Self::AttachmentResumeTokenMismatch,
-            9 => Self::AttachmentResumeWindowExpired,
-            10 => Self::InvalidResumeToken,
             11 => Self::HeartbeatTimeout,
             _ => return Err(()),
         };
@@ -132,13 +122,8 @@ impl RemoteErrorCode {
             Self::AuthenticationFailed => "Authentication failed",
             Self::UnknownTab => "unknown tab",
             Self::FailedCreateTab => "failed to create tab",
-            Self::NotAttached => "not attached",
+            Self::NoActiveTab => "no active tab",
             Self::CannotDestroyLastTab => "cannot destroy last tab",
-            Self::AttachmentAlreadyActive => "attachment already active",
-            Self::AttachmentBelongsToDifferentTab => "attachment belongs to different tab",
-            Self::AttachmentResumeTokenMismatch => "attachment resume token mismatch",
-            Self::AttachmentResumeWindowExpired => "attachment resume window expired",
-            Self::InvalidResumeToken => "invalid resume token",
             Self::HeartbeatTimeout => "heartbeat timeout",
         }
     }
@@ -634,7 +619,6 @@ pub(crate) fn decode_tab_list_payload(payload: &[u8]) -> Result<Vec<RemoteDirect
             name,
             title,
             pwd,
-            attached: (flags & 0x01) != 0,
             child_exited: (flags & 0x02) != 0,
         });
     }
@@ -764,9 +748,6 @@ pub fn encode_tab_list(tabs: &[RemoteTabInfo]) -> Vec<u8> {
         push_string(&mut payload, &tab.title);
         push_string(&mut payload, &tab.pwd);
         let mut flags = 0u8;
-        if tab.attached {
-            flags |= 0x01;
-        }
         if tab.child_exited {
             flags |= 0x02;
         }
@@ -1120,14 +1101,13 @@ mod tests {
             name: "Tab 1".to_string(),
             title: "shell".to_string(),
             pwd: "/tmp".to_string(),
-            attached: true,
             child_exited: false,
         }]);
         assert_eq!(u32::from_le_bytes(payload[0..4].try_into().unwrap()), 1);
         assert_eq!(u32::from_le_bytes(payload[4..8].try_into().unwrap()), 7);
         assert_eq!(u16::from_le_bytes(payload[8..10].try_into().unwrap()), 5);
         assert_eq!(&payload[10..15], b"Tab 1");
-        assert_eq!(*payload.last().unwrap(), 0x01);
+        assert_eq!(*payload.last().unwrap(), 0x00);
     }
 
     #[test]
@@ -1339,7 +1319,6 @@ mod tests {
                 name: "Tab 1".to_string(),
                 title: "shell".to_string(),
                 pwd: "/tmp".to_string(),
-                attached: true,
                 child_exited: false,
             },
             RemoteTabInfo {
@@ -1347,7 +1326,6 @@ mod tests {
                 name: String::new(),
                 title: "logs".to_string(),
                 pwd: "/var/log".to_string(),
-                attached: false,
                 child_exited: true,
             },
         ]);
@@ -1361,7 +1339,6 @@ mod tests {
                     name: "Tab 1".to_string(),
                     title: "shell".to_string(),
                     pwd: "/tmp".to_string(),
-                    attached: true,
                     child_exited: false,
                 },
                 RemoteDirectTabInfo {
@@ -1369,7 +1346,6 @@ mod tests {
                     name: String::new(),
                     title: "logs".to_string(),
                     pwd: "/var/log".to_string(),
-                    attached: false,
                     child_exited: true,
                 },
             ]

@@ -12,7 +12,6 @@ struct ProtocolCodecSelfTestMain {
                 name: "Tab 1",
                 title: "shell",
                 pwd: "/tmp",
-                attached: true,
                 childExited: false
             ),
             "tab list decoding"
@@ -169,10 +168,10 @@ struct ProtocolCodecSelfTestMain {
         assertEqual(deltaEffect, .none, "delta has no side effect")
         assertEqual(clientState.screen.map(WireCodec.screenText(from:)), "BC", "delta reducer applies screen update")
 
-        clientState.attachedTabId = 42
+        clientState.activeTabId = 42
         let tabExitedEffect = ClientWireReducer.reduce(message: .tabExited, payload: Data(), state: &clientState)
         assertEqual(tabExitedEffect, .none, "tab exited has no side effect")
-        assertEqual(clientState.attachedTabId, nil, "tab exited clears attached tab")
+        assertEqual(clientState.activeTabId, nil, "tab exited clears active tab")
 
         let reachableTabs = [
             RemoteTabInfo(
@@ -180,35 +179,33 @@ struct ProtocolCodecSelfTestMain {
                 name: "Tab 1",
                 title: "shell",
                 pwd: "/tmp",
-                attached: true,
                 childExited: false
             )
         ]
         assertEqual(
-            resolveAttachedTabHealth(attachedTabId: nil, tabs: reachableTabs),
-            .unattached,
-            "missing attachment is unhealthy"
+            resolveActiveTabHealth(activeTabId: nil, tabs: reachableTabs),
+            .inactive,
+            "missing active tab is unhealthy"
         )
         assertEqual(
-            resolveAttachedTabHealth(attachedTabId: 7, tabs: reachableTabs),
+            resolveActiveTabHealth(activeTabId: 7, tabs: reachableTabs),
             .unreachable(tabId: 7),
-            "missing attached tab is unreachable"
+            "missing active tab is unreachable"
         )
         assertEqual(
-            resolveAttachedTabHealth(attachedTabId: 42, tabs: reachableTabs),
+            resolveActiveTabHealth(activeTabId: 42, tabs: reachableTabs),
             .reachable(tabId: 42),
-            "live attached tab is reachable"
+            "live active tab is reachable"
         )
         assertEqual(
-            resolveAttachedTabHealth(
-                attachedTabId: 9,
+            resolveActiveTabHealth(
+                activeTabId: 9,
                 tabs: [
                     RemoteTabInfo(
                         id: 9,
                         name: "Tab 9",
                         title: "shell",
                         pwd: "/tmp",
-                        attached: true,
                         childExited: true
                     )
                 ]

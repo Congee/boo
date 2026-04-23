@@ -436,13 +436,13 @@ enum ConnectionStatus: Equatable {
     case connecting
     case connected
     case authenticated
-    case attached(tabId: UInt32)
+    case activeTab(tabId: UInt32)
     case connectionLost(reason: String)
 }
 
 extension ConnectionStatus {
-    var attachedTabId: UInt32? {
-        if case .attached(let tabId) = self {
+    var activeTabId: UInt32? {
+        if case .activeTab(let tabId) = self {
             return tabId
         }
         return nil
@@ -560,7 +560,7 @@ final class ConnectionMonitor: ObservableObject {
             Publishers.CombineLatest4(
                 client.$connected,
                 client.$authenticated,
-                client.$attachedTabId,
+                client.$activeTabId,
                 client.$lastError
             ),
             client.$lastHeartbeatAck
@@ -571,14 +571,14 @@ final class ConnectionMonitor: ObservableObject {
             let (connected, authenticated, tabId, error) = values
 
             if let tabId {
-                self.status = .attached(tabId: tabId)
+                self.status = .activeTab(tabId: tabId)
             } else if let error, !connected, self.status != .disconnected {
                 self.status = .connectionLost(reason: error)
             } else if authenticated {
                 self.status = .authenticated
             } else if connected {
                 self.status = .connected
-            } else if self.lastHost != nil, case .attached = self.status {
+            } else if self.lastHost != nil, case .activeTab = self.status {
                 self.status = .connectionLost(reason: "Connection closed")
             } else {
                 self.status = .disconnected

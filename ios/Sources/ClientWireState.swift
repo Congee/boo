@@ -16,7 +16,7 @@ enum ClientWireErrorCode: UInt16, Equatable {
     case authenticationFailed = 1
     case unknownTab = 2
     case failedCreateTab = 3
-    case notAttached = 4
+    case noActiveTab = 4
     case cannotDestroyLastTab = 5
     case heartbeatTimeout = 11
 }
@@ -30,7 +30,7 @@ enum ClientWireErrorKind: Equatable {
     case authenticationFailed
     case unknownTab
     case failedCreateTab
-    case notAttached
+    case noActiveTab
     case remote(String)
 
     var message: String {
@@ -41,8 +41,8 @@ enum ClientWireErrorKind: Equatable {
             return "unknown tab"
         case .failedCreateTab:
             return "failed to create tab"
-        case .notAttached:
-            return "not attached"
+        case .noActiveTab:
+            return "no active tab"
         case .remote(let message):
             return message
         }
@@ -79,7 +79,7 @@ struct ClientWireState: Equatable {
     var serverIdentityId: String?
     var tabs: [DecodedWireTabInfo] = []
     var screen: DecodedWireScreenState?
-    var attachedTabId: UInt32?
+    var activeTabId: UInt32?
     var lastErrorKind: ClientWireErrorKind?
     var lastError: String?
 
@@ -93,8 +93,7 @@ struct ClientWireState: Equatable {
         tabs: [DecodedWireTabInfo] = [],
         legacyTabs: [DecodedWireTabInfo]? = nil,
         screen: DecodedWireScreenState? = nil,
-        attachedTabId: UInt32? = nil,
-        legacyAttachedTabId: UInt32? = nil,
+        activeTabId: UInt32? = nil,
         lastErrorKind: ClientWireErrorKind? = nil,
         lastError: String? = nil
     ) {
@@ -106,7 +105,7 @@ struct ClientWireState: Equatable {
         self.serverIdentityId = serverIdentityId
         self.tabs = legacyTabs ?? tabs
         self.screen = screen
-        self.attachedTabId = legacyAttachedTabId ?? attachedTabId
+        self.activeTabId = activeTabId
         self.lastErrorKind = lastErrorKind
         self.lastError = lastError
     }
@@ -130,8 +129,8 @@ func decodeClientWireError(_ payload: Data) -> ClientWireErrorKind {
         return .unknownTab
     case .failedCreateTab:
         return .failedCreateTab
-    case .notAttached:
-        return .notAttached
+    case .noActiveTab:
+        return .noActiveTab
     case .cannotDestroyLastTab:
         return .remote(message)
     case .heartbeatTimeout:
@@ -265,11 +264,11 @@ enum ClientWireReducer {
                 let exitedTabId = payload.withUnsafeBytes {
                     UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
                 }
-                if state.attachedTabId == exitedTabId {
-                    state.attachedTabId = nil
+                if state.activeTabId == exitedTabId {
+                    state.activeTabId = nil
                 }
             } else {
-                state.attachedTabId = nil
+                state.activeTabId = nil
             }
             return .none
         case .tabCreated:

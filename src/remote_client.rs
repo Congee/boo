@@ -194,7 +194,6 @@ mod tests {
                         name: "dev".to_string(),
                         title: "shell".to_string(),
                         pwd: "/home/example/dev/boo".to_string(),
-                        attached: true,
                         child_exited: false,
                     }]),
                 ))
@@ -210,7 +209,6 @@ mod tests {
         assert_eq!(summary.tabs[0].id, 11);
         assert_eq!(summary.tabs[0].name, "dev");
         assert_eq!(summary.tabs[0].pwd, "/home/example/dev/boo");
-        assert!(summary.tabs[0].attached);
 
         server.join().expect("list server thread");
     }

@@ -99,7 +99,6 @@ mod tests {
             name: "Tab 1".to_string(),
             title: "boo".to_string(),
             pwd: "/tmp".to_string(),
-            attached: true,
             child_exited: false,
         }];
 
@@ -131,7 +130,6 @@ mod tests {
             name: "Tab 1".to_string(),
             title: "boo".to_string(),
             pwd: "/tmp".to_string(),
-            attached: true,
             child_exited: false,
         }];
 
@@ -160,7 +158,6 @@ mod tests {
             name: "Tab 1".to_string(),
             title: "boo".to_string(),
             pwd: "/tmp".to_string(),
-            attached: true,
             child_exited: false,
         }];
 

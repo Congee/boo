@@ -296,14 +296,14 @@ struct BooRootView: View {
     private func handleStatusChange(from oldValue: ConnectionStatus, to newValue: ConnectionStatus) {
         let wasConnected: Bool = {
             switch oldValue {
-            case .connected, .authenticated, .attached:
+            case .connected, .authenticated, .activeTab:
                 return true
             default:
                 return false
             }
         }()
         switch newValue {
-        case .authenticated, .attached:
+        case .authenticated, .activeTab:
             if selectedTab == .terminal {
                 showingConnectedTerminal = true
             }
@@ -761,11 +761,11 @@ struct ConnectScreen: View {
         let sameEndpoint = monitor.lastHost == host && monitor.lastPort == port
         let sameDisplayName = monitor.lastDisplayName == nodeName && monitor.lastPort == port
         guard sameEndpoint || sameDisplayName else { return false }
-        guard client.attachedTabId != nil else {
+        guard client.activeTabId != nil else {
             return false
         }
         switch monitor.status {
-        case .connecting, .connected, .authenticated, .attached:
+        case .connecting, .connected, .authenticated, .activeTab:
             return true
         case .connectionLost:
             return false
@@ -941,8 +941,8 @@ struct TerminalTabScreen: View {
         client.tabs.filter { !$0.childExited }
     }
 
-    private var tabHealth: AttachedTabHealth {
-        resolveAttachedTabHealth(attachedTabId: client.attachedTabId, tabs: client.tabs)
+    private var tabHealth: ActiveTabHealth {
+        resolveActiveTabHealth(activeTabId: client.activeTabId, tabs: client.tabs)
     }
 
     private var tabHealthIssue: String? {
@@ -988,7 +988,7 @@ struct TerminalTabScreen: View {
         }
         .onAppear {
             applyUITestForcedErrorIfNeeded()
-            guard !isDisconnected, client.attachedTabId != nil else { return }
+            guard !isDisconnected, client.activeTabId != nil else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 keyboardFocused = true
             }
@@ -999,11 +999,11 @@ struct TerminalTabScreen: View {
             }
             applyUITestForcedErrorIfNeeded()
         }
-        .onChange(of: client.attachedTabId) { _, attachedTabId in
+        .onChange(of: client.activeTabId) { _, activeTabId in
             if finalizeHostTabCloseIfNeeded() {
                 return
             }
-            if attachedTabId != nil {
+            if activeTabId != nil {
                 keyboardFocused = false
                 DispatchQueue.main.async {
                     keyboardFocused = true
@@ -1036,7 +1036,7 @@ struct TerminalTabScreen: View {
 
     @ViewBuilder
     private var attachmentOverlay: some View {
-        if !isDisconnected, client.attachedTabId == nil {
+        if !isDisconnected, client.activeTabId == nil {
             VStack(spacing: KineticSpacing.sm) {
                 ProgressView()
                     .tint(KineticColor.primary)
@@ -1047,7 +1047,7 @@ struct TerminalTabScreen: View {
             .padding(KineticSpacing.lg)
             .background(.ultraThinMaterial)
             .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
-            .accessibilityIdentifier("terminal-attaching-overlay")
+            .accessibilityIdentifier("terminal-opening-overlay")
         }
     }
 
@@ -1072,13 +1072,13 @@ struct TerminalTabScreen: View {
         } onGestureAction: { action in
             handleTerminalGesture(action)
         }
-        .opacity(isDisconnected || client.attachedTabId == nil ? 0.5 : 1.0)
+        .opacity(isDisconnected || client.activeTabId == nil ? 0.5 : 1.0)
         .accessibilityIdentifier("terminal-screen")
-        .accessibilityLabel(client.attachedTabId.map { "attached-\($0)" } ?? "detached")
+        .accessibilityLabel(client.activeTabId.map { "active-\($0)" } ?? "inactive")
         .accessibilityValue(client.screen.accessibilityTextSnapshot)
         .contentShape(Rectangle())
         .onTapGesture {
-            guard !isDisconnected, client.attachedTabId != nil else { return }
+            guard !isDisconnected, client.activeTabId != nil else { return }
             keyboardFocused = true
         }
         .overlay {
@@ -1115,7 +1115,7 @@ struct TerminalTabScreen: View {
                     onEnd: { sendSpecialKey([0x1b, 0x5b, 0x46]) }
                 )
             )
-            .id("terminal-keyboard-\(client.connectionDebugGeneration)-\(client.attachedTabId ?? 0)")
+            .id("terminal-keyboard-\(client.connectionDebugGeneration)-\(client.activeTabId ?? 0)")
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
         }
@@ -1161,12 +1161,12 @@ struct TerminalTabScreen: View {
                 .accessibilityIdentifier("terminal-banner-label")
 
             HStack(spacing: KineticSpacing.sm) {
-                if let attachedTabId = client.attachedTabId {
+                if let activeTabId = client.activeTabId {
                     Button("Close Tab") {
                         forgetResumeAttachment()
                         client.suppressAutomaticTabBootstrap()
                         client.clearErrorState()
-                        client.destroyTab(tabId: attachedTabId)
+                        client.destroyTab(tabId: activeTabId)
                     }
                     .buttonStyle(KineticSecondaryButtonStyle())
                     .accessibilityIdentifier("close-tab-button")
@@ -1289,13 +1289,13 @@ struct TerminalTabScreen: View {
         resetModifierStates()
         forgetResumeAttachment()
         client.clearErrorState()
-        let attachedTabId = client.attachedTabId
-        if let attachedTabId {
-            closingHostTabId = attachedTabId
+        let activeTabId = client.activeTabId
+        if let activeTabId {
+            closingHostTabId = activeTabId
             client.suppressAutomaticTabBootstrap()
-            client.destroyTab(tabId: attachedTabId)
+            client.destroyTab(tabId: activeTabId)
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                forceCloseHostTabIfNeeded(expectedTabId: attachedTabId)
+                forceCloseHostTabIfNeeded(expectedTabId: activeTabId)
             }
         } else {
             monitor.disconnect()
@@ -1316,7 +1316,7 @@ struct TerminalTabScreen: View {
 
     private func applyUITestForcedErrorIfNeeded() {
         guard !didApplyUITestForcedError,
-              client.attachedTabId != nil,
+              client.activeTabId != nil,
               let rawKind = UITestLaunchConfiguration.current()?.forcedTerminalErrorKind,
               let kind = ClientWireErrorKind.uiTestNamed(rawKind)
         else { return }
@@ -1329,8 +1329,8 @@ struct TerminalTabScreen: View {
     private func finalizeHostTabCloseIfNeeded() -> Bool {
         guard let closingHostTabId else { return false }
         let tabStillVisible = visibleTabs.contains(where: { $0.id == closingHostTabId })
-        let tabStillAttached = client.attachedTabId == closingHostTabId
-        guard !tabStillVisible, !tabStillAttached else { return false }
+        let tabStillActive = client.activeTabId == closingHostTabId
+        guard !tabStillVisible, !tabStillActive else { return false }
         self.closingHostTabId = nil
         monitor.disconnect()
         DispatchQueue.main.async {

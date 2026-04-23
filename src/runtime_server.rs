@@ -436,7 +436,7 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_error(client_id, RemoteErrorCode::NotAttached, "not attached");
+                        server.send_error(client_id, RemoteErrorCode::NoActiveTab, "no active tab");
                     }
                     return;
                 };
@@ -476,7 +476,7 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_error(client_id, RemoteErrorCode::NotAttached, "not attached");
+                        server.send_error(client_id, RemoteErrorCode::NoActiveTab, "no active tab");
                     }
                     return;
                 };
@@ -518,7 +518,7 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_error(client_id, RemoteErrorCode::NotAttached, "not attached");
+                        server.send_error(client_id, RemoteErrorCode::NoActiveTab, "no active tab");
                     }
                     return;
                 };
@@ -565,7 +565,7 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_error(client_id, RemoteErrorCode::NotAttached, "not attached");
+                        server.send_error(client_id, RemoteErrorCode::NoActiveTab, "no active tab");
                     }
                     return;
                 };
@@ -623,7 +623,7 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_error(client_id, RemoteErrorCode::NotAttached, "not attached");
+                        server.send_error(client_id, RemoteErrorCode::NoActiveTab, "no active tab");
                     }
                     return;
                 };
@@ -690,7 +690,7 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        server.send_error(client_id, RemoteErrorCode::NotAttached, "not attached");
+                        server.send_error(client_id, RemoteErrorCode::NoActiveTab, "no active tab");
                     }
                     return;
                 };
@@ -813,9 +813,6 @@ impl BooApp {
                         .as_ref()
                         .map(|snapshot| snapshot.pwd.clone())
                         .unwrap_or_default(),
-                    attached: self
-                        .remote_servers()
-                        .any(|server| server.subscribed_to_tab(tab.id)),
                     child_exited: pane.id() == 0 || terminal.is_none(),
                 }
             })

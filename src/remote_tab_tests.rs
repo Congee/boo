@@ -87,7 +87,6 @@ mod tests {
                         name: "unix".to_string(),
                         title: "shell".to_string(),
                         pwd: "/tmp".to_string(),
-                        attached: false,
                         child_exited: false,
                     }]),
                 ))

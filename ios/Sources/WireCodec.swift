@@ -5,7 +5,6 @@ struct DecodedWireTabInfo: Equatable {
     let name: String
     let title: String
     let pwd: String
-    let attached: Bool
     let childExited: Bool
 }
 
@@ -73,7 +72,6 @@ enum WireCodec {
                     name: name,
                     title: title,
                     pwd: pwd,
-                    attached: (flags & 0x01) != 0,
                     childExited: (flags & 0x02) != 0
                 )
             )

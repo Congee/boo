@@ -2579,7 +2579,6 @@ fn decode_remote_tab_list(payload: &[u8]) -> Option<Vec<remote::RemoteTabInfo>> 
             name,
             title,
             pwd,
-            attached: (flags & 0x01) != 0,
             child_exited: (flags & 0x02) != 0,
         });
     }
@@ -3887,7 +3886,6 @@ mod tests {
             name: "shell".to_string(),
             title: "shell".to_string(),
             pwd: "/tmp".to_string(),
-            attached: false,
             child_exited: false,
         }]));
 

@@ -1,15 +1,15 @@
 import Foundation
 
-enum AttachedTabHealth: Equatable {
-    case unattached
+enum ActiveTabHealth: Equatable {
+    case inactive
     case unreachable(tabId: UInt32)
     case exited(tabId: UInt32)
     case reachable(tabId: UInt32)
 
     var issue: String? {
         switch self {
-        case .unattached:
-            return "Tab is not attached"
+        case .inactive:
+            return "No active tab"
         case .unreachable(let tabId):
             return "Tab \(tabId) is unreachable"
         case .exited(let tabId):
@@ -21,7 +21,7 @@ enum AttachedTabHealth: Equatable {
 
     var statusSummary: String? {
         switch self {
-        case .unattached:
+        case .inactive:
             return nil
         case .unreachable(let tabId):
             return "tab \(tabId) unreachable"
@@ -36,7 +36,7 @@ enum AttachedTabHealth: Equatable {
         switch self {
         case .reachable:
             return false
-        case .unattached, .unreachable, .exited:
+        case .inactive, .unreachable, .exited:
             return true
         }
     }
@@ -46,8 +46,8 @@ enum AttachedTabHealth: Equatable {
     }
 }
 
-func resolveAttachedTabHealth(attachedTabId: UInt32?, tabs: [RemoteTabInfo]) -> AttachedTabHealth {
-    guard let tabId = attachedTabId else { return .unattached }
+func resolveActiveTabHealth(activeTabId: UInt32?, tabs: [RemoteTabInfo]) -> ActiveTabHealth {
+    guard let tabId = activeTabId else { return .inactive }
     guard let tab = tabs.first(where: { $0.id == tabId }) else {
         return .unreachable(tabId: tabId)
     }
