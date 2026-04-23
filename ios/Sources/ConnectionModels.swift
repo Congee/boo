@@ -49,31 +49,91 @@ struct ConnectionHistoryEntry: Identifiable, Codable {
 }
 
 struct ResumeAttachmentMetadata: Codable, Equatable {
-    var sessionId: UInt32
+    var tabId: UInt32
     var attachmentId: UInt64
     var resumeToken: UInt64
     var recordedAt: Date
 
-    var tabId: UInt32 {
-        get { sessionId }
-        set { sessionId = newValue }
+    var sessionId: UInt32 {
+        get { tabId }
+        set { tabId = newValue }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case tabId
+        case sessionId
+        case attachmentId
+        case resumeToken
+        case recordedAt
+    }
+
+    init(tabId: UInt32, attachmentId: UInt64, resumeToken: UInt64, recordedAt: Date) {
+        self.tabId = tabId
+        self.attachmentId = attachmentId
+        self.resumeToken = resumeToken
+        self.recordedAt = recordedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        tabId = try container.decodeIfPresent(UInt32.self, forKey: .tabId)
+            ?? container.decode(UInt32.self, forKey: .sessionId)
+        attachmentId = try container.decode(UInt64.self, forKey: .attachmentId)
+        resumeToken = try container.decode(UInt64.self, forKey: .resumeToken)
+        recordedAt = try container.decode(Date.self, forKey: .recordedAt)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(tabId, forKey: .tabId)
+        try container.encode(attachmentId, forKey: .attachmentId)
+        try container.encode(resumeToken, forKey: .resumeToken)
+        try container.encode(recordedAt, forKey: .recordedAt)
     }
 }
 
-struct HostSessionMetadata: Codable, Equatable {
-    var sessionId: UInt32
+struct HostTabMetadata: Codable, Equatable {
+    var tabId: UInt32
     var recordedAt: Date
     var modelVersion: Int?
 
-    var tabId: UInt32 {
-        get { sessionId }
-        set { sessionId = newValue }
+    var sessionId: UInt32 {
+        get { tabId }
+        set { tabId = newValue }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case tabId
+        case sessionId
+        case recordedAt
+        case modelVersion
+    }
+
+    init(tabId: UInt32, recordedAt: Date, modelVersion: Int?) {
+        self.tabId = tabId
+        self.recordedAt = recordedAt
+        self.modelVersion = modelVersion
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        tabId = try container.decodeIfPresent(UInt32.self, forKey: .tabId)
+            ?? container.decode(UInt32.self, forKey: .sessionId)
+        recordedAt = try container.decode(Date.self, forKey: .recordedAt)
+        modelVersion = try container.decodeIfPresent(Int.self, forKey: .modelVersion)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(tabId, forKey: .tabId)
+        try container.encode(recordedAt, forKey: .recordedAt)
+        try container.encodeIfPresent(modelVersion, forKey: .modelVersion)
     }
 }
 
-typealias HostTabMetadata = HostSessionMetadata
+typealias HostSessionMetadata = HostTabMetadata
 
-private let BooHostSessionMetadataModelVersion = 2
+private let BooHostTabMetadataModelVersion = 2
 
 struct TailscaleDiscoverySettings: Codable, Equatable {
     var defaultPort: UInt16 = BooDefaultRemotePort
@@ -187,13 +247,13 @@ final class ConnectionStore: ObservableObject {
     private let storageNamespaceSuffix: String
     private var trustedServerIdentities: [String: String] = [:]
     private var resumeAttachments: [String: ResumeAttachmentMetadata] = [:]
-    private var hostSessions: [String: HostSessionMetadata] = [:]
+    private var hostTabs: [String: HostTabMetadata] = [:]
 
     private var nodesKey: String { "boo.remote.savedNodes\(storageNamespaceSuffix)" }
     private var historyKey: String { "boo.remote.connectionHistory\(storageNamespaceSuffix)" }
     private var trustedIdentitiesKey: String { "boo.remote.trustedServerIdentities\(storageNamespaceSuffix)" }
     private var resumeAttachmentsKey: String { "boo.remote.resumeAttachments\(storageNamespaceSuffix)" }
-    private var hostSessionsKey: String { "boo.remote.hostSessions\(storageNamespaceSuffix)" }
+    private var hostTabsKey: String { "boo.remote.hostSessions\(storageNamespaceSuffix)" }
     private var tailscaleSettingsKey: String { "boo.remote.tailscale.discovery\(storageNamespaceSuffix)" }
     private var terminalDisplaySettingsKey: String { "boo.remote.terminalDisplay\(storageNamespaceSuffix)" }
     private var tailscaleTokenService: String { "me.congee.boo.tailscale\(storageNamespaceSuffix)" }
@@ -206,7 +266,7 @@ final class ConnectionStore: ObservableObject {
         loadHistory()
         loadTrustedServerIdentities()
         loadResumeAttachments()
-        loadHostSessions()
+        loadHostTabs()
         loadTailscaleSettings()
         loadTerminalDisplaySettings()
         refreshTailscaleTokenStatus()
@@ -273,7 +333,7 @@ final class ConnectionStore: ObservableObject {
 
     func recordResumeAttachment(host: String, port: UInt16, tabId: UInt32, attachmentId: UInt64, resumeToken: UInt64) {
         resumeAttachments[targetKey(host: host, port: port)] = ResumeAttachmentMetadata(
-            sessionId: tabId,
+            tabId: tabId,
             attachmentId: attachmentId,
             resumeToken: resumeToken,
             recordedAt: Date()
@@ -294,41 +354,41 @@ final class ConnectionStore: ObservableObject {
         saveResumeAttachments()
     }
 
-    func recordHostSession(host: String, port: UInt16, sessionId: UInt32) {
-        hostSessions[targetKey(host: host, port: port)] = HostSessionMetadata(
-            sessionId: sessionId,
-            recordedAt: Date(),
-            modelVersion: BooHostSessionMetadataModelVersion
-        )
-        saveHostSessions()
-    }
-
-    func hostSession(host: String, port: UInt16) -> HostSessionMetadata? {
+    func hostTab(host: String, port: UInt16) -> HostTabMetadata? {
         let key = targetKey(host: host, port: port)
-        guard let metadata = hostSessions[key] else { return nil }
-        guard metadata.modelVersion == BooHostSessionMetadataModelVersion else {
-            hostSessions.removeValue(forKey: key)
-            saveHostSessions()
+        guard let metadata = hostTabs[key] else { return nil }
+        guard metadata.modelVersion == BooHostTabMetadataModelVersion else {
+            hostTabs.removeValue(forKey: key)
+            saveHostTabs()
             return nil
         }
         return metadata
     }
 
-    func clearHostSession(host: String, port: UInt16) {
-        hostSessions.removeValue(forKey: targetKey(host: host, port: port))
-        saveHostSessions()
+    func clearHostTab(host: String, port: UInt16) {
+        hostTabs.removeValue(forKey: targetKey(host: host, port: port))
+        saveHostTabs()
     }
 
     func recordHostTab(host: String, port: UInt16, tabId: UInt32) {
-        recordHostSession(host: host, port: port, sessionId: tabId)
+        hostTabs[targetKey(host: host, port: port)] = HostTabMetadata(
+            tabId: tabId,
+            recordedAt: Date(),
+            modelVersion: BooHostTabMetadataModelVersion
+        )
+        saveHostTabs()
     }
 
-    func hostTab(host: String, port: UInt16) -> HostTabMetadata? {
-        hostSession(host: host, port: port)
+    func recordHostSession(host: String, port: UInt16, sessionId: UInt32) {
+        recordHostTab(host: host, port: port, tabId: sessionId)
     }
 
-    func clearHostTab(host: String, port: UInt16) {
-        clearHostSession(host: host, port: port)
+    func hostSession(host: String, port: UInt16) -> HostSessionMetadata? {
+        hostTab(host: host, port: port)
+    }
+
+    func clearHostSession(host: String, port: UInt16) {
+        clearHostTab(host: host, port: port)
     }
 
     var hasTailscaleAPIToken: Bool {
@@ -439,14 +499,22 @@ final class ConnectionStore: ObservableObject {
     }
 
     private func loadHostSessions() {
-        guard let data = UserDefaults.standard.data(forKey: hostSessionsKey),
-              let sessions = try? JSONDecoder().decode([String: HostSessionMetadata].self, from: data) else { return }
-        hostSessions = sessions
+        loadHostTabs()
     }
 
     private func saveHostSessions() {
-        guard let data = try? JSONEncoder().encode(hostSessions) else { return }
-        UserDefaults.standard.set(data, forKey: hostSessionsKey)
+        saveHostTabs()
+    }
+
+    private func loadHostTabs() {
+        guard let data = UserDefaults.standard.data(forKey: hostTabsKey),
+              let tabs = try? JSONDecoder().decode([String: HostTabMetadata].self, from: data) else { return }
+        hostTabs = tabs
+    }
+
+    private func saveHostTabs() {
+        guard let data = try? JSONEncoder().encode(hostTabs) else { return }
+        UserDefaults.standard.set(data, forKey: hostTabsKey)
     }
 
     private func loadTailscaleSettings() {
@@ -479,7 +547,7 @@ final class ConnectionStore: ObservableObject {
             UserDefaults.standard.removeObject(forKey: historyKey)
             UserDefaults.standard.removeObject(forKey: trustedIdentitiesKey)
             UserDefaults.standard.removeObject(forKey: resumeAttachmentsKey)
-            UserDefaults.standard.removeObject(forKey: hostSessionsKey)
+            UserDefaults.standard.removeObject(forKey: hostTabsKey)
             UserDefaults.standard.removeObject(forKey: tailscaleSettingsKey)
             UserDefaults.standard.removeObject(forKey: terminalDisplaySettingsKey)
             try? KeychainStringStore.delete(service: tailscaleTokenService, account: tailscaleTokenAccount)

@@ -297,7 +297,7 @@ struct BooRootView: View {
                 store.clearResumeAttachment(host: host, port: port)
             }
             switch client.lastErrorKind {
-            case .unknownSession, .notAttached:
+            case .unknownTab, .notAttached:
                 store.clearHostTab(host: host, port: port)
             default:
                 break
@@ -983,7 +983,7 @@ struct TerminalTabScreen: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            terminalSessionBody
+            terminalTabBody
                 .background(KineticColor.surface)
                 .ignoresSafeArea()
                 .navigationBarBackButtonHidden(true)
@@ -1054,7 +1054,7 @@ struct TerminalTabScreen: View {
         }
     }
 
-    private var terminalSessionBody: some View {
+    private var terminalTabBody: some View {
         VStack(spacing: 0) {
             terminalBanner
             terminalView
