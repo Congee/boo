@@ -14,8 +14,11 @@ enum ClientWireMessageType {
 }
 
 extension ClientWireMessageType {
+    @available(*, deprecated, message: "Use .tabList")
     static var sessionList: Self { .tabList }
+    @available(*, deprecated, message: "Use .tabCreated")
     static var sessionCreated: Self { .tabCreated }
+    @available(*, deprecated, message: "Use .tabExited")
     static var sessionExited: Self { .tabExited }
 }
 
@@ -35,9 +38,13 @@ enum ClientWireErrorCode: UInt16, Equatable {
 }
 
 extension ClientWireErrorCode {
+    @available(*, deprecated, message: "Use .unknownTab")
     static var unknownSession: Self { .unknownTab }
+    @available(*, deprecated, message: "Use .failedCreateTab")
     static var failedCreateSession: Self { .failedCreateTab }
+    @available(*, deprecated, message: "Use .cannotDestroyLastTab")
     static var cannotDestroyLastSession: Self { .cannotDestroyLastTab }
+    @available(*, deprecated, message: "Use .attachmentBelongsToDifferentTab")
     static var attachmentBelongsToDifferentSession: Self { .attachmentBelongsToDifferentTab }
 }
 
@@ -111,7 +118,9 @@ enum ClientWireErrorKind: Equatable {
 }
 
 extension ClientWireErrorKind {
+    @available(*, deprecated, message: "Use .unknownTab")
     static var unknownSession: Self { .unknownTab }
+    @available(*, deprecated, message: "Use .failedCreateTab")
     static var failedCreateSession: Self { .failedCreateTab }
 }
 
