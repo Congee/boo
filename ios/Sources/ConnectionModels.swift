@@ -241,7 +241,8 @@ final class ConnectionStore: ObservableObject {
     private var historyKey: String { "boo.remote.connectionHistory\(storageNamespaceSuffix)" }
     private var trustedIdentitiesKey: String { "boo.remote.trustedServerIdentities\(storageNamespaceSuffix)" }
     private var resumeAttachmentsKey: String { "boo.remote.resumeAttachments\(storageNamespaceSuffix)" }
-    private var hostTabsKey: String { "boo.remote.hostSessions\(storageNamespaceSuffix)" }
+    private var hostTabsKey: String { "boo.remote.hostTabs\(storageNamespaceSuffix)" }
+    private var legacyHostTabsKey: String { "boo.remote.hostSessions\(storageNamespaceSuffix)" }
     private var tailscaleSettingsKey: String { "boo.remote.tailscale.discovery\(storageNamespaceSuffix)" }
     private var terminalDisplaySettingsKey: String { "boo.remote.terminalDisplay\(storageNamespaceSuffix)" }
     private var tailscaleTokenService: String { "me.congee.boo.tailscale\(storageNamespaceSuffix)" }
@@ -471,14 +472,17 @@ final class ConnectionStore: ObservableObject {
     }
 
     private func loadHostTabs() {
-        guard let data = UserDefaults.standard.data(forKey: hostTabsKey),
+        let defaults = UserDefaults.standard
+        guard let data = defaults.data(forKey: hostTabsKey) ?? defaults.data(forKey: legacyHostTabsKey),
               let tabs = try? JSONDecoder().decode([String: HostTabMetadata].self, from: data) else { return }
         hostTabs = tabs
     }
 
     private func saveHostTabs() {
         guard let data = try? JSONEncoder().encode(hostTabs) else { return }
-        UserDefaults.standard.set(data, forKey: hostTabsKey)
+        let defaults = UserDefaults.standard
+        defaults.set(data, forKey: hostTabsKey)
+        defaults.removeObject(forKey: legacyHostTabsKey)
     }
 
     private func loadTailscaleSettings() {
@@ -512,6 +516,7 @@ final class ConnectionStore: ObservableObject {
             UserDefaults.standard.removeObject(forKey: trustedIdentitiesKey)
             UserDefaults.standard.removeObject(forKey: resumeAttachmentsKey)
             UserDefaults.standard.removeObject(forKey: hostTabsKey)
+            UserDefaults.standard.removeObject(forKey: legacyHostTabsKey)
             UserDefaults.standard.removeObject(forKey: tailscaleSettingsKey)
             UserDefaults.standard.removeObject(forKey: terminalDisplaySettingsKey)
             try? KeychainStringStore.delete(service: tailscaleTokenService, account: tailscaleTokenAccount)
