@@ -4,8 +4,6 @@ enum ClientWireMessageType {
     case authOk
     case authFail
     case tabList
-    case attached
-    case detached
     case tabCreated
     case tabExited
     case fullState
@@ -261,15 +259,6 @@ enum ClientWireReducer {
             return .none
         case .tabList:
             state.tabs = WireCodec.decodeTabList(payload)
-            return .none
-        case .attached:
-            guard payload.count >= 4 else { return .none }
-            state.attachedTabId = payload.withUnsafeBytes {
-                UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
-            }
-            return .none
-        case .detached:
-            state.attachedTabId = nil
             return .none
         case .tabExited:
             if payload.count >= 4 {

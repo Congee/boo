@@ -19,8 +19,6 @@ enum GSPMessageType: UInt8 {
     case tabList = 0x82
     case fullState = 0x83
     case delta = 0x84
-    case attached = 0x85
-    case detached = 0x86
     case errorMsg = 0x87
     case tabExited = 0x89
     case scrollData = 0x8a
@@ -1220,14 +1218,10 @@ final class GSPClient: ObservableObject {
                 self.tabListRequestedAt = nil
             }
             applyReducedMessage(.tabList, payload: payload)
-        case .attached:
-            applyReducedMessage(.attached, payload: payload)
         case .fullState:
             applyReducedMessage(.fullState, payload: payload)
         case .delta:
             applyReducedMessage(.delta, payload: payload)
-        case .detached:
-            applyReducedMessage(.detached, payload: payload)
         case .tabExited:
             applyReducedMessage(.tabExited, payload: payload)
         case .errorMsg:
@@ -1427,7 +1421,7 @@ final class GSPClient: ObservableObject {
         let nextAttachedTabId = runtimeActiveTabId ?? fallbackAttachedTabId
         if nextAttachedTabId == nil {
             switch message {
-            case .detached, .tabExited:
+            case .tabExited:
                 pendingHostTabCreation = false
                 pendingAttachedTabId = nil
             case .errorMsg where pendingAttachedTabId != nil:

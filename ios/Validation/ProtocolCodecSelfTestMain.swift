@@ -164,18 +164,10 @@ struct ProtocolCodecSelfTestMain {
         let createdEffect = ClientWireReducer.reduce(message: .tabCreated, payload: Data(createdPayload), state: &clientState)
         assertEqual(createdEffect, .none, "tab created no longer triggers client-side attach")
 
-        let attachedEffect = ClientWireReducer.reduce(message: .attached, payload: Data(createdPayload), state: &clientState)
-        assertEqual(attachedEffect, .none, "attached has no side effect")
-        assertEqual(clientState.attachedTabId, 42, "attached stores tab id")
-
         clientState.screen = state
         let deltaEffect = ClientWireReducer.reduce(message: .delta, payload: makeDeltaPayload(), state: &clientState)
         assertEqual(deltaEffect, .none, "delta has no side effect")
         assertEqual(clientState.screen.map(WireCodec.screenText(from:)), "BC", "delta reducer applies screen update")
-
-        let detachedEffect = ClientWireReducer.reduce(message: .detached, payload: Data(), state: &clientState)
-        assertEqual(detachedEffect, .none, "detached has no side effect")
-        assertEqual(clientState.attachedTabId, nil, "detached clears attached tab")
 
         clientState.attachedTabId = 42
         let tabExitedEffect = ClientWireReducer.reduce(message: .tabExited, payload: Data(), state: &clientState)
