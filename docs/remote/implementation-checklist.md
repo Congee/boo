@@ -19,8 +19,8 @@ runtime plus per-screen view state.
 - [x] introduce a shared authoritative runtime metadata payload
 - [x] introduce explicit per-screen runtime-view state on the server
 - [x] add first-class `RuntimeAction` protocol messages for semantic mutations
-- [ ] route all semantic runtime mutations through `RuntimeAction` in main flows
-- [ ] retire compatibility-only `ListTabs` / `Create` / `Destroy` framing from
+- [x] route all semantic runtime mutations through `RuntimeAction` in main flows
+- [x] retire compatibility-only `ListTabs` / `Create` / `Destroy` framing from
       primary paths
 
 ### Runtime and view data model
@@ -42,8 +42,8 @@ runtime plus per-screen view state.
 - [x] scope pane updates by `tab_id + pane_id`
 - [x] scope non-focused pane streaming to panes visible on that screen
 - [x] prove only visible panes are streamed to each screen with targeted tests
-- [ ] implement explicit per-screen focused-pane prioritization/coalescing
-- [ ] cover divergent focused-pane scheduling across multiple screens
+- [x] implement explicit per-screen focused-pane prioritization/coalescing
+- [x] cover divergent focused-pane scheduling across multiple screens
 
 ### Shared runtime vs per-screen semantics
 

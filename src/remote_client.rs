@@ -242,7 +242,7 @@ mod tests {
     }
 
     #[test]
-    fn create_remote_daemon_tab_uses_shared_handshake_and_create_path() {
+    fn create_remote_daemon_tab_uses_shared_handshake_and_runtime_action_path() {
         use std::net::TcpListener;
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
@@ -267,21 +267,17 @@ mod tests {
                 .expect("write heartbeat ack");
 
             let (ty, payload) = read_message(&mut stream).expect("read create");
-            assert_eq!(ty, MessageType::Create);
-            assert_eq!(payload, [132, 0, 48, 0]);
-            stream
-                .write_all(&encode_message(
-                    MESSAGE_TYPE_TAB_LIST,
-                    &encode_tab_list(&[RemoteTabInfo {
-                        id: 77,
-                        name: "Tab 1".to_string(),
-                        title: "Tab 1".to_string(),
-                        pwd: "/tmp".to_string(),
-                        active: true,
-                        child_exited: false,
-                    }]),
-                ))
-                .expect("write tab list");
+            assert_eq!(ty, MessageType::RuntimeAction);
+            let action: crate::remote::RuntimeAction =
+                serde_json::from_slice(&payload).expect("decode runtime action");
+            assert_eq!(
+                action,
+                crate::remote::RuntimeAction::NewTab {
+                    view_id: 0,
+                    cols: Some(132),
+                    rows: Some(48),
+                }
+            );
             stream
                 .write_all(&encode_message(
                     MessageType::UiRuntimeState,

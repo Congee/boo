@@ -135,6 +135,7 @@ pub struct ClientApp {
     visible_panes: Vec<control::UiPaneSnapshot>,
     mouse_selection: control::UiMouseSelectionSnapshot,
     mode: ClientMode,
+    runtime_view_id: u64,
     active_remote_tab_id: Option<u32>,
     pane_snapshots: HashMap<u64, Arc<vt_backend_core::TerminalSnapshot>>,
     focused_pane_id: u64,
@@ -234,6 +235,7 @@ impl ClientApp {
     }
 
     fn apply_ui_runtime_state(&mut self, state: control::UiRuntimeState) {
+        self.runtime_view_id = state.view_id;
         let ui_state = ClientUiState::from_runtime_state(&state);
         if let Some(active_tab_id) = ui_state
             .tabs
@@ -319,6 +321,7 @@ impl ClientApp {
             visible_panes: Vec::new(),
             mouse_selection: control::UiMouseSelectionSnapshot::default(),
             mode: ClientMode::Bootstrapping,
+            runtime_view_id: 0,
             active_remote_tab_id: None,
             pane_snapshots,
             focused_pane_id,
@@ -374,9 +377,6 @@ impl ClientApp {
             Message::RemoteDiagnosticsTick => self.refresh_remote_debug_summary(),
             Message::StreamReady(tx) => {
                 self.stream_tx = Some(tx);
-                if matches!(self.mode, ClientMode::Recovering) {
-                    self.send_stream_command(StreamCommand::ListTabs);
-                }
             }
             Message::StreamEvent(event) => {
                 if let Some(task) = self.handle_stream_delivery(event) {
@@ -995,14 +995,27 @@ impl ClientApp {
                     && !self.has_paintable_terminal()
                     && live_tabs.is_empty()
                 {
-                    let _ = self.client.send(&control::Request::NewTab);
-                    self.send_stream_command(StreamCommand::ListTabs);
+                    self.send_runtime_action(remote::RuntimeAction::NewTab {
+                        view_id: self.runtime_view_id,
+                        cols: None,
+                        rows: None,
+                    });
                 } else {
                     self.should_exit = live_tabs.is_empty();
                 }
             }
             LocalStreamEvent::UiRuntimeState(state) => {
                 self.apply_ui_runtime_state(state);
+                if matches!(self.mode, ClientMode::Bootstrapping)
+                    && !self.has_paintable_terminal()
+                    && self.ui_state.tabs.is_empty()
+                {
+                    self.send_runtime_action(remote::RuntimeAction::NewTab {
+                        view_id: self.runtime_view_id,
+                        cols: None,
+                        rows: None,
+                    });
+                }
             }
             LocalStreamEvent::UiAppearance(appearance) => {
                 self.apply_ui_appearance(&appearance);
@@ -1226,6 +1239,10 @@ impl ClientApp {
         if let Some(tx) = self.stream_tx.as_ref() {
             let _ = tx.send(command);
         }
+    }
+
+    fn send_runtime_action(&self, action: remote::RuntimeAction) {
+        self.send_stream_command(StreamCommand::RuntimeAction { action });
     }
 
     fn send_resize_cells(&mut self, cols: u16, rows: u16) {
@@ -2092,7 +2109,7 @@ pub(crate) struct RemoteRowDelta {
 
 #[derive(Clone, Debug)]
 pub(crate) enum StreamCommand {
-    ListTabs,
+    RuntimeAction { action: remote::RuntimeAction },
     AppKeyEvent { event: AppKeyEvent },
     AppMouseEvent { event: AppMouseEvent },
     ExecuteCommand { input: String },
@@ -2139,11 +2156,18 @@ fn local_stream_subscription(
                     let mut write = write;
                     while let Ok(command) = cmd_rx.recv() {
                         let result = match command {
-                            StreamCommand::ListTabs => write_stream_message(
-                                &mut write,
-                                remote::MESSAGE_TYPE_LIST_TABS,
-                                &[],
-                            ),
+                            StreamCommand::RuntimeAction { action } => {
+                                let Ok(payload) = serde_json::to_vec(&action) else {
+                                    let _ = writer_event_tx
+                                        .unbounded_send(LocalStreamEvent::Disconnected);
+                                    break;
+                                };
+                                write_stream_message(
+                                    &mut write,
+                                    remote::MessageType::RuntimeAction,
+                                    &payload,
+                                )
+                            }
                             StreamCommand::AppKeyEvent { event } => {
                                 let Ok(payload) = serde_json::to_vec(&event) else {
                                     let _ = writer_event_tx
@@ -4038,7 +4062,16 @@ mod tests {
         drop(task);
 
         match rx.recv().unwrap() {
-            StreamCommand::ListTabs => {}
+            StreamCommand::RuntimeAction { action } => {
+                assert_eq!(
+                    action,
+                    remote::RuntimeAction::NewTab {
+                        view_id: 0,
+                        cols: None,
+                        rows: None,
+                    }
+                );
+            }
             other => panic!("unexpected stream command: {other:?}"),
         }
     }

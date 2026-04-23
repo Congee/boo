@@ -274,6 +274,104 @@ impl BooApp {
         Some(Arc::new(remote::full_state_from_ui(&snapshot)))
     }
 
+    fn create_remote_runtime_tab(
+        &mut self,
+        client_id: u64,
+        cols: u16,
+        rows: u16,
+        send_legacy_created_ack: bool,
+    ) {
+        log::info!(
+            "remote_create client_id={client_id} cols={cols} rows={rows} tabs_before={}",
+            self.server.tabs.len()
+        );
+        let created = self.new_tab();
+        let Some(created_tab_id) = created else {
+            log::warn!(
+                "remote_create_failed client_id={client_id} cols={cols} rows={rows} tabs_after={}",
+                self.server.tabs.len()
+            );
+            if let Some(server) = self
+                .remote_server_for_client(client_id)
+                .or(self.server.local_gui_server.as_ref())
+                .or(self.server.remote_server.as_ref())
+            {
+                server.send_error(
+                    client_id,
+                    RemoteErrorCode::FailedCreateTab,
+                    "failed to create tab",
+                );
+            }
+            return;
+        };
+        if let Some(pane) = self.pane_for_tab(created_tab_id) {
+            let (width, height) = self.tab_size_pixels(cols, rows);
+            self.resize_pane_backend(pane, self.scale_factor(), width, height);
+        }
+        self.invalidate_remote_tabs_cache();
+        let focused_pane_id = self.default_focused_pane_for_tab(created_tab_id);
+        let visible_pane_ids = self.pane_ids_for_tab(created_tab_id);
+        if let Some(server) = self.remote_server_for_client(client_id) {
+            server.update_client_view(client_id, |view| {
+                view.viewed_tab_id = Some(created_tab_id);
+                view.focused_pane_id = focused_pane_id;
+                view.visible_pane_ids = visible_pane_ids.clone();
+                view.touch_view();
+            });
+        }
+        log::info!(
+            "remote_create_succeeded client_id={client_id} created_tab_id={created_tab_id} tabs_after={}",
+            self.server.tabs.len()
+        );
+        if send_legacy_created_ack
+            && let Some(server) = self
+                .remote_server_for_client(client_id)
+                .or(self.server.local_gui_server.as_ref())
+                .or(self.server.remote_server.as_ref())
+        {
+            server.send_tab_created(client_id, created_tab_id);
+        }
+        self.broadcast_runtime_view_to_all_viewers();
+    }
+
+    fn destroy_remote_runtime_tab(&mut self, client_id: u64, tab_id: Option<u32>) {
+        let target = tab_id.or_else(|| self.active_runtime_tab_id());
+        let Some(target) = target else {
+            if let Some(server) = self
+                .remote_server_for_client(client_id)
+                .or(self.server.local_gui_server.as_ref())
+                .or(self.server.remote_server.as_ref())
+            {
+                server.send_error(client_id, RemoteErrorCode::UnknownTab, "unknown tab");
+            }
+            return;
+        };
+        log::info!(
+            "remote_destroy client_id={client_id} requested_tab={tab_id:?} resolved_tab={target} tabs_before={}",
+            self.server.tabs.len()
+        );
+        let Some(tab_index) = self.server.tabs.find_index_by_tab_id(target) else {
+            self.recover_remote_client_runtime_view(client_id);
+            return;
+        };
+        let closed_tab_index = tab_index;
+        let was_active = tab_index == self.server.tabs.active_index();
+        let panes = self.server.tabs.remove_tab(tab_index);
+        for pane in panes {
+            self.backend.free_pane(pane);
+        }
+        if was_active && !self.server.tabs.is_empty() {
+            self.sync_after_tab_change();
+        }
+        self.invalidate_remote_tabs_cache();
+        self.repair_all_remote_views(Some(closed_tab_index));
+        let focused_tab_id = self.broadcast_runtime_view_to_all_viewers();
+        log::info!(
+            "remote_destroy_done client_id={client_id} destroyed_tab={target} tabs_after={} focused_after={focused_tab_id:?}",
+            self.server.tabs.len()
+        );
+    }
+
     fn publish_local_gui_runtime_state_for_active_tab(&mut self) {
         if self.server.tabs.active_tab_id().is_none() {
             return;
@@ -556,46 +654,7 @@ impl BooApp {
                 cols,
                 rows,
             } => {
-                log::info!(
-                    "remote_create client_id={client_id} cols={cols} rows={rows} tabs_before={}",
-                    self.server.tabs.len()
-                );
-                let created = self.new_tab();
-                let Some(created_tab_id) = created else {
-                    log::warn!(
-                        "remote_create_failed client_id={client_id} cols={cols} rows={rows} tabs_after={}",
-                        self.server.tabs.len()
-                    );
-                    if let Some(server) = self
-                        .remote_server_for_client(client_id)
-                        .or(self.server.local_gui_server.as_ref())
-                        .or(self.server.remote_server.as_ref())
-                    {
-                        server.send_error(
-                            client_id,
-                            RemoteErrorCode::FailedCreateTab,
-                            "failed to create tab",
-                        );
-                    }
-                    return;
-                };
-                if let Some(pane) = self.pane_for_tab(created_tab_id) {
-                    let (width, height) = self.tab_size_pixels(cols, rows);
-                    self.resize_pane_backend(pane, self.scale_factor(), width, height);
-                }
-                self.invalidate_remote_tabs_cache();
-                log::info!(
-                    "remote_create_succeeded client_id={client_id} created_tab_id={created_tab_id} tabs_after={}",
-                    self.server.tabs.len()
-                );
-                if let Some(server) = self
-                    .remote_server_for_client(client_id)
-                    .or(self.server.local_gui_server.as_ref())
-                    .or(self.server.remote_server.as_ref())
-                {
-                    server.send_tab_created(client_id, created_tab_id);
-                }
-                self.broadcast_runtime_view_to_all_viewers();
+                self.create_remote_runtime_tab(client_id, cols, rows, true);
             }
             server::Command::RemoteInput {
                 client_id,
@@ -794,42 +853,7 @@ impl BooApp {
                 }
             }
             server::Command::RemoteDestroy { client_id, tab_id } => {
-                let target = tab_id.or_else(|| self.active_runtime_tab_id());
-                let Some(target) = target else {
-                    if let Some(server) = self
-                        .remote_server_for_client(client_id)
-                        .or(self.server.local_gui_server.as_ref())
-                        .or(self.server.remote_server.as_ref())
-                    {
-                        server.send_error(client_id, RemoteErrorCode::UnknownTab, "unknown tab");
-                    }
-                    return;
-                };
-                log::info!(
-                    "remote_destroy client_id={client_id} requested_tab={tab_id:?} resolved_tab={target} tabs_before={}",
-                    self.server.tabs.len()
-                );
-                let Some(tab_index) = self.server.tabs.find_index_by_tab_id(target) else {
-                    self.recover_remote_client_runtime_view(client_id);
-                    return;
-                };
-                let closed_tab_index = tab_index;
-                let was_active = tab_index == self.server.tabs.active_index();
-                let panes = self.server.tabs.remove_tab(tab_index);
-                for pane in panes {
-                    self.backend.free_pane(pane);
-                }
-                if was_active && !self.server.tabs.is_empty() {
-                    self.sync_after_tab_change();
-                }
-                self.invalidate_remote_tabs_cache();
-                self.repair_all_remote_views(Some(closed_tab_index));
-                let focused_tab_id = self.broadcast_runtime_view_to_all_viewers();
-                log::info!(
-                    "remote_destroy_done client_id={client_id} destroyed_tab={target} tabs_after={} focused_after={focused_tab_id:?}",
-                    self.server.tabs.len()
-                );
-                let _ = client_id;
+                self.destroy_remote_runtime_tab(client_id, tab_id);
             }
             server::Command::RemoteRuntimeAction { client_id, action } => match action {
                 remote::RuntimeAction::SetViewedTab { view_id: _, tab_id } => {
@@ -863,14 +887,15 @@ impl BooApp {
                     }
                 }
                 remote::RuntimeAction::NewTab { cols, rows, .. } => {
-                    self.handle_server_cmd(server::Command::RemoteCreate {
+                    self.create_remote_runtime_tab(
                         client_id,
-                        cols: cols.unwrap_or(120),
-                        rows: rows.unwrap_or(36),
-                    });
+                        cols.unwrap_or(120),
+                        rows.unwrap_or(36),
+                        false,
+                    );
                 }
                 remote::RuntimeAction::CloseTab { tab_id, .. } => {
-                    self.handle_server_cmd(server::Command::RemoteDestroy { client_id, tab_id });
+                    self.destroy_remote_runtime_tab(client_id, tab_id);
                 }
                 remote::RuntimeAction::NextTab { .. } => {
                     let Some(view) = self.ensure_remote_client_view_state(client_id) else {
@@ -1293,6 +1318,76 @@ mod tests {
         let second_ty = message_types[1];
         assert!(matches!(first_ty, MessageType::FullState | MessageType::Delta));
         assert!(matches!(second_ty, MessageType::UiPaneFullState | MessageType::UiPaneDelta));
+    }
+
+    #[test]
+    fn publish_remote_tab_prioritizes_each_clients_own_focused_pane() {
+        let mut app = BooApp::new_headless();
+        app.init_surface();
+        app.create_split(crate::bindings::SplitDirection::Right);
+        let tab_id = app.active_runtime_tab_id().expect("active tab");
+        let pane_ids = app.pane_ids_for_tab(tab_id);
+        assert!(pane_ids.len() >= 2);
+        let receivers = install_test_remote_server_with_receivers(&mut app, &[1, 2]);
+        app.sync_remote_client_runtime_view(1, true);
+        app.sync_remote_client_runtime_view(2, true);
+        drain_outbound(receivers.get(&1).expect("client 1 receiver"));
+        drain_outbound(receivers.get(&2).expect("client 2 receiver"));
+        {
+            let server = app.server.remote_server.as_ref().expect("remote server");
+            server.update_client_view(1, |view| {
+                view.viewed_tab_id = Some(tab_id);
+                view.focused_pane_id = Some(pane_ids[0]);
+                view.visible_pane_ids = pane_ids.clone();
+                view.touch_view();
+            });
+            server.update_client_view(2, |view| {
+                view.viewed_tab_id = Some(tab_id);
+                view.focused_pane_id = Some(pane_ids[1]);
+                view.visible_pane_ids = pane_ids.clone();
+                view.touch_view();
+            });
+        }
+
+        app.publish_remote_tab(tab_id);
+
+        let rx1 = receivers.get(&1).expect("client 1 receiver");
+        let mut client_one_first = None;
+        let mut client_one_nonfocused = None;
+        while let Ok(message) = rx1.recv_timeout(Duration::from_millis(20)) {
+            let OutboundMessage::ScreenUpdate(frame) = message else {
+                continue;
+            };
+            let (ty, payload) = read_message(&mut Cursor::new(frame)).expect("decode screen update");
+            if client_one_first.is_none() {
+                client_one_first = Some(ty);
+            }
+            if matches!(ty, MessageType::UiPaneFullState | MessageType::UiPaneDelta) {
+                client_one_nonfocused = Some(u64::from_le_bytes(payload[4..12].try_into().expect("pane id bytes")));
+                break;
+            }
+        }
+        let rx2 = receivers.get(&2).expect("client 2 receiver");
+        let mut client_two_first = None;
+        let mut client_two_nonfocused = None;
+        while let Ok(message) = rx2.recv_timeout(Duration::from_millis(20)) {
+            let OutboundMessage::ScreenUpdate(frame) = message else {
+                continue;
+            };
+            let (ty, payload) = read_message(&mut Cursor::new(frame)).expect("decode screen update");
+            if client_two_first.is_none() {
+                client_two_first = Some(ty);
+            }
+            if matches!(ty, MessageType::UiPaneFullState | MessageType::UiPaneDelta) {
+                client_two_nonfocused = Some(u64::from_le_bytes(payload[4..12].try_into().expect("pane id bytes")));
+                break;
+            }
+        }
+
+        assert!(matches!(client_one_first, Some(MessageType::FullState | MessageType::Delta)));
+        assert!(matches!(client_two_first, Some(MessageType::FullState | MessageType::Delta)));
+        assert_eq!(client_one_nonfocused, Some(pane_ids[1]));
+        assert_eq!(client_two_nonfocused, Some(pane_ids[0]));
     }
 
     #[test]

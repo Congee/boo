@@ -2,6 +2,7 @@
 
 use std::io::{Read, Write};
 
+use crate::remote::RuntimeAction;
 use crate::remote_types::RemoteDirectTabInfo;
 use crate::remote_wire::{
     MESSAGE_TYPE_LIST_TABS, MESSAGE_TYPE_TAB_CREATED, MESSAGE_TYPE_TAB_LIST, MessageType,
@@ -123,18 +124,25 @@ impl<S: DirectReadWrite> DirectTransportClient<S> {
     }
 
     pub(crate) fn create_tab(&mut self, cols: u16, rows: u16) -> Result<u32, String> {
-        let mut payload = Vec::with_capacity(4);
-        payload.extend_from_slice(&cols.to_le_bytes());
-        payload.extend_from_slice(&rows.to_le_bytes());
+        let payload = serde_json::to_vec(&RuntimeAction::NewTab {
+            view_id: 0,
+            cols: Some(cols),
+            rows: Some(rows),
+        })
+        .map_err(|error| {
+            format!(
+                "failed to encode create-tab runtime action for {}:{}: {error}",
+                self.host, self.port
+            )
+        })?;
         self.stream
-            .write_all(&encode_message(MessageType::Create, &payload))
+            .write_all(&encode_message(MessageType::RuntimeAction, &payload))
             .map_err(|error| {
                 format!(
-                    "failed to send create request to {}:{}: {error}",
+                    "failed to send create-tab runtime action to {}:{}: {error}",
                     self.host, self.port
                 )
             })?;
-        let mut latest_tabs: Option<Vec<RemoteDirectTabInfo>> = None;
         loop {
             let (ty, payload) = read_message(&mut self.stream).map_err(|error| {
                 format!(
@@ -143,22 +151,6 @@ impl<S: DirectReadWrite> DirectTransportClient<S> {
                 )
             })?;
             match ty {
-                MESSAGE_TYPE_TAB_CREATED => {
-                    return parse_created_tab_id(&payload).ok_or_else(|| {
-                        format!(
-                            "invalid tab-created payload from remote endpoint {}:{}",
-                            self.host, self.port
-                        )
-                    });
-                }
-                MESSAGE_TYPE_TAB_LIST => {
-                    latest_tabs = Some(decode_tab_list_payload(&payload).map_err(|error| {
-                        format!(
-                            "failed to decode remote tab list from {}:{}: {error}",
-                            self.host, self.port
-                        )
-                    })?);
-                }
                 MessageType::UiRuntimeState => {
                     let runtime_state: crate::control::UiRuntimeState =
                         serde_json::from_slice(&payload).map_err(|error| {
@@ -167,12 +159,19 @@ impl<S: DirectReadWrite> DirectTransportClient<S> {
                                 self.host, self.port
                             )
                         })?;
-                    if let Some(tabs) = latest_tabs.as_ref()
-                        && let Some(tab) = tabs.get(runtime_state.active_tab)
-                    {
-                        return Ok(tab.id);
+                    if let Some(tab_id) = runtime_state.viewed_tab_id {
+                        return Ok(tab_id);
                     }
                 }
+                MESSAGE_TYPE_TAB_CREATED => {
+                    return parse_created_tab_id(&payload).ok_or_else(|| {
+                        format!(
+                            "invalid tab-created payload from remote endpoint {}:{}",
+                            self.host, self.port
+                        )
+                    });
+                }
+                MESSAGE_TYPE_TAB_LIST => {}
                 MessageType::Heartbeat => {
                     self.stream
                         .write_all(&encode_message(MessageType::HeartbeatAck, &payload))
@@ -192,5 +191,84 @@ impl<S: DirectReadWrite> DirectTransportClient<S> {
                 _ => {}
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::control::{UiMouseSelectionSnapshot, UiRuntimeState, UiTabSnapshot};
+    use crate::status_components::UiStatusBarSnapshot;
+    use std::net::{TcpListener, TcpStream};
+
+    #[test]
+    fn create_tab_uses_runtime_action_and_viewed_tab_runtime_state() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
+        let port = listener.local_addr().expect("listener addr").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept create client");
+            let (ty, payload) = read_message(&mut stream).expect("read auth request");
+            assert_eq!(ty, MessageType::Auth);
+            assert!(payload.is_empty());
+
+            stream
+                .write_all(&encode_message(
+                    MessageType::AuthOk,
+                    &crate::remote_wire::encode_auth_ok_payload("test-daemon", "test-instance"),
+                ))
+                .expect("write auth ok");
+
+            let (ty, payload) = read_message(&mut stream).expect("read runtime action");
+            assert_eq!(ty, MessageType::RuntimeAction);
+            let action: RuntimeAction = serde_json::from_slice(&payload).expect("decode action");
+            assert_eq!(
+                action,
+                RuntimeAction::NewTab {
+                    view_id: 0,
+                    cols: Some(120),
+                    rows: Some(36),
+                }
+            );
+
+            stream
+                .write_all(&encode_message(
+                    MessageType::UiRuntimeState,
+                    &serde_json::to_vec(&UiRuntimeState {
+                        active_tab: 0,
+                        focused_pane: 5,
+                        tabs: vec![UiTabSnapshot {
+                            tab_id: 77,
+                            index: 0,
+                            active: true,
+                            title: "Tab 1".to_string(),
+                            pane_count: 1,
+                            focused_pane: Some(5),
+                            pane_ids: vec![5],
+                        }],
+                        visible_panes: vec![],
+                        mouse_selection: UiMouseSelectionSnapshot::default(),
+                        status_bar: UiStatusBarSnapshot::default(),
+                        pwd: "/tmp".to_string(),
+                        runtime_revision: 2,
+                        view_revision: 2,
+                        view_id: 4,
+                        viewed_tab_id: Some(77),
+                        viewport_cols: Some(120),
+                        viewport_rows: Some(36),
+                        visible_pane_ids: vec![5],
+                    })
+                    .expect("encode runtime state"),
+                ))
+                .expect("write runtime state");
+        });
+
+        let stream = TcpStream::connect(("127.0.0.1", port)).expect("connect client");
+        let mut client =
+            DirectTransportClient::connect_over_stream(stream, "127.0.0.1".into(), port, None)
+                .expect("connect transport");
+        let tab_id = client.create_tab(120, 36).expect("create tab");
+        assert_eq!(tab_id, 77);
+
+        server.join().expect("server thread");
     }
 }
