@@ -260,16 +260,6 @@ enum ClientWireReducer {
             state.tabs = WireCodec.decodeTabList(payload)
             return .none
         case .tabExited:
-            if payload.count >= 4 {
-                let exitedTabId = payload.withUnsafeBytes {
-                    UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
-                }
-                if state.activeTabId == exitedTabId {
-                    state.activeTabId = nil
-                }
-            } else {
-                state.activeTabId = nil
-            }
             return .none
         case .tabCreated:
             return .none

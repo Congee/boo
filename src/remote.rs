@@ -286,14 +286,6 @@ impl RemoteServer {
             .any(|client| client.runtime_view.visible_tab_id.is_some())
     }
 
-    pub fn viewing_tab(&self, visible_tab_id: u32) -> bool {
-        let state = self.state.lock().expect("remote server state poisoned");
-        state
-            .clients
-            .values()
-            .any(|client| client.runtime_view.visible_tab_id == Some(visible_tab_id))
-    }
-
     pub fn local_viewing_tab(&self, visible_tab_id: u32) -> bool {
         let state = self.state.lock().expect("remote server state poisoned");
         state
@@ -313,14 +305,6 @@ impl RemoteServer {
     #[allow(dead_code)]
     pub fn client_tab(&self, client_id: u64) -> Option<u32> {
         self.client_visible_tab(client_id)
-    }
-
-    pub fn send_tab_created(&self, client_id: u64, visible_tab_id: u32) {
-        self.send_to_client(
-            client_id,
-            MESSAGE_TYPE_TAB_CREATED,
-            visible_tab_id.to_le_bytes().to_vec(),
-        );
     }
 
     #[cfg(test)]
@@ -380,6 +364,14 @@ impl RemoteServer {
             }
         });
         log::info!("remote runtime subscription retargeted: client_id={client_id} visible_tab_id={visible_tab_id}");
+    }
+
+    pub fn clear_client_visible_tab(&self, client_id: u64) {
+        self.update_client(client_id, |client| {
+            client.runtime_view.visible_tab_id = None;
+            client.runtime_view.clear_stream_state();
+        });
+        log::info!("remote runtime view cleared: client_id={client_id}");
     }
 
     pub fn send_error(&self, client_id: u64, code: RemoteErrorCode, message: &str) {
@@ -471,22 +463,6 @@ impl RemoteServer {
         let mut guard = self.state.lock().expect("remote server state poisoned");
         retain_local_subscribed_pane_states_inner(&mut guard, visible_tab_id, visible_pane_ids);
     }
-
-    pub fn send_tab_exited(&self, visible_tab_id: u32) {
-        let client_ids = self.clients_for_tab(visible_tab_id);
-        for client_id in client_ids {
-            self.send_to_client(
-                client_id,
-                MESSAGE_TYPE_TAB_EXITED,
-                visible_tab_id.to_le_bytes().to_vec(),
-            );
-            self.update_client(client_id, |client| {
-                client.runtime_view.visible_tab_id = None;
-                client.runtime_view.clear_stream_state();
-            });
-        }
-    }
-
 
     pub fn record_input_seq(&self, client_id: u64, input_seq: Option<u64>) {
         self.update_client(client_id, |client| {

@@ -1031,16 +1031,7 @@ impl ClientApp {
                 }
                 self.observe_focused_cursor_position();
             }
-            LocalStreamEvent::TabExited(tab_id) => {
-                if self.active_remote_tab_id == Some(tab_id) {
-                    self.active_remote_tab_id = None;
-                }
-                self.mode = ClientMode::Recovering;
-                self.should_exit = false;
-                self.last_error = None;
-                self.pending_input_latencies.clear();
-                self.send_stream_command(StreamCommand::ListTabs);
-            }
+            LocalStreamEvent::TabExited => {}
             LocalStreamEvent::Disconnected => {
                 self.stream_tx = None;
                 self.mode = ClientMode::Recovering;
@@ -1130,7 +1121,7 @@ impl ClientApp {
                 | LocalStreamEvent::Delta { .. }
                 | LocalStreamEvent::UiPaneFullState { .. }
                 | LocalStreamEvent::UiPaneDelta { .. }
-                | LocalStreamEvent::TabExited(_)
+                | LocalStreamEvent::TabExited
         ) || matches!(
             &event,
             LocalStreamEvent::UiPaneFullState { pane_id, .. }
@@ -1932,7 +1923,7 @@ pub(crate) enum LocalStreamEvent {
         pane_id: u64,
         delta: RemoteDelta,
     },
-    TabExited(u32),
+    TabExited,
     Disconnected,
     FullState {
         ack_input_seq: Option<u64>,
@@ -2513,7 +2504,7 @@ fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStream
                 })
             }
             remote::MESSAGE_TYPE_TAB_EXITED => {
-                decode_u32(&payload).map(LocalStreamEvent::TabExited)
+                decode_u32(&payload).map(|_| LocalStreamEvent::TabExited)
             }
             remote::MessageType::FullState => {
                 decode_remote_full_state(&payload).map(|(ack_input_seq, state)| {
@@ -3500,7 +3491,7 @@ mod tests {
                 changed_rows: Vec::new(),
             },
         };
-        let barrier = LocalStreamEvent::TabExited(7);
+        let barrier = LocalStreamEvent::TabExited;
 
         let mut batch = Vec::new();
         let mut pending = PendingCoalescedStreamEvents::with_passive_screen_coalescing(true);
@@ -3525,7 +3516,7 @@ mod tests {
                 ..
             }
         ));
-        assert!(matches!(batch[2], LocalStreamEvent::TabExited(7)));
+        assert!(matches!(batch[2], LocalStreamEvent::TabExited));
     }
 
     #[test]
@@ -3628,7 +3619,7 @@ mod tests {
         });
         let appearance_a = LocalStreamEvent::UiAppearance(appearance("A"));
         let appearance_b = LocalStreamEvent::UiAppearance(appearance("B"));
-        let barrier = LocalStreamEvent::TabExited(7);
+        let barrier = LocalStreamEvent::TabExited;
 
         let mut batch = Vec::new();
         let mut pending = PendingCoalescedStreamEvents::with_passive_screen_coalescing(true);
@@ -3653,7 +3644,7 @@ mod tests {
             }
             other => panic!("expected coalesced appearance, got {other:?}"),
         }
-        assert!(matches!(batch[2], LocalStreamEvent::TabExited(7)));
+        assert!(matches!(batch[2], LocalStreamEvent::TabExited));
     }
 
     #[test]
@@ -3904,7 +3895,7 @@ mod tests {
         app.should_exit = true;
         app.last_error = Some("stale".to_string());
 
-        app.handle_stream_event(LocalStreamEvent::TabExited(7));
+        app.handle_stream_event(LocalStreamEvent::TabExited);
 
         assert!(matches!(app.mode, ClientMode::Recovering));
         assert_eq!(app.active_remote_tab_id, None);

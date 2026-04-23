@@ -121,9 +121,11 @@ pub fn create_remote_daemon_tab(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::control::{UiMouseSelectionSnapshot, UiRuntimeState, UiTabSnapshot};
     use crate::remote_types::RemoteTabInfo;
+    use crate::status_components::UiStatusBarSnapshot;
     use crate::remote_wire::{
-        MESSAGE_TYPE_LIST_TABS, MESSAGE_TYPE_TAB_CREATED, MESSAGE_TYPE_TAB_LIST, MessageType,
+        MESSAGE_TYPE_LIST_TABS, MESSAGE_TYPE_TAB_LIST, MessageType,
         REMOTE_PROTOCOL_VERSION, encode_auth_ok_payload, encode_message, encode_tab_list,
         read_message,
     };
@@ -277,10 +279,40 @@ mod tests {
             assert_eq!(payload, [132, 0, 48, 0]);
             stream
                 .write_all(&encode_message(
-                    MESSAGE_TYPE_TAB_CREATED,
-                    &77_u32.to_le_bytes(),
+                    MESSAGE_TYPE_TAB_LIST,
+                    &encode_tab_list(&[RemoteTabInfo {
+                        id: 77,
+                        name: "Tab 1".to_string(),
+                        title: "Tab 1".to_string(),
+                        pwd: "/tmp".to_string(),
+                        child_exited: false,
+                    }]),
                 ))
-                .expect("write tab created");
+                .expect("write tab list");
+            stream
+                .write_all(&encode_message(
+                    MessageType::UiRuntimeState,
+                    &serde_json::to_vec(&UiRuntimeState {
+                        active_tab: 0,
+                        focused_pane: 1,
+                        tabs: vec![UiTabSnapshot {
+                            tab_id: 77,
+                            index: 0,
+                            active: true,
+                            title: "Tab 1".to_string(),
+                            pane_count: 1,
+                        }],
+                        visible_panes: vec![],
+                        mouse_selection: UiMouseSelectionSnapshot::default(),
+                        status_bar: UiStatusBarSnapshot {
+                            left: vec![],
+                            right: vec![],
+                        },
+                        pwd: "/tmp".to_string(),
+                    })
+                    .expect("encode runtime state"),
+                ))
+                .expect("write runtime state");
         });
 
         let summary = create_remote_daemon_tab(

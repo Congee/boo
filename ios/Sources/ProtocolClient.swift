@@ -1455,11 +1455,6 @@ final class GSPClient: ObservableObject {
             return
         }
 
-        if message == .tabExited {
-            bootstrapCanonicalHostTab(trigger: "tabExited")
-            return
-        }
-
         if message == .tabList, runtimeState == nil {
             bootstrapCanonicalHostTab(trigger: "tabList")
             return

@@ -382,11 +382,6 @@ impl TabManager {
         })
     }
 
-    pub fn tab_id_for_pane_id(&self, pane_id: crate::pane::PaneId) -> Option<u32> {
-        self.find_pane_location(pane_id)
-            .and_then(|(tab_index, _)| self.tab_id_for_index(tab_index))
-    }
-
     pub fn remove_pane_by_id(&mut self, pane_id: crate::pane::PaneId) -> Option<PaneHandle> {
         let (tab_index, _) = self.find_pane_location(pane_id)?;
         let pane = self.tabs.get_mut(tab_index)?.tree.remove_pane(pane_id)?;

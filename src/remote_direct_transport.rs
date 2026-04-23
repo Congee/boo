@@ -6,7 +6,7 @@ use crate::remote_types::RemoteDirectTabInfo;
 use crate::remote_wire::{
     MESSAGE_TYPE_LIST_TABS, MESSAGE_TYPE_TAB_CREATED, MESSAGE_TYPE_TAB_LIST, MessageType,
     decode_auth_ok_payload, decode_tab_list_payload, encode_message,
-    parse_created_tab_id, read_probe_auth_reply, read_probe_reply,
+    parse_created_tab_id, read_message, read_probe_auth_reply, read_probe_reply,
     validate_auth_ok_payload,
 };
 
@@ -125,19 +125,64 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
                     self.host, self.port
                 )
             })?;
-        let (_reply_ty, payload) =
-            read_probe_reply(
-                &mut self.stream,
-                &self.host,
-                self.port,
-                MESSAGE_TYPE_TAB_CREATED,
-            )?;
-        parse_created_tab_id(&payload).ok_or_else(|| {
-            format!(
-                "invalid tab-created payload from remote endpoint {}:{}",
-                self.host, self.port
-            )
-        })
+        let mut latest_tabs: Option<Vec<RemoteDirectTabInfo>> = None;
+        loop {
+            let (ty, payload) = read_message(&mut self.stream).map_err(|error| {
+                format!(
+                    "failed to read create-tab reply from {}:{}: {error}",
+                    self.host, self.port
+                )
+            })?;
+            match ty {
+                MESSAGE_TYPE_TAB_CREATED => {
+                    return parse_created_tab_id(&payload).ok_or_else(|| {
+                        format!(
+                            "invalid tab-created payload from remote endpoint {}:{}",
+                            self.host, self.port
+                        )
+                    });
+                }
+                MESSAGE_TYPE_TAB_LIST => {
+                    latest_tabs = Some(decode_tab_list_payload(&payload).map_err(|error| {
+                        format!(
+                            "failed to decode remote tab list from {}:{}: {error}",
+                            self.host, self.port
+                        )
+                    })?);
+                }
+                MessageType::UiRuntimeState => {
+                    let runtime_state: crate::control::UiRuntimeState =
+                        serde_json::from_slice(&payload).map_err(|error| {
+                            format!(
+                                "failed to decode runtime state from {}:{}: {error}",
+                                self.host, self.port
+                            )
+                        })?;
+                    if let Some(tabs) = latest_tabs.as_ref()
+                        && let Some(tab) = tabs.get(runtime_state.active_tab)
+                    {
+                        return Ok(tab.id);
+                    }
+                }
+                MessageType::Heartbeat => {
+                    self.stream
+                        .write_all(&encode_message(MessageType::HeartbeatAck, &payload))
+                        .map_err(|error| {
+                            format!(
+                                "failed to send heartbeat ack to {}:{}: {error}",
+                                self.host, self.port
+                            )
+                        })?;
+                }
+                MessageType::ErrorMsg => {
+                    return Err(format!(
+                        "remote endpoint {}:{} rejected create-tab request",
+                        self.host, self.port
+                    ));
+                }
+                _ => {}
+            }
+        }
     }
 
 }

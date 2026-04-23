@@ -628,6 +628,7 @@ pub(crate) fn decode_tab_list_payload(payload: &[u8]) -> Result<Vec<RemoteDirect
     Ok(tabs)
 }
 
+#[cfg(test)]
 pub(crate) fn decode_remote_full_state_payload(payload: &[u8]) -> Result<RemoteFullState, String> {
     if payload.len() < REMOTE_FULL_STATE_HEADER_LEN {
         return Err("payload too short".to_string());
