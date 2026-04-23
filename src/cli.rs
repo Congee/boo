@@ -135,7 +135,7 @@ pub enum Command {
     },
     /// Stop the Boo server
     KillServer,
-    /// List live sessions on the Boo server
+    /// List live tabs on the Boo server
     Ls,
     /// Probe a Boo-native QUIC remote daemon directly
     ProbeRemoteDaemon {
@@ -147,7 +147,7 @@ pub enum Command {
         expect_server_identity: Option<String>,
     },
     /// List tabs from a Boo-native QUIC remote daemon directly
-    #[command(visible_alias = "remote-daemon-sessions")]
+    #[command(alias = "remote-daemon-sessions")]
     RemoteDaemonTabs {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
@@ -190,7 +190,7 @@ pub enum Command {
     },
     /// Show connected remote and local-stream client diagnostics
     RemoteClients,
-    /// Create a new live session
+    /// Create a new live tab
     NewSession,
     #[command(hide = true)]
     Ping,
@@ -835,7 +835,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_remote_daemon_sessions_alias_subcommand() {
+    fn parse_remote_daemon_legacy_sessions_alias_subcommand() {
         let cli = Cli::parse_from([
             "boo",
             "remote-daemon-sessions",
@@ -848,7 +848,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_remote_daemon_attach_session_id_alias() {
+    fn parse_remote_daemon_attach_legacy_session_id_alias() {
         let cli = Cli::parse_from([
             "boo",
             "remote-daemon-attach",

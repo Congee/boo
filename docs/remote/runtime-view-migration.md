@@ -21,16 +21,16 @@ Code evidence:
 
 - `src/tabs.rs`
   - `Tab { id, tree, ... }`
-  - `active_session_id()` returns the active tab id
-  - `find_index_by_session_id()` finds a tab by that id
+  - `active_tab_id()` returns the active tab id
+  - `find_index_by_tab_id()` finds a tab by that id
 - `src/runtime_server.rs`
   - remote create creates a new tab
   - remote destroy removes a tab
-  - remote attach targets a tab by `session_id`
+  - remote attach targets a tab by `tab_id` internally
 
 So today:
 
-- `session_id == tab.id`
+- `tab_id == tab.id` at the transport boundary
 - `destroy session == close tab`
 - `attach session == attach to one tab`
 
@@ -63,24 +63,16 @@ older attached-session terminal protocol.
 
 These uses do not represent an independent concept. They are tab ids.
 
-- `src/tabs.rs`
-  - `active_session_id`
-  - `tab_session_info`
-  - `session_id_for_index`
-  - `find_index_by_session_id`
-  - `session_id_for_pane_id`
-- `src/runtime_server.rs`
-  - `remote_sessions()`
-  - `pane_for_session()`
-  - `publish_remote_session()`
-  - remote create/attach/destroy/input/resize paths that immediately convert
-    `session_id` to a tab lookup
-- `src/remote_types.rs`
-  - `RemoteSessionInfo`
-  - `RemoteDirectSessionInfo`
-  - `RemoteSessionListSummary`
-  - `RemoteCreateSummary.session_id`
-  - `RemoteAttachedSummary.session_id`
+- already migrated in the core Rust transport/runtime path to names like:
+  - `active_tab_id`
+  - `find_index_by_tab_id`
+  - `tab_id_for_pane_id`
+  - `RemoteTabInfo`
+  - `RemoteTabListSummary`
+  - `RemoteCreateSummary.tab_id`
+  - `RemoteAttachedSummary.tab_id`
+- remaining work in this category is mostly client-side and compatibility-only
+  decode surfaces, not the main runtime implementation
 
 These should ultimately become tab/runtime terminology or disappear into the
 runtime state model entirely.
@@ -91,18 +83,16 @@ These uses track which runtime target a given stream client is currently bound
 to. They are real transport state, but should not remain the user-visible core
 model.
 
-- `src/remote_state.rs`
-  - `ClientState.attached_session`
-  - revivable attachment metadata
-- `src/remote.rs`
-  - `send_attached`
-  - `send_detached`
-  - `send_session_exited`
-  - client targeting helpers by attached session
-- `src/remote_server_attach.rs`
-- `src/remote_server_targets.rs`
-- iOS transport-side attachment bookkeeping in
-  `ios/Sources/ProtocolClient.swift`
+- Rust transport internals now separate this into:
+  - `ClientRuntimeSubscription`
+  - `ClientAttachmentLease`
+  - `RevivableRuntimeSubscription`
+- remaining attachment-shaped state is concentrated in:
+  - wire compatibility and resume behavior
+  - `src/remote_server_attach.rs`
+  - `src/remote_server_targets.rs`
+  - iOS transport-side attachment bookkeeping in
+    `ios/Sources/ProtocolClient.swift`
 
 This layer can exist as a temporary compatibility mechanism while moving to a
 runtime subscription model, but it should no longer drive UX semantics.
@@ -131,18 +121,19 @@ This is intentionally narrower than the old `attached_session` model:
 These represent the wrong product abstraction and should be deleted, not merely
 renamed.
 
-- `listSessions` bootstrapping for iOS
+- iOS `listSessions` bootstrapping
 - heuristic attach selection
 - host-scoped stored session choice as a product concept
-- any assumption that a host presents a pool of candidate sessions that mobile
+- any assumption that a host presents a pool of candidate tabs that mobile
   should choose from
 
 Examples:
 
 - `ios/Sources/ProtocolClient.swift`
   - `listSessions()` as a bootstrap tool
-- old iOS attach heuristics in `ios/Sources/Screens.swift`
-- session-list attach selection logic in `src/client_gui.rs`
+- `ios/Sources/Screens.swift` still has attachment-driven terminal bootstrap
+- `src/client_gui.rs` still refreshes from compatibility tab lists before a
+  richer runtime-view model exists
 
 ## Target Architecture
 
@@ -274,15 +265,13 @@ These are the main seams where the old session-shaped transport still leaks
 through and needs replacement:
 
 - wire compatibility surface
-  - legacy numeric opcodes for:
-    - list tabs
-    - tab list
-    - tab created
-    - tab exited
+  - legacy numeric opcodes still carrying the historical list/attach flow
   - serde decode aliases like `session_id` and `attached_session`
 - client bootstrap
-  - iOS `listSessions()` and attach heuristics
-  - local GUI remote stream handling that still starts from a tab/session list
+  - iOS transport/bootstrap still centered on `listSessions()` and attached-tab
+    recovery
+  - local GUI remote stream handling still starts from compatibility tab lists
+    instead of first-class runtime snapshots
 
 The next protocol step is to preserve wire compatibility while shifting
 internals and client bootstrap to:
