@@ -70,52 +70,35 @@ These uses do not represent an independent concept. They are tab ids.
   - `RemoteTabInfo`
   - `RemoteTabListSummary`
   - `RemoteCreateSummary.tab_id`
-  - `RemoteAttachedSummary.tab_id`
 - remaining work in this category is mostly client-side and compatibility-only
   decode surfaces, not the main runtime implementation
 
 These should ultimately become tab/runtime terminology or disappear into the
 runtime state model entirely.
 
-### Category B: Transport attachment state that may remain temporarily, but should stop being product-level state
+### Category B: Legacy transport attachment state that has now been removed from live code
 
-These uses track which runtime target a given stream client is currently bound
-to. They are real transport state, but should not remain the user-visible core
-model.
+These uses used to track which runtime target a given stream client was
+explicitly attached to, plus optional resume/lease metadata.
 
-- Rust transport internals now separate this into:
-  - `ClientRuntimeSubscription`
+- removed from live Rust transport/runtime code:
   - `ClientAttachmentLease`
   - `RevivableRuntimeSubscription`
-- remaining attachment-shaped state is concentrated in:
-  - wire compatibility and resume behavior
-  - `src/remote_server_attach.rs`
-  - `src/remote_server_targets.rs`
-  - iOS transport-side attachment bookkeeping in
-    `ios/Sources/ProtocolClient.swift`
+  - explicit remote `Attach` / `Detach` command handling
+  - remote attach/resume CLI and direct-client RPCs
+- removed from live iOS product code:
+  - resume attachment persistence
+  - explicit attach bootstrap
 
-This layer can exist as a temporary compatibility mechanism while moving to a
-runtime subscription model, but it should no longer drive UX semantics.
-
-Current internal split after the first transport cleanup:
-
+What remains is only:
 - `ClientRuntimeSubscription`
   - current subscribed tab id for this client stream
   - cached tab-list/runtime/appearance payloads
   - cached terminal full state and pane states
   - latest acknowledged input sequence
-- `ClientAttachmentLease`
-  - attachment id
-  - optional resume token
-- `RevivableRuntimeSubscription`
-  - tab id plus cached stream state parked during reconnect
 
-This is intentionally narrower than the old `attached_session` compatibility
-surface:
-
-- tab/runtime identity lives in the runtime
-- subscription state lives in transport plumbing
-- revive/lease state is now explicitly transport-only
+That remaining subscription cache is runtime-view transport plumbing, not a
+user-visible attach/session model.
 
 ### Category C: Obsolete legacy-target-picking model that should be removed
 
