@@ -41,7 +41,7 @@ runtime plus per-screen view state.
       snapshot
 - [x] scope pane updates by `tab_id + pane_id`
 - [x] scope non-focused pane streaming to panes visible on that screen
-- [ ] prove only visible panes are streamed to each screen with targeted tests
+- [x] prove only visible panes are streamed to each screen with targeted tests
 - [ ] implement explicit per-screen focused-pane prioritization/coalescing
 - [ ] cover divergent focused-pane scheduling across multiple screens
 
@@ -71,14 +71,14 @@ runtime plus per-screen view state.
 
 - [x] cover runtime-action decode at the protocol layer
 - [x] cover server-side client view initialization
-- [ ] connect a new screen and verify initial runtime/view bootstrap semantics
+- [x] connect a new screen and verify initial runtime/view bootstrap semantics
 - [x] verify changing viewed tab only affects that screen
 - [x] verify closing a shared tab remaps viewed tab deterministically
 - [x] verify different screens can keep different focused panes on one tab
 - [ ] verify stale pane updates are rejected/refreshed via revision linkage
 - [ ] verify normalized split resize reflects across different screen sizes
-- [ ] verify focused-pane traffic is scheduled ahead of non-focused panes
-- [ ] verify tab/status-bar semantic actions propagate shared runtime changes
+- [x] verify focused-pane traffic is scheduled ahead of non-focused panes
+- [x] verify tab/status-bar semantic actions propagate shared runtime changes
 
 ### Deferred / TODO
 

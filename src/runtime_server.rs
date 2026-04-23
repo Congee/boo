@@ -1028,19 +1028,50 @@ mod tests {
     use crate::remote::RemoteServer;
     use crate::remote_batcher::OutboundMessage;
     use crate::remote_state::{ClientState, State as RemoteState};
+    use crate::remote_wire::{MessageType, read_message};
+    use std::collections::HashMap;
+    use std::io::Cursor;
     use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
 
     fn test_remote_client(outbound: mpsc::Sender<OutboundMessage>) -> ClientState {
         ClientState::test_client(outbound, true, false)
     }
 
     fn install_test_remote_server(app: &mut BooApp, client_ids: &[u64]) {
+        let _ = install_test_remote_server_with_receivers(app, client_ids);
+    }
+
+    fn install_test_remote_server_with_receivers(
+        app: &mut BooApp,
+        client_ids: &[u64],
+    ) -> HashMap<u64, mpsc::Receiver<OutboundMessage>> {
         let mut state = RemoteState::test_empty();
+        let mut receivers = HashMap::new();
         for client_id in client_ids {
-            let (tx, _rx) = mpsc::channel();
+            let (tx, rx) = mpsc::channel();
             state.clients.insert(*client_id, test_remote_client(tx));
+            receivers.insert(*client_id, rx);
         }
         app.server.remote_server = Some(RemoteServer::for_test(Arc::new(Mutex::new(state))));
+        receivers
+    }
+
+    fn collect_screen_update_types(rx: &mpsc::Receiver<OutboundMessage>) -> Vec<MessageType> {
+        let mut message_types = Vec::new();
+        while let Ok(message) = rx.recv_timeout(Duration::from_millis(20)) {
+            let OutboundMessage::ScreenUpdate(frame) = message else {
+                continue;
+            };
+            let (ty, _payload) =
+                read_message(&mut Cursor::new(frame)).expect("decode screen update");
+            message_types.push(ty);
+        }
+        message_types
+    }
+
+    fn drain_outbound(rx: &mpsc::Receiver<OutboundMessage>) {
+        while rx.recv_timeout(Duration::from_millis(20)).is_ok() {}
     }
 
     #[test]
@@ -1159,5 +1190,134 @@ mod tests {
         assert_eq!(client_two.viewed_tab_id, Some(tab_id));
         assert_eq!(client_one.focused_pane_id, Some(pane_ids[0]));
         assert_eq!(client_two.focused_pane_id, Some(pane_ids[1]));
+    }
+
+    #[test]
+    fn syncing_new_screen_bootstraps_view_state_and_initial_metadata() {
+        let mut app = BooApp::new_headless();
+        app.init_surface();
+        let receivers = install_test_remote_server_with_receivers(&mut app, &[1]);
+
+        app.sync_remote_client_runtime_view(1, true);
+
+        let server = app.server.remote_server.as_ref().expect("remote server");
+        let snapshot = server.client_runtime_view(1).expect("view snapshot");
+        assert_eq!(snapshot.view_id, 1);
+        assert!(snapshot.subscribed_to_runtime);
+        assert!(snapshot.viewed_tab_id.is_some());
+        assert!(snapshot.focused_pane_id.is_some());
+        assert!(!snapshot.visible_pane_ids.is_empty());
+
+        let rx = receivers.get(&1).expect("receiver");
+        let mut message_types = Vec::new();
+        while let Ok(message) = rx.recv_timeout(Duration::from_millis(20)) {
+            let OutboundMessage::Frame(frame) = message else {
+                continue;
+            };
+            let (ty, _payload) = read_message(&mut Cursor::new(frame)).expect("decode frame");
+            message_types.push(ty);
+        }
+        assert!(message_types.contains(&MessageType::TabList));
+        assert!(message_types.contains(&MessageType::UiRuntimeState));
+        assert!(message_types.contains(&MessageType::UiAppearance));
+    }
+
+    #[test]
+    fn publish_remote_tab_only_streams_visible_panes_per_client() {
+        let mut app = BooApp::new_headless();
+        app.init_surface();
+        app.create_split(crate::bindings::SplitDirection::Right);
+        let tab_id = app.active_runtime_tab_id().expect("active tab");
+        let pane_ids = app.pane_ids_for_tab(tab_id);
+        assert!(pane_ids.len() >= 2);
+        let receivers = install_test_remote_server_with_receivers(&mut app, &[1, 2]);
+        app.sync_remote_client_runtime_view(1, true);
+        app.sync_remote_client_runtime_view(2, true);
+        drain_outbound(receivers.get(&1).expect("client 1 receiver"));
+        drain_outbound(receivers.get(&2).expect("client 2 receiver"));
+        {
+            let server = app.server.remote_server.as_ref().expect("remote server");
+            server.update_client_view(1, |view| {
+                view.viewed_tab_id = Some(tab_id);
+                view.focused_pane_id = Some(pane_ids[0]);
+                view.visible_pane_ids = vec![pane_ids[0]];
+                view.touch_view();
+            });
+            server.update_client_view(2, |view| {
+                view.viewed_tab_id = Some(tab_id);
+                view.focused_pane_id = Some(pane_ids[0]);
+                view.visible_pane_ids = pane_ids.clone();
+                view.touch_view();
+            });
+        }
+
+        app.publish_remote_tab(tab_id);
+
+        let rx1 = receivers.get(&1).expect("client 1 receiver");
+        let client_one_types = collect_screen_update_types(rx1);
+        let rx2 = receivers.get(&2).expect("client 2 receiver");
+        let client_two_types = collect_screen_update_types(rx2);
+
+        assert_eq!(client_one_types.len(), 1);
+        assert!(matches!(client_one_types[0], MessageType::FullState | MessageType::Delta));
+        assert!(client_two_types.iter().any(|ty| matches!(ty, MessageType::UiPaneFullState | MessageType::UiPaneDelta)));
+    }
+
+    #[test]
+    fn publish_remote_tab_sends_focused_pane_before_nonfocused_visible_panes() {
+        let mut app = BooApp::new_headless();
+        app.init_surface();
+        app.create_split(crate::bindings::SplitDirection::Right);
+        let tab_id = app.active_runtime_tab_id().expect("active tab");
+        let pane_ids = app.pane_ids_for_tab(tab_id);
+        assert!(pane_ids.len() >= 2);
+        let receivers = install_test_remote_server_with_receivers(&mut app, &[1]);
+        app.sync_remote_client_runtime_view(1, true);
+        drain_outbound(receivers.get(&1).expect("receiver"));
+        {
+            let server = app.server.remote_server.as_ref().expect("remote server");
+            server.update_client_view(1, |view| {
+                view.viewed_tab_id = Some(tab_id);
+                view.focused_pane_id = Some(pane_ids[0]);
+                view.visible_pane_ids = pane_ids.clone();
+                view.touch_view();
+            });
+        }
+
+        app.publish_remote_tab(tab_id);
+
+        let rx = receivers.get(&1).expect("receiver");
+        let message_types = collect_screen_update_types(rx);
+        assert!(message_types.len() >= 2);
+        let first_ty = message_types[0];
+        let second_ty = message_types[1];
+        assert!(matches!(first_ty, MessageType::FullState | MessageType::Delta));
+        assert!(matches!(second_ty, MessageType::UiPaneFullState | MessageType::UiPaneDelta));
+    }
+
+    #[test]
+    fn runtime_action_new_tab_updates_shared_runtime_metadata_for_all_views() {
+        let mut app = BooApp::new_headless();
+        app.init_surface();
+        install_test_remote_server(&mut app, &[1, 2]);
+        app.sync_remote_client_runtime_view(1, true);
+        app.sync_remote_client_runtime_view(2, true);
+
+        let tabs_before = app.ui_runtime_state_for_client(1).tabs.len();
+
+        app.handle_server_cmd(crate::server::Command::RemoteRuntimeAction {
+            client_id: 1,
+            action: crate::remote::RuntimeAction::NewTab {
+                view_id: 1,
+                cols: Some(120),
+                rows: Some(36),
+            },
+        });
+
+        let client_one_state = app.ui_runtime_state_for_client(1);
+        let client_two_state = app.ui_runtime_state_for_client(2);
+        assert_eq!(client_one_state.tabs.len(), tabs_before + 1);
+        assert_eq!(client_two_state.tabs.len(), tabs_before + 1);
+        assert_eq!(client_one_state.tabs.len(), client_two_state.tabs.len());
     }
 }
