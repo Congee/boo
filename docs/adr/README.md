@@ -9,7 +9,7 @@ Good ADR candidates in boo include:
 - IPC boundary changes
 - renderer strategy changes
 - platform-boundary changes
-- remote protocol or session-model decisions
+- remote protocol or runtime-view model decisions
 
 Suggested format:
 

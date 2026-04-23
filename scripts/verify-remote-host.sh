@@ -43,4 +43,4 @@ python3 scripts/ui-test-client.py --socket "$local_socket" snapshot >/tmp/boo-re
 python3 scripts/remote-stream-client.py --socket "$local_socket" >/tmp/boo-remote-stream.json
 
 echo "control snapshot: /tmp/boo-remote-snapshot.json"
-echo "stream session list: /tmp/boo-remote-stream.json"
+echo "stream tab list: /tmp/boo-remote-stream.json"

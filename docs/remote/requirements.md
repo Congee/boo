@@ -19,32 +19,33 @@ time, even though rollout and UX differ today.
 - keep the server authoritative for PTYs, tabs, splits, and terminal state
 - preserve deterministic verification paths
 - keep desktop SSH practical without blocking on mobile-specific work
-- converge toward one shared remote protocol/session model
+- converge toward one shared remote runtime-view protocol
 - do not rely on Boo-managed shared secrets for remote auth
 - if key-based auth is added, verify public keys server-side in an
   `authorized_keys`-style model and use platform keychain or agent integration
   client-side rather than storing private keys inside Boo
 
-## iOS Host Session Model
+## iOS Host Runtime Model
 
 For iOS, the product direction is now:
 
-- one host maps to one Boo session
-- switching between hosts may switch sessions
-- reconnecting to the same host should reopen that same host session rather
-  than listing multiple candidate sessions and picking one heuristically
+- one host maps to one canonical Boo runtime view
+- reconnecting to the same host should reopen or recover that same host-owned
+  tab/runtime state rather than listing multiple candidate tabs heuristically
+- the client should connect to runtime state, not pick from a host-local
+  session pool
 
 Two architectural models are worth keeping explicit:
 
 1. Rejected current-style model:
    one host -> `listSessions()` -> choose a session heuristically -> attach
 2. Desired host-scoped model:
-   one host -> one canonical Boo session for iOS -> reopen or recover that same
-   session until the user explicitly closes it
+   one host -> one canonical Boo runtime view for iOS -> reopen or recover that
+   same host-owned tab/runtime state until the user explicitly closes it
 
 The first model is structurally wrong for iOS because it allows a visible
 terminal that is not the canonical writable terminal for that host. Future
-research should treat this as a host-session ownership problem, not as a mere
+research should treat this as a host-runtime ownership problem, not as a mere
 keyboard-focus bug.
 
 ## Tailscale Constraint

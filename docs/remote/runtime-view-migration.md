@@ -268,8 +268,8 @@ through and needs replacement:
   - legacy numeric opcodes still carrying the historical list/attach flow
   - serde decode aliases like `session_id` and `attached_session`
 - client bootstrap
-  - iOS transport/bootstrap still centered on `listSessions()` and attached-tab
-    recovery
+  - iOS still has compatibility tab-list handling and attached-tab recovery, but
+    production bootstrap is now tab-native rather than `listSessions()`-driven
   - local GUI remote stream handling still starts from compatibility tab lists
     instead of first-class runtime snapshots
 
