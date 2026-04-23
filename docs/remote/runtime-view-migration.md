@@ -257,10 +257,14 @@ Current implementation progress:
   `UiRuntimeState.active_tab` and `UiTabSnapshot.tab_id`
 - the runtime server now sends `UiRuntimeState` together with `TabList` during
   remote tab-list requests so clients can bootstrap from runtime state
+- the runtime server also publishes runtime state and appearance immediately on
+  remote connect, before any explicit target-picking round trip
 - iOS has canonical runtime-state decoding and uses the active runtime tab as a
   bootstrap fallback before creating a new tab
 - iOS no longer persists a host-scoped preferred tab as a product-level choice;
   reconnect bootstrap now prefers resume metadata and current runtime state
+- remaining attach/detach behavior is transport-only compatibility for terminal
+  streaming and resume, not a product-level "session selection" concept
 
 ### Phase 3: Pane/runtime action model
 
