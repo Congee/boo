@@ -521,14 +521,14 @@ enum ConnectionStatus: Equatable {
     case connecting
     case connected
     case authenticated
-    case attached(sessionId: UInt32)
+    case attached(tabId: UInt32)
     case connectionLost(reason: String)
 }
 
 extension ConnectionStatus {
     var attachedTabId: UInt32? {
-        if case .attached(let sessionId) = self {
-            return sessionId
+        if case .attached(let tabId) = self {
+            return tabId
         }
         return nil
     }
@@ -656,7 +656,7 @@ final class ConnectionMonitor: ObservableObject {
             let (connected, authenticated, tabId, error) = values
 
             if let tabId {
-                self.status = .attached(sessionId: tabId)
+                self.status = .attached(tabId: tabId)
             } else if let error, !connected, self.status != .disconnected {
                 self.status = .connectionLost(reason: error)
             } else if authenticated {
@@ -678,7 +678,7 @@ final class ConnectionMonitor: ObservableObject {
             self.updateReconnectState(
                 connected: connected,
                 authenticated: authenticated,
-                sessionId: tabId,
+                tabId: tabId,
                 error: error
             )
         }
@@ -865,10 +865,10 @@ final class ConnectionMonitor: ObservableObject {
     private func updateReconnectState(
         connected: Bool,
         authenticated: Bool,
-        sessionId: UInt32?,
+        tabId: UInt32?,
         error: String?
     ) {
-        if connected, (authenticated || sessionId != nil) {
+        if connected, (authenticated || tabId != nil) {
             cancelReconnect()
             reconnectState = .idle
             return

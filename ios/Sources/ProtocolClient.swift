@@ -809,7 +809,7 @@ final class GSPClient: ObservableObject {
         return base
     }
 
-    var uiTestSessionDebugSummary: String {
+    var uiTestTabDebugSummary: String {
         let tabIds = tabs.map(\.id).map(String.init).joined(separator: ",")
         return [
             "connected=\(connected)",

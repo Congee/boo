@@ -241,7 +241,7 @@ struct BooRootView: View {
                         .allowsHitTesting(!showingConnectedTerminal)
                         .accessibilityHidden(showingConnectedTerminal)
                         if showingConnectedTerminal {
-                            TerminalSessionScreen(
+                            TerminalTabScreen(
                                 client: client,
                                 monitor: activeMonitor,
                                 store: store,
@@ -952,7 +952,7 @@ private enum TerminalModifierState {
     }
 }
 
-struct TerminalSessionScreen: View {
+struct TerminalTabScreen: View {
     @ObservedObject var client: GSPClient
     @ObservedObject var monitor: ConnectionMonitor
     @ObservedObject var store: ConnectionStore
@@ -967,7 +967,7 @@ struct TerminalSessionScreen: View {
     @State private var altModifierConsumedWhileHeld = false
     @State private var metaModifierConsumedWhileHeld = false
     @State private var didApplyUITestForcedError = false
-    @State private var closingHostSessionId: UInt32?
+    @State private var closingHostTabId: UInt32?
 
     private var visibleTabs: [RemoteTabInfo] {
         client.tabs.filter { !$0.childExited }
@@ -1062,7 +1062,7 @@ struct TerminalSessionScreen: View {
                 Color.clear
                     .frame(width: 1, height: 1)
                     .accessibilityIdentifier("terminal-debug-state")
-                    .accessibilityLabel(client.uiTestSessionDebugSummary)
+                    .accessibilityLabel(client.uiTestTabDebugSummary)
             }
         }
     }
@@ -1353,7 +1353,7 @@ struct TerminalSessionScreen: View {
         client.clearErrorState()
         let attachedTabId = client.attachedTabId
         if let attachedTabId {
-            closingHostSessionId = attachedTabId
+            closingHostTabId = attachedTabId
             client.suppressAutomaticTabBootstrap()
             client.destroyTab(tabId: attachedTabId)
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
@@ -1368,8 +1368,8 @@ struct TerminalSessionScreen: View {
     }
 
     private func forceCloseHostTabIfNeeded(expectedTabId: UInt32) {
-        guard closingHostSessionId == expectedTabId else { return }
-        closingHostSessionId = nil
+        guard closingHostTabId == expectedTabId else { return }
+        closingHostTabId = nil
         client.detach()
         monitor.disconnect()
         DispatchQueue.main.async {
@@ -1406,13 +1406,13 @@ struct TerminalSessionScreen: View {
 
     @discardableResult
     private func finalizeHostTabCloseIfNeeded() -> Bool {
-        guard let closingHostSessionId else { return false }
-        let tabStillVisible = visibleTabs.contains(where: { $0.id == closingHostSessionId })
+        guard let closingHostTabId else { return false }
+        let tabStillVisible = visibleTabs.contains(where: { $0.id == closingHostTabId })
         let tabStillAttached =
-            client.attachedTabId == closingHostSessionId ||
-            client.pendingAttachedTabId == closingHostSessionId
+            client.attachedTabId == closingHostTabId ||
+            client.pendingAttachedTabId == closingHostTabId
         guard !tabStillVisible, !tabStillAttached else { return false }
-        self.closingHostSessionId = nil
+        self.closingHostTabId = nil
         monitor.disconnect()
         DispatchQueue.main.async {
             onBack()
