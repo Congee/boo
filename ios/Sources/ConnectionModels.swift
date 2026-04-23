@@ -341,10 +341,6 @@ final class ConnectionStore: ObservableObject {
         saveResumeAttachments()
     }
 
-    func recordResumeAttachment(host: String, port: UInt16, sessionId: UInt32, attachmentId: UInt64, resumeToken: UInt64) {
-        recordResumeAttachment(host: host, port: port, tabId: sessionId, attachmentId: attachmentId, resumeToken: resumeToken)
-    }
-
     func resumeAttachment(host: String, port: UInt16) -> ResumeAttachmentMetadata? {
         resumeAttachments[targetKey(host: host, port: port)]
     }
@@ -377,18 +373,6 @@ final class ConnectionStore: ObservableObject {
             modelVersion: BooHostTabMetadataModelVersion
         )
         saveHostTabs()
-    }
-
-    func recordHostSession(host: String, port: UInt16, sessionId: UInt32) {
-        recordHostTab(host: host, port: port, tabId: sessionId)
-    }
-
-    func hostSession(host: String, port: UInt16) -> HostSessionMetadata? {
-        hostTab(host: host, port: port)
-    }
-
-    func clearHostSession(host: String, port: UInt16) {
-        clearHostTab(host: host, port: port)
     }
 
     var hasTailscaleAPIToken: Bool {
@@ -496,14 +480,6 @@ final class ConnectionStore: ObservableObject {
     private func saveResumeAttachments() {
         guard let data = try? JSONEncoder().encode(resumeAttachments) else { return }
         UserDefaults.standard.set(data, forKey: resumeAttachmentsKey)
-    }
-
-    private func loadHostSessions() {
-        loadHostTabs()
-    }
-
-    private func saveHostSessions() {
-        saveHostTabs()
     }
 
     private func loadHostTabs() {
