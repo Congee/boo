@@ -7,7 +7,7 @@ func assertEqual<T: Equatable>(_ actual: T, _ expected: T, _ message: String) {
     }
 }
 
-func makeSessionListPayload() -> Data {
+func makeTabListPayload() -> Data {
     var data = Data()
     data.append(contentsOf: UInt32(1).littleEndianBytes)
     data.append(contentsOf: UInt32(7).littleEndianBytes)

@@ -3,11 +3,11 @@ import Foundation
 @main
 struct ProtocolCodecSelfTestMain {
     static func main() {
-        let sessions = WireCodec.decodeSessionList(makeSessionListPayload())
-        assertEqual(sessions.count, 1, "session list count")
+        let tabs = WireCodec.decodeTabList(makeTabListPayload())
+        assertEqual(tabs.count, 1, "tab list count")
         assertEqual(
-            sessions[0],
-            DecodedWireSessionInfo(
+            tabs[0],
+            DecodedWireTabInfo(
                 id: 7,
                 name: "Tab 1",
                 title: "shell",
@@ -15,7 +15,7 @@ struct ProtocolCodecSelfTestMain {
                 attached: true,
                 childExited: false
             ),
-            "session list decoding"
+            "tab list decoding"
         )
 
         guard let state = WireCodec.decodeFullState(makeFullStatePayload()) else {
@@ -66,7 +66,7 @@ struct ProtocolCodecSelfTestMain {
             with: serverIdentityId.utf8
         )
         let authEffect = ClientWireReducer.reduce(message: .authOk, payload: authOkPayload, state: &clientState)
-        assertEqual(authEffect, .listSessions, "auth ok triggers session refresh")
+        assertEqual(authEffect, .listTabs, "auth ok triggers tab refresh")
         assertEqual(clientState.authenticated, true, "auth ok sets authenticated")
         assertEqual(clientState.protocolVersion, 1, "auth ok protocol version decode")
         assertEqual(clientState.transportCapabilities, 0x7f, "auth ok capability decode")
@@ -141,17 +141,17 @@ struct ProtocolCodecSelfTestMain {
             "server identity mismatch ignores unknown trusted identity"
         )
 
-        let listEffect = ClientWireReducer.reduce(message: .sessionList, payload: makeSessionListPayload(), state: &clientState)
-        assertEqual(listEffect, .none, "session list has no side effect")
-        assertEqual(clientState.sessions, sessions, "session list reducer decode")
+        let listEffect = ClientWireReducer.reduce(message: .tabList, payload: makeTabListPayload(), state: &clientState)
+        assertEqual(listEffect, .none, "tab list has no side effect")
+        assertEqual(clientState.tabs, tabs, "tab list reducer decode")
 
         let createdPayload = UInt32(42).littleEndianBytes
-        let createdEffect = ClientWireReducer.reduce(message: .sessionCreated, payload: Data(createdPayload), state: &clientState)
-        assertEqual(createdEffect, .attach(42), "session created triggers attach")
+        let createdEffect = ClientWireReducer.reduce(message: .tabCreated, payload: Data(createdPayload), state: &clientState)
+        assertEqual(createdEffect, .attach(42), "tab created triggers attach")
 
         let attachedEffect = ClientWireReducer.reduce(message: .attached, payload: Data(createdPayload), state: &clientState)
         assertEqual(attachedEffect, .none, "attached has no side effect")
-        assertEqual(clientState.attachedSessionId, 42, "attached stores session id")
+        assertEqual(clientState.attachedTabId, 42, "attached stores tab id")
 
         var attachedWithResumePayload = Data(count: 20)
         attachedWithResumePayload.withUnsafeMutableBytes { bytes in
@@ -165,7 +165,7 @@ struct ProtocolCodecSelfTestMain {
             state: &clientState
         )
         assertEqual(attachedWithResumeEffect, .none, "attached with resume token has no side effect")
-        assertEqual(clientState.attachedSessionId, 42, "attached with resume token stores session id")
+        assertEqual(clientState.attachedTabId, 42, "attached with resume token stores tab id")
         assertEqual(clientState.attachmentId, 0xB001D00DCAFEBEEF, "attached with resume token stores attachment id")
         assertEqual(clientState.resumeToken, 0x0BADF00DDEADC0DE, "attached with resume token stores resume token")
 
@@ -176,19 +176,19 @@ struct ProtocolCodecSelfTestMain {
 
         let detachedEffect = ClientWireReducer.reduce(message: .detached, payload: Data(), state: &clientState)
         assertEqual(detachedEffect, .none, "detached has no side effect")
-        assertEqual(clientState.attachedSessionId, nil, "detached clears attached session")
+        assertEqual(clientState.attachedTabId, nil, "detached clears attached tab")
 
-        clientState.attachedSessionId = 42
+        clientState.attachedTabId = 42
         clientState.attachmentId = 0xB001D00DCAFEBEEF
         clientState.resumeToken = 0x0BADF00DDEADC0DE
-        let sessionExitedEffect = ClientWireReducer.reduce(message: .sessionExited, payload: Data(), state: &clientState)
-        assertEqual(sessionExitedEffect, .listSessions, "session exited triggers session refresh")
-        assertEqual(clientState.attachedSessionId, nil, "session exited clears attached session")
-        assertEqual(clientState.attachmentId, nil, "session exited clears attachment id")
-        assertEqual(clientState.resumeToken, nil, "session exited clears resume token")
+        let tabExitedEffect = ClientWireReducer.reduce(message: .tabExited, payload: Data(), state: &clientState)
+        assertEqual(tabExitedEffect, .listTabs, "tab exited triggers tab refresh")
+        assertEqual(clientState.attachedTabId, nil, "tab exited clears attached tab")
+        assertEqual(clientState.attachmentId, nil, "tab exited clears attachment id")
+        assertEqual(clientState.resumeToken, nil, "tab exited clears resume token")
 
-        let reachableSessions = [
-            SessionInfo(
+        let reachableTabs = [
+            RemoteTabInfo(
                 id: 42,
                 name: "Tab 1",
                 title: "shell",
@@ -198,25 +198,25 @@ struct ProtocolCodecSelfTestMain {
             )
         ]
         assertEqual(
-            resolveAttachedSessionHealth(attachedSessionId: nil, sessions: reachableSessions),
+            resolveAttachedTabHealth(attachedTabId: nil, tabs: reachableTabs),
             .unattached,
             "missing attachment is unhealthy"
         )
         assertEqual(
-            resolveAttachedSessionHealth(attachedSessionId: 7, sessions: reachableSessions),
-            .unreachable(sessionId: 7),
-            "missing attached session is unreachable"
+            resolveAttachedTabHealth(attachedTabId: 7, tabs: reachableTabs),
+            .unreachable(tabId: 7),
+            "missing attached tab is unreachable"
         )
         assertEqual(
-            resolveAttachedSessionHealth(attachedSessionId: 42, sessions: reachableSessions),
-            .reachable(sessionId: 42),
-            "live attached session is reachable"
+            resolveAttachedTabHealth(attachedTabId: 42, tabs: reachableTabs),
+            .reachable(tabId: 42),
+            "live attached tab is reachable"
         )
         assertEqual(
-            resolveAttachedSessionHealth(
-                attachedSessionId: 9,
-                sessions: [
-                    SessionInfo(
+            resolveAttachedTabHealth(
+                attachedTabId: 9,
+                tabs: [
+                    RemoteTabInfo(
                         id: 9,
                         name: "Tab 9",
                         title: "shell",
@@ -226,8 +226,8 @@ struct ProtocolCodecSelfTestMain {
                     )
                 ]
             ),
-            .exited(sessionId: 9),
-            "exited session is not treated as reachable"
+            .exited(tabId: 9),
+            "exited tab is not treated as reachable"
         )
 
         print("iOS wire codec self-test passed")

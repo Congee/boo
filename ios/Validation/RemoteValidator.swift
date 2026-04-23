@@ -109,7 +109,7 @@ private func validateValidationAuthOkMetadata(_ payload: Data) -> String? {
 
 enum WireMessageType: UInt8 {
     case auth = 0x01
-    case listSessions = 0x02
+    case listTabs = 0x02
     case attach = 0x03
     case detach = 0x04
     case create = 0x05
@@ -120,14 +120,14 @@ enum WireMessageType: UInt8 {
 
     case authOk = 0x80
     case authFail = 0x81
-    case sessionList = 0x82
+    case tabList = 0x82
     case fullState = 0x83
     case delta = 0x84
     case attached = 0x85
     case detached = 0x86
     case errorMsg = 0x87
-    case sessionCreated = 0x88
-    case sessionExited = 0x89
+    case tabCreated = 0x88
+    case tabExited = 0x89
     case heartbeatAck = 0x92
 }
 
@@ -147,12 +147,12 @@ final class RemoteValidator {
     private var serverIdentityId: String?
     private var heartbeatAckReceived = false
     private var expectedHeartbeatPayload = Data()
-    private var sessionListReceived = false
-    private var sessions: [DecodedWireSessionInfo] = []
-    private var attachedSessionId: UInt32?
+    private var tabListReceived = false
+    private var tabs: [DecodedWireTabInfo] = []
+    private var attachedTabId: UInt32?
     private var attachmentId: UInt64?
     private var resumeToken: UInt64?
-    private var createdSessionId: UInt32?
+    private var createdTabId: UInt32?
     private var screenState: DecodedWireScreenState?
     private var lastScreenText = ""
     private var screenUpdateReceived = false
@@ -253,9 +253,9 @@ final class RemoteValidator {
     }
 
     func validateRoundTrip() throws {
-        sessionListReceived = false
-        sendMessage(type: .listSessions, payload: Data())
-        try waitUntil("session list") { self.sessionListReceived }
+        tabListReceived = false
+        sendMessage(type: .listTabs, payload: Data())
+        try waitUntil("tab list") { self.tabListReceived }
 
         var createPayload = Data(count: 4)
         createPayload.withUnsafeMutableBytes { bytes in
@@ -263,20 +263,20 @@ final class RemoteValidator {
             bytes.storeBytes(of: UInt16(36).littleEndian, toByteOffset: 2, as: UInt16.self)
         }
         sendMessage(type: .create, payload: createPayload)
-        try waitUntil("session creation") { self.createdSessionId != nil }
-        guard let sessionId = createdSessionId else {
-            throw ValidationError("server did not return a created session id")
+        try waitUntil("tab creation") { self.createdTabId != nil }
+        guard let tabId = createdTabId else {
+            throw ValidationError("server did not return a created tab id")
         }
 
         let expectedAttachmentId = UInt64(0xB001D00DCAFEBEEF)
         var attachPayload = Data(count: 12)
         attachPayload.withUnsafeMutableBytes { bytes in
-            bytes.storeBytes(of: sessionId.littleEndian, as: UInt32.self)
+            bytes.storeBytes(of: tabId.littleEndian, as: UInt32.self)
             bytes.storeBytes(of: expectedAttachmentId.littleEndian, toByteOffset: 4, as: UInt64.self)
         }
         sendMessage(type: .attach, payload: attachPayload)
         try waitUntil("attach acknowledgement") {
-            self.attachedSessionId == sessionId
+            self.attachedTabId == tabId
                 && self.attachmentId == expectedAttachmentId
                 && self.resumeToken != nil
         }
@@ -301,12 +301,12 @@ final class RemoteValidator {
         }
 
         try reconnectForResumeValidation()
-        sessionListReceived = false
-        sendMessage(type: .listSessions, payload: Data())
-        try waitUntil("session list after reconnect") { self.sessionListReceived }
+        tabListReceived = false
+        sendMessage(type: .listTabs, payload: Data())
+        try waitUntil("tab list after reconnect") { self.tabListReceived }
         var wrongResumeAttachPayload = Data(count: 20)
         wrongResumeAttachPayload.withUnsafeMutableBytes { bytes in
-            bytes.storeBytes(of: sessionId.littleEndian, as: UInt32.self)
+            bytes.storeBytes(of: tabId.littleEndian, as: UInt32.self)
             bytes.storeBytes(of: expectedAttachmentId.littleEndian, toByteOffset: 4, as: UInt64.self)
             bytes.storeBytes(of: (resumeToken ^ 0xffff).littleEndian, toByteOffset: 12, as: UInt64.self)
         }
@@ -316,13 +316,13 @@ final class RemoteValidator {
 
         var resumeAttachPayload = Data(count: 20)
         resumeAttachPayload.withUnsafeMutableBytes { bytes in
-            bytes.storeBytes(of: sessionId.littleEndian, as: UInt32.self)
+            bytes.storeBytes(of: tabId.littleEndian, as: UInt32.self)
             bytes.storeBytes(of: expectedAttachmentId.littleEndian, toByteOffset: 4, as: UInt64.self)
             bytes.storeBytes(of: resumeToken.littleEndian, toByteOffset: 12, as: UInt64.self)
         }
         sendMessage(type: .attach, payload: resumeAttachPayload)
         try waitUntil("attach acknowledgement after reconnect") {
-            self.attachedSessionId == sessionId
+            self.attachedTabId == tabId
                 && self.attachmentId == expectedAttachmentId
                 && self.resumeToken == resumeToken
         }
@@ -351,8 +351,8 @@ final class RemoteValidator {
         serverInstanceId = nil
         serverIdentityId = nil
         heartbeatAckReceived = false
-        sessionListReceived = false
-        attachedSessionId = nil
+        tabListReceived = false
+        attachedTabId = nil
         attachmentId = nil
         resumeToken = nil
         screenUpdateReceived = false
@@ -466,17 +466,17 @@ final class RemoteValidator {
                 return
             }
             heartbeatAckReceived = true
-        case .sessionList:
-            sessionListReceived = true
-            sessions = WireCodec.decodeSessionList(payload)
-        case .sessionCreated:
+        case .tabList:
+            tabListReceived = true
+            tabs = WireCodec.decodeTabList(payload)
+        case .tabCreated:
             guard payload.count >= 4 else { return }
-            createdSessionId = payload.withUnsafeBytes {
+            createdTabId = payload.withUnsafeBytes {
                 UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
             }
         case .attached:
             guard payload.count >= 4 else { return }
-            attachedSessionId = payload.withUnsafeBytes {
+            attachedTabId = payload.withUnsafeBytes {
                 UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
             }
             attachmentId = payload.count >= 12 ? payload.withUnsafeBytes {
@@ -497,8 +497,8 @@ final class RemoteValidator {
                 screenState = screen
                 lastScreenText = WireCodec.screenText(from: screen)
             }
-        case .detached, .sessionExited:
-            attachedSessionId = nil
+        case .detached, .tabExited:
+            attachedTabId = nil
             attachmentId = nil
         case .errorMsg:
             lastError = String(data: payload, encoding: .utf8) ?? "remote error"
@@ -523,7 +523,7 @@ final class RemoteValidator {
         let screenSnippet = lastScreenText
             .replacingOccurrences(of: "\n", with: "\\n")
             .prefix(160)
-        let stateSummary = "authenticated=\(authenticated) heartbeatAckReceived=\(heartbeatAckReceived) sessionListReceived=\(sessionListReceived) sessions=\(sessions.count) createdSessionId=\(String(describing: createdSessionId)) attachedSessionId=\(String(describing: attachedSessionId)) attachmentId=\(String(describing: attachmentId)) resumeToken=\(String(describing: resumeToken)) buildId=\(serverBuildId ?? "nil") serverIdentityId=\(serverIdentityId ?? "nil") serverInstanceId=\(serverInstanceId ?? "nil") screenUpdateReceived=\(screenUpdateReceived) screen=\"\(screenSnippet)\" trace=\(messageTrace.joined(separator: ","))"
+        let stateSummary = "authenticated=\(authenticated) heartbeatAckReceived=\(heartbeatAckReceived) tabListReceived=\(tabListReceived) tabs=\(tabs.count) createdTabId=\(String(describing: createdTabId)) attachedTabId=\(String(describing: attachedTabId)) attachmentId=\(String(describing: attachmentId)) resumeToken=\(String(describing: resumeToken)) buildId=\(serverBuildId ?? "nil") serverIdentityId=\(serverIdentityId ?? "nil") serverInstanceId=\(serverInstanceId ?? "nil") screenUpdateReceived=\(screenUpdateReceived) screen=\"\(screenSnippet)\" trace=\(messageTrace.joined(separator: ","))"
         lock.unlock()
         throw ValidationError("timed out waiting for \(description) (\(stateSummary))")
     }
