@@ -136,6 +136,8 @@ pub struct ClientApp {
     mouse_selection: control::UiMouseSelectionSnapshot,
     mode: ClientMode,
     runtime_view_id: u64,
+    runtime_revision: u64,
+    view_revision: u64,
     active_remote_tab_id: Option<u32>,
     pane_snapshots: HashMap<u64, Arc<vt_backend_core::TerminalSnapshot>>,
     focused_pane_id: u64,
@@ -235,7 +237,12 @@ impl ClientApp {
     }
 
     fn apply_ui_runtime_state(&mut self, state: control::UiRuntimeState) {
+        if self.view_revision != 0 && state.view_revision != self.view_revision {
+            self.pane_snapshots.clear();
+        }
         self.runtime_view_id = state.view_id;
+        self.runtime_revision = state.runtime_revision;
+        self.view_revision = state.view_revision;
         let ui_state = ClientUiState::from_runtime_state(&state);
         if let Some(active_tab_id) = ui_state
             .tabs
@@ -322,6 +329,8 @@ impl ClientApp {
             mouse_selection: control::UiMouseSelectionSnapshot::default(),
             mode: ClientMode::Bootstrapping,
             runtime_view_id: 0,
+            runtime_revision: 0,
+            view_revision: 0,
             active_remote_tab_id: None,
             pane_snapshots,
             focused_pane_id,
@@ -1020,7 +1029,14 @@ impl ClientApp {
             LocalStreamEvent::UiAppearance(appearance) => {
                 self.apply_ui_appearance(&appearance);
             }
-            LocalStreamEvent::UiPaneFullState { pane_id, state } => {
+            LocalStreamEvent::UiPaneFullState {
+                pane_id,
+                runtime_revision,
+                state,
+            } => {
+                if runtime_revision != 0 && runtime_revision < self.runtime_revision {
+                    return;
+                }
                 let revision_seed = self.allocate_full_snapshot_revision_seed(state.rows as usize);
                 self.terminal_snapshot_generation = self.allocate_snapshot_generation();
                 self.pane_snapshots.insert(
@@ -1037,7 +1053,14 @@ impl ClientApp {
                 self.last_error = None;
                 self.observe_focused_cursor_position();
             }
-            LocalStreamEvent::UiPaneDelta { pane_id, delta } => {
+            LocalStreamEvent::UiPaneDelta {
+                pane_id,
+                runtime_revision,
+                delta,
+            } => {
+                if runtime_revision != 0 && runtime_revision != self.runtime_revision {
+                    return;
+                }
                 if let Some(snapshot) = self.pane_snapshots.get_mut(&pane_id) {
                     apply_remote_delta_snapshot(Arc::make_mut(snapshot), &delta);
                 }
@@ -1925,10 +1948,12 @@ pub(crate) enum LocalStreamEvent {
     UiAppearance(control::UiAppearanceSnapshot),
     UiPaneFullState {
         pane_id: u64,
+        runtime_revision: u64,
         state: remote::RemoteFullState,
     },
     UiPaneDelta {
         pane_id: u64,
+        runtime_revision: u64,
         delta: RemoteDelta,
     },
     TabExited,
@@ -2508,10 +2533,20 @@ fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStream
             remote::MessageType::UiAppearance => serde_json::from_slice(&payload)
                 .ok()
                 .map(LocalStreamEvent::UiAppearance),
-            remote::MessageType::UiPaneFullState => decode_remote_pane_full_state(&payload)
-                .map(|(pane_id, state)| LocalStreamEvent::UiPaneFullState { pane_id, state }),
-            remote::MessageType::UiPaneDelta => decode_remote_pane_delta(&payload)
-                .map(|(pane_id, delta)| LocalStreamEvent::UiPaneDelta { pane_id, delta }),
+            remote::MessageType::UiPaneFullState => decode_remote_pane_full_state(&payload).map(
+                |(pane_id, runtime_revision, state)| LocalStreamEvent::UiPaneFullState {
+                    pane_id,
+                    runtime_revision,
+                    state,
+                },
+            ),
+            remote::MessageType::UiPaneDelta => decode_remote_pane_delta(&payload).map(
+                |(pane_id, runtime_revision, delta)| LocalStreamEvent::UiPaneDelta {
+                    pane_id,
+                    runtime_revision,
+                    delta,
+                },
+            ),
             remote::MESSAGE_TYPE_TAB_EXITED => {
                 decode_u32(&payload).map(|_| LocalStreamEvent::TabExited)
             }
@@ -2663,14 +2698,15 @@ fn decode_remote_full_state(payload: &[u8]) -> Option<(Option<u64>, remote::Remo
     ))
 }
 
-fn decode_remote_pane_full_state(payload: &[u8]) -> Option<(u64, remote::RemoteFullState)> {
+fn decode_remote_pane_full_state(payload: &[u8]) -> Option<(u64, u64, remote::RemoteFullState)> {
     if payload.len() < crate::remote_wire::UI_PANE_UPDATE_HEADER_LEN {
         return None;
     }
     let pane_id = u64::from_le_bytes(payload[4..12].try_into().ok()?);
+    let runtime_revision = u64::from_le_bytes(payload[20..28].try_into().ok()?);
     let (_, state) =
         decode_remote_full_state(&payload[crate::remote_wire::UI_PANE_UPDATE_HEADER_LEN..])?;
-    Some((pane_id, state))
+    Some((pane_id, runtime_revision, state))
 }
 
 fn decode_remote_delta(payload: &[u8]) -> Option<(Option<u64>, RemoteDelta)> {
@@ -2766,14 +2802,15 @@ fn decode_remote_delta(payload: &[u8]) -> Option<(Option<u64>, RemoteDelta)> {
     ))
 }
 
-fn decode_remote_pane_delta(payload: &[u8]) -> Option<(u64, RemoteDelta)> {
+fn decode_remote_pane_delta(payload: &[u8]) -> Option<(u64, u64, RemoteDelta)> {
     if payload.len() < crate::remote_wire::UI_PANE_UPDATE_HEADER_LEN {
         return None;
     }
     let pane_id = u64::from_le_bytes(payload[4..12].try_into().ok()?);
+    let runtime_revision = u64::from_le_bytes(payload[20..28].try_into().ok()?);
     let (_, delta) =
         decode_remote_delta(&payload[crate::remote_wire::UI_PANE_UPDATE_HEADER_LEN..])?;
-    Some((pane_id, delta))
+    Some((pane_id, runtime_revision, delta))
 }
 
 fn apply_remote_delta_snapshot(
@@ -3854,8 +3891,10 @@ mod tests {
             &remote::encode_full_state(&full_state, None, true),
         );
 
-        let (pane_id, decoded) = decode_remote_pane_full_state(&payload).expect("pane full state");
+        let (pane_id, runtime_revision, decoded) =
+            decode_remote_pane_full_state(&payload).expect("pane full state");
         assert_eq!(pane_id, 99);
+        assert_eq!(runtime_revision, 4);
         assert_eq!(decoded.rows, 1);
         assert_eq!(decoded.cols, 1);
         assert_eq!(decoded.cells.len(), 1);
@@ -3881,8 +3920,10 @@ mod tests {
         let payload =
             crate::remote_wire::encode_ui_pane_update_payload(77, 101, 5, 6, &delta);
 
-        let (pane_id, decoded) = decode_remote_pane_delta(&payload).expect("pane delta");
+        let (pane_id, runtime_revision, decoded) =
+            decode_remote_pane_delta(&payload).expect("pane delta");
         assert_eq!(pane_id, 101);
+        assert_eq!(runtime_revision, 6);
         assert_eq!(decoded.changed_rows.len(), 1);
         assert_eq!(decoded.changed_rows[0].cells[0].codepoint, u32::from('b'));
     }
@@ -3997,6 +4038,128 @@ mod tests {
     }
 
     #[test]
+    fn stale_pane_delta_is_rejected_by_runtime_revision() {
+        let (mut app, _) = ClientApp::new("/tmp/test.sock".to_string());
+        app.apply_ui_runtime_state(control::UiRuntimeState {
+            active_tab: 0,
+            focused_pane: 7,
+            tabs: vec![control::UiTabSnapshot {
+                tab_id: 7,
+                index: 0,
+                active: true,
+                title: "shell".to_string(),
+                pane_count: 1,
+                focused_pane: Some(7),
+                pane_ids: vec![7],
+            }],
+            visible_panes: vec![test_pane_with_id(7, 0.0, 0.0, 80.0, 25.0)],
+            mouse_selection: control::UiMouseSelectionSnapshot::default(),
+            status_bar: crate::status_components::UiStatusBarSnapshot::default(),
+            pwd: "/tmp".to_string(),
+            runtime_revision: 3,
+            view_revision: 1,
+            view_id: 1,
+            viewed_tab_id: Some(7),
+            viewport_cols: None,
+            viewport_rows: None,
+            visible_pane_ids: vec![7],
+        });
+        app.handle_stream_event(LocalStreamEvent::UiPaneFullState {
+            pane_id: 7,
+            runtime_revision: 3,
+            state: remote::RemoteFullState {
+                rows: 1,
+                cols: 1,
+                cursor_x: 0,
+                cursor_y: 0,
+                cursor_visible: true,
+                cursor_blinking: false,
+                cursor_style: 0,
+                cells: vec![remote::RemoteCell {
+                    codepoint: u32::from('a'),
+                    fg: [0, 0, 0],
+                    bg: [0, 0, 0],
+                    style_flags: 0,
+                    wide: false,
+                }],
+            },
+        });
+
+        app.handle_stream_event(LocalStreamEvent::UiPaneDelta {
+            pane_id: 7,
+            runtime_revision: 2,
+            delta: RemoteDelta {
+                cursor_x: 0,
+                cursor_y: 0,
+                cursor_visible: true,
+                cursor_blinking: false,
+                cursor_style: 0,
+                scroll_rows: 0,
+                changed_rows: vec![RemoteRowDelta {
+                    row: 0,
+                    start_col: 0,
+                    cells: vec![remote::RemoteCell {
+                        codepoint: u32::from('z'),
+                        fg: [0, 0, 0],
+                        bg: [0, 0, 0],
+                        style_flags: 0,
+                        wide: false,
+                    }],
+                }],
+            },
+        });
+
+        let snapshot = app.pane_snapshots.get(&7).expect("pane snapshot");
+        assert_eq!(snapshot.rows_data[0][0].text, "a");
+    }
+
+    #[test]
+    fn changed_view_revision_clears_cached_pane_snapshots() {
+        let (mut app, _) = ClientApp::new("/tmp/test.sock".to_string());
+        app.pane_snapshots.insert(
+            7,
+            Arc::new(vt_backend_core::TerminalSnapshot {
+                cols: 1,
+                rows: 1,
+                rows_data: vec![vec![vt_backend_core::CellSnapshot {
+                    text: "a".to_string(),
+                    ..Default::default()
+                }]],
+                row_revisions: vec![1],
+                ..Default::default()
+            }),
+        );
+        app.view_revision = 1;
+
+        app.apply_ui_runtime_state(control::UiRuntimeState {
+            active_tab: 0,
+            focused_pane: 7,
+            tabs: vec![control::UiTabSnapshot {
+                tab_id: 7,
+                index: 0,
+                active: true,
+                title: "shell".to_string(),
+                pane_count: 1,
+                focused_pane: Some(7),
+                pane_ids: vec![7],
+            }],
+            visible_panes: vec![test_pane_with_id(7, 0.0, 0.0, 80.0, 25.0)],
+            mouse_selection: control::UiMouseSelectionSnapshot::default(),
+            status_bar: crate::status_components::UiStatusBarSnapshot::default(),
+            pwd: "/tmp".to_string(),
+            runtime_revision: 2,
+            view_revision: 2,
+            view_id: 1,
+            viewed_tab_id: Some(7),
+            viewport_cols: None,
+            viewport_rows: None,
+            visible_pane_ids: vec![7],
+        });
+
+        assert!(app.pane_snapshots.is_empty());
+    }
+
+    #[test]
     fn tab_list_bootstrap_does_not_pick_a_target_without_runtime_state() {
         let (mut app, _rx) = ClientApp::new("/tmp/test.sock".to_string());
         let (stream_tx, stream_rx) = std::sync::mpsc::channel();
@@ -4053,7 +4216,7 @@ mod tests {
     }
 
     #[test]
-    fn stream_ready_relists_tabs_while_recovering() {
+    fn stream_ready_does_not_emit_legacy_recovery_command() {
         let (mut app, _) = ClientApp::new("/tmp/test.sock".to_string());
         let (tx, rx) = std::sync::mpsc::channel();
         app.mode = ClientMode::Recovering;
@@ -4061,19 +4224,7 @@ mod tests {
         let task = app.update(Message::StreamReady(tx));
         drop(task);
 
-        match rx.recv().unwrap() {
-            StreamCommand::RuntimeAction { action } => {
-                assert_eq!(
-                    action,
-                    remote::RuntimeAction::NewTab {
-                        view_id: 0,
-                        cols: None,
-                        rows: None,
-                    }
-                );
-            }
-            other => panic!("unexpected stream command: {other:?}"),
-        }
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

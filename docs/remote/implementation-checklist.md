@@ -33,7 +33,7 @@ runtime plus per-screen view state.
 - [x] reflect explicit `tab -> pane_ids` hierarchy in runtime metadata
 - [x] include runtime/view revision metadata in runtime payloads
 - [x] maintain explicit per-pane terminal revisions independent of runtime/view
-- [ ] use runtime/view revisions for stale-update rejection and pane refresh
+- [x] use runtime/view revisions for stale-update rejection and pane refresh
 
 ### Publish scoping and transport
 
@@ -75,7 +75,7 @@ runtime plus per-screen view state.
 - [x] verify changing viewed tab only affects that screen
 - [x] verify closing a shared tab remaps viewed tab deterministically
 - [x] verify different screens can keep different focused panes on one tab
-- [ ] verify stale pane updates are rejected/refreshed via revision linkage
+- [x] verify stale pane updates are rejected/refreshed via revision linkage
 - [ ] verify normalized split resize reflects across different screen sizes
 - [x] verify focused-pane traffic is scheduled ahead of non-focused panes
 - [x] verify tab/status-bar semantic actions propagate shared runtime changes
