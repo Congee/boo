@@ -104,6 +104,18 @@ The current implemented verification baseline for this redesign is:
 - `cargo test -q runtime_server::tests::`
 - `cargo test -q client_gui::tests::`
 
+Additional 2026-04-23 real-device verification result:
+
+- `BOO_IOS_UI_TEST_DESTINATION='id=<device-id>' BOO_IOS_UI_TEST_ONLY='BooUITests/BooUITests/testOpenLiveTabAndType' bash scripts/test-ios-ui.sh`
+  now completes build, link, signing, install, and test-runner launch on the
+  physical iPad after `xcodebuild` environment sanitization in the script
+- the corrected focused test invocation
+  `BOO_IOS_UI_TEST_ONLY='BooUITests/BooAppLaunchTests/testOpenLiveTabAndType'`
+  now executes on-device and currently fails later in the connect flow with
+  `Connection refused`
+- that remaining issue is tracked as real-device workflow / transport follow-up
+  rather than a missing runtime-view protocol redesign item
+
 ## Related Docs
 
 - [./runtime-view-migration.md](./runtime-view-migration.md)

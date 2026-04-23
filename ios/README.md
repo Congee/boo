@@ -106,6 +106,16 @@ Notes:
   real attached device; on a real device it starts a local Boo daemon, writes a
   temporary UI-test host config for the test bundle, and exercises the visible
   connect/runtime-view terminal flow end-to-end
+- `scripts/test-ios-ui.sh` also sanitizes inherited shell toolchain overrides
+  such as `LD`, `CC`, `CXX`, `SDKROOT`, and `NIX_LDFLAGS` before invoking
+  `xcodebuild`; this avoids host-shell linker leakage that can break real-device
+  builds
+- if a real-device UI test reaches the runner but fails with `Timed out while
+  enabling automation mode`, verify `Settings > Developer > Enable UI Automation`
+  on the device and keep the device unlocked during the run
+- if `xcodebuild` reports `The developer disk image could not be mounted on this
+  device`, open Xcode's Devices and Simulators window and let Xcode finish any
+  required support-file / developer-disk-image setup before retrying
 - Bonjour discovery on a real device still depends on the iPad or iPhone granting
   Local Network access to `boo`; otherwise the app now surfaces a direct error
   and an `Open iPad Settings` action instead of silently showing an empty list

@@ -11,6 +11,7 @@ TEAM_ID="${BOO_IOS_TEAM_ID:-}"
 ONLY_TEST="${BOO_IOS_UI_TEST_ONLY:-}"
 HOST_PORT_FILE="/tmp/boo-ios-ui-tests.env"
 SKIP_DAEMON="${BOO_IOS_UI_TEST_SKIP_DAEMON:-0}"
+XCODEBUILD_LOG="/tmp/boo-ios-ui-tests.xcodebuild.log"
 
 if [[ -z "$HOST" ]]; then
   if [[ "$DESTINATION" == *"platform=iOS Simulator"* ]]; then
@@ -46,6 +47,7 @@ cleanup() {
   fi
   rm -f "$SOCKET_PATH"
   rm -f "$HOST_PORT_FILE"
+  rm -f "$XCODEBUILD_LOG"
 }
 trap cleanup EXIT
 
@@ -96,9 +98,39 @@ xcodebuild_clean_env() {
     "$@"
 }
 
+run_xcodebuild() {
+  set +e
+  xcodebuild_clean_env "$@" 2>&1 | tee "$XCODEBUILD_LOG"
+  local status=${PIPESTATUS[0]}
+  set -e
+
+  if [[ "$status" -ne 0 ]]; then
+    if grep -Fq "Timed out while enabling automation mode" "$XCODEBUILD_LOG"; then
+      cat >&2 <<'EOF'
+
+real-device UI testing reached the test runner, but the device did not enter automation mode.
+On the device, verify:
+- Settings > Developer > Enable UI Automation is ON
+- the device stays unlocked during the run
+
+Then rerun scripts/test-ios-ui.sh.
+EOF
+    elif grep -Fq "The developer disk image could not be mounted on this device." "$XCODEBUILD_LOG"; then
+      cat >&2 <<'EOF'
+
+the target device is connected, but Xcode could not mount its developer disk image.
+Open Xcode > Window > Devices and Simulators, select the device, and let Xcode finish
+any required support-file / developer-disk-image setup before rerunning this script.
+EOF
+    fi
+  fi
+
+  return "$status"
+}
+
 if [[ "$DESTINATION" == *"platform=iOS Simulator"* ]]; then
   BOO_UI_TEST_HOST="$HOST" BOO_UI_TEST_PORT="$PORT" \
-    xcodebuild_clean_env xcodebuild \
+    run_xcodebuild xcodebuild \
     -project ios/Boo.xcodeproj \
     -scheme Boo \
     -destination "$DESTINATION" \
@@ -114,7 +146,7 @@ else
     exit 2
   fi
   BOO_UI_TEST_HOST="$HOST" BOO_UI_TEST_PORT="$PORT" \
-    xcodebuild_clean_env xcodebuild \
+    run_xcodebuild xcodebuild \
     -project ios/Boo.xcodeproj \
     -scheme Boo \
     -destination "$DESTINATION" \

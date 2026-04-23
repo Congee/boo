@@ -679,17 +679,6 @@ struct ConnectScreen: View {
             return
         }
         if case .service = endpoint {
-            if let config = UITestLaunchConfiguration.current(),
-               let configuredHost = config.host
-            {
-                connectToHost(
-                    configuredHost,
-                    port: config.port,
-                    nodeName: display.nodeName,
-                    routeKind: .bonjourLAN
-                )
-                return
-            }
             client.lastError = nil
             resolvingBonjourService = true
             let resolver = BonjourServiceResolver()

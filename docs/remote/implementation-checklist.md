@@ -24,6 +24,25 @@ Implemented outcomes:
 Remaining follow-up work is intentionally post-v1 and is documented in the
 deferred section at the bottom of this file.
 
+## Post-completion verification notes
+
+- 2026-04-23 real-device verification on `Connected iPad`
+  (`<device-id>`) now gets through:
+  - Swift compile
+  - link
+  - signing
+  - install
+  - UI test runner launch
+  - execution of a real focused XCUITest method
+- the previous device-build blocker was fixed by sanitizing `xcodebuild`
+  environment leakage from the repo shell, especially `LD`, `CC`, `CXX`,
+  `SDKROOT`, and `NIX_LDFLAGS` overrides in `scripts/test-ios-ui.sh`
+- the current remaining real-device blocker is now a live connect/runtime issue,
+  not a build or automation bootstrap issue:
+  - `BooUITests/BooAppLaunchTests/testOpenLiveTabAndType`
+  - reaches the discovered daemon row on-device
+  - then fails with `Connection refused`
+
 ## Current Emphasis
 
 - move remote targeting/focus semantics from client-owned selection to
