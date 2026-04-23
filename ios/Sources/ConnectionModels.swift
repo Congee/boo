@@ -54,11 +54,6 @@ struct ResumeAttachmentMetadata: Codable, Equatable {
     var resumeToken: UInt64
     var recordedAt: Date
 
-    var sessionId: UInt32 {
-        get { tabId }
-        set { tabId = newValue }
-    }
-
     private enum CodingKeys: String, CodingKey {
         case tabId
         case sessionId
@@ -97,11 +92,6 @@ struct HostTabMetadata: Codable, Equatable {
     var recordedAt: Date
     var modelVersion: Int?
 
-    var sessionId: UInt32 {
-        get { tabId }
-        set { tabId = newValue }
-    }
-
     private enum CodingKeys: String, CodingKey {
         case tabId
         case sessionId
@@ -130,8 +120,6 @@ struct HostTabMetadata: Codable, Equatable {
         try container.encodeIfPresent(modelVersion, forKey: .modelVersion)
     }
 }
-
-typealias HostSessionMetadata = HostTabMetadata
 
 private let BooHostTabMetadataModelVersion = 2
 

@@ -206,7 +206,7 @@ struct BooRootView: View {
     @StateObject private var browser = BonjourBrowser()
     @StateObject private var tailscaleBrowser = TailscalePeerBrowser()
     @StateObject private var store = ConnectionStore()
-    @State private var selectedTab: BooTab = .sessions
+    @State private var selectedTab: BooTab = .terminal
     @State private var showingConnectedTerminal = false
     @State private var monitor: ConnectionMonitor?
     @State private var serverIdentityWarning: String?
@@ -223,7 +223,7 @@ struct BooRootView: View {
         ZStack(alignment: .bottom) {
             Group {
                 switch selectedTab {
-                case .sessions:
+                case .terminal:
                     ZStack {
                         ConnectScreen(
                             client: client,
@@ -266,7 +266,7 @@ struct BooRootView: View {
                     )
                 }
             }
-            if !(selectedTab == .sessions && showingConnectedTerminal) {
+            if !(selectedTab == .terminal && showingConnectedTerminal) {
                 KineticTabBar(selectedTab: $selectedTab)
                     .padding(.bottom, KineticSpacing.md)
             }
@@ -316,7 +316,7 @@ struct BooRootView: View {
         }()
         switch newValue {
         case .authenticated, .attached:
-            if selectedTab == .sessions {
+            if selectedTab == .terminal {
                 showingConnectedTerminal = true
             }
             if let nodeId = activeMonitor.currentNodeId {
@@ -1235,7 +1235,7 @@ struct TerminalTabScreen: View {
                     goBack()
                 }
                 .buttonStyle(KineticSecondaryButtonStyle())
-                .accessibilityIdentifier("disconnect-session-button")
+                .accessibilityIdentifier("disconnect-tab-button")
             }
         }
         .padding(KineticSpacing.md)
@@ -1755,7 +1755,7 @@ struct SettingsScreen: View {
 
                     VStack(alignment: .leading, spacing: KineticSpacing.sm) {
                         KineticSectionLabel(text: "Tailscale Discovery")
-                        Text("Use a Tailscale API access token to list tailnet devices. This does not reuse the Tailscale app session, and it does not verify that Boo is actually running on those devices.")
+                        Text("Use a Tailscale API access token to list tailnet devices. This does not reuse the Tailscale app connection, and it does not verify that Boo is actually running on those devices.")
                             .font(KineticFont.caption)
                             .foregroundStyle(KineticColor.onSurfaceVariant)
                         if let statusMessage = store.tailscaleTokenStatusMessage {

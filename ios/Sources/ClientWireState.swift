@@ -13,15 +13,6 @@ enum ClientWireMessageType {
     case errorMsg
 }
 
-extension ClientWireMessageType {
-    @available(*, deprecated, message: "Use .tabList")
-    static var sessionList: Self { .tabList }
-    @available(*, deprecated, message: "Use .tabCreated")
-    static var sessionCreated: Self { .tabCreated }
-    @available(*, deprecated, message: "Use .tabExited")
-    static var sessionExited: Self { .tabExited }
-}
-
 enum ClientWireErrorCode: UInt16, Equatable {
     case unknown = 0
     case authenticationFailed = 1
@@ -35,17 +26,6 @@ enum ClientWireErrorCode: UInt16, Equatable {
     case attachmentResumeWindowExpired = 9
     case invalidResumeToken = 10
     case heartbeatTimeout = 11
-}
-
-extension ClientWireErrorCode {
-    @available(*, deprecated, message: "Use .unknownTab")
-    static var unknownSession: Self { .unknownTab }
-    @available(*, deprecated, message: "Use .failedCreateTab")
-    static var failedCreateSession: Self { .failedCreateTab }
-    @available(*, deprecated, message: "Use .cannotDestroyLastTab")
-    static var cannotDestroyLastSession: Self { .cannotDestroyLastTab }
-    @available(*, deprecated, message: "Use .attachmentBelongsToDifferentTab")
-    static var attachmentBelongsToDifferentSession: Self { .attachmentBelongsToDifferentTab }
 }
 
 enum ClientWireEffect: Equatable {
@@ -115,13 +95,6 @@ enum ClientWireErrorKind: Equatable {
             return nil
         }
     }
-}
-
-extension ClientWireErrorKind {
-    @available(*, deprecated, message: "Use .unknownTab")
-    static var unknownSession: Self { .unknownTab }
-    @available(*, deprecated, message: "Use .failedCreateTab")
-    static var failedCreateSession: Self { .failedCreateTab }
 }
 
 struct AuthOkMetadata: Equatable {

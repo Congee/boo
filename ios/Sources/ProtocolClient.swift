@@ -32,17 +32,6 @@ enum GSPMessageType: UInt8 {
     case heartbeatAck = 0x92
 }
 
-extension GSPMessageType {
-    @available(*, deprecated, message: "Use .listTabs")
-    static var listSessions: Self { .listTabs }
-    @available(*, deprecated, message: "Use .tabList")
-    static var sessionList: Self { .tabList }
-    @available(*, deprecated, message: "Use .tabCreated")
-    static var sessionCreated: Self { .tabCreated }
-    @available(*, deprecated, message: "Use .tabExited")
-    static var sessionExited: Self { .tabExited }
-}
-
 private struct OutboundWheelScrolledLinesPayload: Encodable {
     let x: Double
     let y: Double
