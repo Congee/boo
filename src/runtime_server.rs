@@ -309,24 +309,24 @@ impl BooApp {
                 self.publish_local_gui_after_ui_action(&before);
             }
             server::Command::RemoteConnected { client_id } => {
-                let should_bootstrap_local = self
-                    .server
-                    .local_gui_server
-                    .as_ref()
-                    .is_some_and(|server| {
-                        server.client_is_local(client_id)
-                            && server.client_subscription_tab(client_id).is_none()
-                            && self
-                                .server
-                                .tabs
-                                .active_tab_id()
-                                .is_some_and(|tab_id| self.pane_for_tab(tab_id).is_some())
-                    });
-                if should_bootstrap_local
-                    && let Some(tab_id) = self.server.tabs.active_tab_id()
+                let bootstrap_tab_id = self.server.tabs.active_tab_id().filter(|tab_id| {
+                    self.pane_for_tab(*tab_id).is_some()
+                        && self
+                            .remote_server_for_client(client_id)
+                            .or(self.server.local_gui_server.as_ref())
+                            .or(self.server.remote_server.as_ref())
+                            .is_some_and(|server| server.client_subscription_tab(client_id).is_none())
+                });
+                if let Some(tab_id) = bootstrap_tab_id,
+                   let Some(server) = self
+                        .remote_server_for_client(client_id)
+                        .or(self.server.local_gui_server.as_ref())
+                        .or(self.server.remote_server.as_ref())
                 {
-                    if let Some(server) = self.server.local_gui_server.as_ref() {
+                    if server.client_is_local(client_id) {
                         self.bootstrap_local_stream_client(server, client_id, tab_id);
+                    } else {
+                        server.send_tab_attached(client_id, tab_id);
                     }
                     self.publish_remote_tab(tab_id);
                 }
@@ -342,24 +342,24 @@ impl BooApp {
                 }
             }
             server::Command::RemoteListTabs { client_id } => {
-                let should_bootstrap_local = self
-                    .server
-                    .local_gui_server
-                    .as_ref()
-                    .is_some_and(|server| {
-                        server.client_is_local(client_id)
-                            && server.client_subscription_tab(client_id).is_none()
-                            && self
-                                .server
-                                .tabs
-                                .active_tab_id()
-                                .is_some_and(|tab_id| self.pane_for_tab(tab_id).is_some())
-                    });
-                if should_bootstrap_local
-                    && let Some(tab_id) = self.server.tabs.active_tab_id()
+                let bootstrap_tab_id = self.server.tabs.active_tab_id().filter(|tab_id| {
+                    self.pane_for_tab(*tab_id).is_some()
+                        && self
+                            .remote_server_for_client(client_id)
+                            .or(self.server.local_gui_server.as_ref())
+                            .or(self.server.remote_server.as_ref())
+                            .is_some_and(|server| server.client_subscription_tab(client_id).is_none())
+                });
+                if let Some(tab_id) = bootstrap_tab_id,
+                   let Some(server) = self
+                        .remote_server_for_client(client_id)
+                        .or(self.server.local_gui_server.as_ref())
+                        .or(self.server.remote_server.as_ref())
                 {
-                    if let Some(server) = self.server.local_gui_server.as_ref() {
+                    if server.client_is_local(client_id) {
                         self.bootstrap_local_stream_client(server, client_id, tab_id);
+                    } else {
+                        server.send_tab_attached(client_id, tab_id);
                     }
                     self.publish_remote_tab(tab_id);
                 }

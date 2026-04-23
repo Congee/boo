@@ -6,7 +6,6 @@ import UIKit
 enum GSPMessageType: UInt8 {
     case auth = 0x01
     case listTabs = 0x02
-    case attach = 0x03
     case create = 0x05
     case input = 0x06
     case resize = 0x07
@@ -753,7 +752,6 @@ final class GSPClient: ObservableObject {
     @Published var lastConnectLatencyMs: Double?
     @Published var lastAuthLatencyMs: Double?
     @Published var lastTabListLatencyMs: Double?
-    @Published var lastAttachLatencyMs: Double?
     @Published var connectionAttemptCount: UInt32 = 0
     @Published var reconnectAttemptCount: UInt32 = 0
     @Published var connectionDebugGeneration: UInt64 = 0
@@ -771,7 +769,6 @@ final class GSPClient: ObservableObject {
     private var connectionTimeoutTimer: DispatchSourceTimer?
     private var lastHeartbeatSent: Date?
     private var pendingHeartbeatToken: UInt64?
-    private var desiredAttachedTabId: UInt32?
     private var expectedServerIdentityId: String?
     private var connectionGeneration: UInt64 = 0
     private var pendingHostTabCreation = false
@@ -779,7 +776,6 @@ final class GSPClient: ObservableObject {
     private var connectStartedAt: Date?
     private var authRequestedAt: Date?
     private var tabListRequestedAt: Date?
-    private var attachRequestedAt: Date?
 
     private func debugLog(_ message: String) {
         print("[boo-ios] \(message)")
@@ -799,7 +795,6 @@ final class GSPClient: ObservableObject {
         let connect = lastConnectLatencyMs.map { String(format: "conn %.0fms", $0) }
         let auth = lastAuthLatencyMs.map { String(format: "auth %.0fms", $0) }
         let listed = lastTabListLatencyMs.map { String(format: "tabs %.0fms", $0) }
-        let attached = lastAttachLatencyMs.map { String(format: "att %.0fms", $0) }
         let base = [ "proto \(protocolVersion)",
                      "caps 0x\(String(transportCapabilities, radix: 16))",
                      "gen \(connectionDebugGeneration)",
@@ -808,7 +803,7 @@ final class GSPClient: ObservableObject {
                      serverBuildId,
                      "id \(serverIdentityId)",
                      "srv \(serverInstanceId)"].compactMap { $0 }.joined(separator: " · ")
-        let timings = [connect, auth, listed, attached, heartbeat].compactMap { $0 }
+        let timings = [connect, auth, listed, heartbeat].compactMap { $0 }
         if !timings.isEmpty {
             return "\(base) · \(timings.joined(separator: " · "))"
         }
@@ -863,7 +858,6 @@ final class GSPClient: ObservableObject {
         pendingHeartbeatToken = nil
         attachedTabId = nil
         pendingAttachedTabId = nil
-        desiredAttachedTabId = nil
         pendingHostTabCreation = false
         autoTabBootstrapSuppressed = false
         tabs = []
@@ -873,7 +867,6 @@ final class GSPClient: ObservableObject {
         connectStartedAt = nil
         authRequestedAt = nil
         tabListRequestedAt = nil
-        attachRequestedAt = nil
         lastErrorKind = nil
         lastError = nil
     }
@@ -904,15 +897,6 @@ final class GSPClient: ObservableObject {
         sendMessage(type: .destroy, payload: payload)
     }
 
-    func attach(tabId: UInt32) {
-        debugLog("send attach tabId=\(tabId)")
-        pendingHostTabCreation = false
-        desiredAttachedTabId = tabId
-        pendingAttachedTabId = tabId
-        lastError = nil
-        sendAttach(tabId: tabId)
-    }
-
     func suppressAutomaticTabBootstrap() {
         debugLog("suppressAutomaticTabBootstrap")
         autoTabBootstrapSuppressed = true
@@ -927,13 +911,6 @@ final class GSPClient: ObservableObject {
     func clearErrorState() {
         lastErrorKind = nil
         lastError = nil
-    }
-
-    private func sendAttach(tabId: UInt32) {
-        attachRequestedAt = Date()
-        var payload = Data(count: 4)
-        payload.withUnsafeMutableBytes { $0.storeBytes(of: tabId.littleEndian, as: UInt32.self) }
-        sendMessage(type: .attach, payload: payload)
     }
 
     func sendInput(_ text: String) {
@@ -1239,10 +1216,6 @@ final class GSPClient: ObservableObject {
             }
             applyReducedMessage(.tabList, payload: payload)
         case .attached:
-            if let attachRequestedAt {
-                lastAttachLatencyMs = Date().timeIntervalSince(attachRequestedAt) * 1000
-                self.attachRequestedAt = nil
-            }
             applyReducedMessage(.attached, payload: payload)
         case .fullState:
             applyReducedMessage(.fullState, payload: payload)
@@ -1286,7 +1259,7 @@ final class GSPClient: ObservableObject {
     }
 
     private var shouldPreserveRemoteStateOnReconnect: Bool {
-        desiredAttachedTabId != nil || !tabs.isEmpty
+        pendingAttachedTabId != nil || !tabs.isEmpty
     }
 
     private func protocolError(_ message: String) {
@@ -1303,7 +1276,6 @@ final class GSPClient: ObservableObject {
         connectStartedAt = nil
         authRequestedAt = nil
         tabListRequestedAt = nil
-        attachRequestedAt = nil
         if !shouldPreserveRemoteStateOnReconnect {
             protocolVersion = nil
             transportCapabilities = 0
@@ -1369,8 +1341,7 @@ final class GSPClient: ObservableObject {
         if let runtimeState,
            runtimeState.tabs.indices.contains(runtimeState.activeTab) {
             let runtimeActiveTabId = runtimeState.tabs[runtimeState.activeTab].tabId
-            debugLog("bootstrapCanonicalHostTab trigger=\(trigger) attach runtime active tabId=\(runtimeActiveTabId)")
-            attach(tabId: runtimeActiveTabId)
+            debugLog("bootstrapCanonicalHostTab trigger=\(trigger) wait runtime active tabId=\(runtimeActiveTabId)")
             return
         }
 
@@ -1502,7 +1473,6 @@ final class GSPClient: ObservableObject {
         if message == .errorMsg {
             switch lastErrorKind {
             case .unknownTab, .notAttached:
-                desiredAttachedTabId = nil
                 pendingAttachedTabId = nil
                 pendingHostTabCreation = false
                 bootstrapCanonicalHostTab(trigger: "errorRecovery")
