@@ -20,6 +20,7 @@ enum RemoteTerminalGestureAction {
     case pageDown
     case arrowLeft
     case arrowRight
+    case scrollLines(Int)
 }
 
 struct KineticTopBar: View {
@@ -380,6 +381,7 @@ struct TerminalKeyboardBridge: UIViewRepresentable {
     @Binding var isFocused: Bool
     let onText: (String) -> Void
     let onBackspace: () -> Void
+    let onKeyCommand: (String, UIKeyModifierFlags) -> Bool
     let accessoryState: TerminalKeyboardAccessoryState
 
     func makeCoordinator() -> Coordinator {
@@ -391,6 +393,7 @@ struct TerminalKeyboardBridge: UIViewRepresentable {
         textView.delegate = context.coordinator
         textView.onText = onText
         textView.onBackspace = onBackspace
+        textView.onKeyCommand = onKeyCommand
         textView.autocorrectionType = .no
         textView.autocapitalizationType = .none
         textView.spellCheckingType = .no
@@ -414,6 +417,7 @@ struct TerminalKeyboardBridge: UIViewRepresentable {
     func updateUIView(_ uiView: TerminalProxyTextView, context: Context) {
         uiView.onText = onText
         uiView.onBackspace = onBackspace
+        uiView.onKeyCommand = onKeyCommand
         uiView.updateAccessory(state: accessoryState)
         uiView.setFocus(isFocused)
         if !uiView.isFirstResponder {
@@ -452,9 +456,9 @@ struct TerminalKeyboardAccessoryState {
     var metaActive: Bool
     let onInsertText: (String) -> Void
     let onEscape: () -> Void
-    let onToggleCtrl: () -> Void
-    let onToggleAlt: () -> Void
-    let onToggleMeta: () -> Void
+    let onCtrlModifierEvent: (TerminalAssistantModifierEvent) -> Void
+    let onAltModifierEvent: (TerminalAssistantModifierEvent) -> Void
+    let onMetaModifierEvent: (TerminalAssistantModifierEvent) -> Void
     let onTab: () -> Void
     let onArrowUp: () -> Void
     let onArrowDown: () -> Void
@@ -466,9 +470,15 @@ struct TerminalKeyboardAccessoryState {
     let onEnd: () -> Void
 }
 
+enum TerminalAssistantModifierEvent {
+    case pressBegan
+    case pressEnded(wasTap: Bool)
+}
+
 final class TerminalProxyTextView: UITextView {
     var onText: ((String) -> Void)?
     var onBackspace: (() -> Void)?
+    var onKeyCommand: ((String, UIKeyModifierFlags) -> Bool)?
     private var desiredFocus = false
     private var accessoryState: TerminalKeyboardAccessoryState?
 
@@ -531,8 +541,38 @@ final class TerminalProxyTextView: UITextView {
     }
 
     override func accessibilityActivate() -> Bool {
-        becomeFirstResponder()
+        _ = becomeFirstResponder()
         return true
+    }
+
+    override var keyCommands: [UIKeyCommand]? {
+        let letters = (0..<26).compactMap { UnicodeScalar(65 + $0).map { String(Character($0)) } }
+        let controlLetters = letters.map { input in
+            UIKeyCommand(input: input.lowercased(), modifierFlags: .control, action: #selector(handleKeyCommand(_:)))
+        }
+        let altLetters = letters.map { input in
+            UIKeyCommand(input: input.lowercased(), modifierFlags: .alternate, action: #selector(handleKeyCommand(_:)))
+        }
+        let commandLetters = letters.map { input in
+            UIKeyCommand(input: input.lowercased(), modifierFlags: .command, action: #selector(handleKeyCommand(_:)))
+        }
+        let specialInputs = [
+            (UIKeyCommand.inputUpArrow, UIKeyModifierFlags([])),
+            (UIKeyCommand.inputDownArrow, UIKeyModifierFlags([])),
+            (UIKeyCommand.inputLeftArrow, UIKeyModifierFlags([])),
+            (UIKeyCommand.inputRightArrow, UIKeyModifierFlags([])),
+            ("\t", UIKeyModifierFlags([])),
+            ("\u{1b}", UIKeyModifierFlags([])),
+            ("\r", UIKeyModifierFlags([]))
+        ].map { input, modifiers in
+            UIKeyCommand(input: input, modifierFlags: modifiers, action: #selector(handleKeyCommand(_:)))
+        }
+        return controlLetters + altLetters + commandLetters + specialInputs
+    }
+
+    @objc private func handleKeyCommand(_ sender: UIKeyCommand) {
+        guard let input = sender.input else { return }
+        _ = onKeyCommand?(input, sender.modifierFlags)
     }
 
     override func deleteBackward() {
@@ -563,10 +603,10 @@ final class TerminalProxyTextView: UITextView {
 
         let leftItems: [UIBarButtonItem] = [
             assistantItem(title: "⌃", identifier: "terminal-key-ctrl", active: state.ctrlActive) {
-                state.onToggleCtrl()
+                state.onCtrlModifierEvent(.pressEnded(wasTap: true))
             },
             assistantItem(title: "⌥", identifier: "terminal-key-alt", active: state.altActive) {
-                state.onToggleAlt()
+                state.onAltModifierEvent(.pressEnded(wasTap: true))
             },
             assistantItem(title: "⇥", identifier: "terminal-key-tab", active: false) {
                 state.onTab()
@@ -602,7 +642,7 @@ final class TerminalProxyTextView: UITextView {
                 state.onArrowRight()
             },
             assistantItem(title: "⌘", identifier: "terminal-key-meta", active: state.metaActive) {
-                state.onToggleMeta()
+                state.onMetaModifierEvent(.pressEnded(wasTap: true))
             }
         ]
 

@@ -1136,8 +1136,6 @@ final class GSPClient: ObservableObject {
             return "\(prefix): DNS error (\(code))"
         case .tls(let status):
             return "\(prefix): TLS error (\(status))"
-        case .wifiAware(let code):
-            return "\(prefix): Wi-Fi aware error (\(code))"
         @unknown default:
             return "\(prefix)"
         }

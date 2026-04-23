@@ -1067,7 +1067,9 @@ struct TerminalTabScreen: View {
     }
 
     private var terminalView: some View {
-        RemoteTerminalView(screen: client.screen) { cols, rows in
+        let bridge = terminalKeyboardBridge
+
+        return RemoteTerminalView(screen: client.screen) { cols, rows in
             client.sendResize(cols: cols, rows: rows)
         } onGestureAction: { action in
             handleTerminalGesture(action)
@@ -1082,39 +1084,7 @@ struct TerminalTabScreen: View {
             keyboardFocused = true
         }
         .overlay {
-            TerminalKeyboardBridge(
-                isFocused: $keyboardFocused,
-                onText: { text in
-                    sendTypedText(text)
-                },
-                onBackspace: {
-                    client.sendInputBytes(Data([0x7f]))
-                },
-                onKeyCommand: { input, modifiers in
-                    handleKeyCommand(input: input, modifiers: modifiers)
-                },
-                accessoryState: TerminalKeyboardAccessoryState(
-                    ctrlActive: ctrlModifierState.isActive,
-                    altActive: altModifierState.isActive,
-                    metaActive: metaModifierState.isActive,
-                    onInsertText: { text in
-                        sendTypedText(text)
-                    },
-                    onEscape: { sendSpecialKey([0x1b]) },
-                    onCtrlModifierEvent: { handleModifierEvent($0, modifier: .ctrl) },
-                    onAltModifierEvent: { handleModifierEvent($0, modifier: .alt) },
-                    onMetaModifierEvent: { handleModifierEvent($0, modifier: .meta) },
-                    onTab: { sendSpecialKey([0x09]) },
-                    onArrowUp: { sendSpecialKey([0x1b, 0x5b, 0x41]) },
-                    onArrowDown: { sendSpecialKey([0x1b, 0x5b, 0x42]) },
-                    onArrowLeft: { sendSpecialKey([0x1b, 0x5b, 0x44]) },
-                    onArrowRight: { sendSpecialKey([0x1b, 0x5b, 0x43]) },
-                    onPageUp: { sendSpecialKey([0x1b, 0x5b, 0x35, 0x7e]) },
-                    onPageDown: { sendSpecialKey([0x1b, 0x5b, 0x36, 0x7e]) },
-                    onHome: { sendSpecialKey([0x1b, 0x5b, 0x48]) },
-                    onEnd: { sendSpecialKey([0x1b, 0x5b, 0x46]) }
-                )
-            )
+            bridge
             .id("terminal-keyboard-\(client.connectionDebugGeneration)-\(client.activeTabId ?? 0)")
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
@@ -1122,6 +1092,40 @@ struct TerminalTabScreen: View {
         .overlay {
             attachmentOverlay
         }
+    }
+
+    private var terminalKeyboardBridge: some View {
+        TerminalKeyboardBridge(
+            isFocused: $keyboardFocused,
+            onText: sendTypedText,
+            onBackspace: {
+                client.sendInputBytes(Data([0x7f]))
+            },
+            onKeyCommand: handleKeyCommand(input:modifiers:),
+            accessoryState: terminalAccessoryState
+        )
+    }
+
+    private var terminalAccessoryState: TerminalKeyboardAccessoryState {
+        TerminalKeyboardAccessoryState(
+            ctrlActive: ctrlModifierState.isActive,
+            altActive: altModifierState.isActive,
+            metaActive: metaModifierState.isActive,
+            onInsertText: sendTypedText,
+            onEscape: { sendSpecialKey([0x1b]) },
+            onCtrlModifierEvent: { handleModifierEvent($0, modifier: .ctrl) },
+            onAltModifierEvent: { handleModifierEvent($0, modifier: .alt) },
+            onMetaModifierEvent: { handleModifierEvent($0, modifier: .meta) },
+            onTab: { sendSpecialKey([0x09]) },
+            onArrowUp: { sendSpecialKey([0x1b, 0x5b, 0x41]) },
+            onArrowDown: { sendSpecialKey([0x1b, 0x5b, 0x42]) },
+            onArrowLeft: { sendSpecialKey([0x1b, 0x5b, 0x44]) },
+            onArrowRight: { sendSpecialKey([0x1b, 0x5b, 0x43]) },
+            onPageUp: { sendSpecialKey([0x1b, 0x5b, 0x35, 0x7e]) },
+            onPageDown: { sendSpecialKey([0x1b, 0x5b, 0x36, 0x7e]) },
+            onHome: { sendSpecialKey([0x1b, 0x5b, 0x48]) },
+            onEnd: { sendSpecialKey([0x1b, 0x5b, 0x46]) }
+        )
     }
 
     private var isDisconnected: Bool {
