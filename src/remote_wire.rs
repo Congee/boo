@@ -49,8 +49,6 @@ pub const STYLE_FLAG_EXPLICIT_BG: u8 = 0x40;
 pub enum MessageType {
     Auth = 0x01,
     ListTabs = 0x02,
-    Attach = 0x03,
-    Detach = 0x04,
     Create = 0x05,
     Input = 0x06,
     Resize = 0x07,
@@ -69,8 +67,6 @@ pub enum MessageType {
     TabList = 0x82,
     FullState = 0x83,
     Delta = 0x84,
-    Attached = 0x85,
-    Detached = 0x86,
     ErrorMsg = 0x87,
     TabCreated = 0x88,
     TabExited = 0x89,
@@ -193,11 +189,7 @@ pub const fn logical_channel_for_message_type(message_type: MessageType) -> Logi
         | MessageType::Destroy
         | MessageType::TabExited
         | MessageType::ErrorMsg => LogicalChannel::Control,
-        MessageType::Attach
-        | MessageType::Attached
-        | MessageType::Detach
-        | MessageType::Detached
-        | MessageType::FullState
+        MessageType::FullState
         | MessageType::Delta
         | MessageType::ScrollData
         | MessageType::UiRuntimeState
@@ -225,8 +217,6 @@ impl TryFrom<u8> for MessageType {
         let message = match value {
             0x01 => Self::Auth,
             0x02 => Self::ListTabs,
-            0x03 => Self::Attach,
-            0x04 => Self::Detach,
             0x05 => Self::Create,
             0x06 => Self::Input,
             0x07 => Self::Resize,
@@ -244,8 +234,6 @@ impl TryFrom<u8> for MessageType {
             0x82 => Self::TabList,
             0x83 => Self::FullState,
             0x84 => Self::Delta,
-            0x85 => Self::Attached,
-            0x86 => Self::Detached,
             0x87 => Self::ErrorMsg,
             0x88 => Self::TabCreated,
             0x89 => Self::TabExited,
@@ -510,8 +498,6 @@ pub(crate) fn read_probe_reply(
             MessageType::TabList
             | MessageType::FullState
             | MessageType::Delta
-            | MessageType::Attached
-            | MessageType::Detached
             | MessageType::UiRuntimeState
             | MessageType::UiAppearance
             | MessageType::UiPaneFullState
@@ -567,8 +553,6 @@ pub(crate) fn read_probe_auth_reply(
             MessageType::TabList
             | MessageType::FullState
             | MessageType::Delta
-            | MessageType::Attached
-            | MessageType::Detached
             | MessageType::UiRuntimeState
             | MessageType::UiAppearance
             | MessageType::UiPaneFullState
@@ -1260,10 +1244,6 @@ mod tests {
         assert_eq!(
             logical_channel_for_message_type(MessageType::TabList),
             LogicalChannel::Control
-        );
-        assert_eq!(
-            logical_channel_for_message_type(MessageType::Attach),
-            LogicalChannel::SessionStream
         );
         assert_eq!(
             logical_channel_for_message_type(MessageType::Delta),

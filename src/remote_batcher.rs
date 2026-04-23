@@ -263,7 +263,7 @@ mod tests {
         let runtime_b = encode_message(MessageType::UiRuntimeState, b"runtime-b");
         let appearance_a = encode_message(MessageType::UiAppearance, b"appearance-a");
         let appearance_b = encode_message(MessageType::UiAppearance, b"appearance-b");
-        let barrier = encode_message(MessageType::Attached, &7_u32.to_le_bytes());
+        let barrier = encode_message(MessageType::TabCreated, &7_u32.to_le_bytes());
         tx.send(OutboundMessage::Frame(runtime_a)).unwrap();
         tx.send(OutboundMessage::Frame(appearance_a)).unwrap();
         tx.send(OutboundMessage::Frame(runtime_b.clone())).unwrap();

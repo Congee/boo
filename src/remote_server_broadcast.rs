@@ -200,27 +200,22 @@ mod tests {
         state
             .clients
             .insert(4, test_client(remote_attached_tx, Some(11), false));
-        let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
+        let state = Arc::new(Mutex::new(state));
+        let server = RemoteServer::for_test(Arc::clone(&state));
 
         server.retarget_local_attached_to_tab(22);
 
-        match local_attached_rx.recv().expect("local attached frame") {
-            OutboundMessage::Frame(frame) => {
-                assert_eq!(&frame[..2], &MAGIC);
-                assert_eq!(frame[2], MessageType::Attached as u8);
-            }
-            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
-        }
-        match local_attached_two_rx.recv().expect("second local attached frame") {
-            OutboundMessage::Frame(frame) => {
-                assert_eq!(&frame[..2], &MAGIC);
-                assert_eq!(frame[2], MessageType::Attached as u8);
-            }
-            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
-        }
+        let guard = state.lock().expect("remote server state poisoned");
+        assert_eq!(guard.clients.get(&1).and_then(|c| c.runtime_subscription.tab_id), Some(22));
+        assert_eq!(guard.clients.get(&5).and_then(|c| c.runtime_subscription.tab_id), Some(22));
+        assert_eq!(guard.clients.get(&2).and_then(|c| c.runtime_subscription.tab_id), None);
+        assert_eq!(guard.clients.get(&3).and_then(|c| c.runtime_subscription.tab_id), Some(22));
+        assert_eq!(guard.clients.get(&4).and_then(|c| c.runtime_subscription.tab_id), Some(11));
         assert!(local_unattached_rx.try_recv().is_err());
         assert!(local_same_tab_rx.try_recv().is_err());
         assert!(remote_attached_rx.try_recv().is_err());
+        assert!(local_attached_rx.try_recv().is_err());
+        assert!(local_attached_two_rx.try_recv().is_err());
     }
 
     #[test]
