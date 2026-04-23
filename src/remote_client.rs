@@ -3,8 +3,8 @@
 
 use crate::remote::DirectTransportClient;
 use crate::remote_types::{
-    DirectTransportKind, RemoteCreateSummary, RemoteProbeSummary,
-    RemoteTabListSummary, RemoteUpgradeProbeSummary,
+    DirectTransportKind, RemoteCreateSummary, RemoteProbeSummary, RemoteTabListSummary,
+    RemoteUpgradeProbeSummary,
 };
 
 pub fn select_direct_transport(
@@ -123,12 +123,11 @@ mod tests {
     use super::*;
     use crate::control::{UiMouseSelectionSnapshot, UiRuntimeState, UiTabSnapshot};
     use crate::remote_types::RemoteTabInfo;
-    use crate::status_components::UiStatusBarSnapshot;
     use crate::remote_wire::{
-        MESSAGE_TYPE_LIST_TABS, MESSAGE_TYPE_TAB_LIST, MessageType,
-        REMOTE_PROTOCOL_VERSION, encode_auth_ok_payload, encode_message, encode_tab_list,
-        read_message,
+        MESSAGE_TYPE_LIST_TABS, MESSAGE_TYPE_TAB_LIST, MessageType, REMOTE_PROTOCOL_VERSION,
+        encode_auth_ok_payload, encode_message, encode_tab_list, read_message,
     };
+    use crate::status_components::UiStatusBarSnapshot;
     use std::io::Write;
 
     #[test]
@@ -150,8 +149,8 @@ mod tests {
                 .expect("write auth ok");
         });
 
-        let error = probe_remote_endpoint("127.0.0.1", port, None)
-            .expect_err("probe should reject");
+        let error =
+            probe_remote_endpoint("127.0.0.1", port, None).expect_err("probe should reject");
         assert!(
             error.contains("Unsupported remote protocol version"),
             "unexpected error: {error}"
@@ -203,8 +202,7 @@ mod tests {
                 .expect("write tab list");
         });
 
-        let summary =
-            list_remote_daemon_tabs("127.0.0.1", port, None).expect("list tabs summary");
+        let summary = list_remote_daemon_tabs("127.0.0.1", port, None).expect("list tabs summary");
         assert_eq!(summary.protocol_version, REMOTE_PROTOCOL_VERSION);
         assert_eq!(summary.server_identity_id.as_deref(), Some("test-daemon"));
         assert_eq!(summary.server_instance_id.as_deref(), Some("test-instance"));
@@ -236,16 +234,9 @@ mod tests {
                 .expect("write auth ok");
         });
 
-        let error = list_remote_daemon_tabs(
-            "127.0.0.1",
-            port,
-            Some("expected-daemon"),
-        )
-        .expect_err("unexpected daemon identity should fail");
-        assert!(
-            error.contains("expected"),
-            "unexpected error text: {error}"
-        );
+        let error = list_remote_daemon_tabs("127.0.0.1", port, Some("expected-daemon"))
+            .expect_err("unexpected daemon identity should fail");
+        assert!(error.contains("expected"), "unexpected error text: {error}");
 
         server.join().expect("list server thread");
     }
@@ -317,14 +308,8 @@ mod tests {
                 .expect("write runtime state");
         });
 
-        let summary = create_remote_daemon_tab(
-            "127.0.0.1",
-            port,
-            Some("test-daemon"),
-            132,
-            48,
-        )
-        .expect("create summary");
+        let summary = create_remote_daemon_tab("127.0.0.1", port, Some("test-daemon"), 132, 48)
+            .expect("create summary");
         assert_eq!(summary.protocol_version, REMOTE_PROTOCOL_VERSION);
         assert_eq!(summary.server_identity_id.as_deref(), Some("test-daemon"));
         assert_eq!(summary.server_instance_id.as_deref(), Some("test-instance"));

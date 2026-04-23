@@ -236,7 +236,11 @@ fn print_completions<G: Generator>(generator: G) -> Result<(), String> {
     Ok(())
 }
 
-pub fn handle_command<F>(cli: &Cli, boo_config: &config::Config, mut ensure_server_running: F) -> Outcome
+pub fn handle_command<F>(
+    cli: &Cli,
+    boo_config: &config::Config,
+    mut ensure_server_running: F,
+) -> Outcome
 where
     F: FnMut(&str, &config::Config) -> bool,
 {
@@ -319,11 +323,7 @@ where
             host,
             port,
             expect_server_identity,
-        } => match probe_remote_daemon_dispatch(
-            host,
-            *port,
-            expect_server_identity.as_deref(),
-        ) {
+        } => match probe_remote_daemon_dispatch(host, *port, expect_server_identity.as_deref()) {
             Ok(summary) => {
                 let mut stdout = std::io::stdout().lock();
                 use std::io::Write;
@@ -344,11 +344,8 @@ where
             host,
             port,
             expect_server_identity,
-        } => match list_remote_daemon_tabs_dispatch(
-            host,
-            *port,
-            expect_server_identity.as_deref(),
-        ) {
+        } => match list_remote_daemon_tabs_dispatch(host, *port, expect_server_identity.as_deref())
+        {
             Ok(summary) => {
                 let mut stdout = std::io::stdout().lock();
                 use std::io::Write;
@@ -401,7 +398,9 @@ where
                 .as_deref()
                 .or(boo_config.remote_host.as_deref())
             else {
-                eprintln!("remote upgrade target discovery requires --host or remote-host in config");
+                eprintln!(
+                    "remote upgrade target discovery requires --host or remote-host in config"
+                );
                 return Outcome::Exit(1);
             };
             if !require_server() {
@@ -457,10 +456,9 @@ where
                     let Some(direct_host) = target.direct_host.as_deref() else {
                         eprintln!(
                             "{}",
-                            target
-                                .reason
-                                .clone()
-                                .unwrap_or_else(|| "remote upgrade target has no direct host".to_string())
+                            target.reason.clone().unwrap_or_else(|| {
+                                "remote upgrade target has no direct host".to_string()
+                            })
                         );
                         return Outcome::Exit(1);
                     };
@@ -556,7 +554,9 @@ fn resolve_remote_upgrade_target(
         return RemoteUpgradeTargetSummary {
             ssh_host: ssh_host.to_string(),
             upgrade_ready: false,
-            reason: Some("no native remote daemon is running on the forwarded Boo server".to_string()),
+            reason: Some(
+                "no native remote daemon is running on the forwarded Boo server".to_string(),
+            ),
             selected_transport: None,
             direct_host: None,
             port: None,
@@ -570,7 +570,9 @@ fn resolve_remote_upgrade_target(
         return RemoteUpgradeTargetSummary {
             ssh_host: ssh_host.to_string(),
             upgrade_ready: false,
-            reason: Some("forwarded Boo server does not advertise a native remote daemon port".to_string()),
+            reason: Some(
+                "forwarded Boo server does not advertise a native remote daemon port".to_string(),
+            ),
             selected_transport: None,
             direct_host: None,
             port: None,
@@ -695,7 +697,7 @@ mod tests {
             Some(super::Command::ProbeRemoteDaemon {
                 host,
                 port,
-                    expect_server_identity,
+                expect_server_identity,
             }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, crate::config::DEFAULT_REMOTE_PORT);
@@ -721,7 +723,7 @@ mod tests {
             Some(super::Command::RemoteDaemonTabs {
                 host,
                 port,
-                    expect_server_identity,
+                expect_server_identity,
             }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, crate::config::DEFAULT_REMOTE_PORT);
@@ -742,13 +744,9 @@ mod tests {
 
     #[test]
     fn parse_remote_upgrade_probe_subcommand() {
-        let cli = Cli::parse_from([
-            "boo",
-            "remote-upgrade-probe",
-        ]);
+        let cli = Cli::parse_from(["boo", "remote-upgrade-probe"]);
         match cli.command {
-            Some(super::Command::RemoteUpgradeProbe) => {
-            }
+            Some(super::Command::RemoteUpgradeProbe) => {}
             other => panic!("unexpected command: {other:?}"),
         }
     }
@@ -773,7 +771,7 @@ mod tests {
             Some(super::Command::RemoteDaemonCreate {
                 host,
                 port,
-                    expect_server_identity,
+                expect_server_identity,
                 cols,
                 rows,
             }) => {

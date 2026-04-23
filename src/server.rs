@@ -14,6 +14,7 @@ fn advertised_remote_service_name(port: u16) -> String {
 }
 
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum Command {
     DumpKeys(bool),
     Ping,
@@ -323,13 +324,9 @@ impl From<remote::RemoteCmd> for Command {
             remote::RemoteCmd::FocusPane { client_id, pane_id } => {
                 Self::RemoteFocusPane { client_id, pane_id }
             }
-            remote::RemoteCmd::Destroy {
-                client_id,
-                tab_id,
-            } => Self::RemoteDestroy {
-                client_id,
-                tab_id,
-            },
+            remote::RemoteCmd::Destroy { client_id, tab_id } => {
+                Self::RemoteDestroy { client_id, tab_id }
+            }
         }
     }
 }

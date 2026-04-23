@@ -124,7 +124,11 @@ impl BooApp {
         }
         let ui_state = self.ui_runtime_state();
         let tabs = self.current_remote_tabs();
-        let server = self.server.local_gui_server.as_ref().expect("local gui server");
+        let server = self
+            .server
+            .local_gui_server
+            .as_ref()
+            .expect("local gui server");
         server.send_ui_runtime_state_to_local_viewers(&ui_state);
         server.send_tab_list_to_local_clients(tabs.as_ref());
     }
@@ -161,7 +165,9 @@ impl BooApp {
     fn publish_local_gui_after_ui_action(&mut self, before: &LocalGuiTransportState) {
         self.publish_local_gui_runtime_state_for_active_tab();
         let after = self.local_gui_transport_state();
-        if after != *before && let Some(active_tab_id) = after.active_tab_id {
+        if after != *before
+            && let Some(active_tab_id) = after.active_tab_id
+        {
             self.publish_remote_tab(active_tab_id);
         }
     }
@@ -174,11 +180,13 @@ impl BooApp {
     }
 
     pub(crate) fn has_runtime_stream_subscribers(&self) -> bool {
-        self.remote_servers().any(|server| server.has_runtime_viewers())
+        self.remote_servers()
+            .any(|server| server.has_runtime_viewers())
     }
 
     fn remote_server_for_client(&self, client_id: u64) -> Option<&remote::RemoteServer> {
-        self.remote_servers().find(|server| server.has_client(client_id))
+        self.remote_servers()
+            .find(|server| server.has_client(client_id))
     }
 
     pub(crate) fn handle_server_cmd(&mut self, cmd: server::Command) {
@@ -257,14 +265,16 @@ impl BooApp {
                 source,
                 components,
             } => {
-                if self.status_components.set(crate::status_components::StatusComponentsUpdate {
-                    zone,
-                    source,
-                    components,
-                }) {
-                    if self.has_runtime_stream_subscribers() {
-                        self.mark_active_remote_tab_dirty();
-                    }
+                if self
+                    .status_components
+                    .set(crate::status_components::StatusComponentsUpdate {
+                        zone,
+                        source,
+                        components,
+                    })
+                    && self.has_runtime_stream_subscribers()
+                {
+                    self.mark_active_remote_tab_dirty();
                 }
             }
             server::Command::ClearStatusComponents { source, zone } => {
@@ -363,7 +373,10 @@ impl BooApp {
                 self.publish_local_gui_after_ui_action(&before);
             }
             server::Command::RemoteConnected { client_id } => {
-                self.sync_remote_client_runtime_view(client_id, self.active_runtime_tab_id().is_some());
+                self.sync_remote_client_runtime_view(
+                    client_id,
+                    self.active_runtime_tab_id().is_some(),
+                );
             }
             server::Command::RemoteListTabs { client_id } => {
                 // Compatibility request: reply with tab metadata, but do not
@@ -582,16 +595,12 @@ impl BooApp {
                     self.recover_remote_client_runtime_view(client_id);
                     return;
                 }
-                if self.focus_pane_by_id(pane_id)
-                {
+                if self.focus_pane_by_id(pane_id) {
                     let _ = client_id;
                     self.broadcast_runtime_view_to_all_viewers();
                 }
             }
-            server::Command::RemoteDestroy {
-                client_id,
-                tab_id,
-            } => {
+            server::Command::RemoteDestroy { client_id, tab_id } => {
                 let target = tab_id.or_else(|| self.active_runtime_tab_id());
                 let Some(target) = target else {
                     if let Some(server) = self
@@ -699,21 +708,24 @@ impl BooApp {
                     tree.export_panes()
                         .into_iter()
                         .filter_map(|exported| {
-                        let pane_id = exported.pane.id();
-                        if pane_id == focused_pane_id {
-                            return None;
-                        }
-                        self.remote_full_state_for_pane(pane_id)
-                            .map(|state| (pane_id, state))
-                    })
-                    .collect::<Vec<_>>()
+                            let pane_id = exported.pane.id();
+                            if pane_id == focused_pane_id {
+                                return None;
+                            }
+                            self.remote_full_state_for_pane(pane_id)
+                                .map(|state| (pane_id, state))
+                        })
+                        .collect::<Vec<_>>()
                 })
                 .unwrap_or_default()
         } else {
             Vec::new()
         };
         if needs_local_pane_states {
-            let visible_pane_ids = pane_states.iter().map(|(pane_id, _)| *pane_id).collect::<Vec<_>>();
+            let visible_pane_ids = pane_states
+                .iter()
+                .map(|(pane_id, _)| *pane_id)
+                .collect::<Vec<_>>();
             for server in &servers {
                 server.retain_local_viewer_pane_states(&visible_pane_ids);
             }
@@ -721,14 +733,9 @@ impl BooApp {
         for server in servers {
             server.send_full_state_to_viewers(tab_id, Arc::clone(&state));
             for (pane_id, pane_state) in &pane_states {
-                server.send_pane_state_to_local_viewers(
-                    tab_id,
-                    *pane_id,
-                    Arc::clone(pane_state),
-                );
+                server.send_pane_state_to_local_viewers(tab_id, *pane_id, Arc::clone(pane_state));
             }
         }
         log_server_latency("publish_remote_tab", started_at);
     }
-
 }

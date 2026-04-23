@@ -147,6 +147,7 @@ pub enum CopyModeAction {
     Exit,
 }
 
+#[allow(clippy::enum_variant_names)]
 pub enum KeyResult {
     /// Boo consumed the key. Don't forward to ghostty.
     Consumed(Option<Action>),
@@ -157,6 +158,7 @@ pub enum KeyResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(clippy::enum_variant_names)]
 enum Mode {
     Normal,
     Prefix,
@@ -271,11 +273,12 @@ impl Bindings {
                 if let Some(action) = self.direct.get(&(keycode, mods)) {
                     return KeyResult::Consumed(Some(action.clone()));
                 }
-                if let Some(ref prefix) = self.prefix {
-                    if keycode == prefix.keycode && (mods & prefix.mods_mask) == prefix.mods_mask {
-                        self.mode = Mode::Prefix;
-                        return KeyResult::Consumed(None);
-                    }
+                if let Some(ref prefix) = self.prefix
+                    && keycode == prefix.keycode
+                    && (mods & prefix.mods_mask) == prefix.mods_mask
+                {
+                    self.mode = Mode::Prefix;
+                    return KeyResult::Consumed(None);
                 }
                 KeyResult::Forward
             }
@@ -324,34 +327,30 @@ impl Bindings {
         }
 
         // Tier 2: Ctrl-modified keys
-        if has_ctrl {
-            if let Some(ch) = key_char {
-                let action = match ch {
-                    'b' | '\x02' => Some(PageUp),
-                    'f' | '\x06' => Some(PageDown),
-                    'u' | '\x15' => Some(HalfPageUp),
-                    'd' | '\x04' => Some(HalfPageDown),
-                    'y' | '\x19' => Some(ScrollUp),
-                    'e' | '\x05' => Some(ScrollDown),
-                    'v' | '\x16' => Some(StartRectSelect),
-                    _ => None,
-                };
-                if let Some(a) = action {
-                    return KeyResult::CopyMode(a);
-                }
+        if has_ctrl && let Some(ch) = key_char {
+            let action = match ch {
+                'b' | '\x02' => Some(PageUp),
+                'f' | '\x06' => Some(PageDown),
+                'u' | '\x15' => Some(HalfPageUp),
+                'd' | '\x04' => Some(HalfPageDown),
+                'y' | '\x19' => Some(ScrollUp),
+                'e' | '\x05' => Some(ScrollDown),
+                'v' | '\x16' => Some(StartRectSelect),
+                _ => None,
+            };
+            if let Some(a) = action {
+                return KeyResult::CopyMode(a);
             }
         }
 
         // Tier 2b: Alt-modified keys
-        if has_alt {
-            if let Some(ch) = key_char {
-                let action = match ch {
-                    'x' => Some(JumpToMark),
-                    _ => None,
-                };
-                if let Some(a) = action {
-                    return KeyResult::CopyMode(a);
-                }
+        if has_alt && let Some(ch) = key_char {
+            let action = match ch {
+                'x' => Some(JumpToMark),
+                _ => None,
+            };
+            if let Some(a) = action {
+                return KeyResult::CopyMode(a);
             }
         }
 
@@ -649,15 +648,15 @@ fn parse_action(s: &str) -> Option<Action> {
         "select_layout:even-horizontal" => Some(Action::SelectLayout(
             crate::layout::TabLayout::EvenHorizontal,
         )),
-        "select_layout:even-vertical" => Some(Action::SelectLayout(
-            crate::layout::TabLayout::EvenVertical,
-        )),
+        "select_layout:even-vertical" => {
+            Some(Action::SelectLayout(crate::layout::TabLayout::EvenVertical))
+        }
         "select_layout:main-horizontal" => Some(Action::SelectLayout(
             crate::layout::TabLayout::MainHorizontal,
         )),
-        "select_layout:main-vertical" => Some(Action::SelectLayout(
-            crate::layout::TabLayout::MainVertical,
-        )),
+        "select_layout:main-vertical" => {
+            Some(Action::SelectLayout(crate::layout::TabLayout::MainVertical))
+        }
         "select_layout:tiled" => Some(Action::SelectLayout(crate::layout::TabLayout::Tiled)),
         "toggle_zoom" => Some(Action::ToggleZoom),
         "command_prompt" => Some(Action::OpenCommandPrompt),

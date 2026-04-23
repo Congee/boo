@@ -143,7 +143,10 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(value.get("subscribed_to_runtime").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            value.get("subscribed_to_runtime").and_then(|v| v.as_bool()),
+            Some(true)
+        );
         assert!(value.get("current_tab").is_none());
         assert!(value.get("attached_tab").is_none());
     }

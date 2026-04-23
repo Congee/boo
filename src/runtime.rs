@@ -42,7 +42,8 @@ impl BooApp {
                 font_families.push(leak_font_family(family));
             }
         }
-        for family in platform_default_font_fallbacks(config.font_families.first().map(String::as_str))
+        for family in
+            platform_default_font_fallbacks(config.font_families.first().map(String::as_str))
         {
             if seen_families.insert(family.to_ascii_lowercase()) {
                 font_families.push(family);
@@ -129,10 +130,11 @@ impl BooApp {
         );
         let bindings = bindings::Bindings::from_config(&boo_config);
         let appearance = Self::resolve_appearance_config(&boo_config);
-        let (cell_width, cell_height) =
-            terminal_metrics(appearance.font_size, appearance.font_families.first().copied());
-        let initial_dirty_remote_tabs =
-            server.tabs.active_tab_id().into_iter().collect::<Vec<_>>();
+        let (cell_width, cell_height) = terminal_metrics(
+            appearance.font_size,
+            appearance.font_families.first().copied(),
+        );
+        let initial_dirty_remote_tabs = server.tabs.active_tab_id().into_iter().collect::<Vec<_>>();
 
         #[cfg(target_os = "linux")]
         {
@@ -517,17 +519,17 @@ impl BooApp {
                 platform::send_desktop_notification(&notification.title, &notification.body);
             }
         }
-        if let Some(pwd) = poll.active_pwd {
-            if self.pwd != pwd {
-                self.pwd = pwd;
-                remote_dirty = true;
-            }
+        if let Some(pwd) = poll.active_pwd
+            && self.pwd != pwd
+        {
+            self.pwd = pwd;
+            remote_dirty = true;
         }
-        if let Some(title) = poll.active_title {
-            if self.server.tabs.active_title() != Some(title.as_str()) {
-                self.server.tabs.set_active_title(title);
-                remote_dirty = true;
-            }
+        if let Some(title) = poll.active_title
+            && self.server.tabs.active_title() != Some(title.as_str())
+        {
+            self.server.tabs.set_active_title(title);
+            remote_dirty = true;
         }
         if let Some(scrollbar) = poll.active_scrollbar {
             if self.freeze_mouse_selection_viewport() && self.scrollbar.offset != scrollbar.offset {
@@ -550,8 +552,10 @@ impl BooApp {
             }
         }
         for pane_id in poll.exited_panes {
-            self.status_components
-                .clear(&crate::status_components::osc_source_for_pane(pane_id), None);
+            self.status_components.clear(
+                &crate::status_components::osc_source_for_pane(pane_id),
+                None,
+            );
             self.close_pane_by_id(pane_id);
             remote_dirty = true;
         }
@@ -581,8 +585,10 @@ impl BooApp {
         self.cursor_blink = appearance.cursor_blink;
         self.cursor_blink_interval = appearance.cursor_blink_interval;
         self.cursor_blink_epoch = std::time::Instant::now();
-        let (cell_width, cell_height) =
-            terminal_metrics(self.terminal_font_size, self.terminal_font_families.first().copied());
+        let (cell_width, cell_height) = terminal_metrics(
+            self.terminal_font_size,
+            self.terminal_font_families.first().copied(),
+        );
         self.cell_width = cell_width;
         self.cell_height = cell_height;
         self.appearance_revision = self.appearance_revision.wrapping_add(1);

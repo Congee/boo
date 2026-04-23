@@ -181,13 +181,13 @@ impl BooApp {
                 }
             }
             SwapAnchor => {
-                if let Some(ref mut cm) = self.copy_mode {
-                    if let Some((ar, ac)) = cm.sel_anchor {
-                        let (cr, cc) = (cm.cursor_row, cm.cursor_col);
-                        cm.cursor_row = ar;
-                        cm.cursor_col = ac;
-                        cm.sel_anchor = Some((cr, cc));
-                    }
+                if let Some(ref mut cm) = self.copy_mode
+                    && let Some((ar, ac)) = cm.sel_anchor
+                {
+                    let (cr, cc) = (cm.cursor_row, cm.cursor_col);
+                    cm.cursor_row = ar;
+                    cm.cursor_col = ac;
+                    cm.sel_anchor = Some((cr, cc));
                 }
                 self.copy_mode_ensure_visible();
                 self.update_copy_mode_highlight();
@@ -223,11 +223,11 @@ impl BooApp {
                 }
             }
             JumpToMark => {
-                if let Some(ref mut cm) = self.copy_mode {
-                    if let Some((r, c)) = cm.mark {
-                        cm.cursor_row = r;
-                        cm.cursor_col = c;
-                    }
+                if let Some(ref mut cm) = self.copy_mode
+                    && let Some((r, c)) = cm.mark
+                {
+                    cm.cursor_row = r;
+                    cm.cursor_col = c;
                 }
                 self.copy_mode_ensure_visible();
                 self.update_copy_mode_highlight();
@@ -256,7 +256,7 @@ impl BooApp {
                 let forward = self
                     .copy_mode
                     .as_ref()
-                    .map_or(true, |cm| cm.last_search_forward);
+                    .is_none_or(|cm| cm.last_search_forward);
                 if forward {
                     self.ghostty_binding_action("navigate_search:next");
                 } else {
@@ -267,7 +267,7 @@ impl BooApp {
                 let forward = self
                     .copy_mode
                     .as_ref()
-                    .map_or(true, |cm| cm.last_search_forward);
+                    .is_none_or(|cm| cm.last_search_forward);
                 if forward {
                     self.ghostty_binding_action("navigate_search:previous");
                 } else {
@@ -612,12 +612,12 @@ impl BooApp {
 
         let brackets = [('(', ')'), ('[', ']'), ('{', '}')];
         let mut found = None;
-        for i in col..chars.len() {
+        for (i, ch) in chars.iter().enumerate().skip(col) {
             for &(open, close) in &brackets {
-                if chars[i] == open {
+                if *ch == open {
                     found = Some((i, open, close, true));
                     break;
-                } else if chars[i] == close {
+                } else if *ch == close {
                     found = Some((i, open, close, false));
                     break;
                 }
@@ -844,6 +844,7 @@ impl BooApp {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn compute_selection_rects_static(
         selection: SelectionMode,
         cursor_row: i64,

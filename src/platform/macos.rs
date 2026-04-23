@@ -39,11 +39,8 @@ unsafe extern "C" {}
 unsafe extern "C" {
     static kCTFontFamilyNameAttribute: *const c_void;
 
-    fn CTFontCreateWithName(
-        name: *const c_void,
-        size: f64,
-        matrix: *const c_void,
-    ) -> *const c_void;
+    fn CTFontCreateWithName(name: *const c_void, size: f64, matrix: *const c_void)
+    -> *const c_void;
     fn CTFontCopyDefaultCascadeListForLanguages(
         font: *const c_void,
         language_pref_list: *const c_void,
@@ -111,9 +108,8 @@ pub fn default_font_fallbacks(primary_family: Option<&str>) -> Vec<String> {
         if descriptor.is_null() {
             continue;
         }
-        let family = unsafe {
-            CTFontDescriptorCopyAttribute(descriptor, kCTFontFamilyNameAttribute)
-        };
+        let family =
+            unsafe { CTFontDescriptorCopyAttribute(descriptor, kCTFontFamilyNameAttribute) };
         if family.is_null() {
             continue;
         }

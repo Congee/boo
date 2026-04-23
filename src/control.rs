@@ -17,8 +17,8 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
-use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Read/write timeout for a one-shot control-socket RPC: connect, write the
@@ -65,38 +65,88 @@ pub enum Request {
         source: String,
         id: String,
     },
-    AppKeyEvent { event: crate::AppKeyEvent },
-    AppMouseEvent { event: crate::AppMouseEvent },
-    AppAction { action: crate::bindings::Action },
-    FocusPane { pane_id: u64 },
-    ExecuteCommand { input: String },
-    SendText { text: String },
-    SendVt { text: String },
-    NewSplit { direction: Option<String> },
+    AppKeyEvent {
+        event: crate::AppKeyEvent,
+    },
+    AppMouseEvent {
+        event: crate::AppMouseEvent,
+    },
+    AppAction {
+        action: crate::bindings::Action,
+    },
+    FocusPane {
+        pane_id: u64,
+    },
+    ExecuteCommand {
+        input: String,
+    },
+    SendText {
+        text: String,
+    },
+    SendVt {
+        text: String,
+    },
+    NewSplit {
+        direction: Option<String>,
+    },
     NewTab,
-    GotoTab { index: usize },
+    GotoTab {
+        index: usize,
+    },
     NextTab,
     PrevTab,
-    ResizeViewportPoints { width: f64, height: f64 },
-    ResizeViewport { cols: u16, rows: u16 },
-    ResizeFocused { cols: u16, rows: u16 },
-    FocusSurface { index: usize },
-    SendKey { key: String },
-    DumpKeys { enabled: bool },
+    ResizeViewportPoints {
+        width: f64,
+        height: f64,
+    },
+    ResizeViewport {
+        cols: u16,
+        rows: u16,
+    },
+    ResizeFocused {
+        cols: u16,
+        rows: u16,
+    },
+    FocusSurface {
+        index: usize,
+    },
+    SendKey {
+        key: String,
+    },
+    DumpKeys {
+        enabled: bool,
+    },
     Quit,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)]
 pub enum Response {
-    Version { version: String },
-    RemoteClients { snapshot: crate::remote::RemoteClientsSnapshot },
-    Surfaces { surfaces: Vec<SurfaceInfo> },
-    Tabs { tabs: Vec<crate::tabs::TabInfo> },
-    Clipboard { text: String },
-    UiSnapshot { snapshot: UiSnapshot },
-    Ok { ok: bool },
-    Error { error: String },
+    Version {
+        version: String,
+    },
+    RemoteClients {
+        snapshot: crate::remote::RemoteClientsSnapshot,
+    },
+    Surfaces {
+        surfaces: Vec<SurfaceInfo>,
+    },
+    Tabs {
+        tabs: Vec<crate::tabs::TabInfo>,
+    },
+    Clipboard {
+        text: String,
+    },
+    UiSnapshot {
+        snapshot: UiSnapshot,
+    },
+    Ok {
+        ok: bool,
+    },
+    Error {
+        error: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -290,11 +340,21 @@ pub enum ControlCmd {
     DumpKeysOn,
     DumpKeysOff,
     Ping,
-    GetRemoteClients { reply: mpsc::Sender<Response> },
-    ListSurfaces { reply: mpsc::Sender<Response> },
-    ListTabs { reply: mpsc::Sender<Response> },
-    GetClipboard { reply: mpsc::Sender<Response> },
-    GetUiSnapshot { reply: mpsc::Sender<Response> },
+    GetRemoteClients {
+        reply: mpsc::Sender<Response>,
+    },
+    ListSurfaces {
+        reply: mpsc::Sender<Response>,
+    },
+    ListTabs {
+        reply: mpsc::Sender<Response>,
+    },
+    GetClipboard {
+        reply: mpsc::Sender<Response>,
+    },
+    GetUiSnapshot {
+        reply: mpsc::Sender<Response>,
+    },
     SetStatusComponents {
         zone: crate::status_components::StatusBarZone,
         source: String,
@@ -308,23 +368,54 @@ pub enum ControlCmd {
         source: String,
         id: String,
     },
-    AppKeyEvent { event: crate::AppKeyEvent },
-    AppMouseEvent { event: crate::AppMouseEvent },
-    AppAction { action: crate::bindings::Action },
-    FocusPane { pane_id: u64 },
-    ExecuteCommand { input: String },
-    SendKey { keyspec: String },
-    SendText { text: String },
-    SendVt { text: String },
-    NewSplit { direction: String },
+    AppKeyEvent {
+        event: crate::AppKeyEvent,
+    },
+    AppMouseEvent {
+        event: crate::AppMouseEvent,
+    },
+    AppAction {
+        action: crate::bindings::Action,
+    },
+    FocusPane {
+        pane_id: u64,
+    },
+    ExecuteCommand {
+        input: String,
+    },
+    SendKey {
+        keyspec: String,
+    },
+    SendText {
+        text: String,
+    },
+    SendVt {
+        text: String,
+    },
+    NewSplit {
+        direction: String,
+    },
     NewTab,
-    GotoTab { index: usize },
+    GotoTab {
+        index: usize,
+    },
     NextTab,
     PrevTab,
-    ResizeViewportPoints { width: f64, height: f64 },
-    ResizeViewport { cols: u16, rows: u16 },
-    ResizeFocused { cols: u16, rows: u16 },
-    FocusSurface { index: usize },
+    ResizeViewportPoints {
+        width: f64,
+        height: f64,
+    },
+    ResizeViewport {
+        cols: u16,
+        rows: u16,
+    },
+    ResizeFocused {
+        cols: u16,
+        rows: u16,
+    },
+    FocusSurface {
+        index: usize,
+    },
     Quit,
 }
 
@@ -1226,10 +1317,7 @@ mod tests {
                 active_tab: 1,
                 focused_pane: 7,
                 appearance: UiAppearanceSnapshot {
-                    font_families: vec![
-                        "Fira Code".to_string(),
-                        "Apple Color Emoji".to_string(),
-                    ],
+                    font_families: vec!["Fira Code".to_string(), "Apple Color Emoji".to_string()],
                     font_size: 15.0,
                     background_opacity: 0.7,
                     background_opacity_cells: false,
@@ -1332,7 +1420,10 @@ mod tests {
 
         assert_eq!(value["snapshot"]["active_tab"], 1);
         assert_eq!(value["snapshot"]["focused_pane"], 7);
-        assert_eq!(value["snapshot"]["appearance"]["font_families"][0], "Fira Code");
+        assert_eq!(
+            value["snapshot"]["appearance"]["font_families"][0],
+            "Fira Code"
+        );
         assert!(
             value["snapshot"]["appearance"]["background_opacity"]
                 .as_f64()

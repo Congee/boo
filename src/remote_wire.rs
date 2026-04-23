@@ -367,10 +367,10 @@ pub(crate) fn encode_auth_ok_payload(
     payload
 }
 
+type AuthOkPayloadParts = (u16, u32, Option<String>, Option<String>, Option<String>);
+
 #[cfg_attr(not(test), allow(dead_code))]
-pub fn decode_auth_ok_payload(
-    payload: &[u8],
-) -> Option<(u16, u32, Option<String>, Option<String>, Option<String>)> {
+pub fn decode_auth_ok_payload(payload: &[u8]) -> Option<AuthOkPayloadParts> {
     if payload.is_empty() {
         return None;
     }
@@ -488,7 +488,9 @@ pub(crate) fn read_probe_reply(
             | MessageType::UiPaneFullState
             | MessageType::UiPaneDelta => continue,
             MessageType::AuthFail => {
-                return Err(format!("authentication failed for remote endpoint {host}:{port}"));
+                return Err(format!(
+                    "authentication failed for remote endpoint {host}:{port}"
+                ));
             }
             MessageType::ErrorMsg => {
                 let (_, message) = decode_error_payload(&payload)
@@ -674,8 +676,16 @@ pub(crate) fn decode_remote_full_state_payload(payload: &[u8]) -> Result<RemoteF
                 .try_into()
                 .map_err(|_| "invalid codepoint".to_string())?,
         );
-        let fg = [payload[offset + 4], payload[offset + 5], payload[offset + 6]];
-        let bg = [payload[offset + 7], payload[offset + 8], payload[offset + 9]];
+        let fg = [
+            payload[offset + 4],
+            payload[offset + 5],
+            payload[offset + 6],
+        ];
+        let bg = [
+            payload[offset + 7],
+            payload[offset + 8],
+            payload[offset + 9],
+        ];
         let style_flags = payload[offset + 10];
         let wide = payload[offset + 11] != 0;
         cells.push(RemoteCell {
@@ -726,7 +736,10 @@ pub(crate) fn parse_resize(payload: &[u8]) -> Option<(u16, u16)> {
     })
 }
 
-pub(crate) fn parse_input_payload(payload: &[u8], is_local: bool) -> Option<(Option<u64>, Vec<u8>)> {
+pub(crate) fn parse_input_payload(
+    payload: &[u8],
+    is_local: bool,
+) -> Option<(Option<u64>, Vec<u8>)> {
     if is_local {
         if payload.len() < 8 {
             return None;
@@ -960,7 +973,10 @@ fn changed_segment(previous: &[RemoteCell], current: &[RemoteCell]) -> (usize, V
     (first, current[first..=last].to_vec())
 }
 
-pub(crate) fn detect_scroll_rows(previous: &RemoteFullState, current: &RemoteFullState) -> Option<i16> {
+pub(crate) fn detect_scroll_rows(
+    previous: &RemoteFullState,
+    current: &RemoteFullState,
+) -> Option<i16> {
     if previous.rows != current.rows || previous.cols != current.cols || current.rows <= 1 {
         return None;
     }
@@ -1015,7 +1031,11 @@ pub(crate) fn longest_prefix_suffix_overlap(prefix: &[u64], suffix_source: &[u64
         prefix_function[index] = matched;
     }
 
-    prefix_function.last().copied().unwrap_or(0).min(prefix.len())
+    prefix_function
+        .last()
+        .copied()
+        .unwrap_or(0)
+        .min(prefix.len())
 }
 
 fn row_fingerprints(state: &RemoteFullState) -> Vec<u64> {
@@ -1226,7 +1246,10 @@ mod tests {
 
     #[test]
     fn logical_channel_mapping_matches_current_message_families() {
-        assert_eq!(logical_channel_for_message_type(MessageType::Auth), LogicalChannel::Control);
+        assert_eq!(
+            logical_channel_for_message_type(MessageType::Auth),
+            LogicalChannel::Control
+        );
         assert_eq!(
             logical_channel_for_message_type(MessageType::TabList),
             LogicalChannel::Control
@@ -1270,7 +1293,8 @@ mod tests {
     #[test]
     fn validate_auth_ok_payload_rejects_missing_heartbeat_capability() {
         let mut payload = encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe");
-        payload[2..6].copy_from_slice(&(REMOTE_CAPABILITIES & !REMOTE_CAPABILITY_HEARTBEAT).to_le_bytes());
+        payload[2..6]
+            .copy_from_slice(&(REMOTE_CAPABILITIES & !REMOTE_CAPABILITY_HEARTBEAT).to_le_bytes());
         assert_eq!(
             validate_auth_ok_payload(&payload),
             Err("Remote server does not advertise heartbeat support".to_string())
@@ -1307,12 +1331,9 @@ mod tests {
             MessageType::AuthOk,
             &encode_auth_ok_payload("test-daemon", "test-instance"),
         ));
-        let (ty, payload) = read_probe_auth_reply(
-            &mut std::io::Cursor::new(frames),
-            "127.0.0.1",
-            7359,
-        )
-        .expect("auth reply");
+        let (ty, payload) =
+            read_probe_auth_reply(&mut std::io::Cursor::new(frames), "127.0.0.1", 7359)
+                .expect("auth reply");
         assert_eq!(ty, MessageType::AuthOk);
         assert!(validate_auth_ok_payload(&payload).is_ok());
     }
@@ -1394,7 +1415,7 @@ mod tests {
         assert_eq!(decoded, state);
     }
 
-#[test]
+    #[test]
     fn encode_delta_uses_scroll_delta_for_scrolling_output() {
         let row = |ch: char| -> Vec<RemoteCell> {
             vec![RemoteCell {
@@ -1572,4 +1593,5 @@ mod tests {
         };
 
         assert_eq!(detect_scroll_rows(&previous, &current), Some(2));
-    }}
+    }
+}

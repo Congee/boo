@@ -123,7 +123,9 @@ mod tests {
         let (remote_tx, remote_rx) = mpsc::channel();
         let mut state = empty_state();
         state.clients.insert(1, test_client(local_a_tx, true, true));
-        state.clients.insert(2, test_client(local_b_tx, false, true));
+        state
+            .clients
+            .insert(2, test_client(local_b_tx, false, true));
         state.clients.insert(3, test_client(remote_tx, true, false));
         let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
         let tabs = vec![RemoteTabInfo {
@@ -210,7 +212,12 @@ mod tests {
         server.subscribe_client_to_runtime(1);
 
         let guard = state.lock().expect("remote server state poisoned");
-        assert!(guard.clients.get(&1).is_some_and(|c| c.runtime_view.subscribed_to_runtime));
+        assert!(
+            guard
+                .clients
+                .get(&1)
+                .is_some_and(|c| c.runtime_view.subscribed_to_runtime)
+        );
         assert!(viewer_rx.try_recv().is_err());
     }
 

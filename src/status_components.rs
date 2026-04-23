@@ -109,12 +109,18 @@ impl StatusComponentStore {
                 StatusBarZone::Left => &mut snapshot.left,
                 StatusBarZone::Right => &mut snapshot.right,
             };
-            target.extend(entry.components.iter().cloned().map(|component| UiStatusComponent {
-                source: entry.source.clone(),
-                text: component.text,
-                style: component.style,
-                click: component.click,
-            }));
+            target.extend(
+                entry
+                    .components
+                    .iter()
+                    .cloned()
+                    .map(|component| UiStatusComponent {
+                        source: entry.source.clone(),
+                        text: component.text,
+                        style: component.style,
+                        click: component.click,
+                    }),
+            );
         }
         snapshot
     }
@@ -233,7 +239,10 @@ mod tests {
             }],
         });
 
-        assert_eq!(store.click_action("nvim-1", "run"), Some("new-tab".to_string()));
+        assert_eq!(
+            store.click_action("nvim-1", "run"),
+            Some("new-tab".to_string())
+        );
         assert_eq!(store.click_action("nvim-1", "missing"), None);
     }
 }

@@ -4,8 +4,8 @@
 //! bidirectional stream. The wire format stays unchanged; only the transport
 //! substrate differs from the local Unix-socket lane.
 
-use std::io::{self, Read, Write};
 use std::collections::BTreeSet;
+use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::{Arc, Mutex, mpsc};
 
@@ -121,8 +121,8 @@ pub(crate) fn connect_direct(
     let local_bind_addr: SocketAddr = bind_addr
         .parse()
         .map_err(|error| format!("invalid quic bind address {bind_addr}: {error}"))?;
-    let udp_socket =
-        UdpSocket::bind(local_bind_addr).map_err(|error| format!("failed to bind quic socket: {error}"))?;
+    let udp_socket = UdpSocket::bind(local_bind_addr)
+        .map_err(|error| format!("failed to bind quic socket: {error}"))?;
     udp_socket
         .set_nonblocking(true)
         .map_err(|error| format!("failed to configure quic socket: {error}"))?;
@@ -137,14 +137,15 @@ pub(crate) fn connect_direct(
         .map_err(|error| format!("failed to create quic client endpoint: {error}"))?
     };
     endpoint.set_default_client_config(make_client_config()?);
-    let connection = runtime
-        .block_on(async {
-            endpoint
-                .connect(addr, "boo-remote")
-                .map_err(|error| format!("failed to start quic connection to {host}:{port}: {error}"))?
-                .await
-                .map_err(|error| format!("failed to establish quic connection to {host}:{port}: {error}"))
-        })?;
+    let connection = runtime.block_on(async {
+        endpoint
+            .connect(addr, "boo-remote")
+            .map_err(|error| format!("failed to start quic connection to {host}:{port}: {error}"))?
+            .await
+            .map_err(|error| {
+                format!("failed to establish quic connection to {host}:{port}: {error}")
+            })
+    })?;
     let (send, recv) = runtime
         .block_on(connection.open_bi())
         .map_err(|error| format!("failed to open quic stream to {host}:{port}: {error}"))?;
@@ -188,8 +189,7 @@ fn make_server_config() -> Result<ServerConfig, String> {
     let cert = rcgen::generate_simple_self_signed(vec!["boo-remote".to_string()])
         .map_err(|error| format!("failed to generate quic certificate: {error}"))?;
     let cert_der = cert.cert.der().clone();
-    let key_der =
-        PrivateKeyDer::from(PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der()));
+    let key_der = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der()));
     let mut server_crypto = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(vec![cert_der], key_der)

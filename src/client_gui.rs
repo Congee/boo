@@ -235,7 +235,11 @@ impl ClientApp {
 
     fn apply_ui_runtime_state(&mut self, state: control::UiRuntimeState) {
         let ui_state = ClientUiState::from_runtime_state(&state);
-        if let Some(active_tab_id) = ui_state.tabs.get(ui_state.active_tab).and_then(|tab| tab.tab_id) {
+        if let Some(active_tab_id) = ui_state
+            .tabs
+            .get(ui_state.active_tab)
+            .and_then(|tab| tab.tab_id)
+        {
             self.active_remote_tab_id = Some(active_tab_id);
             self.should_exit = false;
         }
@@ -477,11 +481,11 @@ impl ClientApp {
                         .size(status_text_size)
                         .color(fg),
                 )
-                    .padding(0)
-                    .style(move |_: &Theme| container::Style {
-                        background: Some(iced::Background::Color(bg)),
-                        ..Default::default()
-                    }),
+                .padding(0)
+                .style(move |_: &Theme| container::Style {
+                    background: Some(iced::Background::Color(bg)),
+                    ..Default::default()
+                }),
             );
         }
         main_col = main_col.push(
@@ -517,8 +521,10 @@ impl ClientApp {
     }
 
     fn render_terminal_scene<'a>(&'a self) -> Element<'a, Message> {
-        let _scope =
-            crate::profiling::scope("client.view.render_terminal_scene", crate::profiling::Kind::Cpu);
+        let _scope = crate::profiling::scope(
+            "client.view.render_terminal_scene",
+            crate::profiling::Kind::Cpu,
+        );
         note_gui_test_render_activity();
         crate::profiling::record_units(
             "client.view.render_terminal_scene.panes",
@@ -559,8 +565,9 @@ impl ClientApp {
                 self.cursor_blink_epoch,
                 self.cursor_blink_interval,
             );
-            let selection_rects: Arc<[vt_terminal_canvas::TerminalSelectionRect]> =
-                if self.mouse_selection.active
+            let selection_rects: Arc<[vt_terminal_canvas::TerminalSelectionRect]> = if self
+                .mouse_selection
+                .active
                 && self.mouse_selection.pane_id == Some(pane.pane_id)
             {
                 self.mouse_selection
@@ -667,7 +674,7 @@ impl ClientApp {
                 "client.view.render_terminal_scene.ime_layer",
                 crate::profiling::Kind::Cpu,
             );
-            layers.push(TerminalInputMethodLayer::new(
+            layers.push(TerminalInputMethodLayer::element(
                 self.focused_cursor_rect(),
                 self.font_size,
                 self.preedit_text.clone(),
@@ -694,9 +701,8 @@ impl ClientApp {
             gui_test_subscription(),
         ];
         if self.remote_debug_enabled {
-            subscriptions.push(
-                time::every(Duration::from_secs(1)).map(|_| Message::RemoteDiagnosticsTick),
-            );
+            subscriptions
+                .push(time::every(Duration::from_secs(1)).map(|_| Message::RemoteDiagnosticsTick));
         }
         if !self.cursor_blink_interval.is_zero()
             && self.focused_pane_has_blinking_cursor()
@@ -785,9 +791,7 @@ impl ClientApp {
         if matches!(self.mode, ClientMode::Active)
             || self.stream_tx.is_some()
             || self.has_paintable_terminal()
-        {
-            return;
-        }
+        {}
     }
 
     fn send_text_input(&mut self, text: String) {
@@ -978,17 +982,12 @@ impl ClientApp {
     fn handle_stream_event(&mut self, event: LocalStreamEvent) {
         match event {
             LocalStreamEvent::TabList(tabs) => {
-                let live_tabs: Vec<_> = tabs
-                    .iter()
-                    .filter(|tab| !tab.child_exited)
-                    .collect();
+                let live_tabs: Vec<_> = tabs.iter().filter(|tab| !tab.child_exited).collect();
                 self.apply_remote_tabs(&tabs);
                 if matches!(self.mode, ClientMode::Active)
                     && self
                         .active_remote_tab_id
-                        .map(|tab_id| {
-                            live_tabs.iter().any(|tab| tab.id == tab_id)
-                        })
+                        .map(|tab_id| live_tabs.iter().any(|tab| tab.id == tab_id))
                         .unwrap_or(false)
                 {
                     self.should_exit = false;
@@ -1019,7 +1018,7 @@ impl ClientApp {
                         self.terminal_foreground,
                         self.terminal_background,
                         self.cursor_color,
-                        )),
+                    )),
                 );
                 self.bootstrapped = true;
                 self.last_error = None;
@@ -1101,10 +1100,8 @@ impl ClientApp {
             .visible_panes
             .iter()
             .find(|pane| pane.pane_id == self.focused_pane_id)?;
-        let x = pane.frame.x
-            + snapshot.cursor.x as f64 * self.cell_width;
-        let y = pane.frame.y
-            + snapshot.cursor.y as f64 * self.cell_height;
+        let x = pane.frame.x + snapshot.cursor.x as f64 * self.cell_width;
+        let y = pane.frame.y + snapshot.cursor.y as f64 * self.cell_height;
         Some(Rectangle::new(
             Point::new(x as f32, y as f32),
             Size::new(self.cell_width as f32, self.cell_height as f32),
@@ -1221,9 +1218,7 @@ impl ClientApp {
                 });
             }
             GuiTestCommand::Resize { cols, rows } => self.send_resize_cells(cols, rows),
-            GuiTestCommand::Refresh => {
-                self.refresh_snapshot(SnapshotRefreshReason::GuiTestManual)
-            }
+            GuiTestCommand::Refresh => self.refresh_snapshot(SnapshotRefreshReason::GuiTestManual),
         }
     }
 
@@ -1372,7 +1367,9 @@ fn gui_test_status_last_written() -> &'static Mutex<Option<String>> {
 }
 
 fn render_snapshot_row_text(row: &[vt_backend_core::CellSnapshot]) -> String {
-    row.iter().map(|cell| cell.text.as_str()).collect::<String>()
+    row.iter()
+        .map(|cell| cell.text.as_str())
+        .collect::<String>()
 }
 
 fn gui_test_stream_seq() -> &'static std::sync::atomic::AtomicU64 {
@@ -1451,10 +1448,7 @@ impl ClientUiState {
         }
     }
 
-    fn from_remote_tabs(
-        tabs: &[remote::RemoteTabInfo],
-        active_remote_tab_id: Option<u32>,
-    ) -> Self {
+    fn from_remote_tabs(tabs: &[remote::RemoteTabInfo], active_remote_tab_id: Option<u32>) -> Self {
         let remote_tabs = tabs;
         let active_index = active_remote_tab_id
             .and_then(|tab_id| remote_tabs.iter().position(|tab| tab.id == tab_id))
@@ -1508,7 +1502,6 @@ impl ClientUiState {
             status_bar: state.status_bar.clone(),
         }
     }
-
 }
 
 fn latency_debug_enabled() -> bool {
@@ -1737,13 +1730,11 @@ fn pane_dividers(panes: &[control::UiPaneSnapshot]) -> Vec<PaneDivider> {
                 .or_else(|| vertical_divider(second_rect, first_rect))
                 .or_else(|| horizontal_divider(first_rect, second_rect))
                 .or_else(|| horizontal_divider(second_rect, first_rect))
-            {
-                if !dividers
+                && !dividers
                     .iter()
                     .any(|existing| same_divider(*existing, divider))
-                {
-                    dividers.push(divider);
-                }
+            {
+                dividers.push(divider);
             }
         }
     }
@@ -1841,7 +1832,7 @@ struct TerminalInputMethodLayer {
 }
 
 impl TerminalInputMethodLayer {
-    fn new<'a>(
+    fn element<'a>(
         cursor: Option<Rectangle>,
         text_size: f32,
         preedit: String,
@@ -1893,19 +1884,19 @@ impl Widget<Message, Theme, iced::Renderer> for TerminalInputMethodLayer {
         shell: &mut Shell<'_, Message>,
         _viewport: &Rectangle,
     ) {
-        if let Event::Window(window::Event::RedrawRequested(_)) = event {
-            if let Some(cursor) = self.cursor.filter(|_| self.enabled) {
-                let preedit = (!self.preedit.is_empty()).then(|| input_method::Preedit {
-                    content: self.preedit.as_str(),
-                    selection: None,
-                    text_size: Some(iced::Pixels(self.text_size)),
-                });
-                shell.request_input_method(&InputMethod::Enabled {
-                    cursor,
-                    purpose: input_method::Purpose::Terminal,
-                    preedit,
-                });
-            }
+        if let Event::Window(window::Event::RedrawRequested(_)) = event
+            && let Some(cursor) = self.cursor.filter(|_| self.enabled)
+        {
+            let preedit = (!self.preedit.is_empty()).then_some(input_method::Preedit {
+                content: self.preedit.as_str(),
+                selection: None,
+                text_size: Some(iced::Pixels(self.text_size)),
+            });
+            shell.request_input_method(&InputMethod::Enabled {
+                cursor,
+                purpose: input_method::Purpose::Terminal,
+                preedit,
+            });
         }
     }
 }
@@ -2493,16 +2484,10 @@ fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStream
             remote::MessageType::UiAppearance => serde_json::from_slice(&payload)
                 .ok()
                 .map(LocalStreamEvent::UiAppearance),
-            remote::MessageType::UiPaneFullState => {
-                decode_remote_pane_full_state(&payload).map(|(pane_id, state)| {
-                    LocalStreamEvent::UiPaneFullState { pane_id, state }
-                })
-            }
-            remote::MessageType::UiPaneDelta => {
-                decode_remote_pane_delta(&payload).map(|(pane_id, delta)| {
-                    LocalStreamEvent::UiPaneDelta { pane_id, delta }
-                })
-            }
+            remote::MessageType::UiPaneFullState => decode_remote_pane_full_state(&payload)
+                .map(|(pane_id, state)| LocalStreamEvent::UiPaneFullState { pane_id, state }),
+            remote::MessageType::UiPaneDelta => decode_remote_pane_delta(&payload)
+                .map(|(pane_id, delta)| LocalStreamEvent::UiPaneDelta { pane_id, delta }),
             remote::MESSAGE_TYPE_TAB_EXITED => {
                 decode_u32(&payload).map(|_| LocalStreamEvent::TabExited)
             }
@@ -3192,7 +3177,6 @@ mod tests {
         ));
     }
 
-
     #[test]
     fn unchanged_focused_cursor_does_not_reset_blink_epoch() {
         let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
@@ -3386,9 +3370,9 @@ mod tests {
             StreamCommand::AppKeyEvent { event } => {
                 assert_eq!(
                     event.keycode,
-                    crate::keymap::physical_to_native_keycode(
-                        &keyboard::key::Physical::Code(keyboard::key::Code::Quote)
-                    )
+                    crate::keymap::physical_to_native_keycode(&keyboard::key::Physical::Code(
+                        keyboard::key::Code::Quote
+                    ))
                     .expect("quote key should map to a native keycode")
                 );
                 assert_eq!(event.text.as_deref(), Some("\""));
@@ -3761,7 +3745,11 @@ mod tests {
         let texts = snapshot
             .rows_data
             .iter()
-            .map(|row| row.first().map(|cell| cell.text.clone()).unwrap_or_default())
+            .map(|row| {
+                row.first()
+                    .map(|cell| cell.text.clone())
+                    .unwrap_or_default()
+            })
             .collect::<Vec<_>>();
         assert_eq!(texts, vec!["b".to_string(), "c".to_string(), String::new()]);
         assert_eq!(snapshot.row_revisions, vec![20, 30, 11]);

@@ -50,7 +50,9 @@ mod tests {
         ClientState::test_client(outbound, true, true)
     }
 
-    fn remote_client(outbound: mpsc::Sender<crate::remote_batcher::OutboundMessage>) -> ClientState {
+    fn remote_client(
+        outbound: mpsc::Sender<crate::remote_batcher::OutboundMessage>,
+    ) -> ClientState {
         ClientState::test_client(outbound, true, false)
     }
 
@@ -126,9 +128,7 @@ mod tests {
                         - DIRECT_CLIENT_HEARTBEAT_WINDOW
                         - Duration::from_secs(2),
                     authenticated_at: Some(
-                        Instant::now()
-                            - DIRECT_CLIENT_HEARTBEAT_WINDOW
-                            - Duration::from_secs(2),
+                        Instant::now() - DIRECT_CLIENT_HEARTBEAT_WINDOW - Duration::from_secs(2),
                     ),
                     ..local_client(outbound_tx)
                 },
@@ -176,9 +176,7 @@ mod tests {
                         - DIRECT_CLIENT_HEARTBEAT_WINDOW
                         - Duration::from_secs(2),
                     authenticated_at: Some(
-                        Instant::now()
-                            - DIRECT_CLIENT_HEARTBEAT_WINDOW
-                            - Duration::from_secs(2),
+                        Instant::now() - DIRECT_CLIENT_HEARTBEAT_WINDOW - Duration::from_secs(2),
                     ),
                     runtime_view: ClientRuntimeView {
                         subscribed_to_runtime: true,

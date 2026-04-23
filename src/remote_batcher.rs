@@ -214,7 +214,10 @@ fn collect_outbound_batch(
 }
 
 fn coalescible_frame_kind(frame: &[u8]) -> Option<CoalescibleFrameKind> {
-    let ty = frame.get(2).copied().and_then(|value| MessageType::try_from(value).ok())?;
+    let ty = frame
+        .get(2)
+        .copied()
+        .and_then(|value| MessageType::try_from(value).ok())?;
     match ty {
         crate::remote_wire::MESSAGE_TYPE_TAB_LIST => Some(CoalescibleFrameKind::TabList),
         MessageType::UiRuntimeState => Some(CoalescibleFrameKind::UiRuntimeState),
@@ -267,7 +270,8 @@ mod tests {
         tx.send(OutboundMessage::Frame(runtime_a)).unwrap();
         tx.send(OutboundMessage::Frame(appearance_a)).unwrap();
         tx.send(OutboundMessage::Frame(runtime_b.clone())).unwrap();
-        tx.send(OutboundMessage::Frame(appearance_b.clone())).unwrap();
+        tx.send(OutboundMessage::Frame(appearance_b.clone()))
+            .unwrap();
         tx.send(OutboundMessage::Frame(barrier.clone())).unwrap();
 
         let first = rx.recv().unwrap();
@@ -275,4 +279,5 @@ mod tests {
         assert_eq!(batch.frames, vec![runtime_b, appearance_b, barrier]);
         assert_eq!(batch.message_count, 5);
         assert_eq!(batch.coalesced_control_frames, 2);
-    }}
+    }
+}

@@ -7,7 +7,10 @@ use iced::{Pixels, Point, Rectangle, Renderer};
 
 impl BooApp {
     fn ui_mouse_selection_snapshot(&self) -> control::UiMouseSelectionSnapshot {
-        let Some(selection) = self.mouse_selection.filter(|selection| selection.has_range()) else {
+        let Some(selection) = self
+            .mouse_selection
+            .filter(|selection| selection.has_range())
+        else {
             return control::UiMouseSelectionSnapshot::default();
         };
         let rects = self
@@ -940,12 +943,12 @@ impl BooApp {
                         .font(font)
                         .size(status_text_size)
                         .color(fg),
-            )
-            .padding(0)
-                    .style(move |_: &Theme| container::Style {
-                        background: bg.map(iced::Background::Color),
-                        ..Default::default()
-                    }),
+                )
+                .padding(0)
+                .style(move |_: &Theme| container::Style {
+                    background: bg.map(iced::Background::Color),
+                    ..Default::default()
+                }),
             );
         }
         row.into()

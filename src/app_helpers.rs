@@ -40,7 +40,7 @@ pub(crate) fn shifted_codepoint(keycode: u32, mods: i32) -> u32 {
 
     #[cfg(target_os = "macos")]
     {
-    let has_shift = mods & ffi::GHOSTTY_MODS_SHIFT != 0;
+        let has_shift = mods & ffi::GHOSTTY_MODS_SHIFT != 0;
         let base = match keycode {
             0x00 => 'a',
             0x01 => 's',

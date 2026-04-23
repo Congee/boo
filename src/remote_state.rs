@@ -15,7 +15,9 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::remote_batcher::OutboundMessage;
-use crate::remote_wire::{MessageType, RemoteErrorCode, RemoteFullState, encode_error_payload, encode_message};
+use crate::remote_wire::{
+    MessageType, RemoteErrorCode, RemoteFullState, encode_error_payload, encode_message,
+};
 
 /// Absolute deadline from `connected_at` for an unauthenticated client to
 /// finish the initial auth acknowledgement. Protects against clients pinning

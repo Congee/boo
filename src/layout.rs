@@ -345,10 +345,10 @@ pub fn save_layout(layout: &Layout) -> std::io::Result<()> {
 }
 
 fn shellexpand_home(path: &str) -> String {
-    if path.starts_with("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return format!("{home}{}", &path[1..]);
-        }
+    if path.starts_with("~/")
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return format!("{home}{}", &path[1..]);
     }
     path.to_string()
 }

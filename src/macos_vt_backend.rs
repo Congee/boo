@@ -213,20 +213,19 @@ impl crate::backend::TerminalBackend for MacVtBackend {
                 }
             }
             "paste_from_clipboard" => {
-                if let Some(text) = platform::clipboard_read() {
-                    if let Some(active_pane) = self.panes.get(&id) {
-                        let _ = active_pane.write_input(text.as_bytes());
-                    }
+                if let Some(text) = platform::clipboard_read()
+                    && let Some(active_pane) = self.panes.get(&id)
+                {
+                    let _ = active_pane.write_input(text.as_bytes());
                 }
             }
             "end_search" | "toggle_split_zoom" => {}
             _ => {
-                if let Some(lines) = action.strip_prefix("scroll_page_lines:") {
-                    if let Ok(lines) = lines.parse::<isize>() {
-                        if let Some(pane) = self.panes.get_mut(&id) {
-                            let _ = pane.scroll_viewport_delta(lines);
-                        }
-                    }
+                if let Some(lines) = action.strip_prefix("scroll_page_lines:")
+                    && let Ok(lines) = lines.parse::<isize>()
+                    && let Some(pane) = self.panes.get_mut(&id)
+                {
+                    let _ = pane.scroll_viewport_delta(lines);
                 }
             }
         }

@@ -144,8 +144,7 @@ impl Config {
                     }
                 }
                 "remote-prefer-nix-profile-binary" => {
-                    config.remote_prefer_nix_profile_binary =
-                        parse_bool(value).unwrap_or(false);
+                    config.remote_prefer_nix_profile_binary = parse_bool(value).unwrap_or(false);
                 }
                 "remote-port" => {
                     if let Ok(port) = value.parse::<u16>() {

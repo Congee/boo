@@ -1016,13 +1016,12 @@ impl VtPane {
                 Err(_) => return,
             }
         };
-        self.status_component_updates.push(
-            crate::status_components::StatusComponentsUpdate {
+        self.status_component_updates
+            .push(crate::status_components::StatusComponentsUpdate {
                 zone,
                 source: String::new(),
                 components,
-            },
-        );
+            });
     }
 
     fn handle_osc_133(&mut self, rest: &str) {
@@ -1628,7 +1627,7 @@ fn write_all_fd(fd: i32, mut bytes: &[u8]) -> io::Result<()> {
 }
 
 fn vt_to_io(err: vt::Error) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, err)
+    io::Error::other(err)
 }
 
 fn text_width(text: &str) -> u8 {

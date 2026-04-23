@@ -47,14 +47,13 @@ pub(crate) fn clients_snapshot(
     let mut clients = state
         .clients
         .iter()
-        .map(|(client_id, client)| client_info_for_client(state, now, local_socket_path, client_id, client))
+        .map(|(client_id, client)| {
+            client_info_for_client(state, now, local_socket_path, client_id, client)
+        })
         .collect::<Vec<_>>();
     clients.sort_by_key(|client| client.client_id);
 
-    RemoteClientsSnapshot {
-        servers,
-        clients,
-    }
+    RemoteClientsSnapshot { servers, clients }
 }
 
 fn client_info_for_client(
@@ -106,7 +105,9 @@ mod tests {
     use crate::remote_state::{
         ClientRuntimeView, ClientState, DIRECT_CLIENT_HEARTBEAT_WINDOW, State,
     };
-    use crate::remote_wire::{REMOTE_CAPABILITIES, REMOTE_PROTOCOL_VERSION, RemoteCell, RemoteFullState};
+    use crate::remote_wire::{
+        REMOTE_CAPABILITIES, REMOTE_PROTOCOL_VERSION, RemoteCell, RemoteFullState,
+    };
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex, mpsc};
     use std::time::{Duration, Instant};
@@ -115,7 +116,9 @@ mod tests {
         State::test_empty()
     }
 
-    fn remote_client(outbound: mpsc::Sender<crate::remote_batcher::OutboundMessage>) -> ClientState {
+    fn remote_client(
+        outbound: mpsc::Sender<crate::remote_batcher::OutboundMessage>,
+    ) -> ClientState {
         ClientState::test_client(outbound, true, false)
     }
 
@@ -195,9 +198,11 @@ mod tests {
         assert!(client.connection_age_ms <= 250);
         assert!(client.authenticated_age_ms.is_some_and(|age| age <= 250));
         assert!(client.last_heartbeat_age_ms.is_some_and(|age| age <= 250));
-        assert!(client.heartbeat_expires_in_ms.is_some_and(
-            |ms| ms <= DIRECT_CLIENT_HEARTBEAT_WINDOW.as_millis() as u64
-        ));
+        assert!(
+            client
+                .heartbeat_expires_in_ms
+                .is_some_and(|ms| ms <= DIRECT_CLIENT_HEARTBEAT_WINDOW.as_millis() as u64)
+        );
         assert!(!client.heartbeat_overdue);
         assert_eq!(client.challenge_expires_in_ms, None);
     }
@@ -237,19 +242,23 @@ mod tests {
     fn clients_snapshot_recovers_after_fresh_direct_heartbeat() {
         let (tx, _rx) = mpsc::channel();
         let state = Arc::new(Mutex::new(empty_state()));
-        state.lock().expect("remote server state poisoned").clients.insert(
-            1,
-            ClientState {
-                connected_at: Instant::now() - Duration::from_secs(30),
-                authenticated_at: Some(
-                    Instant::now() - DIRECT_CLIENT_HEARTBEAT_WINDOW - Duration::from_secs(1),
-                ),
-                last_heartbeat_at: Some(
-                    Instant::now() - DIRECT_CLIENT_HEARTBEAT_WINDOW - Duration::from_secs(1),
-                ),
-                ..remote_client(tx)
-            },
-        );
+        state
+            .lock()
+            .expect("remote server state poisoned")
+            .clients
+            .insert(
+                1,
+                ClientState {
+                    connected_at: Instant::now() - Duration::from_secs(30),
+                    authenticated_at: Some(
+                        Instant::now() - DIRECT_CLIENT_HEARTBEAT_WINDOW - Duration::from_secs(1),
+                    ),
+                    last_heartbeat_at: Some(
+                        Instant::now() - DIRECT_CLIENT_HEARTBEAT_WINDOW - Duration::from_secs(1),
+                    ),
+                    ..remote_client(tx)
+                },
+            );
 
         let stale_snapshot = {
             let guard = state.lock().expect("remote server state poisoned");
@@ -259,7 +268,11 @@ mod tests {
 
         {
             let mut guard = state.lock().expect("remote server state poisoned");
-            guard.clients.get_mut(&1).expect("client state").last_heartbeat_at = Some(Instant::now());
+            guard
+                .clients
+                .get_mut(&1)
+                .expect("client state")
+                .last_heartbeat_at = Some(Instant::now());
         }
 
         let recovered_snapshot = {

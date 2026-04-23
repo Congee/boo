@@ -17,6 +17,7 @@ pub(crate) enum JumpKind {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum WordMoveKind {
     NextWord,
     PrevWord,

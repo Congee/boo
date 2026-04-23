@@ -14,11 +14,10 @@ static STARTUP_REMOTE_HOST: std::sync::OnceLock<String> = std::sync::OnceLock::n
 static STARTUP_REMOTE_WORKDIR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_SOCKET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_BINARY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-static STARTUP_REMOTE_PREFER_NIX_PROFILE_BINARY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+static STARTUP_REMOTE_PREFER_NIX_PROFILE_BINARY: std::sync::OnceLock<bool> =
+    std::sync::OnceLock::new();
 static STARTUP_REMOTE_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_BIND_ADDRESS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-
-
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct StartupOverrides {
@@ -61,7 +60,9 @@ impl RemotePathSpec {
     }
 
     fn needs_remote_home(&self) -> bool {
-        self.parts.iter().any(|part| matches!(part, RemotePathPart::Home))
+        self.parts
+            .iter()
+            .any(|part| matches!(part, RemotePathPart::Home))
     }
 
     fn resolve(&self, remote_home: Option<&str>) -> Result<String, String> {
@@ -92,9 +93,7 @@ fn parse_remote_path_parts(raw: &str) -> Vec<RemotePathPart> {
 
     while index < raw.len() {
         let tail = &raw[index..];
-        let home_match = if index == 0 && tail == "~" {
-            Some(1)
-        } else if index == 0 && tail.starts_with("~/") {
+        let home_match = if index == 0 && (tail == "~" || tail.starts_with("~/")) {
             Some(1)
         } else if tail.starts_with("${HOME}") {
             Some("${HOME}".len())
@@ -142,8 +141,7 @@ const LOCAL_BOO_VERSION: &str = env!("CARGO_PKG_VERSION");
 const LOCAL_SERVER_READY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Poll interval for the local-server readiness check.
-const LOCAL_SERVER_READY_POLL_INTERVAL: std::time::Duration =
-    std::time::Duration::from_millis(50);
+const LOCAL_SERVER_READY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// How long the SSH-bootstrapped remote boo server has to become reachable
 /// over the forwarded control socket before we declare the bootstrap broken.
@@ -170,9 +168,7 @@ pub fn parse_startup_args(cli: &crate::cli::Cli) -> bool {
         STARTUP_REMOTE_PORT.set(port).ok();
     }
     if let Some(bind_address) = cli.global.remote_bind_address.as_ref() {
-        STARTUP_REMOTE_BIND_ADDRESS
-            .set(bind_address.clone())
-            .ok();
+        STARTUP_REMOTE_BIND_ADDRESS.set(bind_address.clone()).ok();
     }
     if let Some(path) = cli.global.remote_workdir.as_ref() {
         STARTUP_REMOTE_WORKDIR.set(path.clone()).ok();
@@ -279,10 +275,7 @@ pub fn run_gui_client() {
 
     iced::application(
         move || {
-            client_gui::ClientApp::new_with_remote_host(
-                socket_path.clone(),
-                remote_host.clone(),
-            )
+            client_gui::ClientApp::new_with_remote_host(socket_path.clone(), remote_host.clone())
         },
         client_gui::ClientApp::update,
         client_gui::ClientApp::view,
@@ -327,11 +320,12 @@ fn install_ordered_font_fallbacks(boo_config: &config::Config) {
         ),
     );
     let (locale, db) = raw.into_locale_and_db();
-    *font_system.raw() = graphics_text::cosmic_text::FontSystem::new_with_locale_and_db_and_fallback(
-        locale,
-        db,
-        BooFontFallback::new(user_fallbacks),
-    );
+    *font_system.raw() =
+        graphics_text::cosmic_text::FontSystem::new_with_locale_and_db_and_fallback(
+            locale,
+            db,
+            BooFontFallback::new(user_fallbacks),
+        );
 }
 
 fn merge_family_lists(
@@ -385,7 +379,7 @@ impl graphics_text::cosmic_text::Fallback for BooFontFallback {
             .script_fallbacks
             .lock()
             .expect("lock script fallback cache");
-        *cache.entry(script).or_insert_with(|| {
+        cache.entry(script).or_insert_with(|| {
             let merged = merge_family_lists(
                 &self.user_fallbacks,
                 graphics_text::cosmic_text::Fallback::script_fallback(
@@ -563,10 +557,7 @@ fn ensure_remote_server_running(
     false
 }
 
-fn bootstrap_remote_server(
-    host: &str,
-    resolved_paths: &ResolvedRemotePaths,
-) -> Result<(), String> {
+fn bootstrap_remote_server(host: &str, resolved_paths: &ResolvedRemotePaths) -> Result<(), String> {
     let remote_log = format!("/tmp/boo-{}.log", sanitize_for_path(host));
     let mut script_parts = vec!["set -e".to_string()];
     if let Some(workdir) = resolved_paths.workdir.as_deref() {
@@ -627,9 +618,9 @@ fn resolve_remote_paths(
 ) -> Result<ResolvedRemotePaths, String> {
     let socket_spec = RemotePathSpec::new(
         boo_config
-        .remote_socket
-        .clone()
-        .unwrap_or_else(control::default_socket_path),
+            .remote_socket
+            .clone()
+            .unwrap_or_else(control::default_socket_path),
     );
     let binary_spec = RemotePathSpec::new(select_remote_binary_candidate(boo_config));
     let workdir_spec = boo_config
@@ -879,7 +870,10 @@ fn restart_remote_server(host: &str, resolved_paths: &ResolvedRemotePaths) -> Re
     }
 }
 
-fn fetch_remote_boo_version(host: &str, resolved_paths: &ResolvedRemotePaths) -> Result<String, String> {
+fn fetch_remote_boo_version(
+    host: &str,
+    resolved_paths: &ResolvedRemotePaths,
+) -> Result<String, String> {
     let mut script_parts = vec!["set -e".to_string()];
     if let Some(workdir) = resolved_paths.workdir.as_deref() {
         script_parts.push(format!("cd {}", shell_single_quote(workdir)));
@@ -907,7 +901,11 @@ fn fetch_remote_boo_version(host: &str, resolved_paths: &ResolvedRemotePaths) ->
     parse_boo_version_output(&String::from_utf8_lossy(&output.stdout))
 }
 
-fn format_remote_version_mismatch(host: &str, remote_binary_path: &str, remote_version: &str) -> String {
+fn format_remote_version_mismatch(
+    host: &str,
+    remote_binary_path: &str,
+    remote_version: &str,
+) -> String {
     format!(
         "version mismatch: local boo {LOCAL_BOO_VERSION} vs remote boo {remote_version} on {host}; rebuild the remote binary at {remote_binary_path} so both sides match"
     )
@@ -1147,16 +1145,14 @@ fn server_ui_ready(client: &control::Client) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_startup_overrides, cleanup_local_forwarded_sockets,
-        classify_remote_bootstrap_failure, classify_remote_preflight_failure,
-        forwarded_control_path, forwarded_control_socket_healthy, forwarded_socket_path,
-        forwarded_stream_socket_healthy, format_remote_version_mismatch, merge_family_lists,
-        parse_boo_version_output, parse_remote_path_parts,
-        remote_binary_looks_like_path, remote_control_version_negotiation_unsupported,
+        REMOTE_BOOTSTRAP_MARKER, REMOTE_PREFLIGHT_MARKER, RemotePathPart, RemotePathSpec,
+        StartupOverrides, apply_startup_overrides, classify_remote_bootstrap_failure,
+        classify_remote_preflight_failure, cleanup_local_forwarded_sockets,
+        format_remote_version_mismatch, forwarded_control_path, forwarded_control_socket_healthy,
+        forwarded_socket_path, forwarded_stream_socket_healthy, merge_family_lists,
+        parse_boo_version_output, parse_remote_path_parts, remote_binary_looks_like_path,
+        remote_control_version_negotiation_unsupported, remote_tunnel_healthy, sanitize_for_path,
         select_remote_binary_candidate,
-        remote_tunnel_healthy, sanitize_for_path, RemotePathPart, RemotePathSpec,
-        StartupOverrides,
-        REMOTE_BOOTSTRAP_MARKER, REMOTE_PREFLIGHT_MARKER,
     };
     use crate::launch::{load_startup_config, parse_startup_args};
     use clap::Parser;
@@ -1218,7 +1214,9 @@ mod tests {
     #[test]
     fn remote_path_spec_resolves_home_shorthand() {
         assert_eq!(
-            RemotePathSpec::new("~").resolve(Some("/Users/example")).unwrap(),
+            RemotePathSpec::new("~")
+                .resolve(Some("/Users/example"))
+                .unwrap(),
             "/Users/example"
         );
         assert_eq!(
@@ -1245,10 +1243,7 @@ mod tests {
     fn remote_path_spec_leaves_non_home_literals_unchanged() {
         let spec = RemotePathSpec::new("/tmp/~boo/$HOMER/run.sock");
         assert!(!spec.needs_remote_home());
-        assert_eq!(
-            spec.resolve(None).unwrap(),
-            "/tmp/~boo/$HOMER/run.sock"
-        );
+        assert_eq!(spec.resolve(None).unwrap(), "/tmp/~boo/$HOMER/run.sock");
     }
 
     #[test]
@@ -1256,15 +1251,14 @@ mod tests {
         assert!(!remote_binary_looks_like_path("boo"));
         assert!(!remote_binary_looks_like_path("boo-debug"));
         assert!(remote_binary_looks_like_path("./target/debug/boo"));
-        assert!(remote_binary_looks_like_path("/Users/example/dev/boo/target/debug/boo"));
+        assert!(remote_binary_looks_like_path(
+            "/Users/example/dev/boo/target/debug/boo"
+        ));
     }
 
     #[test]
     fn parse_boo_version_output_extracts_version() {
-        assert_eq!(
-            parse_boo_version_output("boo 0.1.0\n").unwrap(),
-            "0.1.0"
-        );
+        assert_eq!(parse_boo_version_output("boo 0.1.0\n").unwrap(), "0.1.0");
     }
 
     #[test]
@@ -1284,8 +1278,7 @@ mod tests {
     fn remote_control_version_negotiation_error_is_actionable() {
         let message = format!(
             "remote boo server on {} does not support control version negotiation; rebuild the remote binary at {} so both sides match",
-            "example-mbp.local",
-            "/Users/example/dev/boo/target/debug/boo"
+            "example-mbp.local", "/Users/example/dev/boo/target/debug/boo"
         );
         assert!(message.contains("does not support control version negotiation"));
         assert!(message.contains("example-mbp.local"));
@@ -1364,10 +1357,8 @@ mod tests {
     fn classify_remote_preflight_failure_reports_non_writable_socket_dir() {
         let output = std::process::Output {
             status: std::process::ExitStatus::from_raw(46 << 8),
-            stdout: format!(
-                "{REMOTE_PREFLIGHT_MARKER}non-writable-socket-dir:/private/tmp/boo\n"
-            )
-            .into_bytes(),
+            stdout: format!("{REMOTE_PREFLIGHT_MARKER}non-writable-socket-dir:/private/tmp/boo\n")
+                .into_bytes(),
             stderr: Vec::new(),
         };
         assert_eq!(
@@ -1380,10 +1371,8 @@ mod tests {
     fn classify_remote_preflight_failure_reports_conflicting_socket_path() {
         let output = std::process::Output {
             status: std::process::ExitStatus::from_raw(47 << 8),
-            stdout: format!(
-                "{REMOTE_PREFLIGHT_MARKER}conflicting-socket-path:/tmp/boo.sock\n"
-            )
-            .into_bytes(),
+            stdout: format!("{REMOTE_PREFLIGHT_MARKER}conflicting-socket-path:/tmp/boo.sock\n")
+                .into_bytes(),
             stderr: Vec::new(),
         };
         assert_eq!(
@@ -1496,12 +1485,7 @@ mod tests {
 
     #[test]
     fn startup_config_uses_host_specific_socket_when_remote_host_is_present() {
-        let cli = crate::cli::Cli::parse_from([
-            "boo",
-            "ls",
-            "--host",
-            "example-mbp.local",
-        ]);
+        let cli = crate::cli::Cli::parse_from(["boo", "ls", "--host", "example-mbp.local"]);
         parse_startup_args(&cli);
         let config = load_startup_config();
         assert_eq!(

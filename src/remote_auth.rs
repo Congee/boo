@@ -17,13 +17,12 @@ use std::time::Instant;
 use crate::remote::RemoteCmd;
 use crate::remote_batcher::OutboundMessage;
 use crate::remote_state::{
-    AUTH_CHALLENGE_WINDOW, DIRECT_CLIENT_HEARTBEAT_WINDOW, State, send_direct_error, send_direct_frame,
-    should_disconnect_idle_client,
+    AUTH_CHALLENGE_WINDOW, DIRECT_CLIENT_HEARTBEAT_WINDOW, State, send_direct_error,
+    send_direct_frame, should_disconnect_idle_client,
 };
 use crate::remote_wire::{
-    MessageType, RemoteErrorCode, encode_auth_ok_payload, encode_message,
-    parse_input_payload, parse_key_payload, parse_pane_id, parse_resize, parse_tab_id,
-    read_message_retrying,
+    MessageType, RemoteErrorCode, encode_auth_ok_payload, encode_message, parse_input_payload,
+    parse_key_payload, parse_pane_id, parse_resize, parse_tab_id, read_message_retrying,
 };
 
 pub(crate) enum AuthHandling {
@@ -266,7 +265,10 @@ mod tests {
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let mut frames = Vec::new();
-        frames.extend_from_slice(&encode_message(crate::remote_wire::MESSAGE_TYPE_LIST_TABS, &[]));
+        frames.extend_from_slice(&encode_message(
+            crate::remote_wire::MESSAGE_TYPE_LIST_TABS,
+            &[],
+        ));
 
         read_loop(std::io::Cursor::new(frames), 1, state, cmd_tx);
 
@@ -344,9 +346,7 @@ mod tests {
                         - DIRECT_CLIENT_HEARTBEAT_WINDOW
                         - Duration::from_secs(2),
                     authenticated_at: Some(
-                        Instant::now()
-                            - DIRECT_CLIENT_HEARTBEAT_WINDOW
-                            - Duration::from_secs(2),
+                        Instant::now() - DIRECT_CLIENT_HEARTBEAT_WINDOW - Duration::from_secs(2),
                     ),
                     ..remote_client(outbound_tx, true)
                 },
@@ -363,8 +363,8 @@ mod tests {
                 let mut cursor = std::io::Cursor::new(frame);
                 let (ty, payload) = read_message(&mut cursor).expect("decoded error frame");
                 assert_eq!(ty, MessageType::ErrorMsg);
-                let (code, message) =
-                    crate::remote_wire::decode_error_payload(&payload).expect("decode error payload");
+                let (code, message) = crate::remote_wire::decode_error_payload(&payload)
+                    .expect("decode error payload");
                 assert_eq!(code, RemoteErrorCode::HeartbeatTimeout);
                 assert_eq!(message, "heartbeat timeout");
             }
@@ -373,4 +373,5 @@ mod tests {
         assert!(cmd_rx.try_recv().is_err());
         let guard = state.lock().expect("remote server state poisoned");
         assert!(!guard.clients.contains_key(&1));
-    }}
+    }
+}

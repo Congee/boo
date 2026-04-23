@@ -47,9 +47,7 @@ pub(crate) fn run_remote_client_connection<R, W>(
         );
         (client_id, outbound_rx)
     };
-    log::info!(
-        "remote client connected: client_id={client_id} transport={transport_label}"
-    );
+    log::info!("remote client connected: client_id={client_id} transport={transport_label}");
 
     std::thread::spawn(move || writer_loop(writer, outbound_rx, true, true));
 

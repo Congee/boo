@@ -1,9 +1,9 @@
 use std::env;
 #[cfg(target_os = "macos")]
 use std::fs;
-use std::path::Path;
 #[cfg(target_os = "macos")]
 use std::os::unix::fs::symlink;
+use std::path::Path;
 use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]

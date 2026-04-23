@@ -11,6 +11,7 @@ mod copy_mode;
 mod ffi;
 mod keymap;
 mod launch;
+mod layout;
 #[cfg(target_os = "macos")]
 mod macos_vt_backend;
 mod pane;
@@ -32,9 +33,9 @@ mod remote_server_control;
 mod remote_server_diag;
 mod remote_server_stream;
 mod remote_server_targets;
+mod remote_state;
 #[cfg(test)]
 mod remote_tab_tests;
-mod remote_state;
 mod remote_types;
 mod remote_wire;
 mod runtime;
@@ -44,7 +45,6 @@ mod runtime_panes;
 mod runtime_server;
 mod runtime_ui;
 mod server;
-mod layout;
 mod splits;
 mod status_components;
 mod tabs;
@@ -341,7 +341,10 @@ fn resolve_linux_font_fallbacks(name: &str) -> Vec<&'static str> {
 }
 
 #[cfg(target_os = "linux")]
-fn measured_linux_terminal_metrics(primary_family: Option<&str>, font_size: f32) -> Option<(f64, f64)> {
+fn measured_linux_terminal_metrics(
+    primary_family: Option<&str>,
+    font_size: f32,
+) -> Option<(f64, f64)> {
     use std::collections::HashMap;
     static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<(String, u32), (f64, f64)>>> =
         std::sync::OnceLock::new();
@@ -375,7 +378,10 @@ fn measured_linux_terminal_metrics(primary_family: Option<&str>, font_size: f32)
 
     let glyph = ['M', 'W', '0']
         .into_iter()
-        .find_map(|ch| face.glyph_index(ch).and_then(|id| face.glyph_hor_advance(id)))
+        .find_map(|ch| {
+            face.glyph_index(ch)
+                .and_then(|id| face.glyph_hor_advance(id))
+        })
         .map(f64::from)?;
     let height_units =
         f64::from(face.ascender()) - f64::from(face.descender()) + f64::from(face.line_gap());

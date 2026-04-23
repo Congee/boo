@@ -1,7 +1,7 @@
 //! Tab management — each tab contains its own split tree.
 
-use crate::pane::PaneHandle;
 use crate::layout::TabLayout;
+use crate::pane::PaneHandle;
 use crate::splits::SplitTree;
 
 pub struct TabManager {
@@ -281,11 +281,9 @@ impl TabManager {
     ) -> bool {
         let mut changed = false;
         for tab in &mut self.tabs {
-            if tab.tree.focused_pane().id() == pane_id {
-                if tab.running_command != running_command {
-                    tab.running_command = running_command.clone();
-                    changed = true;
-                }
+            if tab.tree.focused_pane().id() == pane_id && tab.running_command != running_command {
+                tab.running_command = running_command.clone();
+                changed = true;
             }
         }
         changed
@@ -430,8 +428,8 @@ pub struct TabInfo {
 #[cfg(test)]
 mod tests {
     use super::TabManager;
-    use crate::pane::PaneHandle;
     use crate::layout::TabLayout;
+    use crate::pane::PaneHandle;
 
     #[test]
     fn new_tab_switches_active_pane() {

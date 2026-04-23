@@ -13,11 +13,7 @@ pub(crate) enum CachedControlPayload {
     UiAppearance,
 }
 
-pub(crate) fn send_tab_list(
-    state: &Arc<Mutex<State>>,
-    client_id: u64,
-    tabs: &[RemoteTabInfo],
-) {
+pub(crate) fn send_tab_list(state: &Arc<Mutex<State>>, client_id: u64, tabs: &[RemoteTabInfo]) {
     send_cached_control_payload_bytes(
         state,
         client_id,
@@ -27,11 +23,7 @@ pub(crate) fn send_tab_list(
     );
 }
 
-pub(crate) fn reply_tab_list(
-    state: &Arc<Mutex<State>>,
-    client_id: u64,
-    tabs: &[RemoteTabInfo],
-) {
+pub(crate) fn reply_tab_list(state: &Arc<Mutex<State>>, client_id: u64, tabs: &[RemoteTabInfo]) {
     let frame = encode_message(MESSAGE_TYPE_TAB_LIST, &encode_tab_list(tabs));
     let guard = state.lock().expect("remote server state poisoned");
     if let Some(client) = guard.clients.get(&client_id) {
@@ -39,10 +31,7 @@ pub(crate) fn reply_tab_list(
     }
 }
 
-pub(crate) fn send_tab_list_to_local_clients(
-    state: &Arc<Mutex<State>>,
-    tabs: &[RemoteTabInfo],
-) {
+pub(crate) fn send_tab_list_to_local_clients(state: &Arc<Mutex<State>>, tabs: &[RemoteTabInfo]) {
     let payload = encode_tab_list(tabs);
     let client_ids = {
         let guard = state.lock().expect("remote server state poisoned");
@@ -166,7 +155,9 @@ fn cache_slot_mut(
 ) -> &mut Option<Vec<u8>> {
     match cache_slot {
         CachedControlPayload::TabList => &mut client.runtime_view.last_tab_list_payload,
-        CachedControlPayload::UiRuntimeState => &mut client.runtime_view.last_ui_runtime_state_payload,
+        CachedControlPayload::UiRuntimeState => {
+            &mut client.runtime_view.last_ui_runtime_state_payload
+        }
         CachedControlPayload::UiAppearance => &mut client.runtime_view.last_ui_appearance_payload,
     }
 }

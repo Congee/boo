@@ -357,13 +357,12 @@ impl SplitTree {
 
     /// Find the leaf at a given point and set focus to it.
     pub fn focus_at(&mut self, frame: Rect, point: (f64, f64)) -> bool {
-        if let Some(ref root) = self.root {
-            if let Some(id) = leaf_at_point(root, frame, point) {
-                if id != self.focused_id {
-                    self.focused_id = id;
-                    return true;
-                }
-            }
+        if let Some(ref root) = self.root
+            && let Some(id) = leaf_at_point(root, frame, point)
+            && id != self.focused_id
+        {
+            self.focused_id = id;
+            return true;
         }
         false
     }
@@ -460,11 +459,11 @@ impl SplitTree {
             }
         }
 
-        if let Some((leaf_id, _, _)) = best {
-            if leaf_id != self.focused_id {
-                self.focused_id = leaf_id;
-                return true;
-            }
+        if let Some((leaf_id, _, _)) = best
+            && leaf_id != self.focused_id
+        {
+            self.focused_id = leaf_id;
+            return true;
         }
         false
     }

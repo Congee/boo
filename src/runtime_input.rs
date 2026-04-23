@@ -80,7 +80,10 @@ impl BooApp {
     }
 
     fn copy_mouse_selection(&mut self) -> bool {
-        let Some(selection) = self.mouse_selection.filter(|selection| selection.has_range()) else {
+        let Some(selection) = self
+            .mouse_selection
+            .filter(|selection| selection.has_range())
+        else {
             return false;
         };
         let Some(text) = self.mouse_selection_text(selection) else {
@@ -156,7 +159,8 @@ impl BooApp {
         let local_y = (point.1 - pane_frame.origin.y).max(0.0);
         let col = ((local_x / self.cell_width).floor() as u32)
             .min(snapshot.cols.saturating_sub(1) as u32);
-        let row = ((local_y / self.cell_height).floor() as u32).min(snapshot.rows.saturating_sub(1) as u32);
+        let row = ((local_y / self.cell_height).floor() as u32)
+            .min(snapshot.rows.saturating_sub(1) as u32);
         Some((pane.pane.id(), row, col))
     }
 
@@ -261,7 +265,10 @@ impl BooApp {
         true
     }
 
-    fn viewport_selection(&self, selection: MouseSelectionState) -> Option<ffi::ghostty_selection_s> {
+    fn viewport_selection(
+        &self,
+        selection: MouseSelectionState,
+    ) -> Option<ffi::ghostty_selection_s> {
         let (top_row, left_col, bottom_row, right_col) = ordered_selection_bounds(selection);
         let offset = self.scrollbar.offset as i64;
         if bottom_row < offset {
@@ -399,16 +406,14 @@ impl BooApp {
             if event.mods
                 & (ffi::GHOSTTY_MODS_CTRL | ffi::GHOSTTY_MODS_ALT | ffi::GHOSTTY_MODS_SUPER)
                 == 0
-            {
-                if let Some(committed) = event
+                && let Some(committed) = event
                     .text
                     .clone()
                     .or_else(|| event.modified_text.clone())
                     .filter(|text| !text.is_empty())
-                {
-                    self.handle_committed_text(committed);
-                    return false;
-                }
+            {
+                self.handle_committed_text(committed);
+                return false;
             }
             self.reset_scrolling_state_for_user_input();
             #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1452,9 +1457,7 @@ impl BooApp {
                     self.scroll_to_mouse_y(position.y as f64);
                     return;
                 }
-                if self.mouse_selection_drag_active
-                    && self.mouse_selection.is_some()
-                {
+                if self.mouse_selection_drag_active && self.mouse_selection.is_some() {
                     if let Some(clamped) = self.drag_autoscroll_selection(self.last_mouse_pos) {
                         if self.update_mouse_selection(clamped) {
                             return;
@@ -1484,8 +1487,7 @@ impl BooApp {
             mouse::Event::ButtonPressed(button) => {
                 if button == mouse::Button::Left {
                     let (mx, my) = self.last_mouse_pos;
-                    if let Some((source, id, x_offset)) = self.status_component_at_point((mx, my))
-                    {
+                    if let Some((source, id, x_offset)) = self.status_component_at_point((mx, my)) {
                         let _ = self.clear_mouse_selection();
                         crate::control::notify_status_click(&source, &id, "left", x_offset);
                         let _ = self.invoke_status_component(&source, &id);
@@ -1501,20 +1503,20 @@ impl BooApp {
 
                     let frame = self.terminal_frame();
                     let point = (mx, my);
-                    if let Some(tree) = self.server.tabs.active_tree() {
-                        if let Some(dir) = tree.divider_at(frame, point) {
-                            self.divider_drag = Some(dir);
-                            return;
-                        }
+                    if let Some(tree) = self.server.tabs.active_tree()
+                        && let Some(dir) = tree.divider_at(frame, point)
+                    {
+                        self.divider_drag = Some(dir);
+                        return;
                     }
 
                     let old = self.server.tabs.focused_pane();
-                    if let Some(tree) = self.server.tabs.active_tree_mut() {
-                        if tree.focus_at(frame, point) {
-                            let new = self.server.tabs.focused_pane();
-                            self.set_pane_focus(old, false);
-                            self.set_pane_focus(new, true);
-                        }
+                    if let Some(tree) = self.server.tabs.active_tree_mut()
+                        && tree.focus_at(frame, point)
+                    {
+                        let new = self.server.tabs.focused_pane();
+                        self.set_pane_focus(old, false);
+                        self.set_pane_focus(new, true);
                     }
 
                     #[cfg(any(target_os = "linux", target_os = "macos"))]

@@ -35,6 +35,7 @@ pub struct DesktopNotification {
     pub body: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub trait TerminalBackend {
     fn new(callback_userdata: *mut c_void) -> Self;
     fn tick(&mut self);
@@ -403,13 +404,13 @@ impl TerminalBackend for LinuxBackend {
                 } else {
                     status_update.source
                 };
-                result
-                    .status_component_updates
-                    .push(crate::status_components::StatusComponentsUpdate {
+                result.status_component_updates.push(
+                    crate::status_components::StatusComponentsUpdate {
                         zone: status_update.zone,
                         source,
                         components: status_update.components,
-                    });
+                    },
+                );
             }
             for notification in update.desktop_notifications {
                 result.desktop_notifications.push(DesktopNotification {

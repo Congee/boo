@@ -5,9 +5,8 @@ use std::io::{Read, Write};
 use crate::remote_types::RemoteDirectTabInfo;
 use crate::remote_wire::{
     MESSAGE_TYPE_LIST_TABS, MESSAGE_TYPE_TAB_CREATED, MESSAGE_TYPE_TAB_LIST, MessageType,
-    decode_auth_ok_payload, decode_tab_list_payload, encode_message,
-    parse_created_tab_id, read_message, read_probe_auth_reply, read_probe_reply,
-    validate_auth_ok_payload,
+    decode_auth_ok_payload, decode_tab_list_payload, encode_message, parse_created_tab_id,
+    read_message, read_probe_auth_reply, read_probe_reply, validate_auth_ok_payload,
 };
 
 pub(crate) trait DirectReadWrite: Read + Write {}
@@ -38,7 +37,9 @@ impl<S: DirectReadWrite> DirectTransportClient<S> {
         match ty {
             MessageType::AuthOk => {}
             MessageType::AuthFail => {
-                return Err(format!("authentication failed for remote endpoint {host}:{port}"));
+                return Err(format!(
+                    "authentication failed for remote endpoint {host}:{port}"
+                ));
             }
             other => {
                 return Err(format!(
@@ -52,13 +53,13 @@ impl<S: DirectReadWrite> DirectTransportClient<S> {
             decode_auth_ok_payload(&auth_ok_payload).ok_or_else(|| {
                 format!("remote endpoint {host}:{port} returned malformed handshake metadata")
             })?;
-        if let Some(expected_server_identity) = expected_server_identity {
-            if server_identity_id.as_deref() != Some(expected_server_identity) {
-                return Err(format!(
-                    "remote endpoint {host}:{port} reported daemon identity {:?}, expected {:?}",
-                    server_identity_id, expected_server_identity
-                ));
-            }
+        if let Some(expected_server_identity) = expected_server_identity
+            && server_identity_id.as_deref() != Some(expected_server_identity)
+        {
+            return Err(format!(
+                "remote endpoint {host}:{port} reported daemon identity {:?}, expected {:?}",
+                server_identity_id, expected_server_identity
+            ));
         }
 
         Ok(Self {
@@ -83,8 +84,12 @@ impl<S: DirectReadWrite> DirectTransportClient<S> {
                     self.host, self.port
                 )
             })?;
-        let (_heartbeat_ty, heartbeat_reply) =
-            read_probe_reply(&mut self.stream, &self.host, self.port, MessageType::HeartbeatAck)?;
+        let (_heartbeat_ty, heartbeat_reply) = read_probe_reply(
+            &mut self.stream,
+            &self.host,
+            self.port,
+            MessageType::HeartbeatAck,
+        )?;
         if heartbeat_reply != payload {
             return Err(format!(
                 "heartbeat payload mismatch from remote endpoint {}:{}",
@@ -103,8 +108,12 @@ impl<S: DirectReadWrite> DirectTransportClient<S> {
                     self.host, self.port
                 )
             })?;
-        let (_reply_ty, payload) =
-            read_probe_reply(&mut self.stream, &self.host, self.port, MESSAGE_TYPE_TAB_LIST)?;
+        let (_reply_ty, payload) = read_probe_reply(
+            &mut self.stream,
+            &self.host,
+            self.port,
+            MESSAGE_TYPE_TAB_LIST,
+        )?;
         decode_tab_list_payload(&payload).map_err(|error| {
             format!(
                 "failed to decode remote tab list from {}:{}: {error}",
@@ -184,5 +193,4 @@ impl<S: DirectReadWrite> DirectTransportClient<S> {
             }
         }
     }
-
 }

@@ -12,38 +12,33 @@ pub(crate) use crate::remote_direct_transport::DirectTransportClient;
 // `crate::remote::RemoteProbeSummary` etc. keep working unchanged.
 #[allow(unused_imports)]
 pub use crate::remote_types::{
-    DirectTransportKind, RemoteClientInfo,
-    RemoteClientsSnapshot, RemoteCreateSummary, RemoteDirectTabInfo,
-    RemoteProbeSummary, RemoteServerInfo,
-    RemoteTabInfo, RemoteTabListSummary, RemoteUpgradeProbeSummary,
+    DirectTransportKind, RemoteClientInfo, RemoteClientsSnapshot, RemoteCreateSummary,
+    RemoteDirectTabInfo, RemoteProbeSummary, RemoteServerInfo, RemoteTabInfo, RemoteTabListSummary,
+    RemoteUpgradeProbeSummary,
 };
 
 // Re-export the direct-client RPCs so existing callers of
 // `crate::remote::probe_remote_endpoint` etc. keep working unchanged.
 #[allow(unused_imports)]
 pub use crate::remote_client::{
-    create_remote_daemon_tab, list_remote_daemon_tabs,
-    probe_remote_endpoint, probe_selected_direct_transport, select_direct_transport,
+    create_remote_daemon_tab, list_remote_daemon_tabs, probe_remote_endpoint,
+    probe_selected_direct_transport, select_direct_transport,
 };
 
 pub use crate::remote_full_state::{full_state_from_terminal, full_state_from_ui};
 
-
 use crate::remote_wire::{encode_error_payload, random_instance_id};
 // Re-export wire-level items so external callers that reach through
 // `crate::remote::` keep working.
+use crate::remote_batcher::{OutboundMessage, writer_loop};
 #[allow(unused_imports)]
 pub use crate::remote_wire::{
-    MessageType, REMOTE_CAPABILITIES,
-    REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT, REMOTE_PROTOCOL_VERSION, RemoteCell,
-    RemoteErrorCode,
-    RemoteFullState,
     MESSAGE_TYPE_LIST_TABS, MESSAGE_TYPE_TAB_CREATED, MESSAGE_TYPE_TAB_EXITED,
-    MESSAGE_TYPE_TAB_LIST,
-    decode_auth_ok_payload, encode_full_state, encode_message, encode_tab_list, read_message,
-    validate_auth_ok_payload,
+    MESSAGE_TYPE_TAB_LIST, MessageType, REMOTE_CAPABILITIES,
+    REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT, REMOTE_PROTOCOL_VERSION, RemoteCell, RemoteErrorCode,
+    RemoteFullState, decode_auth_ok_payload, encode_full_state, encode_message, encode_tab_list,
+    read_message, validate_auth_ok_payload,
 };
-use crate::remote_batcher::{OutboundMessage, writer_loop};
 
 #[derive(Clone, Debug)]
 pub struct RemoteConfig {
@@ -58,7 +53,10 @@ impl RemoteConfig {
     }
 
     pub(crate) fn should_advertise(&self) -> bool {
-        !matches!(self.effective_bind_address(), "127.0.0.1" | "localhost" | "::1")
+        !matches!(
+            self.effective_bind_address(),
+            "127.0.0.1" | "localhost" | "::1"
+        )
     }
 }
 
@@ -121,8 +119,7 @@ use crate::remote_listener::NEXT_CLIENT_ID;
 use crate::remote_quic::{QuicServerHandle, start_quic_listener};
 use crate::remote_server_advertise::ServiceAdvertiser;
 use crate::remote_server_control::{
-    reply_tab_list as send_reply_tab_list,
-    send_tab_list as send_cached_tab_list,
+    reply_tab_list as send_reply_tab_list, send_tab_list as send_cached_tab_list,
     send_tab_list_to_local_clients as send_cached_tab_list_to_local_clients,
     send_ui_appearance as send_local_ui_appearance,
     send_ui_appearance_to_local_clients as send_ui_appearance_to_all_local_clients,
@@ -136,8 +133,7 @@ use crate::remote_server_stream::{
 };
 use crate::remote_server_targets::{
     local_viewer_client_ids,
-    retain_local_viewer_pane_states as retain_local_viewer_pane_states_inner,
-    viewer_client_ids,
+    retain_local_viewer_pane_states as retain_local_viewer_pane_states_inner, viewer_client_ids,
 };
 use crate::remote_state::{ClientRuntimeView, ClientState, State};
 
@@ -184,8 +180,12 @@ impl RemoteServer {
             server_instance_id: random_instance_id(),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
-        let quic_listener =
-            start_quic_listener(&bind_address, config.port, Arc::clone(&state), cmd_tx.clone())?;
+        let quic_listener = start_quic_listener(
+            &bind_address,
+            config.port,
+            Arc::clone(&state),
+            cmd_tx.clone(),
+        )?;
 
         let advertiser = if config.should_advertise() {
             ServiceAdvertiser::spawn(&config.service_name, config.port)
@@ -378,7 +378,10 @@ impl RemoteServer {
                 .clients
                 .iter()
                 .filter_map(|(client_id, client)| {
-                    client.runtime_view.subscribed_to_runtime.then_some(*client_id)
+                    client
+                        .runtime_view
+                        .subscribed_to_runtime
+                        .then_some(*client_id)
                 })
                 .collect::<Vec<_>>()
         };
@@ -421,18 +424,11 @@ impl RemoteServer {
         );
     }
 
-    pub fn send_ui_runtime_state(
-        &self,
-        client_id: u64,
-        state: &crate::control::UiRuntimeState,
-    ) {
+    pub fn send_ui_runtime_state(&self, client_id: u64, state: &crate::control::UiRuntimeState) {
         send_local_ui_runtime_state(&self.state, client_id, state);
     }
 
-    pub fn send_ui_runtime_state_to_local_viewers(
-        &self,
-        state: &crate::control::UiRuntimeState,
-    ) {
+    pub fn send_ui_runtime_state_to_local_viewers(&self, state: &crate::control::UiRuntimeState) {
         send_ui_runtime_state_to_local_viewers_inner(&self.state, state);
     }
 
@@ -443,7 +439,10 @@ impl RemoteServer {
                 .clients
                 .iter()
                 .filter_map(|(client_id, client)| {
-                    client.runtime_view.subscribed_to_runtime.then_some(*client_id)
+                    client
+                        .runtime_view
+                        .subscribed_to_runtime
+                        .then_some(*client_id)
                 })
                 .collect::<Vec<_>>()
         };
@@ -467,17 +466,17 @@ impl RemoteServer {
         send_ui_appearance_to_all_local_clients(&self.state, appearance);
     }
 
-    pub fn send_ui_appearance_to_viewers(
-        &self,
-        appearance: &crate::control::UiAppearanceSnapshot,
-    ) {
+    pub fn send_ui_appearance_to_viewers(&self, appearance: &crate::control::UiAppearanceSnapshot) {
         let client_ids = {
             let state_guard = self.state.lock().expect("remote server state poisoned");
             state_guard
                 .clients
                 .iter()
                 .filter_map(|(client_id, client)| {
-                    client.runtime_view.subscribed_to_runtime.then_some(*client_id)
+                    client
+                        .runtime_view
+                        .subscribed_to_runtime
+                        .then_some(*client_id)
                 })
                 .collect::<Vec<_>>()
         };
@@ -514,10 +513,7 @@ impl RemoteServer {
         }
     }
 
-    pub fn retain_local_viewer_pane_states(
-        &self,
-        visible_pane_ids: &[u64],
-    ) {
+    pub fn retain_local_viewer_pane_states(&self, visible_pane_ids: &[u64]) {
         let mut guard = self.state.lock().expect("remote server state poisoned");
         retain_local_viewer_pane_states_inner(&mut guard, visible_pane_ids);
     }
@@ -549,7 +545,6 @@ impl RemoteServer {
             let _ = client.outbound.send(OutboundMessage::Frame(frame));
         }
     }
-
 }
 
 impl Drop for RemoteServer {
