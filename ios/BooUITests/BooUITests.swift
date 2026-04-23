@@ -213,9 +213,9 @@ final class BooAppLaunchTests: BooUITestCase {
         let persistedLabel = relaunched.staticTexts["API access token saved securely in the iOS Keychain."]
         XCTAssertTrue(persistedLabel.waitForExistence(timeout: 5))
 
-        let sessionsTab = relaunched.buttons["tab-sessions"]
-        XCTAssertTrue(sessionsTab.waitForExistence(timeout: 5))
-        sessionsTab.tap()
+        let terminalTab = relaunched.buttons["tab-terminal"]
+        XCTAssertTrue(terminalTab.waitForExistence(timeout: 5))
+        terminalTab.tap()
         navigateToConnectScreen(relaunched)
         let tailscaleSection = relaunched.staticTexts["TAILSCALE DEVICES"]
         scrollUntilExists(tailscaleSection, in: relaunched)
@@ -271,9 +271,9 @@ final class BooAppLaunchTests: BooUITestCase {
         let savedLabel = app.staticTexts["API access token saved securely in the iOS Keychain."]
         XCTAssertTrue(savedLabel.waitForExistence(timeout: 5))
 
-        let sessionsTab = app.buttons["tab-sessions"]
-        XCTAssertTrue(sessionsTab.waitForExistence(timeout: 5))
-        sessionsTab.tap()
+        let terminalTab = app.buttons["tab-terminal"]
+        XCTAssertTrue(terminalTab.waitForExistence(timeout: 5))
+        terminalTab.tap()
 
         navigateToConnectScreen(app)
 
@@ -351,7 +351,7 @@ final class BooAppLaunchTests: BooUITestCase {
         assertTerminalCanType(app, marker: "BOO_DISCOVERED_TYPED")
     }
 
-    func testFloatingDisconnectButtonClosesHostSession() {
+    func testFloatingDisconnectButtonClosesHostTab() {
         let app = makeApp(autoConnect: false, resetStorage: true, includeConfiguredHost: false)
         _ = installSystemAlertHandler(for: app)
         app.launch()
@@ -408,7 +408,7 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTFail("tailscale device tap neither connected nor surfaced a timeout; status='\(banner)'")
     }
 
-    func testOpenLiveSessionAndType() {
+    func testOpenLiveTabAndType() {
         let app = makeApp(autoConnect: false, resetStorage: false)
         _ = installSystemAlertHandler(for: app)
         app.launch()
@@ -418,7 +418,7 @@ final class BooAppLaunchTests: BooUITestCase {
         assertTerminalCanType(app, marker: "BOO_UI_TYPED")
     }
 
-    func testOpenLiveSessionShowsCustomKeyboardAccessory() {
+    func testOpenLiveTabShowsCustomKeyboardAccessory() {
         let app = makeApp(autoConnect: false, resetStorage: false)
         _ = installSystemAlertHandler(for: app)
         app.launch()
@@ -561,9 +561,9 @@ final class BooAppLaunchTests: BooUITestCase {
         app.launch()
         app.tap()
 
-        let sessionsTab = app.buttons["sessions-tab"]
-        if sessionsTab.waitForExistence(timeout: 5) {
-            sessionsTab.tap()
+        let terminalTab = app.buttons["tab-terminal"]
+        if terminalTab.waitForExistence(timeout: 5) {
+            terminalTab.tap()
         }
 
         navigateToConnectScreen(app)
@@ -714,7 +714,7 @@ final class BooAppLaunchTests: BooUITestCase {
         assertTerminalCanType(app, marker: "BOO_UI_TYPED_REFOCUS")
     }
 
-    func testNewSessionRecoveryActionStillTypes() {
+    func testNewTabRecoveryActionStillTypes() {
         let app = makeApp(
             autoConnect: false,
             resetStorage: false,
@@ -729,9 +729,9 @@ final class BooAppLaunchTests: BooUITestCase {
         let terminal = app.otherElements["terminal-screen"]
         let originalLabel = terminal.label
 
-        let newSessionButton = app.buttons["new-session-button"]
-        XCTAssertTrue(newSessionButton.waitForExistence(timeout: 5))
-        newSessionButton.tap()
+        let newTabButton = app.buttons["new-tab-button"]
+        XCTAssertTrue(newTabButton.waitForExistence(timeout: 5))
+        newTabButton.tap()
 
         let labelChange = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "label != %@", originalLabel),
@@ -742,7 +742,7 @@ final class BooAppLaunchTests: BooUITestCase {
         assertTerminalCanType(app, marker: "BOO_UI_TYPED_NEW")
     }
 
-    func testCloseSessionRecoveryActionStillTypes() {
+    func testCloseTabRecoveryActionStillTypes() {
         let app = makeApp(
             autoConnect: false,
             resetStorage: false,
@@ -757,9 +757,9 @@ final class BooAppLaunchTests: BooUITestCase {
         let terminal = app.otherElements["terminal-screen"]
         let firstLabel = terminal.label
 
-        let newSessionButton = app.buttons["new-session-button"]
-        XCTAssertTrue(newSessionButton.waitForExistence(timeout: 5))
-        newSessionButton.tap()
+        let newTabButton = app.buttons["new-tab-button"]
+        XCTAssertTrue(newTabButton.waitForExistence(timeout: 5))
+        newTabButton.tap()
 
         let labelChange = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "label != %@", firstLabel),
@@ -768,9 +768,9 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [labelChange], timeout: 10), .completed)
         let secondLabel = terminal.label
 
-        let closeSessionButton = app.buttons["close-session-button"]
-        XCTAssertTrue(closeSessionButton.waitForExistence(timeout: 5))
-        closeSessionButton.tap()
+        let closeTabButton = app.buttons["close-tab-button"]
+        XCTAssertTrue(closeTabButton.waitForExistence(timeout: 5))
+        closeTabButton.tap()
 
         let relabeled = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "label != %@", secondLabel),
@@ -792,7 +792,7 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTAssertTrue(app.buttons["connect-button"].exists)
     }
 
-    func testAutoConnectCanCreateAndAttachSession() {
+    func testAutoConnectCanCreateAndAttachTab() {
         let app = makeApp(autoConnect: false, resetStorage: false)
         _ = installSystemAlertHandler(for: app)
         app.launch()

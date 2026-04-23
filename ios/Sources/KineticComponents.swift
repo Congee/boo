@@ -2,13 +2,13 @@ import SwiftUI
 import UIKit
 
 enum BooTab: String, CaseIterable {
-    case sessions
+    case terminal
     case history
     case settings
 
     var icon: String {
         switch self {
-        case .sessions: return "terminal"
+        case .terminal: return "terminal"
         case .history: return "clock.arrow.circlepath"
         case .settings: return "gearshape"
         }
