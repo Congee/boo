@@ -289,13 +289,7 @@ struct BooRootView: View {
             activeMonitor.reconnect()
         }
         .onChange(of: client.lastError) { _, newValue in
-            guard newValue != nil,
-                  let host = activeMonitor.lastHost,
-                  let port = activeMonitor.lastPort
-            else { return }
-            if client.lastErrorKind?.invalidatesResumeAttachment == true {
-                store.clearResumeAttachment(host: host, port: port)
-            }
+            guard newValue != nil else { return }
         }
     }
 
@@ -326,18 +320,6 @@ struct BooRootView: View {
                     port: port,
                     identityId: serverIdentityId
                 )
-                if let tabId = client.attachedTabId,
-                   let attachmentId = client.attachmentId,
-                   let resumeToken = client.resumeToken
-                {
-                    store.recordResumeAttachment(
-                        host: host,
-                        port: port,
-                        tabId: tabId,
-                        attachmentId: attachmentId,
-                        resumeToken: resumeToken
-                    )
-                }
             }
         case .connectionLost:
             if let historyId = activeMonitor.currentHistoryId {
@@ -345,9 +327,6 @@ struct BooRootView: View {
                 activeMonitor.clearTrackedConnection()
             }
         case .disconnected:
-            if let host = activeMonitor.lastHost, let port = activeMonitor.lastPort {
-                store.clearResumeAttachment(host: host, port: port)
-            }
             if wasConnected, let historyId = activeMonitor.currentHistoryId {
                 store.endConnection(id: historyId, status: .disconnected)
                 activeMonitor.clearTrackedConnection()
@@ -1173,10 +1152,6 @@ struct TerminalTabScreen: View {
         return nil
     }
 
-    private var hasResumeFailure: Bool {
-        client.lastErrorKind?.invalidatesResumeAttachment == true
-    }
-
     private func transportBanner(reason: String, color: Color) -> some View {
         VStack(alignment: .leading, spacing: KineticSpacing.sm) {
             Text(reason)
@@ -1186,15 +1161,6 @@ struct TerminalTabScreen: View {
                 .accessibilityIdentifier("terminal-banner-label")
 
             HStack(spacing: KineticSpacing.sm) {
-                if hasResumeFailure {
-                    Button("Forget Resume") {
-                        forgetResumeAttachment()
-                        client.clearErrorState()
-                    }
-                    .buttonStyle(KineticSecondaryButtonStyle())
-                    .accessibilityIdentifier("forget-resume-button")
-                }
-
                 if let attachedTabId = client.attachedTabId {
                     Button("Close Tab") {
                         forgetResumeAttachment()
@@ -1308,10 +1274,6 @@ struct TerminalTabScreen: View {
     }
 
     private func forgetResumeAttachment() {
-        client.clearResumeAttachmentState()
-        if let host = monitor.lastHost, let port = monitor.lastPort {
-            store.clearResumeAttachment(host: host, port: port)
-        }
     }
 
     private func goBack() {

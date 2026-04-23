@@ -14,9 +14,7 @@ This directory contains the Boo iOS remote viewer app.
   - saved nodes
   - connection history
   - trusted daemon identity pinning per endpoint
-  - reconnect/resume against bounded revive windows
   - tab list / attach / create
-  - explicit detach back to the tab list
   - terminal accessory keys for:
     - escape
     - ctrl
@@ -91,7 +89,7 @@ BOO_IOS_UI_TEST_DESTINATION='id=<device-id>' bash scripts/test-ios-ui.sh
 
 Notes:
 
-- the build script uses a repo-local derived-data path so it does not depend on
+- the build script uses `/tmp/boo-ios-derived` so it does not depend on
   Xcode's default `~/Library/Developer/Xcode/DerivedData` location
 - the build script auto-discovers the first provisioning team known to Xcode;
   override with `BOO_IOS_TEAM_ID` if needed
@@ -114,7 +112,7 @@ Notes:
 
 ## Remaining Manual Validation
 
-Automated validation covers the remote protocol, reconnect/resume flow, and state updates. Manual validation is still reserved for client UX that depends on the real iOS interaction model:
+Automated validation covers the remote protocol, runtime-first bootstrap flow, and state updates. Manual validation is still reserved for client UX that depends on the real iOS interaction model:
 
 - keyboard accessory ergonomics on-device, especially modifier toggles and function-key reachability
 - swipe gesture feel for page navigation and left/right terminal movement
@@ -125,4 +123,4 @@ Transport-state transitions that still need manual judgment in a real client:
 
 - when degraded heartbeat state should feel visible but not alarming
 - when reconnecting state should block input vs leave the last terminal visible
-- how long a disconnected-but-resumable tab should keep the last screen visible before the UI feels misleading
+- how long a disconnected tab should keep the last screen visible before the UI feels misleading

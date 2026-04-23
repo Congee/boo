@@ -20,11 +20,6 @@ enum ClientWireErrorCode: UInt16, Equatable {
     case failedCreateTab = 3
     case notAttached = 4
     case cannotDestroyLastTab = 5
-    case attachmentAlreadyActive = 6
-    case attachmentBelongsToDifferentTab = 7
-    case attachmentResumeTokenMismatch = 8
-    case attachmentResumeWindowExpired = 9
-    case invalidResumeToken = 10
     case heartbeatTimeout = 11
 }
 
@@ -38,10 +33,6 @@ enum ClientWireErrorKind: Equatable {
     case unknownTab
     case failedCreateTab
     case notAttached
-    case attachmentResumeUnsupported
-    case attachmentResumeWindowExpired
-    case attachmentResumeTokenMismatch
-    case invalidResumeToken
     case remote(String)
 
     var message: String {
@@ -54,28 +45,8 @@ enum ClientWireErrorKind: Equatable {
             return "failed to create tab"
         case .notAttached:
             return "not attached"
-        case .attachmentResumeUnsupported:
-            return "Remote server does not advertise attachment resume support"
-        case .attachmentResumeWindowExpired:
-            return "attachment resume window expired"
-        case .attachmentResumeTokenMismatch:
-            return "attachment resume token mismatch"
-        case .invalidResumeToken:
-            return "invalid resume token"
         case .remote(let message):
             return message
-        }
-    }
-
-    var invalidatesResumeAttachment: Bool {
-        switch self {
-        case .attachmentResumeUnsupported,
-                .attachmentResumeWindowExpired,
-                .attachmentResumeTokenMismatch,
-                .invalidResumeToken:
-            return true
-        case .authenticationFailed, .unknownTab, .failedCreateTab, .notAttached, .remote:
-            return false
         }
     }
 
@@ -83,14 +54,6 @@ enum ClientWireErrorKind: Equatable {
         switch raw.lowercased() {
         case "authenticationfailed":
             return .authenticationFailed
-        case "attachmentresumeunsupported":
-            return .attachmentResumeUnsupported
-        case "attachmentresumewindowexpired":
-            return .attachmentResumeWindowExpired
-        case "attachmentresumetokenmismatch":
-            return .attachmentResumeTokenMismatch
-        case "invalidresumetoken":
-            return .invalidResumeToken
         default:
             return nil
         }
@@ -107,7 +70,6 @@ struct AuthOkMetadata: Equatable {
 
 private let expectedRemoteProtocolVersion: UInt16 = 1
 private let remoteCapabilityHeartbeat: UInt32 = 1 << 4
-private let remoteCapabilityAttachmentResume: UInt32 = 1 << 5
 private let remoteCapabilityDaemonIdentity: UInt32 = 1 << 6
 
 struct ClientWireState: Equatable {
@@ -120,8 +82,6 @@ struct ClientWireState: Equatable {
     var tabs: [DecodedWireTabInfo] = []
     var screen: DecodedWireScreenState?
     var attachedTabId: UInt32?
-    var attachmentId: UInt64?
-    var resumeToken: UInt64?
     var lastErrorKind: ClientWireErrorKind?
     var lastError: String?
 
@@ -137,8 +97,6 @@ struct ClientWireState: Equatable {
         screen: DecodedWireScreenState? = nil,
         attachedTabId: UInt32? = nil,
         legacyAttachedTabId: UInt32? = nil,
-        attachmentId: UInt64? = nil,
-        resumeToken: UInt64? = nil,
         lastErrorKind: ClientWireErrorKind? = nil,
         lastError: String? = nil
     ) {
@@ -151,8 +109,6 @@ struct ClientWireState: Equatable {
         self.tabs = legacyTabs ?? tabs
         self.screen = screen
         self.attachedTabId = legacyAttachedTabId ?? attachedTabId
-        self.attachmentId = attachmentId
-        self.resumeToken = resumeToken
         self.lastErrorKind = lastErrorKind
         self.lastError = lastError
     }
@@ -180,14 +136,6 @@ func decodeClientWireError(_ payload: Data) -> ClientWireErrorKind {
         return .notAttached
     case .cannotDestroyLastTab:
         return .remote(message)
-    case .attachmentAlreadyActive, .attachmentBelongsToDifferentTab:
-        return .remote(message)
-    case .attachmentResumeTokenMismatch:
-        return .attachmentResumeTokenMismatch
-    case .attachmentResumeWindowExpired:
-        return .attachmentResumeWindowExpired
-    case .invalidResumeToken:
-        return .invalidResumeToken
     case .heartbeatTimeout:
         return .remote(message)
     }
@@ -269,9 +217,6 @@ func validateAuthOkMetadata(_ payload: Data) -> String? {
     if (metadata.transportCapabilities & remoteCapabilityHeartbeat) == 0 {
         return "Remote server does not advertise heartbeat support"
     }
-    if (metadata.transportCapabilities & remoteCapabilityAttachmentResume) == 0 {
-        return "Remote server does not advertise attachment resume support"
-    }
     if (metadata.transportCapabilities & remoteCapabilityDaemonIdentity) == 0 {
         return "Remote server does not advertise daemon identity support"
     }
@@ -322,17 +267,9 @@ enum ClientWireReducer {
             state.attachedTabId = payload.withUnsafeBytes {
                 UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
             }
-            state.attachmentId = payload.count >= 12 ? payload.withUnsafeBytes {
-                UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: 4, as: UInt64.self))
-            } : nil
-            state.resumeToken = payload.count >= 20 ? payload.withUnsafeBytes {
-                UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: 12, as: UInt64.self))
-            } : nil
             return .none
         case .detached:
             state.attachedTabId = nil
-            state.attachmentId = nil
-            state.resumeToken = nil
             return .none
         case .tabExited:
             if payload.count >= 4 {
@@ -341,13 +278,9 @@ enum ClientWireReducer {
                 }
                 if state.attachedTabId == exitedTabId {
                     state.attachedTabId = nil
-                    state.attachmentId = nil
-                    state.resumeToken = nil
                 }
             } else {
                 state.attachedTabId = nil
-                state.attachmentId = nil
-                state.resumeToken = nil
             }
             return .none
         case .tabCreated:

@@ -22,28 +22,6 @@ struct ProtocolCodecSelfTestMain {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
 
-        let legacyResumeMetadata = """
-        {
-          "sessionId": 42,
-          "attachmentId": 9,
-          "resumeToken": 13,
-          "recordedAt": "2026-04-22T12:00:00Z"
-        }
-        """.data(using: .utf8)!
-        let normalizedResumeMetadata = normalizeLegacyTabMetadataKeys(in: legacyResumeMetadata) ?? legacyResumeMetadata
-        let decodedResumeMetadata = tryOrExit(
-            decoder.decode(ResumeAttachmentMetadata.self, from: normalizedResumeMetadata),
-            "resume metadata legacy decode"
-        )
-        assertEqual(decodedResumeMetadata.tabId, 42, "resume metadata legacy sessionId decode")
-        let encodedResumeMetadata = tryOrExit(
-            encoder.encode(decodedResumeMetadata),
-            "resume metadata canonical encode"
-        )
-        let encodedResumeJson = String(data: encodedResumeMetadata, encoding: .utf8) ?? ""
-        assertEqual(encodedResumeJson.contains("\"tabId\""), true, "resume metadata encodes canonical tabId")
-        assertEqual(encodedResumeJson.contains("\"sessionId\""), false, "resume metadata omits legacy sessionId on encode")
-
         let runtimeStatePayload = """
         {
           "active_tab": 0,
@@ -153,19 +131,9 @@ struct ProtocolCodecSelfTestMain {
             "missing heartbeat capability rejected"
         )
 
-        var missingResumePayload = authOkPayload
-        missingResumePayload.withUnsafeMutableBytes { bytes in
-            bytes.storeBytes(of: UInt32(0x1f).littleEndian, toByteOffset: 2, as: UInt32.self)
-        }
-        assertEqual(
-            validateAuthOkMetadata(missingResumePayload),
-            "Remote server does not advertise attachment resume support",
-            "missing attachment resume capability rejected"
-        )
-
         var missingIdentityCapabilityPayload = authOkPayload
         missingIdentityCapabilityPayload.withUnsafeMutableBytes { bytes in
-            bytes.storeBytes(of: UInt32(0x3f).littleEndian, toByteOffset: 2, as: UInt32.self)
+            bytes.storeBytes(of: UInt32(0x5f).littleEndian, toByteOffset: 2, as: UInt32.self)
         }
         assertEqual(
             validateAuthOkMetadata(missingIdentityCapabilityPayload),
@@ -200,22 +168,6 @@ struct ProtocolCodecSelfTestMain {
         assertEqual(attachedEffect, .none, "attached has no side effect")
         assertEqual(clientState.attachedTabId, 42, "attached stores tab id")
 
-        var attachedWithResumePayload = Data(count: 20)
-        attachedWithResumePayload.withUnsafeMutableBytes { bytes in
-            bytes.storeBytes(of: UInt32(42).littleEndian, as: UInt32.self)
-            bytes.storeBytes(of: UInt64(0xB001D00DCAFEBEEF).littleEndian, toByteOffset: 4, as: UInt64.self)
-            bytes.storeBytes(of: UInt64(0x0BADF00DDEADC0DE).littleEndian, toByteOffset: 12, as: UInt64.self)
-        }
-        let attachedWithResumeEffect = ClientWireReducer.reduce(
-            message: .attached,
-            payload: attachedWithResumePayload,
-            state: &clientState
-        )
-        assertEqual(attachedWithResumeEffect, .none, "attached with resume token has no side effect")
-        assertEqual(clientState.attachedTabId, 42, "attached with resume token stores tab id")
-        assertEqual(clientState.attachmentId, 0xB001D00DCAFEBEEF, "attached with resume token stores attachment id")
-        assertEqual(clientState.resumeToken, 0x0BADF00DDEADC0DE, "attached with resume token stores resume token")
-
         clientState.screen = state
         let deltaEffect = ClientWireReducer.reduce(message: .delta, payload: makeDeltaPayload(), state: &clientState)
         assertEqual(deltaEffect, .none, "delta has no side effect")
@@ -226,13 +178,9 @@ struct ProtocolCodecSelfTestMain {
         assertEqual(clientState.attachedTabId, nil, "detached clears attached tab")
 
         clientState.attachedTabId = 42
-        clientState.attachmentId = 0xB001D00DCAFEBEEF
-        clientState.resumeToken = 0x0BADF00DDEADC0DE
         let tabExitedEffect = ClientWireReducer.reduce(message: .tabExited, payload: Data(), state: &clientState)
-        assertEqual(tabExitedEffect, .listTabs, "tab exited triggers tab refresh")
+        assertEqual(tabExitedEffect, .none, "tab exited has no side effect")
         assertEqual(clientState.attachedTabId, nil, "tab exited clears attached tab")
-        assertEqual(clientState.attachmentId, nil, "tab exited clears attachment id")
-        assertEqual(clientState.resumeToken, nil, "tab exited clears resume token")
 
         let reachableTabs = [
             RemoteTabInfo(

@@ -761,8 +761,6 @@ final class GSPClient: ObservableObject {
     @Published var runtimeState: RemoteRuntimeStateSnapshot?
     @Published var screen = ScreenState()
     @Published var attachedTabId: UInt32?
-    @Published var attachmentId: UInt64?
-    @Published var resumeToken: UInt64?
     @Published var pendingAttachedTabId: UInt32?
     @Published var lastErrorKind: ClientWireErrorKind?
     @Published var lastError: String?
@@ -774,8 +772,6 @@ final class GSPClient: ObservableObject {
     private var lastHeartbeatSent: Date?
     private var pendingHeartbeatToken: UInt64?
     private var desiredAttachedTabId: UInt32?
-    private var desiredAttachmentId: UInt64?
-    private var desiredResumeToken: UInt64?
     private var expectedServerIdentityId: String?
     private var connectionGeneration: UInt64 = 0
     private var pendingHostTabCreation = false
@@ -804,8 +800,6 @@ final class GSPClient: ObservableObject {
         let auth = lastAuthLatencyMs.map { String(format: "auth %.0fms", $0) }
         let listed = lastTabListLatencyMs.map { String(format: "tabs %.0fms", $0) }
         let attached = lastAttachLatencyMs.map { String(format: "att %.0fms", $0) }
-        let attachment = attachmentId.map { "attach 0x" + String($0, radix: 16) }
-        let resume = resumeToken.map { "resume 0x" + String($0, radix: 16) }
         let base = [ "proto \(protocolVersion)",
                      "caps 0x\(String(transportCapabilities, radix: 16))",
                      "gen \(connectionDebugGeneration)",
@@ -813,9 +807,7 @@ final class GSPClient: ObservableObject {
                      reconnectAttemptCount > 0 ? "reconn# \(reconnectAttemptCount)" : nil,
                      serverBuildId,
                      "id \(serverIdentityId)",
-                     "srv \(serverInstanceId)",
-                     attachment,
-                     resume].compactMap { $0 }.joined(separator: " · ")
+                     "srv \(serverInstanceId)"].compactMap { $0 }.joined(separator: " · ")
         let timings = [connect, auth, listed, attached, heartbeat].compactMap { $0 }
         if !timings.isEmpty {
             return "\(base) · \(timings.joined(separator: " · "))"
@@ -870,12 +862,8 @@ final class GSPClient: ObservableObject {
         lastHeartbeatSent = nil
         pendingHeartbeatToken = nil
         attachedTabId = nil
-        attachmentId = nil
-        resumeToken = nil
         pendingAttachedTabId = nil
         desiredAttachedTabId = nil
-        desiredAttachmentId = nil
-        desiredResumeToken = nil
         pendingHostTabCreation = false
         autoTabBootstrapSuppressed = false
         tabs = []
@@ -917,15 +905,12 @@ final class GSPClient: ObservableObject {
     }
 
     func attach(tabId: UInt32) {
-        let newAttachmentId = generateAttachmentId()
-        debugLog("send attach tabId=\(tabId) attachmentId=\(newAttachmentId)")
+        debugLog("send attach tabId=\(tabId)")
         pendingHostTabCreation = false
         desiredAttachedTabId = tabId
-        desiredAttachmentId = newAttachmentId
-        desiredResumeToken = nil
         pendingAttachedTabId = tabId
         lastError = nil
-        sendAttach(tabId: tabId, attachmentId: newAttachmentId, resumeToken: nil)
+        sendAttach(tabId: tabId)
     }
 
     func suppressAutomaticTabBootstrap() {
@@ -933,22 +918,6 @@ final class GSPClient: ObservableObject {
         autoTabBootstrapSuppressed = true
         pendingHostTabCreation = false
         pendingAttachedTabId = nil
-    }
-
-    func configureResumeAttachment(tabId: UInt32, attachmentId: UInt64, resumeToken: UInt64) {
-        desiredAttachedTabId = tabId
-        desiredAttachmentId = attachmentId
-        desiredResumeToken = resumeToken
-        pendingAttachedTabId = tabId
-    }
-
-    func clearResumeAttachmentState() {
-        attachmentId = nil
-        resumeToken = nil
-        pendingAttachedTabId = nil
-        desiredAttachedTabId = nil
-        desiredAttachmentId = nil
-        desiredResumeToken = nil
     }
 
     func configureTrustedServerIdentity(_ identityId: String?) {
@@ -960,24 +929,11 @@ final class GSPClient: ObservableObject {
         lastError = nil
     }
 
-    private func sendAttach(tabId: UInt32, attachmentId: UInt64, resumeToken: UInt64?) {
+    private func sendAttach(tabId: UInt32) {
         attachRequestedAt = Date()
-        var payload = Data(count: resumeToken == nil ? 12 : 20)
+        var payload = Data(count: 4)
         payload.withUnsafeMutableBytes { $0.storeBytes(of: tabId.littleEndian, as: UInt32.self) }
-        payload.withUnsafeMutableBytes { $0.storeBytes(of: attachmentId.littleEndian, toByteOffset: 4, as: UInt64.self) }
-        if let resumeToken {
-            payload.withUnsafeMutableBytes { $0.storeBytes(of: resumeToken.littleEndian, toByteOffset: 12, as: UInt64.self) }
-        }
         sendMessage(type: .attach, payload: payload)
-    }
-
-    private func generateAttachmentId() -> UInt64 {
-        var generator = SystemRandomNumberGenerator()
-        var attachmentId = UInt64.random(in: UInt64.min...UInt64.max, using: &generator)
-        if attachmentId == 0 {
-            attachmentId = 1
-        }
-        return attachmentId
     }
 
     func sendInput(_ text: String) {
@@ -1355,8 +1311,6 @@ final class GSPClient: ObservableObject {
             serverInstanceId = nil
             serverIdentityId = nil
             attachedTabId = nil
-            attachmentId = nil
-            resumeToken = nil
             pendingAttachedTabId = nil
             tabs = []
             runtimeState = nil
@@ -1412,18 +1366,6 @@ final class GSPClient: ObservableObject {
         guard pendingAttachedTabId == nil else { return }
         guard !autoTabBootstrapSuppressed else { return }
 
-        if let desiredTabId = desiredAttachedTabId,
-           let desiredAttachmentId,
-           let desiredResumeToken {
-            debugLog("bootstrapCanonicalHostTab trigger=\(trigger) resume tabId=\(desiredTabId)")
-            sendAttach(
-                tabId: desiredTabId,
-                attachmentId: desiredAttachmentId,
-                resumeToken: desiredResumeToken
-            )
-            return
-        }
-
         if let runtimeState,
            runtimeState.tabs.indices.contains(runtimeState.activeTab) {
             let runtimeActiveTabId = runtimeState.tabs[runtimeState.activeTab].tabId
@@ -1477,8 +1419,6 @@ final class GSPClient: ObservableObject {
                 cursorStyle: screen.cursorStyle
             ),
             attachedTabId: attachedTabId,
-            attachmentId: attachmentId,
-            resumeToken: resumeToken,
             lastErrorKind: lastErrorKind,
             lastError: lastError
         )
@@ -1501,12 +1441,7 @@ final class GSPClient: ObservableObject {
         }
         lastErrorKind = state.lastErrorKind
         lastError = state.lastError
-        if state.lastErrorKind?.invalidatesResumeAttachment == true {
-            clearResumeAttachmentState()
-        }
         attachedTabId = state.attachedTabId
-        attachmentId = state.attachmentId
-        resumeToken = state.resumeToken
         if attachedTabId != nil {
             pendingHostTabCreation = false
             pendingAttachedTabId = nil
@@ -1568,8 +1503,6 @@ final class GSPClient: ObservableObject {
             switch lastErrorKind {
             case .unknownTab, .notAttached:
                 desiredAttachedTabId = nil
-                desiredAttachmentId = nil
-                desiredResumeToken = nil
                 pendingAttachedTabId = nil
                 pendingHostTabCreation = false
                 bootstrapCanonicalHostTab(trigger: "errorRecovery")

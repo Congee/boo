@@ -333,9 +333,10 @@ Current implementation progress:
 - iOS has canonical runtime-state decoding and uses the active runtime tab as a
   bootstrap fallback before creating a new tab
 - iOS no longer persists a host-scoped preferred tab as a product-level choice;
-  reconnect bootstrap now prefers resume metadata and current runtime state
+  reconnect bootstrap now prefers current runtime state
+- iOS no longer persists resume-attachment metadata as product state
 - remaining attach/detach behavior is transport-only compatibility for terminal
-  streaming and resume, not a product-level "session selection" concept
+  streaming, not a product-level "session selection" concept
 
 ### Phase 3: Pane/runtime action model
 

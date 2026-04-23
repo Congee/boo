@@ -48,20 +48,6 @@ struct ConnectionHistoryEntry: Identifiable, Codable {
     }
 }
 
-struct ResumeAttachmentMetadata: Codable, Equatable {
-    var tabId: UInt32
-    var attachmentId: UInt64
-    var resumeToken: UInt64
-    var recordedAt: Date
-
-    init(tabId: UInt32, attachmentId: UInt64, resumeToken: UInt64, recordedAt: Date) {
-        self.tabId = tabId
-        self.attachmentId = attachmentId
-        self.resumeToken = resumeToken
-        self.recordedAt = recordedAt
-    }
-}
-
 struct TailscaleDiscoverySettings: Codable, Equatable {
     var defaultPort: UInt16 = BooDefaultRemotePort
 }
@@ -196,12 +182,9 @@ final class ConnectionStore: ObservableObject {
     private let maxHistory = 50
     private let storageNamespaceSuffix: String
     private var trustedServerIdentities: [String: String] = [:]
-    private var resumeAttachments: [String: ResumeAttachmentMetadata] = [:]
-
     private var nodesKey: String { "boo.remote.savedNodes\(storageNamespaceSuffix)" }
     private var historyKey: String { "boo.remote.connectionHistory\(storageNamespaceSuffix)" }
     private var trustedIdentitiesKey: String { "boo.remote.trustedServerIdentities\(storageNamespaceSuffix)" }
-    private var resumeAttachmentsKey: String { "boo.remote.resumeAttachments\(storageNamespaceSuffix)" }
     private var tailscaleSettingsKey: String { "boo.remote.tailscale.discovery\(storageNamespaceSuffix)" }
     private var terminalDisplaySettingsKey: String { "boo.remote.terminalDisplay\(storageNamespaceSuffix)" }
     private var tailscaleTokenService: String { "me.congee.boo.tailscale\(storageNamespaceSuffix)" }
@@ -213,7 +196,6 @@ final class ConnectionStore: ObservableObject {
         loadNodes()
         loadHistory()
         loadTrustedServerIdentities()
-        loadResumeAttachments()
         clearLegacyHostTabStorage()
         loadTailscaleSettings()
         loadTerminalDisplaySettings()
@@ -277,25 +259,6 @@ final class ConnectionStore: ObservableObject {
     func trustServerIdentity(host: String, port: UInt16, identityId: String) {
         trustedServerIdentities["\(host):\(port)"] = identityId
         saveTrustedServerIdentities()
-    }
-
-    func recordResumeAttachment(host: String, port: UInt16, tabId: UInt32, attachmentId: UInt64, resumeToken: UInt64) {
-        resumeAttachments[targetKey(host: host, port: port)] = ResumeAttachmentMetadata(
-            tabId: tabId,
-            attachmentId: attachmentId,
-            resumeToken: resumeToken,
-            recordedAt: Date()
-        )
-        saveResumeAttachments()
-    }
-
-    func resumeAttachment(host: String, port: UInt16) -> ResumeAttachmentMetadata? {
-        resumeAttachments[targetKey(host: host, port: port)]
-    }
-
-    func clearResumeAttachment(host: String, port: UInt16) {
-        resumeAttachments.removeValue(forKey: targetKey(host: host, port: port))
-        saveResumeAttachments()
     }
 
     var hasTailscaleAPIToken: Bool {
@@ -394,23 +357,11 @@ final class ConnectionStore: ObservableObject {
         UserDefaults.standard.set(data, forKey: trustedIdentitiesKey)
     }
 
-    private func loadResumeAttachments() {
-        guard let data = UserDefaults.standard.data(forKey: resumeAttachmentsKey),
-              let normalized = normalizeLegacyTabMetadataKeys(in: data),
-              let attachments = try? JSONDecoder().decode([String: ResumeAttachmentMetadata].self, from: normalized) else { return }
-        resumeAttachments = attachments
-        saveResumeAttachments()
-    }
-
-    private func saveResumeAttachments() {
-        guard let data = try? JSONEncoder().encode(resumeAttachments) else { return }
-        UserDefaults.standard.set(data, forKey: resumeAttachmentsKey)
-    }
-
     private func clearLegacyHostTabStorage() {
         let defaults = UserDefaults.standard
         defaults.removeObject(forKey: "boo.remote.hostTabs\(storageNamespaceSuffix)")
         defaults.removeObject(forKey: "boo.remote.hostSessions\(storageNamespaceSuffix)")
+        defaults.removeObject(forKey: "boo.remote.resumeAttachments\(storageNamespaceSuffix)")
     }
 
     private func loadTailscaleSettings() {
@@ -442,7 +393,6 @@ final class ConnectionStore: ObservableObject {
             UserDefaults.standard.removeObject(forKey: nodesKey)
             UserDefaults.standard.removeObject(forKey: historyKey)
             UserDefaults.standard.removeObject(forKey: trustedIdentitiesKey)
-            UserDefaults.standard.removeObject(forKey: resumeAttachmentsKey)
             UserDefaults.standard.removeObject(forKey: "boo.remote.hostTabs\(storageNamespaceSuffix)")
             UserDefaults.standard.removeObject(forKey: "boo.remote.hostSessions\(storageNamespaceSuffix)")
             UserDefaults.standard.removeObject(forKey: tailscaleSettingsKey)
@@ -738,25 +688,11 @@ final class ConnectionMonitor: ObservableObject {
 
     private func startClientConnection(host: String, port: UInt16) {
         client.configureTrustedServerIdentity(store.trustedServerIdentity(host: host, port: port))
-        if let resume = store.resumeAttachment(host: host, port: port) {
-            client.configureResumeAttachment(
-                tabId: resume.tabId,
-                attachmentId: resume.attachmentId,
-                resumeToken: resume.resumeToken
-            )
-        }
         client.connect(host: host, port: port)
     }
 
     private func startClientConnection(endpoint: NWEndpoint, host: String, port: UInt16) {
         client.configureTrustedServerIdentity(store.trustedServerIdentity(host: host, port: port))
-        if let resume = store.resumeAttachment(host: host, port: port) {
-            client.configureResumeAttachment(
-                tabId: resume.tabId,
-                attachmentId: resume.attachmentId,
-                resumeToken: resume.resumeToken
-            )
-        }
         client.connect(endpoint: endpoint)
     }
 
