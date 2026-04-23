@@ -17,6 +17,45 @@ struct ProtocolCodecSelfTestMain {
             ),
             "tab list decoding"
         )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+
+        let legacyResumeMetadata = """
+        {
+          "sessionId": 42,
+          "attachmentId": 9,
+          "resumeToken": 13,
+          "recordedAt": "2026-04-22T12:00:00Z"
+        }
+        """.data(using: .utf8)!
+        let decodedResumeMetadata = tryOrExit(
+            decoder.decode(ResumeAttachmentMetadata.self, from: legacyResumeMetadata),
+            "resume metadata legacy decode"
+        )
+        assertEqual(decodedResumeMetadata.tabId, 42, "resume metadata legacy sessionId decode")
+
+        let legacyHostMetadata = """
+        {
+          "sessionId": 7,
+          "recordedAt": "2026-04-22T12:00:00Z",
+          "modelVersion": 1
+        }
+        """.data(using: .utf8)!
+        let decodedHostMetadata = tryOrExit(
+            decoder.decode(HostTabMetadata.self, from: legacyHostMetadata),
+            "host tab metadata legacy decode"
+        )
+        assertEqual(decodedHostMetadata.tabId, 7, "host tab metadata legacy sessionId decode")
+
+        let encodedHostMetadata = tryOrExit(
+            encoder.encode(decodedHostMetadata),
+            "host tab metadata canonical encode"
+        )
+        let encodedHostJson = String(data: encodedHostMetadata, encoding: .utf8) ?? ""
+        assertEqual(encodedHostJson.contains("\"tabId\""), true, "host tab metadata encodes canonical tabId")
+        assertEqual(encodedHostJson.contains("\"sessionId\""), false, "host tab metadata omits legacy sessionId on encode")
 
         guard let state = WireCodec.decodeFullState(makeFullStatePayload()) else {
             fputs("failed to decode full-state payload\n", stderr)
@@ -231,5 +270,14 @@ struct ProtocolCodecSelfTestMain {
         )
 
         print("iOS wire codec self-test passed")
+    }
+}
+
+private func tryOrExit<T>(_ result: @autoclosure () throws -> T, _ context: String) -> T {
+    do {
+        return try result()
+    } catch {
+        fputs("\(context): \(error)\n", stderr)
+        exit(1)
     }
 }
