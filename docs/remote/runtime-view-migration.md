@@ -91,13 +91,13 @@ explicitly attached to, plus optional resume/lease metadata.
   - explicit attach bootstrap
 
 What remains is only:
-- `ClientRuntimeSubscription`
-  - current subscribed tab id for this client stream
+- `ClientRuntimeView`
+  - current visible tab id for this client stream
   - cached tab-list/runtime/appearance payloads
   - cached terminal full state and pane states
   - latest acknowledged input sequence
 
-That remaining subscription cache is runtime-view transport plumbing, not a
+That remaining viewer cache is runtime-view transport plumbing, not a
 user-visible attach/session model.
 
 ### Category C: Obsolete legacy-target-picking model that should be removed
@@ -116,18 +116,18 @@ Examples:
 
 - `ios/Sources/ProtocolClient.swift`
 - `listSessions()` as a bootstrap tool in the old client model
-- `ios/Sources/Screens.swift` still has attachment-driven terminal bootstrap
+- `ios/Sources/Screens.swift` historically carried attachment-driven terminal bootstrap
 - `src/client_gui.rs` still refreshes from compatibility tab lists before a
   richer runtime-view model exists
 
 ## Target Architecture
 
-### One runtime subscription per client
+### One runtime viewer per client
 
 A remote client should connect to the Boo runtime, not attach through the
 legacy session layer.
 
-The runtime subscription should carry:
+The runtime viewer should carry:
 
 - runtime state
 - pane state / terminal state
@@ -349,8 +349,8 @@ as historical or migration-only code:
   - iOS still rewrites legacy persisted `sessionId` / `hostSessions` data into
     canonical `tabId` / `hostTabs` storage on load
 - client bootstrap
-  - iOS still has compatibility tab-list handling and attached-tab recovery, but
-    production bootstrap is now tab-native rather than `listSessions()`-driven
+  - iOS still has compatibility tab-list handling, but production bootstrap is
+    now tab-native rather than `listSessions()`-driven
   - local GUI remote stream handling still starts from compatibility tab lists
     instead of first-class runtime snapshots
 

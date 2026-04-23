@@ -11,7 +11,7 @@ boo --host <ssh-host>
 - bootstrap the remote Boo server over SSH
 - forward the remote control socket
 - forward the remote `.stream` socket
-- attach the local GUI/client to the forwarded local sockets
+- connect the local GUI/client to the forwarded local sockets
 
 ## Why This Exists
 
@@ -35,7 +35,7 @@ Prefer direct socket-level checks:
 - forwarded control socket health
 - `get-ui-snapshot` over the tunnel
 - tab creation through the forwarded path
-- `.stream` attach/update behavior
+- `.stream` runtime-view update behavior
 
 ## Related Docs
 

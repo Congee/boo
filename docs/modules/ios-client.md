@@ -20,8 +20,9 @@ It handles:
 - Bonjour discovery
 - optional Tailscale device discovery through the Tailscale API
 - auth
-- tab listing and attach
-- reconnect/resume metadata
+- runtime-view bootstrap
+- tab metadata and current-view state
+- trusted server identity pinning
 - terminal state decoding and presentation
 
 ## Important Current Behavior
@@ -35,7 +36,7 @@ It handles:
 - therefore current Tailscale dashboard metrics are app-level Boo service probes on the configured port, not Tailscale-native peer/path telemetry
 - connects through resolved Network framework endpoints
 - supports saved nodes and connection history
-- supports attachment resume and trusted server identity pinning
+- bootstraps from runtime state rather than selecting an attach target
 - if Bonjour browsing returns local-network authorization failure, the app now shows a direct error and an `Open iPad Settings` action instead of silently showing an empty discovery list
 
 ## Verification
@@ -60,7 +61,7 @@ Primary high-level doc:
 Changes here can affect:
 
 - auth and handshake behavior
-- resume/reconnect UX
+- runtime-view bootstrap and reconnect UX
 - terminal decode correctness
 - Bonjour discovery and endpoint handling
 - Tailscale peer discovery and token handling

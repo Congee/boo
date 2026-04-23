@@ -21,7 +21,7 @@ It powers:
 - direct remote daemon access
 - iOS client connectivity
 - daemon diagnostics
-- tab attach/detach, create, resize, input, and state publishing
+- runtime-view publishing plus tab create, resize, input, and diagnostics
 
 ## Current Shape
 
@@ -33,14 +33,15 @@ files own narrower responsibilities such as:
 - listener and transport setup
 - wire encode/decode
 - daemon state
-- tab/full-state handling
-- diagnostics, broadcast, and attachment behavior
+- runtime-view, tab, and pane/full-state handling
+- diagnostics and broadcast behavior
 
 ## Important Properties
 
 - supports full-state and delta publishing
 - supports heartbeat and reconnect-oriented metadata
 - supports daemon identity metadata
+- keeps only thin per-viewer current-tab/cache bookkeeping in the transport layer
 - exposed diagnostics through `boo remote-clients`
 
 ## Related Docs

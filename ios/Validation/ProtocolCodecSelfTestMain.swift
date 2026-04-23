@@ -171,7 +171,7 @@ struct ProtocolCodecSelfTestMain {
         clientState.activeTabId = 42
         let tabExitedEffect = ClientWireReducer.reduce(message: .tabExited, payload: Data(), state: &clientState)
         assertEqual(tabExitedEffect, .none, "tab exited has no side effect")
-        assertEqual(clientState.activeTabId, nil, "tab exited clears active tab")
+        assertEqual(clientState.activeTabId, 42, "tab exited does not mutate active tab directly")
 
         let reachableTabs = [
             RemoteTabInfo(
