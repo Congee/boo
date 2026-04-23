@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 pub(crate) fn send_state_to_client(
     state: &Arc<Mutex<State>>,
     client_id: u64,
-    tab_id: u32,
+    visible_tab_id: u32,
     next_state: Arc<RemoteFullState>,
 ) {
     let _scope = crate::profiling::scope("server.stream.encode_state", crate::profiling::Kind::Cpu);
@@ -17,13 +17,13 @@ pub(crate) fn send_state_to_client(
         let Some(client) = guard.clients.get(&client_id) else {
             return;
         };
-        if client.runtime_subscription.tab_id != Some(tab_id) {
+        if client.runtime_view.visible_tab_id != Some(visible_tab_id) {
             return;
         }
         (
             client.outbound.clone(),
-            client.runtime_subscription.last_state.clone(),
-            client.runtime_subscription.latest_input_seq,
+            client.runtime_view.last_state.clone(),
+            client.runtime_view.latest_input_seq,
             client.is_local,
         )
     };
@@ -46,10 +46,10 @@ pub(crate) fn send_state_to_client(
         let Some(client) = guard.clients.get_mut(&client_id) else {
             return;
         };
-        if client.runtime_subscription.tab_id != Some(tab_id) {
+        if client.runtime_view.visible_tab_id != Some(visible_tab_id) {
             false
         } else {
-            client.runtime_subscription.last_state = Some(Arc::clone(&next_state));
+            client.runtime_view.last_state = Some(Arc::clone(&next_state));
             true
         }
     };
@@ -74,7 +74,7 @@ pub(crate) fn send_state_to_client(
 pub(crate) fn send_pane_state_to_client(
     state: &Arc<Mutex<State>>,
     client_id: u64,
-    tab_id: u32,
+    visible_tab_id: u32,
     pane_id: u64,
     next_state: Arc<RemoteFullState>,
 ) {
@@ -83,10 +83,10 @@ pub(crate) fn send_pane_state_to_client(
         let Some(client) = guard.clients.get(&client_id) else {
             return;
         };
-        if client.runtime_subscription.tab_id != Some(tab_id) {
+        if client.runtime_view.visible_tab_id != Some(visible_tab_id) {
             return;
         }
-        (client.outbound.clone(), client.runtime_subscription.pane_states.get(&pane_id).cloned())
+        (client.outbound.clone(), client.runtime_view.pane_states.get(&pane_id).cloned())
     };
     let (ty, payload) =
         match previous_state
@@ -104,10 +104,10 @@ pub(crate) fn send_pane_state_to_client(
         let Some(client) = guard.clients.get_mut(&client_id) else {
             return;
         };
-        if client.runtime_subscription.tab_id != Some(tab_id) {
+        if client.runtime_view.visible_tab_id != Some(visible_tab_id) {
             false
         } else {
-            client.runtime_subscription.pane_states.insert(pane_id, Arc::clone(&next_state));
+            client.runtime_view.pane_states.insert(pane_id, Arc::clone(&next_state));
             true
         }
     };

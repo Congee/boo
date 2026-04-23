@@ -31,8 +31,8 @@ pub(crate) const DIRECT_CLIENT_HEARTBEAT_WINDOW: Duration = Duration::from_secs(
 /// The authoritative tab/pane/runtime model lives in the server runtime. This
 /// struct only tracks which tab a given stream is currently subscribed to plus
 /// the cached payloads/full states needed for efficient transport updates.
-pub(crate) struct ClientRuntimeSubscription {
-    pub(crate) tab_id: Option<u32>,
+pub(crate) struct ClientRuntimeView {
+    pub(crate) visible_tab_id: Option<u32>,
     pub(crate) last_tab_list_payload: Option<Vec<u8>>,
     pub(crate) last_ui_runtime_state_payload: Option<Vec<u8>>,
     pub(crate) last_ui_appearance_payload: Option<Vec<u8>>,
@@ -41,10 +41,10 @@ pub(crate) struct ClientRuntimeSubscription {
     pub(crate) latest_input_seq: Option<u64>,
 }
 
-impl ClientRuntimeSubscription {
+impl ClientRuntimeView {
     pub(crate) fn idle() -> Self {
         Self {
-            tab_id: None,
+            visible_tab_id: None,
             last_tab_list_payload: None,
             last_ui_runtime_state_payload: None,
             last_ui_appearance_payload: None,
@@ -74,7 +74,7 @@ impl ClientState {
             connected_at: Instant::now(),
             authenticated_at: authenticated.then(Instant::now),
             last_heartbeat_at: None,
-            runtime_subscription: ClientRuntimeSubscription::idle(),
+            runtime_view: ClientRuntimeView::idle(),
             is_local,
         }
     }
@@ -86,7 +86,7 @@ pub(crate) struct ClientState {
     pub(crate) connected_at: Instant,
     pub(crate) authenticated_at: Option<Instant>,
     pub(crate) last_heartbeat_at: Option<Instant>,
-    pub(crate) runtime_subscription: ClientRuntimeSubscription,
+    pub(crate) runtime_view: ClientRuntimeView,
     pub(crate) is_local: bool,
 }
 

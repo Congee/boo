@@ -86,9 +86,9 @@ pub(crate) fn send_ui_runtime_state(
     );
 }
 
-pub(crate) fn send_ui_runtime_state_to_local_subscribed(
+pub(crate) fn send_ui_runtime_state_to_local_viewers(
     state: &Arc<Mutex<State>>,
-    tab_id: u32,
+    visible_tab_id: u32,
     runtime_state: &crate::control::UiRuntimeState,
 ) {
     let Ok(payload) = serde_json::to_vec(runtime_state) else {
@@ -96,7 +96,7 @@ pub(crate) fn send_ui_runtime_state_to_local_subscribed(
     };
     let client_ids = {
         let guard = state.lock().expect("remote server state poisoned");
-        local_subscribed_client_ids_for_tab(&guard, tab_id)
+        local_subscribed_client_ids_for_tab(&guard, visible_tab_id)
     };
     for client_id in client_ids {
         send_cached_control_payload_bytes(
@@ -186,8 +186,8 @@ fn cache_slot_mut(
     cache_slot: CachedControlPayload,
 ) -> &mut Option<Vec<u8>> {
     match cache_slot {
-        CachedControlPayload::TabList => &mut client.runtime_subscription.last_tab_list_payload,
-        CachedControlPayload::UiRuntimeState => &mut client.runtime_subscription.last_ui_runtime_state_payload,
-        CachedControlPayload::UiAppearance => &mut client.runtime_subscription.last_ui_appearance_payload,
+        CachedControlPayload::TabList => &mut client.runtime_view.last_tab_list_payload,
+        CachedControlPayload::UiRuntimeState => &mut client.runtime_view.last_ui_runtime_state_payload,
+        CachedControlPayload::UiAppearance => &mut client.runtime_view.last_ui_appearance_payload,
     }
 }

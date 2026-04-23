@@ -162,7 +162,7 @@ pub(crate) fn read_loop(
             }
             MessageType::Destroy => Some(RemoteCmd::Destroy {
                 client_id,
-                tab_id: parse_tab_id(&payload),
+                visible_tab_id: parse_tab_id(&payload),
             }),
             _ => None,
         };

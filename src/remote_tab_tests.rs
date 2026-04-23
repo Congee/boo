@@ -4,7 +4,7 @@ mod tests {
     use crate::remote_auth::read_loop;
     use crate::remote_batcher::OutboundMessage;
     use crate::remote_state::{
-        ClientRuntimeSubscription, ClientState, DIRECT_CLIENT_HEARTBEAT_WINDOW, State,
+        ClientRuntimeView, ClientState, DIRECT_CLIENT_HEARTBEAT_WINDOW, State,
     };
     use crate::remote_wire::{
         MESSAGE_TYPE_LIST_TABS, MESSAGE_TYPE_TAB_LIST, MessageType, RemoteCell, RemoteErrorCode,
@@ -179,11 +179,11 @@ mod tests {
                             - DIRECT_CLIENT_HEARTBEAT_WINDOW
                             - Duration::from_secs(2),
                     ),
-                    runtime_subscription: ClientRuntimeSubscription {
-                        tab_id: Some(11),
+                    runtime_view: ClientRuntimeView {
+                        visible_tab_id: Some(11),
                         last_state: Some(Arc::clone(&cached_state)),
                         latest_input_seq: Some(9),
-                        ..ClientRuntimeSubscription::idle()
+                        ..ClientRuntimeView::idle()
                     },
                     ..remote_client(outbound_tx)
                 },

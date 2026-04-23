@@ -12,7 +12,7 @@ use std::time::Instant;
 use crate::remote::RemoteCmd;
 use crate::remote_auth::read_loop;
 use crate::remote_batcher::writer_loop;
-use crate::remote_state::{ClientRuntimeSubscription, ClientState, State};
+use crate::remote_state::{ClientRuntimeView, ClientState, State};
 
 /// Monotonic client-id allocator. Shared across transports so diagnostics can
 /// cross-reference a client_id in the clients snapshot with the reader/writer
@@ -41,7 +41,7 @@ pub(crate) fn run_remote_client_connection<R, W>(
                 connected_at: Instant::now(),
                 authenticated_at: Some(Instant::now()),
                 last_heartbeat_at: None,
-                runtime_subscription: ClientRuntimeSubscription::idle(),
+                runtime_view: ClientRuntimeView::idle(),
                 is_local: false,
             },
         );

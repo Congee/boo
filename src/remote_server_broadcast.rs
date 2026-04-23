@@ -5,7 +5,7 @@ mod tests {
     use crate::control;
     use crate::remote::{RemoteServer, RemoteTabInfo};
     use crate::remote_batcher::OutboundMessage;
-    use crate::remote_state::{ClientRuntimeSubscription, ClientState, State};
+    use crate::remote_state::{ClientRuntimeView, ClientState, State};
     use crate::remote_wire::{MAGIC, MessageType, RemoteCell, RemoteFullState};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex, mpsc};
@@ -26,9 +26,9 @@ mod tests {
             connected_at: Instant::now(),
             authenticated_at: Some(Instant::now()),
             last_heartbeat_at: None,
-            runtime_subscription: ClientRuntimeSubscription {
-                tab_id: subscribed_tab,
-                ..ClientRuntimeSubscription::idle()
+            runtime_view: ClientRuntimeView {
+                visible_tab_id: subscribed_tab,
+                ..ClientRuntimeView::idle()
             },
             is_local,
         }
@@ -47,7 +47,7 @@ mod tests {
     }
 
     #[test]
-    fn send_ui_runtime_state_to_local_subscribed_only_targets_matching_tab() {
+    fn send_ui_runtime_state_to_local_viewers_only_targets_matching_tab() {
         let (subscribed_tx, subscribed_rx) = mpsc::channel();
         let (idle_tx, idle_rx) = mpsc::channel();
         let mut state = empty_state();
@@ -55,7 +55,7 @@ mod tests {
         state.clients.insert(2, test_client(idle_tx, None, true));
         let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
 
-        server.send_ui_runtime_state_to_local_subscribed(11, &sample_ui_state());
+        server.send_ui_runtime_state_to_local_viewers(11, &sample_ui_state());
 
         match subscribed_rx.recv().expect("subscribed frame") {
             OutboundMessage::Frame(frame) => {
@@ -177,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn retarget_local_subscribed_to_tab_skips_same_tab_unsubscribed_and_remote_clients() {
+    fn retarget_local_viewing_tab_skips_same_tab_unsubscribed_and_remote_clients() {
         let (local_subscribed_tx, local_subscribed_rx) = mpsc::channel();
         let (local_subscribed_two_tx, local_subscribed_two_rx) = mpsc::channel();
         let (local_idle_tx, local_idle_rx) = mpsc::channel();
@@ -200,14 +200,14 @@ mod tests {
         let state = Arc::new(Mutex::new(state));
         let server = RemoteServer::for_test(Arc::clone(&state));
 
-        server.retarget_local_subscribed_to_tab(22);
+        server.retarget_local_viewing_tab(22);
 
         let guard = state.lock().expect("remote server state poisoned");
-        assert_eq!(guard.clients.get(&1).and_then(|c| c.runtime_subscription.tab_id), Some(22));
-        assert_eq!(guard.clients.get(&5).and_then(|c| c.runtime_subscription.tab_id), Some(22));
-        assert_eq!(guard.clients.get(&2).and_then(|c| c.runtime_subscription.tab_id), None);
-        assert_eq!(guard.clients.get(&3).and_then(|c| c.runtime_subscription.tab_id), Some(22));
-        assert_eq!(guard.clients.get(&4).and_then(|c| c.runtime_subscription.tab_id), Some(11));
+        assert_eq!(guard.clients.get(&1).and_then(|c| c.runtime_view.visible_tab_id), Some(22));
+        assert_eq!(guard.clients.get(&5).and_then(|c| c.runtime_view.visible_tab_id), Some(22));
+        assert_eq!(guard.clients.get(&2).and_then(|c| c.runtime_view.visible_tab_id), None);
+        assert_eq!(guard.clients.get(&3).and_then(|c| c.runtime_view.visible_tab_id), Some(22));
+        assert_eq!(guard.clients.get(&4).and_then(|c| c.runtime_view.visible_tab_id), Some(11));
         assert!(local_idle_rx.try_recv().is_err());
         assert!(local_same_tab_rx.try_recv().is_err());
         assert!(remote_subscribed_rx.try_recv().is_err());
@@ -220,7 +220,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let mut state = empty_state();
         let mut client = test_client(tx, Some(11), true);
-        client.runtime_subscription.pane_states = HashMap::from([
+        client.runtime_view.pane_states = HashMap::from([
             (
                 10,
                 Arc::new(RemoteFullState {
@@ -268,7 +268,7 @@ mod tests {
 
         let guard = state.lock().expect("remote server state poisoned");
         let client = guard.clients.get(&1).expect("client state");
-        assert!(!client.runtime_subscription.pane_states.contains_key(&10));
-        assert!(client.runtime_subscription.pane_states.contains_key(&20));
+        assert!(!client.runtime_view.pane_states.contains_key(&10));
+        assert!(client.runtime_view.pane_states.contains_key(&20));
     }
 }

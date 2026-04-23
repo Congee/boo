@@ -753,10 +753,10 @@ impl ClientApp {
         }
         self.remote_debug_summary = match self.client.get_remote_clients() {
             Ok(snapshot) => {
-                let subscribed = snapshot
+                let viewing = snapshot
                     .clients
                     .iter()
-                    .filter(|client| client.subscribed_tab.is_some())
+                    .filter(|client| client.viewing_tab.is_some())
                     .count();
                 let pending = snapshot
                     .clients
@@ -769,10 +769,10 @@ impl ClientApp {
                     .filter(|client| client.heartbeat_overdue)
                     .count();
                 Some(format!(
-                    "diag s={} c={} a={} p={} h={}",
+                    "diag s={} c={} v={} p={} h={}",
                     snapshot.servers.len(),
                     snapshot.clients.len(),
-                    subscribed,
+                    viewing,
                     pending,
                     stale_heartbeats
                 ))
@@ -4043,9 +4043,9 @@ mod tests {
                 None,
                 None,
                 Some("example-mbp.local"),
-                Some("diag s=1 c=2 a=1 p=1 h=0 r=1"),
+                Some("diag s=1 c=2 v=1 p=1 h=0 r=1"),
             ),
-            "remote:example-mbp.local: connected  /repo  diag s=1 c=2 a=1 p=1 h=0 r=1"
+            "remote:example-mbp.local: connected  /repo  diag s=1 c=2 v=1 p=1 h=0 r=1"
         );
     }
 }
