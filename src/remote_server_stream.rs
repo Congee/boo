@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 pub(crate) fn send_state_to_client(
     state: &Arc<Mutex<State>>,
     client_id: u64,
-    visible_tab_id: u32,
+    _visible_tab_id: u32,
     next_state: Arc<RemoteFullState>,
 ) {
     let _scope = crate::profiling::scope("server.stream.encode_state", crate::profiling::Kind::Cpu);
@@ -17,7 +17,7 @@ pub(crate) fn send_state_to_client(
         let Some(client) = guard.clients.get(&client_id) else {
             return;
         };
-        if client.runtime_view.visible_tab_id != Some(visible_tab_id) {
+        if client.runtime_view.visible_tab_id.is_none() {
             return;
         }
         (
@@ -46,7 +46,7 @@ pub(crate) fn send_state_to_client(
         let Some(client) = guard.clients.get_mut(&client_id) else {
             return;
         };
-        if client.runtime_view.visible_tab_id != Some(visible_tab_id) {
+        if client.runtime_view.visible_tab_id.is_none() {
             false
         } else {
             client.runtime_view.last_state = Some(Arc::clone(&next_state));
@@ -74,7 +74,7 @@ pub(crate) fn send_state_to_client(
 pub(crate) fn send_pane_state_to_client(
     state: &Arc<Mutex<State>>,
     client_id: u64,
-    visible_tab_id: u32,
+    _visible_tab_id: u32,
     pane_id: u64,
     next_state: Arc<RemoteFullState>,
 ) {
@@ -83,7 +83,7 @@ pub(crate) fn send_pane_state_to_client(
         let Some(client) = guard.clients.get(&client_id) else {
             return;
         };
-        if client.runtime_view.visible_tab_id != Some(visible_tab_id) {
+        if client.runtime_view.visible_tab_id.is_none() {
             return;
         }
         (client.outbound.clone(), client.runtime_view.pane_states.get(&pane_id).cloned())
@@ -104,7 +104,7 @@ pub(crate) fn send_pane_state_to_client(
         let Some(client) = guard.clients.get_mut(&client_id) else {
             return;
         };
-        if client.runtime_view.visible_tab_id != Some(visible_tab_id) {
+        if client.runtime_view.visible_tab_id.is_none() {
             false
         } else {
             client.runtime_view.pane_states.insert(pane_id, Arc::clone(&next_state));

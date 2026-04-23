@@ -2,7 +2,7 @@
 
 use crate::remote::RemoteTabInfo;
 use crate::remote_batcher::OutboundMessage;
-use crate::remote_server_targets::{local_client_ids, local_subscribed_client_ids_for_tab};
+use crate::remote_server_targets::{local_client_ids, local_viewer_client_ids};
 use crate::remote_state::{ClientState, State};
 use crate::remote_wire::{MESSAGE_TYPE_TAB_LIST, MessageType, encode_message, encode_tab_list};
 use std::sync::{Arc, Mutex};
@@ -88,7 +88,7 @@ pub(crate) fn send_ui_runtime_state(
 
 pub(crate) fn send_ui_runtime_state_to_local_viewers(
     state: &Arc<Mutex<State>>,
-    visible_tab_id: u32,
+    _visible_tab_id: u32,
     runtime_state: &crate::control::UiRuntimeState,
 ) {
     let Ok(payload) = serde_json::to_vec(runtime_state) else {
@@ -96,7 +96,7 @@ pub(crate) fn send_ui_runtime_state_to_local_viewers(
     };
     let client_ids = {
         let guard = state.lock().expect("remote server state poisoned");
-        local_subscribed_client_ids_for_tab(&guard, visible_tab_id)
+        local_viewer_client_ids(&guard)
     };
     for client_id in client_ids {
         send_cached_control_payload_bytes(

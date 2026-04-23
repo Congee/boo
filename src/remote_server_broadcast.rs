@@ -264,7 +264,7 @@ mod tests {
         let state = Arc::new(Mutex::new(state));
         let server = RemoteServer::for_test(Arc::clone(&state));
 
-        server.retain_local_subscribed_pane_states(11, &[20]);
+        server.retain_local_subscribed_pane_states(&[20]);
 
         let guard = state.lock().expect("remote server state poisoned");
         let client = guard.clients.get(&1).expect("client state");

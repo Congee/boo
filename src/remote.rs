@@ -135,9 +135,9 @@ use crate::remote_server_stream::{
     send_state_to_client as publish_state_to_client,
 };
 use crate::remote_server_targets::{
-    client_ids_for_tab, local_subscribed_client_ids_for_tab,
+    local_viewer_client_ids,
     retain_local_subscribed_pane_states as retain_local_subscribed_pane_states_inner,
-    retarget_subscribed_client_ids_for_tab,
+    retarget_subscribed_client_ids_for_tab, viewer_client_ids,
 };
 use crate::remote_state::{ClientRuntimeView, ClientState, State};
 
@@ -479,7 +479,7 @@ impl RemoteServer {
     }
 
     pub fn send_full_state_to_viewers(&self, visible_tab_id: u32, state: Arc<RemoteFullState>) {
-        let client_ids = self.clients_for_tab(visible_tab_id);
+        let client_ids = self.viewer_client_ids();
         for client_id in client_ids {
             publish_state_to_client(&self.state, client_id, visible_tab_id, Arc::clone(&state));
         }
@@ -493,7 +493,7 @@ impl RemoteServer {
     ) {
         let client_ids = {
             let state_guard = self.state.lock().expect("remote server state poisoned");
-            local_subscribed_client_ids_for_tab(&state_guard, visible_tab_id)
+            local_viewer_client_ids(&state_guard)
         };
         for client_id in client_ids {
             publish_pane_state_to_client(
@@ -508,11 +508,10 @@ impl RemoteServer {
 
     pub fn retain_local_subscribed_pane_states(
         &self,
-        visible_tab_id: u32,
         visible_pane_ids: &[u64],
     ) {
         let mut guard = self.state.lock().expect("remote server state poisoned");
-        retain_local_subscribed_pane_states_inner(&mut guard, visible_tab_id, visible_pane_ids);
+        retain_local_subscribed_pane_states_inner(&mut guard, visible_pane_ids);
     }
 
     pub fn record_input_seq(&self, client_id: u64, input_seq: Option<u64>) {
@@ -523,9 +522,9 @@ impl RemoteServer {
         });
     }
 
-    fn clients_for_tab(&self, visible_tab_id: u32) -> Vec<u64> {
+    fn viewer_client_ids(&self) -> Vec<u64> {
         let state = self.state.lock().expect("remote server state poisoned");
-        client_ids_for_tab(&state, visible_tab_id)
+        viewer_client_ids(&state)
     }
 
     fn update_client(&self, client_id: u64, mut update: impl FnMut(&mut ClientState)) {

@@ -786,7 +786,7 @@ impl BooApp {
         if needs_local_pane_states {
             let visible_pane_ids = pane_states.iter().map(|(pane_id, _)| *pane_id).collect::<Vec<_>>();
             for server in &servers {
-                server.retain_local_subscribed_pane_states(visible_tab_id, &visible_pane_ids);
+                server.retain_local_subscribed_pane_states(&visible_pane_ids);
             }
         }
         for server in servers {
