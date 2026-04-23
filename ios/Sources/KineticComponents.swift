@@ -395,6 +395,97 @@ struct RemoteTerminalView: View {
     }
 }
 
+struct RemoteTerminalCanvasView: View {
+    let state: DecodedWireScreenState?
+    var onGestureAction: ((RemoteTerminalGestureAction) -> Void)? = nil
+
+    private let font = Font.system(size: 14, design: .monospaced)
+    private let cellWidth: CGFloat = 8.4
+    private let cellHeight: CGFloat = 17
+    private let gestureThreshold: CGFloat = 28
+    @State private var accumulatedScrollDrag: CGFloat = 0
+    @State private var lastDragTranslation: CGSize = .zero
+
+    var body: some View {
+        Canvas { context, size in
+            guard let state else { return }
+            let cols = Int(state.cols)
+            let rows = Int(state.rows)
+            guard cols > 0, rows > 0, state.cells.count == cols * rows else { return }
+            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.black))
+            for row in 0..<rows {
+                for col in 0..<cols {
+                    let index = row * cols + col
+                    let cell = state.cells[index]
+                    let x = CGFloat(col) * cellWidth
+                    let y = CGFloat(row) * cellHeight
+                    if cell.bg_r != 0 || cell.bg_g != 0 || cell.bg_b != 0 || (cell.styleFlags & 0x40) != 0 {
+                        let rect = CGRect(x: x, y: y, width: cellWidth, height: cellHeight)
+                        context.fill(
+                            Path(rect),
+                            with: .color(Color(
+                                red: Double(cell.bg_r) / 255,
+                                green: Double(cell.bg_g) / 255,
+                                blue: Double(cell.bg_b) / 255
+                            ))
+                        )
+                    }
+                    guard cell.codepoint > 0x20, let scalar = Unicode.Scalar(cell.codepoint) else { continue }
+                    let color: Color = (cell.styleFlags & 0x20) != 0
+                        ? Color(red: Double(cell.fg_r)/255, green: Double(cell.fg_g)/255, blue: Double(cell.fg_b)/255)
+                        : .white
+                    var text = Text(String(Character(scalar))).font(font).foregroundColor(color)
+                    if (cell.styleFlags & 0x01) != 0 { text = text.bold() }
+                    if (cell.styleFlags & 0x02) != 0 { text = text.italic() }
+                    context.draw(context.resolve(text), at: CGPoint(x: x, y: y), anchor: .topLeading)
+                }
+            }
+            if state.cursorVisible {
+                let rect = CGRect(
+                    x: CGFloat(state.cursorX) * cellWidth,
+                    y: CGFloat(state.cursorY) * cellHeight,
+                    width: cellWidth,
+                    height: cellHeight
+                )
+                context.fill(Path(rect), with: .color(.white.opacity(0.45)))
+            }
+        }
+        .background(.black)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 4)
+                .onChanged { drag in
+                    guard let onGestureAction else { return }
+                    let dx = drag.translation.width
+                    let dy = drag.translation.height
+                    if abs(dy) > abs(dx) {
+                        let step = dy - lastDragTranslation.height
+                        accumulatedScrollDrag += step
+                        let lines = Int(accumulatedScrollDrag / cellHeight)
+                        if lines != 0 {
+                            onGestureAction(.scrollLines(lines))
+                            accumulatedScrollDrag -= CGFloat(lines) * cellHeight
+                        }
+                    }
+                    lastDragTranslation = drag.translation
+                }
+                .onEnded { drag in
+                    guard let onGestureAction else { return }
+                    let dx = drag.translation.width
+                    if abs(dx) >= abs(drag.translation.height) {
+                        if dx <= -gestureThreshold {
+                            onGestureAction(.arrowRight)
+                        } else if dx >= gestureThreshold {
+                            onGestureAction(.arrowLeft)
+                        }
+                    }
+                    accumulatedScrollDrag = 0
+                    lastDragTranslation = .zero
+                }
+        )
+    }
+}
+
 struct TerminalKeyboardBridge: UIViewRepresentable {
     @Binding var isFocused: Bool
     let onText: (String) -> Void

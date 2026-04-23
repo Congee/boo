@@ -60,6 +60,22 @@ func makeDeltaPayload() -> Data {
     return data
 }
 
+func makePaneUpdatePayload(
+    tabId: UInt32,
+    paneId: UInt64,
+    paneRevision: UInt64,
+    runtimeRevision: UInt64,
+    body: Data
+) -> Data {
+    var data = Data()
+    data.append(contentsOf: tabId.littleEndianBytes)
+    data.append(contentsOf: paneId.littleEndianBytes)
+    data.append(contentsOf: paneRevision.littleEndianBytes)
+    data.append(contentsOf: runtimeRevision.littleEndianBytes)
+    data.append(body)
+    return data
+}
+
 extension FixedWidthInteger {
     var littleEndianBytes: [UInt8] {
         withUnsafeBytes(of: self.littleEndian, Array.init)

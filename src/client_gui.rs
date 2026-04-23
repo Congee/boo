@@ -2640,11 +2640,12 @@ fn decode_remote_full_state(payload: &[u8]) -> Option<(Option<u64>, remote::Remo
 }
 
 fn decode_remote_pane_full_state(payload: &[u8]) -> Option<(u64, remote::RemoteFullState)> {
-    if payload.len() < 8 {
+    if payload.len() < crate::remote_wire::UI_PANE_UPDATE_HEADER_LEN {
         return None;
     }
-    let pane_id = u64::from_le_bytes(payload[..8].try_into().ok()?);
-    let (_, state) = decode_remote_full_state(&payload[8..])?;
+    let pane_id = u64::from_le_bytes(payload[4..12].try_into().ok()?);
+    let (_, state) =
+        decode_remote_full_state(&payload[crate::remote_wire::UI_PANE_UPDATE_HEADER_LEN..])?;
     Some((pane_id, state))
 }
 
@@ -2742,11 +2743,12 @@ fn decode_remote_delta(payload: &[u8]) -> Option<(Option<u64>, RemoteDelta)> {
 }
 
 fn decode_remote_pane_delta(payload: &[u8]) -> Option<(u64, RemoteDelta)> {
-    if payload.len() < 8 {
+    if payload.len() < crate::remote_wire::UI_PANE_UPDATE_HEADER_LEN {
         return None;
     }
-    let pane_id = u64::from_le_bytes(payload[..8].try_into().ok()?);
-    let (_, delta) = decode_remote_delta(&payload[8..])?;
+    let pane_id = u64::from_le_bytes(payload[4..12].try_into().ok()?);
+    let (_, delta) =
+        decode_remote_delta(&payload[crate::remote_wire::UI_PANE_UPDATE_HEADER_LEN..])?;
     Some((pane_id, delta))
 }
 
@@ -3800,6 +3802,65 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(texts, vec!["b".to_string(), "c".to_string(), String::new()]);
         assert_eq!(snapshot.row_revisions, vec![20, 30, 11]);
+    }
+
+    #[test]
+    fn decode_remote_pane_full_state_uses_prefixed_tab_and_pane_header() {
+        let full_state = remote::RemoteFullState {
+            rows: 1,
+            cols: 1,
+            cursor_x: 0,
+            cursor_y: 0,
+            cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 0,
+            cells: vec![remote::RemoteCell {
+                codepoint: u32::from('x'),
+                fg: [1, 2, 3],
+                bg: [4, 5, 6],
+                style_flags: 0,
+                wide: false,
+            }],
+        };
+        let payload = crate::remote_wire::encode_ui_pane_update_payload(
+            77,
+            99,
+            3,
+            4,
+            &remote::encode_full_state(&full_state, None, true),
+        );
+
+        let (pane_id, decoded) = decode_remote_pane_full_state(&payload).expect("pane full state");
+        assert_eq!(pane_id, 99);
+        assert_eq!(decoded.rows, 1);
+        assert_eq!(decoded.cols, 1);
+        assert_eq!(decoded.cells.len(), 1);
+        assert_eq!(decoded.cells[0].codepoint, u32::from('x'));
+    }
+
+    #[test]
+    fn decode_remote_pane_delta_uses_prefixed_tab_and_pane_header() {
+        let mut delta = Vec::new();
+        delta.extend_from_slice(&0_u64.to_le_bytes());
+        delta.extend_from_slice(&1_u16.to_le_bytes());
+        delta.extend_from_slice(&0_u16.to_le_bytes());
+        delta.extend_from_slice(&0_u16.to_le_bytes());
+        delta.push(1);
+        delta.push(0);
+        delta.push(0);
+        delta.extend_from_slice(&0_i32.to_le_bytes());
+        delta.extend_from_slice(&0_u16.to_le_bytes());
+        delta.extend_from_slice(&0_u16.to_le_bytes());
+        delta.extend_from_slice(&1_u16.to_le_bytes());
+        delta.extend_from_slice(&u32::from('b').to_le_bytes());
+        delta.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
+        let payload =
+            crate::remote_wire::encode_ui_pane_update_payload(77, 101, 5, 6, &delta);
+
+        let (pane_id, decoded) = decode_remote_pane_delta(&payload).expect("pane delta");
+        assert_eq!(pane_id, 101);
+        assert_eq!(decoded.changed_rows.len(), 1);
+        assert_eq!(decoded.changed_rows[0].cells[0].codepoint, u32::from('b'));
     }
 
     #[test]

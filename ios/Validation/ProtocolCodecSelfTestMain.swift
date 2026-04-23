@@ -44,6 +44,22 @@ struct ProtocolCodecSelfTestMain {
               "pane_ids": [7]
             }
           ],
+          "visible_panes": [
+            {
+              "leaf_index": 0,
+              "leaf_id": 1,
+              "pane_id": 7,
+              "focused": true,
+              "frame": {
+                "x": 0,
+                "y": 0,
+                "width": 100,
+                "height": 80
+              },
+              "split_direction": null,
+              "split_ratio": null
+            }
+          ],
           "pwd": "/tmp"
         }
         """.data(using: .utf8)!
@@ -56,6 +72,7 @@ struct ProtocolCodecSelfTestMain {
         assertEqual(runtimeState?.viewId, 9, "view id decode")
         assertEqual(runtimeState?.viewedTabId, 42, "viewed tab id decode")
         assertEqual(runtimeState?.visiblePaneIds, [7, 8], "visible pane ids decode")
+        assertEqual(runtimeState?.visiblePanes.first?.paneId, 7, "visible pane decode")
 
         guard let state = WireCodec.decodeFullState(makeFullStatePayload()) else {
             fputs("failed to decode full-state payload\n", stderr)
@@ -76,6 +93,19 @@ struct ProtocolCodecSelfTestMain {
         assertEqual(deltaState.cursorY, 0, "delta cursorY decode")
         assertEqual(deltaState.cursorVisible, true, "delta cursor visible decode")
         assertEqual(WireCodec.screenText(from: deltaState), "BC", "delta screen text decoding")
+
+        let paneFullPayload = makePaneUpdatePayload(tabId: 42, paneId: 7, paneRevision: 2, runtimeRevision: 3, body: makeFullStatePayload())
+        let paneFull = WireCodec.decodePaneFullState(paneFullPayload)
+        assertEqual(paneFull?.0.tabId, 42, "pane full tab decode")
+        assertEqual(paneFull?.0.paneId, 7, "pane full pane id decode")
+        assertEqual(paneFull?.0.paneRevision, 2, "pane full pane revision decode")
+        assertEqual(paneFull?.0.runtimeRevision, 3, "pane full runtime revision decode")
+        assertEqual(paneFull?.1.cols, 2, "pane full state body decode")
+
+        let paneDeltaPayload = makePaneUpdatePayload(tabId: 42, paneId: 7, paneRevision: 4, runtimeRevision: 5, body: makeDeltaPayload())
+        let paneDelta = WireCodec.decodePaneDelta(paneDeltaPayload)
+        assertEqual(paneDelta?.0.paneRevision, 4, "pane delta pane revision decode")
+        assertEqual(paneDelta?.0.runtimeRevision, 5, "pane delta runtime revision decode")
 
         var clientState = ClientWireState()
         let buildId = "0.1.0"

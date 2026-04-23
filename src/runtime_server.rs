@@ -1021,3 +1021,143 @@ impl BooApp {
         log_server_latency("publish_remote_tab", started_at);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::remote::RemoteServer;
+    use crate::remote_batcher::OutboundMessage;
+    use crate::remote_state::{ClientState, State as RemoteState};
+    use std::sync::{Arc, Mutex, mpsc};
+
+    fn test_remote_client(outbound: mpsc::Sender<OutboundMessage>) -> ClientState {
+        ClientState::test_client(outbound, true, false)
+    }
+
+    fn install_test_remote_server(app: &mut BooApp, client_ids: &[u64]) {
+        let mut state = RemoteState::test_empty();
+        for client_id in client_ids {
+            let (tx, _rx) = mpsc::channel();
+            state.clients.insert(*client_id, test_remote_client(tx));
+        }
+        app.server.remote_server = Some(RemoteServer::for_test(Arc::new(Mutex::new(state))));
+    }
+
+    #[test]
+    fn runtime_action_set_viewed_tab_only_updates_target_client() {
+        let mut app = BooApp::new_headless();
+        app.init_surface();
+        let first_tab_id = app.active_runtime_tab_id().expect("initial tab");
+        let second_tab_id = app.new_tab().expect("second tab");
+        install_test_remote_server(&mut app, &[1, 2]);
+        app.sync_remote_client_runtime_view(1, true);
+        app.sync_remote_client_runtime_view(2, true);
+        {
+            let first_focus = app.default_focused_pane_for_tab(first_tab_id);
+            let first_visible = app.pane_ids_for_tab(first_tab_id);
+            let server = app.server.remote_server.as_ref().expect("remote server");
+            server.update_client_view(1, |view| {
+                view.viewed_tab_id = Some(first_tab_id);
+                view.focused_pane_id = first_focus;
+                view.visible_pane_ids = first_visible.clone();
+                view.touch_view();
+            });
+            server.update_client_view(2, |view| {
+                view.viewed_tab_id = Some(first_tab_id);
+                view.focused_pane_id = first_focus;
+                view.visible_pane_ids = first_visible.clone();
+                view.touch_view();
+            });
+        }
+
+        app.handle_server_cmd(crate::server::Command::RemoteRuntimeAction {
+            client_id: 1,
+            action: crate::remote::RuntimeAction::SetViewedTab {
+                view_id: 1,
+                tab_id: second_tab_id,
+            },
+        });
+
+        let server = app.server.remote_server.as_ref().expect("remote server");
+        let client_one = server.client_runtime_view(1).expect("client 1 view");
+        let client_two = server.client_runtime_view(2).expect("client 2 view");
+        assert_eq!(client_one.viewed_tab_id, Some(second_tab_id));
+        assert_eq!(client_two.viewed_tab_id, Some(first_tab_id));
+    }
+
+    #[test]
+    fn closing_viewed_tab_repairs_other_client_view_deterministically() {
+        let mut app = BooApp::new_headless();
+        app.init_surface();
+        let first_tab_id = app.active_runtime_tab_id().expect("initial tab");
+        let second_tab_id = app.new_tab().expect("second tab");
+        install_test_remote_server(&mut app, &[1, 2]);
+        app.sync_remote_client_runtime_view(1, true);
+        app.sync_remote_client_runtime_view(2, true);
+        {
+            let first_focus = app.default_focused_pane_for_tab(first_tab_id);
+            let first_visible = app.pane_ids_for_tab(first_tab_id);
+            let second_focus = app.default_focused_pane_for_tab(second_tab_id);
+            let second_visible = app.pane_ids_for_tab(second_tab_id);
+            let server = app.server.remote_server.as_ref().expect("remote server");
+            server.update_client_view(1, |view| {
+                view.viewed_tab_id = Some(first_tab_id);
+                view.focused_pane_id = first_focus;
+                view.visible_pane_ids = first_visible.clone();
+                view.touch_view();
+            });
+            server.update_client_view(2, |view| {
+                view.viewed_tab_id = Some(second_tab_id);
+                view.focused_pane_id = second_focus;
+                view.visible_pane_ids = second_visible.clone();
+                view.touch_view();
+            });
+        }
+
+        app.handle_server_cmd(crate::server::Command::RemoteDestroy {
+            client_id: 1,
+            tab_id: Some(second_tab_id),
+        });
+
+        let server = app.server.remote_server.as_ref().expect("remote server");
+        let repaired = server.client_runtime_view(2).expect("client 2 repaired view");
+        assert_eq!(repaired.viewed_tab_id, Some(first_tab_id));
+        assert_eq!(repaired.visible_pane_ids, app.pane_ids_for_tab(first_tab_id));
+    }
+
+    #[test]
+    fn different_clients_can_keep_different_focused_panes_on_same_tab() {
+        let mut app = BooApp::new_headless();
+        app.init_surface();
+        app.create_split(crate::bindings::SplitDirection::Right);
+        let tab_id = app.active_runtime_tab_id().expect("active tab");
+        let pane_ids = app.pane_ids_for_tab(tab_id);
+        assert!(pane_ids.len() >= 2);
+        install_test_remote_server(&mut app, &[1, 2]);
+        app.sync_remote_client_runtime_view(1, true);
+        app.sync_remote_client_runtime_view(2, true);
+        {
+            let server = app.server.remote_server.as_ref().expect("remote server");
+            server.update_client_view(1, |view| {
+                view.viewed_tab_id = Some(tab_id);
+                view.focused_pane_id = Some(pane_ids[0]);
+                view.visible_pane_ids = pane_ids.clone();
+                view.touch_view();
+            });
+            server.update_client_view(2, |view| {
+                view.viewed_tab_id = Some(tab_id);
+                view.focused_pane_id = Some(pane_ids[1]);
+                view.visible_pane_ids = pane_ids.clone();
+                view.touch_view();
+            });
+        }
+
+        let server = app.server.remote_server.as_ref().expect("remote server");
+        let client_one = server.client_runtime_view(1).expect("client 1 view");
+        let client_two = server.client_runtime_view(2).expect("client 2 view");
+        assert_eq!(client_one.viewed_tab_id, Some(tab_id));
+        assert_eq!(client_two.viewed_tab_id, Some(tab_id));
+        assert_eq!(client_one.focused_pane_id, Some(pane_ids[0]));
+        assert_eq!(client_two.focused_pane_id, Some(pane_ids[1]));
+    }
+}

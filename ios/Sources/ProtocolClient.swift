@@ -25,6 +25,8 @@ enum GSPMessageType: UInt8 {
     case image = 0x8c
     case uiRuntimeState = 0x8d
     case uiAppearance = 0x8e
+    case uiPaneFullState = 0x90
+    case uiPaneDelta = 0x91
     case heartbeatAck = 0x92
 }
 
@@ -791,6 +793,7 @@ final class GSPClient: ObservableObject {
     @Published var tabs: [RemoteTabInfo] = []
     @Published var runtimeState: RemoteRuntimeStateSnapshot?
     @Published var screen = ScreenState()
+    @Published var paneScreens: [UInt64: DecodedWireScreenState] = [:]
     @Published var activeTabId: UInt32?
     @Published var lastErrorKind: ClientWireErrorKind?
     @Published var lastError: String?
@@ -806,6 +809,7 @@ final class GSPClient: ObservableObject {
     private var connectStartedAt: Date?
     private var authRequestedAt: Date?
     private var tabListRequestedAt: Date?
+    private var paneRevisions: [UInt64: UInt64] = [:]
 
     private func debugLog(_ message: String) {
         print("[boo-ios] \(message)")
@@ -895,6 +899,8 @@ final class GSPClient: ObservableObject {
         tabs = []
         runtimeState = nil
         screen = ScreenState()
+        paneScreens = [:]
+        paneRevisions = [:]
         stopHeartbeatLoop()
         connectStartedAt = nil
         authRequestedAt = nil
@@ -1282,9 +1288,36 @@ final class GSPClient: ObservableObject {
         case .uiRuntimeState:
             guard let decodedRuntimeState = decodeRemoteRuntimeState(payload) else { return }
             runtimeState = decodedRuntimeState
+            let visible = Set(decodedRuntimeState.visiblePaneIds)
+            paneScreens = paneScreens.filter { visible.contains($0.key) }
+            paneRevisions = paneRevisions.filter { visible.contains($0.key) }
             activeTabId = runtimeActiveTabId
         case .uiAppearance:
             break
+        case .uiPaneFullState:
+            guard let (update, state) = WireCodec.decodePaneFullState(payload) else { return }
+            guard update.tabId == runtimeState?.viewedTabId else { return }
+            let lastRevision = paneRevisions[update.paneId] ?? 0
+            guard update.paneRevision >= lastRevision else { return }
+            paneRevisions[update.paneId] = update.paneRevision
+            paneScreens[update.paneId] = state
+            if update.paneId == runtimeState?.focusedPane {
+                applyDecodedScreen(state)
+                screen.objectWillChange.send()
+            }
+        case .uiPaneDelta:
+            guard let (update, deltaPayload) = WireCodec.decodePaneDelta(payload) else { return }
+            guard update.tabId == runtimeState?.viewedTabId else { return }
+            let lastRevision = paneRevisions[update.paneId] ?? 0
+            guard update.paneRevision >= lastRevision else { return }
+            guard var state = paneScreens[update.paneId] else { return }
+            guard WireCodec.applyDelta(deltaPayload, to: &state) else { return }
+            paneRevisions[update.paneId] = update.paneRevision
+            paneScreens[update.paneId] = state
+            if update.paneId == runtimeState?.focusedPane {
+                applyDecodedScreen(state)
+                screen.objectWillChange.send()
+            }
         default:
             break
         }
@@ -1317,6 +1350,8 @@ final class GSPClient: ObservableObject {
         tabs = []
         runtimeState = nil
         screen = ScreenState()
+        paneScreens = [:]
+        paneRevisions = [:]
         if message == "Remote heartbeat timed out" {
             heartbeatTimeoutCount &+= 1
         }

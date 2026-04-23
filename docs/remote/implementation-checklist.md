@@ -59,22 +59,22 @@ runtime plus per-screen view state.
 - [x] decode richer runtime metadata on the client wire model
 - [x] preserve compatibility with the current single-screen bootstrap flow
 - [x] add iOS-side `RuntimeAction`-driven semantic interactions in the main UI
-- [ ] render all visible panes for the viewed tab on iOS
+- [x] render all visible panes for the viewed tab on iOS
 - [x] render server-owned status/tab UI from runtime metadata on iOS
-- [ ] drive pane hit-testing/focus changes from server-provided pane frames
+- [x] drive pane hit-testing/focus changes from server-provided pane frames
 - [x] drive tab/status-bar interactions semantically instead of by raw
       coordinates
 - [ ] drive divider resize semantically using normalized split ratios
-- [ ] keep focused pane interaction hottest without local prediction
+- [x] keep focused pane interaction hottest without local prediction
 
 ### Testing
 
 - [x] cover runtime-action decode at the protocol layer
 - [x] cover server-side client view initialization
 - [ ] connect a new screen and verify initial runtime/view bootstrap semantics
-- [ ] verify changing viewed tab only affects that screen
-- [ ] verify closing a shared tab remaps viewed tab deterministically
-- [ ] verify different screens can keep different focused panes on one tab
+- [x] verify changing viewed tab only affects that screen
+- [x] verify closing a shared tab remaps viewed tab deterministically
+- [x] verify different screens can keep different focused panes on one tab
 - [ ] verify stale pane updates are rejected/refreshed via revision linkage
 - [ ] verify normalized split resize reflects across different screen sizes
 - [ ] verify focused-pane traffic is scheduled ahead of non-focused panes

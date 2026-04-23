@@ -1104,10 +1104,60 @@ struct TerminalTabScreen: View {
     private var terminalView: some View {
         let bridge = terminalKeyboardBridge
 
-        return RemoteTerminalView(screen: client.screen) { cols, rows in
-            client.sendResize(cols: cols, rows: rows)
-        } onGestureAction: { action in
-            handleTerminalGesture(action)
+        return Group {
+            if let runtimeState = client.runtimeState, !runtimeState.visiblePanes.isEmpty {
+                GeometryReader { geo in
+                    ZStack(alignment: .topLeading) {
+                        ForEach(runtimeState.visiblePanes, id: \.paneId) { pane in
+                            RemoteTerminalCanvasView(
+                                state: client.paneScreens[pane.paneId],
+                                onGestureAction: pane.paneId == runtimeState.focusedPane ? handleTerminalGesture : nil
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(
+                                        pane.paneId == runtimeState.focusedPane ? KineticColor.primary : KineticColor.onSurfaceVariant,
+                                        lineWidth: pane.paneId == runtimeState.focusedPane ? 2 : 1
+                                    )
+                            )
+                            .frame(
+                                width: max(1, pane.frame.width),
+                                height: max(1, pane.frame.height)
+                            )
+                            .position(
+                                x: pane.frame.x + pane.frame.width / 2,
+                                y: pane.frame.y + pane.frame.height / 2
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if let tabId = runtimeState.viewedTabId {
+                                    client.focusPane(tabId: tabId, paneId: pane.paneId)
+                                }
+                                keyboardFocused = true
+                            }
+                        }
+                    }
+                    .background(.black)
+                    .onAppear {
+                        client.sendResize(
+                            cols: max(1, UInt16(geo.size.width / 8.4)),
+                            rows: max(1, UInt16(geo.size.height / 17))
+                        )
+                    }
+                    .onChange(of: geo.size) { _, newSize in
+                        client.sendResize(
+                            cols: max(1, UInt16(newSize.width / 8.4)),
+                            rows: max(1, UInt16(newSize.height / 17))
+                        )
+                    }
+                }
+            } else {
+                RemoteTerminalView(screen: client.screen) { cols, rows in
+                    client.sendResize(cols: cols, rows: rows)
+                } onGestureAction: { action in
+                    handleTerminalGesture(action)
+                }
+            }
         }
         .opacity(isDisconnected || client.activeTabId == nil ? 0.5 : 1.0)
         .accessibilityIdentifier("terminal-screen")

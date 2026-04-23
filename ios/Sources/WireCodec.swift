@@ -46,6 +46,7 @@ struct RemoteRuntimeStateSnapshot: Decodable, Equatable {
     let activeTab: Int
     let focusedPane: UInt64
     let tabs: [RemoteRuntimeTabSnapshot]
+    let visiblePanes: [RemoteRuntimePaneSnapshot]
     let pwd: String
     let runtimeRevision: UInt64
     let viewRevision: UInt64
@@ -54,6 +55,30 @@ struct RemoteRuntimeStateSnapshot: Decodable, Equatable {
     let viewportCols: UInt16?
     let viewportRows: UInt16?
     let visiblePaneIds: [UInt64]
+}
+
+struct RemoteRuntimeRectSnapshot: Decodable, Equatable {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+}
+
+struct RemoteRuntimePaneSnapshot: Decodable, Equatable {
+    let leafIndex: Int
+    let leafId: Int
+    let paneId: UInt64
+    let focused: Bool
+    let frame: RemoteRuntimeRectSnapshot
+    let splitDirection: String?
+    let splitRatio: Double?
+}
+
+struct DecodedPaneUpdate: Equatable {
+    let tabId: UInt32
+    let paneId: UInt64
+    let paneRevision: UInt64
+    let runtimeRevision: UInt64
 }
 
 func decodeRemoteRuntimeState(_ payload: Data) -> RemoteRuntimeStateSnapshot? {
@@ -66,6 +91,7 @@ enum WireCodec {
     private static let cellEncodedLen = 12
     private static let remoteFullStateHeaderLen = 14
     private static let remoteDeltaHeaderLen = 13
+    private static let remotePaneUpdateHeaderLen = 28
 
     static func decodeTabList(_ data: Data) -> [DecodedWireTabInfo] {
         guard data.count >= 4 else { return [] }
@@ -262,5 +288,38 @@ enum WireCodec {
             }
         }
         return text
+    }
+
+    static func decodePaneFullState(_ data: Data) -> (DecodedPaneUpdate, DecodedWireScreenState)? {
+        guard data.count >= remotePaneUpdateHeaderLen else { return nil }
+        let update = decodePaneUpdateHeader(data)
+        guard let state = decodeFullState(Data(data.dropFirst(remotePaneUpdateHeaderLen))) else { return nil }
+        return (update, state)
+    }
+
+    static func decodePaneDelta(_ data: Data) -> (DecodedPaneUpdate, Data)? {
+        guard data.count >= remotePaneUpdateHeaderLen else { return nil }
+        return (decodePaneUpdateHeader(data), Data(data.dropFirst(remotePaneUpdateHeaderLen)))
+    }
+
+    private static func decodePaneUpdateHeader(_ data: Data) -> DecodedPaneUpdate {
+        let tabId = data.withUnsafeBytes {
+            UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
+        }
+        let paneId = data.withUnsafeBytes {
+            UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: 4, as: UInt64.self))
+        }
+        let paneRevision = data.withUnsafeBytes {
+            UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: 12, as: UInt64.self))
+        }
+        let runtimeRevision = data.withUnsafeBytes {
+            UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: 20, as: UInt64.self))
+        }
+        return DecodedPaneUpdate(
+            tabId: tabId,
+            paneId: paneId,
+            paneRevision: paneRevision,
+            runtimeRevision: runtimeRevision
+        )
     }
 }
