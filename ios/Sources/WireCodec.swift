@@ -9,8 +9,6 @@ struct DecodedWireTabInfo: Equatable {
     let childExited: Bool
 }
 
-typealias DecodedWireSessionInfo = DecodedWireTabInfo
-
 struct DecodedWireCell: Equatable {
     var codepoint: UInt32 = 0
     var fg_r: UInt8 = 0
@@ -81,10 +79,6 @@ enum WireCodec {
             )
         }
         return items
-    }
-
-    static func decodeSessionList(_ data: Data) -> [DecodedWireSessionInfo] {
-        decodeTabList(data)
     }
 
     static func decodeFullState(_ data: Data) -> DecodedWireScreenState? {

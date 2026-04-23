@@ -151,8 +151,10 @@ struct ClientWireState: Equatable {
         serverInstanceId: String? = nil,
         serverIdentityId: String? = nil,
         tabs: [DecodedWireTabInfo] = [],
+        legacyTabs: [DecodedWireTabInfo]? = nil,
         screen: DecodedWireScreenState? = nil,
         attachedTabId: UInt32? = nil,
+        legacyAttachedTabId: UInt32? = nil,
         attachmentId: UInt64? = nil,
         resumeToken: UInt64? = nil,
         lastErrorKind: ClientWireErrorKind? = nil,
@@ -164,9 +166,9 @@ struct ClientWireState: Equatable {
         self.serverBuildId = serverBuildId
         self.serverInstanceId = serverInstanceId
         self.serverIdentityId = serverIdentityId
-        self.tabs = tabs
+        self.tabs = legacyTabs ?? tabs
         self.screen = screen
-        self.attachedTabId = attachedTabId
+        self.attachedTabId = legacyAttachedTabId ?? attachedTabId
         self.attachmentId = attachmentId
         self.resumeToken = resumeToken
         self.lastErrorKind = lastErrorKind
@@ -352,10 +354,10 @@ enum ClientWireReducer {
             return .none
         case .tabExited:
             if payload.count >= 4 {
-                let exitedSessionId = payload.withUnsafeBytes {
+                let exitedTabId = payload.withUnsafeBytes {
                     UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
                 }
-                if state.attachedTabId == exitedSessionId {
+                if state.attachedTabId == exitedTabId {
                     state.attachedTabId = nil
                     state.attachmentId = nil
                     state.resumeToken = nil

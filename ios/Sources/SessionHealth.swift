@@ -46,8 +46,6 @@ enum AttachedTabHealth: Equatable {
     }
 }
 
-typealias AttachedSessionHealth = AttachedTabHealth
-
 func resolveAttachedTabHealth(attachedTabId: UInt32?, tabs: [RemoteTabInfo]) -> AttachedTabHealth {
     guard let tabId = attachedTabId else { return .unattached }
     guard let tab = tabs.first(where: { $0.id == tabId }) else {
@@ -57,8 +55,4 @@ func resolveAttachedTabHealth(attachedTabId: UInt32?, tabs: [RemoteTabInfo]) -> 
         return .exited(tabId: tabId)
     }
     return .reachable(tabId: tabId)
-}
-
-func resolveAttachedSessionHealth(attachedSessionId: UInt32?, sessions: [SessionInfo]) -> AttachedSessionHealth {
-    resolveAttachedTabHealth(attachedTabId: attachedSessionId, tabs: sessions)
 }

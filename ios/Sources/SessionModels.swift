@@ -8,5 +8,3 @@ struct RemoteTabInfo: Identifiable {
     let attached: Bool
     let childExited: Bool
 }
-
-typealias SessionInfo = RemoteTabInfo
