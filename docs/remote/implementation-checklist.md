@@ -32,7 +32,7 @@ runtime plus per-screen view state.
 - [x] track per-view visible pane membership
 - [x] reflect explicit `tab -> pane_ids` hierarchy in runtime metadata
 - [x] include runtime/view revision metadata in runtime payloads
-- [ ] maintain explicit per-pane terminal revisions independent of runtime/view
+- [x] maintain explicit per-pane terminal revisions independent of runtime/view
 - [ ] use runtime/view revisions for stale-update rejection and pane refresh
 
 ### Publish scoping and transport

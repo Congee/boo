@@ -510,6 +510,10 @@ struct BooApp {
     cursor_blink_epoch: std::time::Instant,
     appearance_revision: u64,
     runtime_revision: u64,
+    pane_terminal_revisions: std::collections::HashMap<
+        u64,
+        (u64, std::sync::Arc<remote::RemoteFullState>),
+    >,
     surface_initialized_once: bool,
     app_focused: bool,
     dirty_remote_tabs: Vec<u32>,

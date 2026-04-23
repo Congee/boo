@@ -209,6 +209,7 @@ impl BooApp {
                     cursor_blink_epoch: std::time::Instant::now(),
                     appearance_revision: 1,
                     runtime_revision: 1,
+                    pane_terminal_revisions: std::collections::HashMap::new(),
                     surface_initialized_once: false,
                     app_focused: true,
                     dirty_remote_tabs: initial_dirty_remote_tabs.clone(),
@@ -297,6 +298,7 @@ impl BooApp {
                     cursor_blink_epoch: std::time::Instant::now(),
                     appearance_revision: 1,
                     runtime_revision: 1,
+                    pane_terminal_revisions: std::collections::HashMap::new(),
                     surface_initialized_once: false,
                     app_focused: true,
                     dirty_remote_tabs: initial_dirty_remote_tabs,
@@ -332,6 +334,30 @@ impl BooApp {
             self.dirty_remote_tabs.push(tab_id);
         }
         self.invalidate_remote_tabs_cache();
+    }
+
+    pub(crate) fn pane_terminal_revision(
+        &mut self,
+        pane_id: u64,
+        next_state: &std::sync::Arc<remote::RemoteFullState>,
+    ) -> u64 {
+        match self.pane_terminal_revisions.get_mut(&pane_id) {
+            Some((revision, cached_state)) if cached_state.as_ref() == next_state.as_ref() => *revision,
+            Some((revision, cached_state)) => {
+                *revision = revision.wrapping_add(1).max(1);
+                *cached_state = std::sync::Arc::clone(next_state);
+                *revision
+            }
+            None => {
+                self.pane_terminal_revisions
+                    .insert(pane_id, (1, std::sync::Arc::clone(next_state)));
+                1
+            }
+        }
+    }
+
+    pub(crate) fn forget_pane_terminal_revision(&mut self, pane_id: u64) {
+        self.pane_terminal_revisions.remove(&pane_id);
     }
 
     pub(crate) fn mark_active_remote_tab_dirty(&mut self) {

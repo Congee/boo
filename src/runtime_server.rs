@@ -358,6 +358,7 @@ impl BooApp {
         let was_active = tab_index == self.server.tabs.active_index();
         let panes = self.server.tabs.remove_tab(tab_index);
         for pane in panes {
+            self.forget_pane_terminal_revision(pane.id());
             self.backend.free_pane(pane);
         }
         if was_active && !self.server.tabs.is_empty() {
@@ -1004,38 +1005,46 @@ impl BooApp {
 
     pub(crate) fn publish_remote_tab(&mut self, tab_id: u32) {
         let started_at = Instant::now();
-        let servers = self.remote_servers().collect::<Vec<_>>();
-        if servers.is_empty() {
+        let client_ids = self
+            .remote_servers()
+            .flat_map(|server| server.clients_snapshot().clients.into_iter().map(|client| client.client_id))
+            .collect::<Vec<_>>();
+        if client_ids.is_empty() {
             return;
         }
-        for server in servers {
-            let client_ids = server.clients_snapshot().clients.into_iter().map(|client| client.client_id).collect::<Vec<_>>();
-            for client_id in client_ids {
-                let Some(view) = server.client_runtime_view(client_id) else {
-                    continue;
-                };
-                if !view.subscribed_to_runtime || view.viewed_tab_id != Some(tab_id) {
+        for client_id in client_ids {
+            let view = match self.remote_server_for_client(client_id) {
+                Some(server) => server.client_runtime_view(client_id),
+                None => None,
+            };
+            let Some(view) = view else {
+                continue;
+            };
+            if !view.subscribed_to_runtime || view.viewed_tab_id != Some(tab_id) {
+                continue;
+            }
+            let focused_pane_id = view
+                .focused_pane_id
+                .filter(|pane_id| view.visible_pane_ids.contains(pane_id))
+                .or_else(|| self.default_focused_pane_for_tab(tab_id));
+            if let Some(focused_pane_id) = focused_pane_id
+                && let Some(state) = self.remote_full_state_for_pane(focused_pane_id)
+                && let Some(server) = self.remote_server_for_delivery(client_id)
+            {
+                server.send_full_state_to_client(client_id, tab_id, Arc::clone(&state));
+            }
+            for pane_id in &view.visible_pane_ids {
+                if Some(*pane_id) == focused_pane_id {
                     continue;
                 }
-                let focused_pane_id = view
-                    .focused_pane_id
-                    .filter(|pane_id| view.visible_pane_ids.contains(pane_id))
-                    .or_else(|| self.default_focused_pane_for_tab(tab_id));
-                if let Some(focused_pane_id) = focused_pane_id
-                    && let Some(state) = self.remote_full_state_for_pane(focused_pane_id)
-                {
-                    server.send_full_state_to_client(client_id, tab_id, Arc::clone(&state));
-                }
-                for pane_id in &view.visible_pane_ids {
-                    if Some(*pane_id) == focused_pane_id {
-                        continue;
-                    }
-                    if let Some(pane_state) = self.remote_full_state_for_pane(*pane_id) {
+                if let Some(pane_state) = self.remote_full_state_for_pane(*pane_id) {
+                    let pane_revision = self.pane_terminal_revision(*pane_id, &pane_state);
+                    if let Some(server) = self.remote_server_for_delivery(client_id) {
                         server.send_pane_state_to_client(
                             client_id,
                             tab_id,
                             *pane_id,
-                            self.runtime_revision,
+                            pane_revision,
                             self.runtime_revision,
                             Arc::clone(&pane_state),
                         );
@@ -1097,6 +1106,16 @@ mod tests {
 
     fn drain_outbound(rx: &mpsc::Receiver<OutboundMessage>) {
         while rx.recv_timeout(Duration::from_millis(20)).is_ok() {}
+    }
+
+    fn decode_pane_update_header(payload: &[u8]) -> (u32, u64, u64, u64) {
+        let tab_id = u32::from_le_bytes(payload[0..4].try_into().expect("tab bytes"));
+        let pane_id = u64::from_le_bytes(payload[4..12].try_into().expect("pane bytes"));
+        let pane_revision =
+            u64::from_le_bytes(payload[12..20].try_into().expect("pane revision bytes"));
+        let runtime_revision =
+            u64::from_le_bytes(payload[20..28].try_into().expect("runtime revision bytes"));
+        (tab_id, pane_id, pane_revision, runtime_revision)
     }
 
     #[test]
@@ -1414,5 +1433,142 @@ mod tests {
         assert_eq!(client_one_state.tabs.len(), tabs_before + 1);
         assert_eq!(client_two_state.tabs.len(), tabs_before + 1);
         assert_eq!(client_one_state.tabs.len(), client_two_state.tabs.len());
+    }
+
+    #[test]
+    fn pane_update_revision_is_independent_from_runtime_revision() {
+        let mut app = BooApp::new_headless();
+        app.init_surface();
+        app.create_split(crate::bindings::SplitDirection::Right);
+        let tab_id = app.active_runtime_tab_id().expect("active tab");
+        let pane_ids = app.pane_ids_for_tab(tab_id);
+        let pane_id = *pane_ids.get(1).expect("non-focused pane");
+        let receivers = install_test_remote_server_with_receivers(&mut app, &[1]);
+        app.sync_remote_client_runtime_view(1, true);
+        drain_outbound(receivers.get(&1).expect("receiver"));
+        {
+            let server = app.server.remote_server.as_ref().expect("remote server");
+            server.update_client_view(1, |view| {
+                view.viewed_tab_id = Some(tab_id);
+                view.focused_pane_id = Some(pane_ids[0]);
+                view.visible_pane_ids = pane_ids.clone();
+                view.touch_view();
+            });
+        }
+
+        app.publish_remote_tab(tab_id);
+
+        let rx = receivers.get(&1).expect("receiver");
+        let mut first_header = None;
+        while let Ok(message) = rx.recv_timeout(Duration::from_millis(20)) {
+            let OutboundMessage::ScreenUpdate(frame) = message else {
+                continue;
+            };
+            let (ty, payload) = read_message(&mut Cursor::new(frame)).expect("decode");
+            if matches!(ty, MessageType::UiPaneFullState | MessageType::UiPaneDelta) {
+                first_header = Some(decode_pane_update_header(&payload));
+                break;
+            }
+        }
+        let (_, first_pane_id, first_pane_revision, first_runtime_revision) =
+            first_header.expect("first pane header");
+        assert_eq!(first_pane_id, pane_id);
+
+        app.bump_runtime_revision();
+        {
+            let server = app.server.remote_server.as_ref().expect("remote server");
+            server.update_client_view(1, |view| {
+                view.touch_view();
+            });
+        }
+        app.publish_remote_tab(tab_id);
+
+        let mut second_header = None;
+        while let Ok(message) = rx.recv_timeout(Duration::from_millis(20)) {
+            let OutboundMessage::ScreenUpdate(frame) = message else {
+                continue;
+            };
+            let (ty, payload) = read_message(&mut Cursor::new(frame)).expect("decode");
+            if matches!(ty, MessageType::UiPaneFullState | MessageType::UiPaneDelta) {
+                second_header = Some(decode_pane_update_header(&payload));
+                break;
+            }
+        }
+        let (_, second_pane_id, second_pane_revision, second_runtime_revision) =
+            second_header.expect("second pane header");
+        assert_eq!(second_pane_id, pane_id);
+        assert_eq!(second_pane_revision, first_pane_revision);
+        assert!(second_runtime_revision > first_runtime_revision);
+    }
+
+    #[test]
+    fn stale_view_refresh_restarts_pane_stream_with_full_state() {
+        let mut app = BooApp::new_headless();
+        app.init_surface();
+        app.create_split(crate::bindings::SplitDirection::Right);
+        let tab_id = app.active_runtime_tab_id().expect("active tab");
+        let pane_ids = app.pane_ids_for_tab(tab_id);
+        let receivers = install_test_remote_server_with_receivers(&mut app, &[1]);
+        app.sync_remote_client_runtime_view(1, true);
+        drain_outbound(receivers.get(&1).expect("receiver"));
+        {
+            let server = app.server.remote_server.as_ref().expect("remote server");
+            server.update_client_view(1, |view| {
+                view.viewed_tab_id = Some(tab_id);
+                view.focused_pane_id = Some(pane_ids[0]);
+                view.visible_pane_ids = pane_ids.clone();
+                view.touch_view();
+            });
+        }
+
+        app.publish_remote_tab(tab_id);
+        let rx = receivers.get(&1).expect("receiver");
+        let mut first_ty = None;
+        while let Ok(message) = rx.recv_timeout(Duration::from_millis(20)) {
+            let OutboundMessage::ScreenUpdate(frame) = message else {
+                continue;
+            };
+            let (ty, _payload) = read_message(&mut Cursor::new(frame)).expect("decode");
+            if matches!(ty, MessageType::UiPaneFullState | MessageType::UiPaneDelta) {
+                first_ty = Some(ty);
+                break;
+            }
+        }
+        assert_eq!(first_ty, Some(MessageType::UiPaneFullState));
+
+        app.publish_remote_tab(tab_id);
+        let mut second_ty = None;
+        while let Ok(message) = rx.recv_timeout(Duration::from_millis(20)) {
+            let OutboundMessage::ScreenUpdate(frame) = message else {
+                continue;
+            };
+            let (ty, _payload) = read_message(&mut Cursor::new(frame)).expect("decode");
+            if matches!(ty, MessageType::UiPaneFullState | MessageType::UiPaneDelta) {
+                second_ty = Some(ty);
+                break;
+            }
+        }
+        assert_eq!(second_ty, Some(MessageType::UiPaneDelta));
+
+        {
+            let server = app.server.remote_server.as_ref().expect("remote server");
+            server.update_client_view(1, |view| {
+                view.touch_view();
+            });
+        }
+        app.publish_remote_tab(tab_id);
+
+        let mut refreshed_ty = None;
+        while let Ok(message) = rx.recv_timeout(Duration::from_millis(20)) {
+            let OutboundMessage::ScreenUpdate(frame) = message else {
+                continue;
+            };
+            let (ty, _payload) = read_message(&mut Cursor::new(frame)).expect("decode");
+            if matches!(ty, MessageType::UiPaneFullState | MessageType::UiPaneDelta) {
+                refreshed_ty = Some(ty);
+                break;
+            }
+        }
+        assert_eq!(refreshed_ty, Some(MessageType::UiPaneFullState));
     }
 }
