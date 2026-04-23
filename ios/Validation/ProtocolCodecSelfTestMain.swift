@@ -194,7 +194,7 @@ struct ProtocolCodecSelfTestMain {
 
         let createdPayload = UInt32(42).littleEndianBytes
         let createdEffect = ClientWireReducer.reduce(message: .tabCreated, payload: Data(createdPayload), state: &clientState)
-        assertEqual(createdEffect, .attach(42), "tab created triggers attach")
+        assertEqual(createdEffect, .none, "tab created no longer triggers client-side attach")
 
         let attachedEffect = ClientWireReducer.reduce(message: .attached, payload: Data(createdPayload), state: &clientState)
         assertEqual(attachedEffect, .none, "attached has no side effect")

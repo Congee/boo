@@ -31,7 +31,6 @@ enum ClientWireErrorCode: UInt16, Equatable {
 enum ClientWireEffect: Equatable {
     case none
     case listTabs
-    case attach(UInt32)
 }
 
 enum ClientWireErrorKind: Equatable {
@@ -352,12 +351,7 @@ enum ClientWireReducer {
             }
             return .none
         case .tabCreated:
-            guard payload.count >= 4 else { return .none }
-            return .attach(
-                payload.withUnsafeBytes {
-                    UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
-                }
-            )
+            return .none
         case .fullState:
             state.screen = WireCodec.decodeFullState(payload)
             return .none

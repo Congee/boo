@@ -1556,9 +1556,6 @@ final class GSPClient: ObservableObject {
             break
         case .listTabs:
             listTabs()
-        case .attach(let tabId):
-            debugLog("effect attach tabId=\(tabId)")
-            attach(tabId: tabId)
         }
 
         if message == .authOk {
