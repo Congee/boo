@@ -191,6 +191,13 @@ pub struct UiRuntimeState {
     pub mouse_selection: UiMouseSelectionSnapshot,
     pub status_bar: crate::status_components::UiStatusBarSnapshot,
     pub pwd: String,
+    pub runtime_revision: u64,
+    pub view_revision: u64,
+    pub view_id: u64,
+    pub viewed_tab_id: Option<u32>,
+    pub viewport_cols: Option<u16>,
+    pub viewport_rows: Option<u16>,
+    pub visible_pane_ids: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -222,6 +229,8 @@ pub struct UiTabSnapshot {
     pub active: bool,
     pub title: String,
     pub pane_count: usize,
+    pub focused_pane: Option<u64>,
+    pub pane_ids: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1242,6 +1251,8 @@ mod tests {
                                 active: true,
                                 title: "shell".to_string(),
                                 pane_count: 1,
+                                focused_pane: Some(42),
+                                pane_ids: vec![42],
                             }],
                             visible_panes: vec![UiPaneSnapshot {
                                 leaf_index: 0,
@@ -1343,6 +1354,8 @@ mod tests {
                         active: false,
                         title: "shell".to_string(),
                         pane_count: 1,
+                        focused_pane: Some(7),
+                        pane_ids: vec![7],
                     },
                     UiTabSnapshot {
                         tab_id: 2,
@@ -1350,6 +1363,8 @@ mod tests {
                         active: true,
                         title: "logs".to_string(),
                         pane_count: 2,
+                        focused_pane: Some(9),
+                        pane_ids: vec![8, 9],
                     },
                 ],
                 visible_panes: vec![UiPaneSnapshot {

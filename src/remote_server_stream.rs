@@ -4,6 +4,7 @@ use crate::remote_batcher::OutboundMessage;
 use crate::remote_state::State;
 use crate::remote_wire::{
     MessageType, RemoteFullState, encode_delta, encode_full_state, encode_message,
+    encode_ui_pane_update_payload,
 };
 use std::sync::{Arc, Mutex};
 
@@ -76,8 +77,10 @@ pub(crate) fn send_state_to_client(
 pub(crate) fn send_pane_state_to_client(
     state: &Arc<Mutex<State>>,
     client_id: u64,
-    _tab_id: u32,
+    tab_id: u32,
     pane_id: u64,
+    pane_revision: u64,
+    runtime_revision: u64,
     next_state: Arc<RemoteFullState>,
 ) {
     let (outbound, previous_state) = {
@@ -121,9 +124,13 @@ pub(crate) fn send_pane_state_to_client(
     if !should_send {
         return;
     }
-    let mut prefixed = Vec::with_capacity(8 + payload.len());
-    prefixed.extend_from_slice(&pane_id.to_le_bytes());
-    prefixed.extend_from_slice(&payload);
+    let prefixed = encode_ui_pane_update_payload(
+        tab_id,
+        pane_id,
+        pane_revision,
+        runtime_revision,
+        &payload,
+    );
     let frame = encode_message(ty, &prefixed);
     let _ = outbound.send(OutboundMessage::ScreenUpdate(frame));
 }

@@ -34,7 +34,14 @@ pub(crate) const DIRECT_CLIENT_HEARTBEAT_WINDOW: Duration = Duration::from_secs(
 /// struct only tracks whether a client is subscribed to the runtime stream plus
 /// the cached payloads/full states needed for efficient transport updates.
 pub(crate) struct ClientRuntimeView {
+    pub(crate) view_id: u64,
     pub(crate) subscribed_to_runtime: bool,
+    pub(crate) view_revision: u64,
+    pub(crate) viewed_tab_id: Option<u32>,
+    pub(crate) focused_pane_id: Option<u64>,
+    pub(crate) viewport_cols: Option<u16>,
+    pub(crate) viewport_rows: Option<u16>,
+    pub(crate) visible_pane_ids: Vec<u64>,
     pub(crate) last_tab_list_payload: Option<Vec<u8>>,
     pub(crate) last_ui_runtime_state_payload: Option<Vec<u8>>,
     pub(crate) last_ui_appearance_payload: Option<Vec<u8>>,
@@ -46,7 +53,14 @@ pub(crate) struct ClientRuntimeView {
 impl ClientRuntimeView {
     pub(crate) fn idle() -> Self {
         Self {
+            view_id: 0,
             subscribed_to_runtime: false,
+            view_revision: 1,
+            viewed_tab_id: None,
+            focused_pane_id: None,
+            viewport_cols: None,
+            viewport_rows: None,
+            visible_pane_ids: Vec::new(),
             last_tab_list_payload: None,
             last_ui_runtime_state_payload: None,
             last_ui_appearance_payload: None,
@@ -60,6 +74,11 @@ impl ClientRuntimeView {
         self.last_state = None;
         self.pane_states.clear();
         self.latest_input_seq = None;
+    }
+
+    pub(crate) fn touch_view(&mut self) {
+        self.view_revision = self.view_revision.wrapping_add(1).max(1);
+        self.clear_stream_state();
     }
 }
 

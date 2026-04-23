@@ -47,6 +47,44 @@ pub struct RemoteConfig {
     pub service_name: String,
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeAction {
+    SetViewedTab {
+        view_id: u64,
+        tab_id: u32,
+    },
+    FocusPane {
+        view_id: u64,
+        tab_id: u32,
+        pane_id: u64,
+    },
+    NewTab {
+        view_id: u64,
+        cols: Option<u16>,
+        rows: Option<u16>,
+    },
+    CloseTab {
+        view_id: u64,
+        tab_id: Option<u32>,
+    },
+    NextTab {
+        view_id: u64,
+    },
+    PrevTab {
+        view_id: u64,
+    },
+    NewSplit {
+        view_id: u64,
+        direction: Option<String>,
+    },
+    ResizeSplit {
+        view_id: u64,
+        direction: String,
+        amount: u16,
+    },
+}
+
 impl RemoteConfig {
     pub(crate) fn effective_bind_address(&self) -> &str {
         self.bind_address.as_deref().unwrap_or("127.0.0.1")
@@ -111,6 +149,10 @@ pub enum RemoteCmd {
     Destroy {
         client_id: u64,
         tab_id: Option<u32>,
+    },
+    RuntimeAction {
+        client_id: u64,
+        action: RuntimeAction,
     },
 }
 
@@ -390,6 +432,40 @@ impl RemoteServer {
         }
     }
 
+    pub fn initialize_client_view(
+        &self,
+        client_id: u64,
+        viewed_tab_id: Option<u32>,
+        focused_pane_id: Option<u64>,
+        visible_pane_ids: &[u64],
+    ) {
+        self.update_client(client_id, |client| {
+            if client.runtime_view.view_id == 0 {
+                client.runtime_view.view_id = client_id;
+            }
+            client.runtime_view.viewed_tab_id = viewed_tab_id;
+            client.runtime_view.focused_pane_id = focused_pane_id;
+            client.runtime_view.visible_pane_ids = visible_pane_ids.to_vec();
+            client.runtime_view.touch_view();
+        });
+    }
+
+    pub fn update_client_view(
+        &self,
+        client_id: u64,
+        mut update: impl FnMut(&mut ClientRuntimeView),
+    ) {
+        self.update_client(client_id, |client| {
+            update(&mut client.runtime_view);
+        });
+    }
+
+    pub fn client_runtime_view(&self, client_id: u64) -> Option<ClientRuntimeViewSnapshot> {
+        let state = self.state.lock().expect("remote server state poisoned");
+        let client = state.clients.get(&client_id)?;
+        Some(ClientRuntimeViewSnapshot::from(&client.runtime_view))
+    }
+
     pub fn subscribe_client_to_runtime(&self, client_id: u64) {
         self.update_client(client_id, |client| {
             if !client.runtime_view.subscribed_to_runtime {
@@ -492,10 +568,16 @@ impl RemoteServer {
         }
     }
 
+    pub fn send_full_state_to_client(&self, client_id: u64, tab_id: u32, state: Arc<RemoteFullState>) {
+        publish_state_to_client(&self.state, client_id, tab_id, state);
+    }
+
     pub fn send_pane_state_to_local_viewers(
         &self,
         tab_id: u32,
         pane_id: u64,
+        pane_revision: u64,
+        runtime_revision: u64,
         state: Arc<RemoteFullState>,
     ) {
         let client_ids = {
@@ -508,9 +590,31 @@ impl RemoteServer {
                 client_id,
                 tab_id,
                 pane_id,
+                pane_revision,
+                runtime_revision,
                 Arc::clone(&state),
             );
         }
+    }
+
+    pub fn send_pane_state_to_client(
+        &self,
+        client_id: u64,
+        tab_id: u32,
+        pane_id: u64,
+        pane_revision: u64,
+        runtime_revision: u64,
+        state: Arc<RemoteFullState>,
+    ) {
+        publish_pane_state_to_client(
+            &self.state,
+            client_id,
+            tab_id,
+            pane_id,
+            pane_revision,
+            runtime_revision,
+            state,
+        );
     }
 
     pub fn retain_local_viewer_pane_states(&self, visible_pane_ids: &[u64]) {
@@ -543,6 +647,33 @@ impl RemoteServer {
         let state = self.state.lock().expect("remote server state poisoned");
         if let Some(client) = state.clients.get(&client_id) {
             let _ = client.outbound.send(OutboundMessage::Frame(frame));
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClientRuntimeViewSnapshot {
+    pub view_id: u64,
+    pub subscribed_to_runtime: bool,
+    pub view_revision: u64,
+    pub viewed_tab_id: Option<u32>,
+    pub focused_pane_id: Option<u64>,
+    pub viewport_cols: Option<u16>,
+    pub viewport_rows: Option<u16>,
+    pub visible_pane_ids: Vec<u64>,
+}
+
+impl From<&ClientRuntimeView> for ClientRuntimeViewSnapshot {
+    fn from(value: &ClientRuntimeView) -> Self {
+        Self {
+            view_id: value.view_id,
+            subscribed_to_runtime: value.subscribed_to_runtime,
+            view_revision: value.view_revision,
+            viewed_tab_id: value.viewed_tab_id,
+            focused_pane_id: value.focused_pane_id,
+            viewport_cols: value.viewport_cols,
+            viewport_rows: value.viewport_rows,
+            visible_pane_ids: value.visible_pane_ids.clone(),
         }
     }
 }

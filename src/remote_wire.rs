@@ -61,6 +61,7 @@ pub enum MessageType {
     FocusPane = 0x0f,
     AppMouseEvent = 0x10,
     Heartbeat = 0x11,
+    RuntimeAction = 0x12,
 
     AuthOk = 0x80,
     AuthFail = 0x81,
@@ -189,7 +190,8 @@ pub const fn logical_channel_for_message_type(message_type: MessageType) -> Logi
         | MessageType::AppAction
         | MessageType::AppKeyEvent
         | MessageType::AppMouseEvent
-        | MessageType::FocusPane => LogicalChannel::InputControl,
+        | MessageType::FocusPane
+        | MessageType::RuntimeAction => LogicalChannel::InputControl,
         MessageType::Heartbeat | MessageType::HeartbeatAck => LogicalChannel::Health,
         MessageType::Clipboard | MessageType::Image => LogicalChannel::RuntimeStream,
     }
@@ -214,6 +216,7 @@ impl TryFrom<u8> for MessageType {
             0x0f => Self::FocusPane,
             0x10 => Self::AppMouseEvent,
             0x11 => Self::Heartbeat,
+            0x12 => Self::RuntimeAction,
             0x80 => Self::AuthOk,
             0x81 => Self::AuthFail,
             0x82 => Self::TabList,
@@ -255,6 +258,24 @@ pub struct RemoteFullState {
     pub cursor_blinking: bool,
     pub cursor_style: i32,
     pub cells: Vec<RemoteCell>,
+}
+
+pub(crate) const UI_PANE_UPDATE_HEADER_LEN: usize = 28;
+
+pub fn encode_ui_pane_update_payload(
+    tab_id: u32,
+    pane_id: u64,
+    pane_revision: u64,
+    runtime_revision: u64,
+    payload: &[u8],
+) -> Vec<u8> {
+    let mut prefixed = Vec::with_capacity(UI_PANE_UPDATE_HEADER_LEN + payload.len());
+    prefixed.extend_from_slice(&tab_id.to_le_bytes());
+    prefixed.extend_from_slice(&pane_id.to_le_bytes());
+    prefixed.extend_from_slice(&pane_revision.to_le_bytes());
+    prefixed.extend_from_slice(&runtime_revision.to_le_bytes());
+    prefixed.extend_from_slice(payload);
+    prefixed
 }
 
 pub fn encode_message(ty: MessageType, payload: &[u8]) -> Vec<u8> {

@@ -43,6 +43,13 @@ mod tests {
             mouse_selection: control::UiMouseSelectionSnapshot::default(),
             status_bar: crate::status_components::UiStatusBarSnapshot::default(),
             pwd: "/tmp".to_string(),
+            runtime_revision: 1,
+            view_revision: 1,
+            view_id: 1,
+            viewed_tab_id: Some(1),
+            viewport_cols: None,
+            viewport_rows: None,
+            visible_pane_ids: Vec::new(),
         }
     }
 
@@ -276,5 +283,21 @@ mod tests {
         let client = guard.clients.get(&1).expect("client state");
         assert!(!client.runtime_view.pane_states.contains_key(&10));
         assert!(client.runtime_view.pane_states.contains_key(&20));
+    }
+
+    #[test]
+    fn initialize_client_view_tracks_view_scope() {
+        let (tx, _rx) = mpsc::channel();
+        let mut state = empty_state();
+        state.clients.insert(1, test_client(tx, true, false));
+        let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
+
+        server.initialize_client_view(1, Some(44), Some(55), &[55, 66]);
+
+        let snapshot = server.client_runtime_view(1).expect("client view snapshot");
+        assert_eq!(snapshot.view_id, 1);
+        assert_eq!(snapshot.viewed_tab_id, Some(44));
+        assert_eq!(snapshot.focused_pane_id, Some(55));
+        assert_eq!(snapshot.visible_pane_ids, vec![55, 66]);
     }
 }

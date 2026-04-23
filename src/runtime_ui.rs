@@ -6,7 +6,95 @@ use iced::widget::stack;
 use iced::{Pixels, Point, Rectangle, Renderer};
 
 impl BooApp {
-    fn ui_mouse_selection_snapshot(&self) -> control::UiMouseSelectionSnapshot {
+    pub(crate) fn pane_ids_for_tab(&self, tab_id: u32) -> Vec<u64> {
+        self.server
+            .tabs
+            .find_index_by_tab_id(tab_id)
+            .and_then(|tab_index| self.server.tabs.tab_tree(tab_index))
+            .map(|tree| {
+                tree.export_panes()
+                    .into_iter()
+                    .map(|pane| pane.pane.id())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn default_focused_pane_for_tab(&self, tab_id: u32) -> Option<u64> {
+        self.server
+            .tabs
+            .find_index_by_tab_id(tab_id)
+            .and_then(|tab_index| self.server.tabs.tab_tree(tab_index))
+            .map(|tree| tree.focused_pane().id())
+    }
+
+    pub(crate) fn visible_pane_snapshots_for(
+        &self,
+        tab_id: u32,
+        focused_pane_id: u64,
+    ) -> Vec<control::UiPaneSnapshot> {
+        let terminal_frame = self.terminal_frame();
+        self.server
+            .tabs
+            .find_index_by_tab_id(tab_id)
+            .and_then(|tab_index| self.server.tabs.tab_tree(tab_index))
+            .map(|tree| {
+                tree.export_panes_with_frames(terminal_frame)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(leaf_index, pane)| control::UiPaneSnapshot {
+                        leaf_index,
+                        leaf_id: pane.leaf_id,
+                        pane_id: pane.pane.id(),
+                        focused: pane.pane.id() == focused_pane_id,
+                        frame: pane
+                            .frame
+                            .map_or(ui_rect_snapshot(0.0, 0.0, 0.0, 0.0), |frame| {
+                                ui_rect_snapshot(
+                                    frame.origin.x,
+                                    frame.origin.y,
+                                    frame.size.width,
+                                    frame.size.height,
+                                )
+                            }),
+                        split_direction: pane
+                            .split
+                            .map(|(direction, _)| split_direction_name(direction).to_string()),
+                        split_ratio: pane.split.map(|(_, ratio)| ratio),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn runtime_tab_snapshots_for(
+        &self,
+        viewed_tab_id: Option<u32>,
+    ) -> Vec<control::UiTabSnapshot> {
+        self.server
+            .tabs
+            .tab_info()
+            .into_iter()
+            .map(|tab| {
+                let tab_id = self
+                    .server
+                    .tabs
+                    .tab_id_for_index(tab.index)
+                    .expect("tab_info index should resolve to tab id");
+                control::UiTabSnapshot {
+                    pane_ids: self.pane_ids_for_tab(tab_id),
+                    focused_pane: self.default_focused_pane_for_tab(tab_id),
+                    tab_id,
+                    index: tab.index,
+                    active: Some(tab_id) == viewed_tab_id,
+                    title: tab.title,
+                    pane_count: tab.surfaces,
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) fn ui_mouse_selection_snapshot(&self) -> control::UiMouseSelectionSnapshot {
         let Some(selection) = self
             .mouse_selection
             .filter(|selection| selection.has_range())
@@ -87,37 +175,10 @@ impl BooApp {
     }
 
     pub(crate) fn visible_pane_snapshots(&self) -> Vec<control::UiPaneSnapshot> {
-        let focused_pane = self.server.tabs.focused_pane();
-        let terminal_frame = self.terminal_frame();
         self.server
             .tabs
-            .active_tree()
-            .map(|tree| {
-                tree.export_panes_with_frames(terminal_frame)
-                    .into_iter()
-                    .enumerate()
-                    .map(|(leaf_index, pane)| control::UiPaneSnapshot {
-                        leaf_index,
-                        leaf_id: pane.leaf_id,
-                        pane_id: pane.pane.id(),
-                        focused: pane.pane.id() == focused_pane.id(),
-                        frame: pane
-                            .frame
-                            .map_or(ui_rect_snapshot(0.0, 0.0, 0.0, 0.0), |frame| {
-                                ui_rect_snapshot(
-                                    frame.origin.x,
-                                    frame.origin.y,
-                                    frame.size.width,
-                                    frame.size.height,
-                                )
-                            }),
-                        split_direction: pane
-                            .split
-                            .map(|(direction, _)| split_direction_name(direction).to_string()),
-                        split_ratio: pane.split.map(|(_, ratio)| ratio),
-                    })
-                    .collect()
-            })
+            .active_tab_id()
+            .map(|tab_id| self.visible_pane_snapshots_for(tab_id, self.server.tabs.focused_pane().id()))
             .unwrap_or_default()
     }
 
@@ -224,6 +285,17 @@ impl BooApp {
             .tab_info()
             .into_iter()
             .map(|tab| control::UiTabSnapshot {
+                pane_ids: self
+                    .server
+                    .tabs
+                    .tab_id_for_index(tab.index)
+                    .map(|tab_id| self.pane_ids_for_tab(tab_id))
+                    .unwrap_or_default(),
+                focused_pane: self
+                    .server
+                    .tabs
+                    .tab_id_for_index(tab.index)
+                    .and_then(|tab_id| self.default_focused_pane_for_tab(tab_id)),
                 tab_id: self
                     .server
                     .tabs
@@ -256,7 +328,7 @@ impl BooApp {
             focused_pane: focused_pane.id(),
             appearance: self.ui_appearance_snapshot(),
             tabs,
-            visible_panes,
+            visible_panes: visible_panes.clone(),
             pane_terminals,
             copy_mode,
             mouse_selection: self.ui_mouse_selection_snapshot(),
@@ -279,30 +351,22 @@ impl BooApp {
     }
 
     pub(crate) fn ui_runtime_state(&self) -> control::UiRuntimeState {
+        let visible_panes = self.visible_pane_snapshots();
         control::UiRuntimeState {
             active_tab: self.server.tabs.active_index(),
             focused_pane: self.server.tabs.focused_pane().id(),
-            tabs: self
-                .server
-                .tabs
-                .tab_info()
-                .into_iter()
-                .map(|tab| control::UiTabSnapshot {
-                    tab_id: self
-                        .server
-                        .tabs
-                        .tab_id_for_index(tab.index)
-                        .expect("tab_info index should resolve to tab id"),
-                    index: tab.index,
-                    active: tab.active,
-                    title: tab.title,
-                    pane_count: tab.surfaces,
-                })
-                .collect(),
-            visible_panes: self.visible_pane_snapshots(),
+            tabs: self.runtime_tab_snapshots_for(self.server.tabs.active_tab_id()),
+            visible_panes: visible_panes.clone(),
             mouse_selection: self.ui_mouse_selection_snapshot(),
             status_bar: self.status_components.snapshot(),
             pwd: self.pwd.clone(),
+            runtime_revision: 1,
+            view_revision: 1,
+            view_id: 0,
+            viewed_tab_id: self.server.tabs.active_tab_id(),
+            viewport_cols: None,
+            viewport_rows: None,
+            visible_pane_ids: visible_panes.iter().map(|pane| pane.pane_id).collect(),
         }
     }
 

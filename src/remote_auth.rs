@@ -163,6 +163,11 @@ pub(crate) fn read_loop(
                 client_id,
                 tab_id: parse_tab_id(&payload),
             }),
+            MessageType::RuntimeAction => {
+                serde_json::from_slice::<crate::remote::RuntimeAction>(&payload)
+                    .ok()
+                    .map(|action| RemoteCmd::RuntimeAction { client_id, action })
+            }
             _ => None,
         };
 
@@ -274,6 +279,40 @@ mod tests {
 
         match cmd_rx.recv().expect("remote command") {
             RemoteCmd::ListTabs { client_id } => assert_eq!(client_id, 1),
+            other => panic!("unexpected remote command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_loop_decodes_runtime_action() {
+        let (outbound_tx, _outbound_rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(1, remote_client(outbound_tx, true))]),
+            ..State::test_empty()
+        }));
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let payload = serde_json::to_vec(&crate::remote::RuntimeAction::FocusPane {
+            view_id: 7,
+            tab_id: 9,
+            pane_id: 11,
+        })
+        .expect("encode runtime action");
+        let frame = encode_message(MessageType::RuntimeAction, &payload);
+
+        read_loop(std::io::Cursor::new(frame), 1, state, cmd_tx);
+
+        match cmd_rx.recv().expect("runtime action command") {
+            RemoteCmd::RuntimeAction { client_id, action } => {
+                assert_eq!(client_id, 1);
+                assert_eq!(
+                    action,
+                    crate::remote::RuntimeAction::FocusPane {
+                        view_id: 7,
+                        tab_id: 9,
+                        pane_id: 11,
+                    }
+                );
+            }
             other => panic!("unexpected remote command: {other:?}"),
         }
     }

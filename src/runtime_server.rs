@@ -40,6 +40,106 @@ struct LocalGuiTransportState {
 }
 
 impl BooApp {
+    fn bump_runtime_revision(&mut self) -> u64 {
+        self.runtime_revision = self.runtime_revision.wrapping_add(1).max(1);
+        self.runtime_revision
+    }
+
+    fn remote_view_state_for_client(
+        &self,
+        client_id: u64,
+    ) -> Option<crate::remote::ClientRuntimeViewSnapshot> {
+        self.remote_server_for_client(client_id)
+            .and_then(|server| server.client_runtime_view(client_id))
+    }
+
+    fn ensure_remote_client_view_state(
+        &mut self,
+        client_id: u64,
+    ) -> Option<crate::remote::ClientRuntimeViewSnapshot> {
+        let mut snapshot = self.remote_view_state_for_client(client_id)?;
+        if snapshot.view_id == 0 {
+            let viewed_tab_id = self.active_runtime_tab_id();
+            let focused_pane_id = viewed_tab_id.and_then(|tab_id| self.default_focused_pane_for_tab(tab_id));
+            let visible_pane_ids = viewed_tab_id
+                .map(|tab_id| self.pane_ids_for_tab(tab_id))
+                .unwrap_or_default();
+            if let Some(server) = self.remote_server_for_client(client_id) {
+                server.initialize_client_view(client_id, viewed_tab_id, focused_pane_id, &visible_pane_ids);
+                snapshot = server.client_runtime_view(client_id)?;
+            }
+        }
+        if let Some(viewed_tab_id) = snapshot.viewed_tab_id {
+            let valid_panes = self.pane_ids_for_tab(viewed_tab_id);
+            let needs_focus_repair = snapshot
+                .focused_pane_id
+                .is_none_or(|pane_id| !valid_panes.contains(&pane_id));
+            let needs_visible_repair = snapshot.visible_pane_ids != valid_panes;
+            if needs_focus_repair || needs_visible_repair {
+                let focused_pane_id = snapshot
+                    .focused_pane_id
+                    .filter(|pane_id| valid_panes.contains(pane_id))
+                    .or_else(|| self.default_focused_pane_for_tab(viewed_tab_id));
+                if let Some(server) = self.remote_server_for_client(client_id) {
+                    server.update_client_view(client_id, |view| {
+                        view.viewed_tab_id = Some(viewed_tab_id);
+                        view.focused_pane_id = focused_pane_id;
+                        view.visible_pane_ids = valid_panes.clone();
+                        view.touch_view();
+                    });
+                    snapshot = server.client_runtime_view(client_id)?;
+                }
+            }
+        }
+        Some(snapshot)
+    }
+
+    fn ui_runtime_state_for_client(&self, client_id: u64) -> control::UiRuntimeState {
+        let view = self.remote_view_state_for_client(client_id);
+        let viewed_tab_id = view.as_ref().and_then(|view| view.viewed_tab_id).or_else(|| self.active_runtime_tab_id());
+        let focused_pane = viewed_tab_id
+            .and_then(|tab_id| {
+                view.as_ref()
+                    .and_then(|view| view.focused_pane_id)
+                    .filter(|pane_id| self.pane_ids_for_tab(tab_id).contains(pane_id))
+                    .or_else(|| self.default_focused_pane_for_tab(tab_id))
+            })
+            .unwrap_or_default();
+        let visible_panes = viewed_tab_id
+            .map(|tab_id| self.visible_pane_snapshots_for(tab_id, focused_pane))
+            .unwrap_or_default();
+        let active_tab = viewed_tab_id
+            .and_then(|tab_id| self.server.tabs.find_index_by_tab_id(tab_id))
+            .unwrap_or_else(|| self.server.tabs.active_index());
+        control::UiRuntimeState {
+            active_tab,
+            focused_pane,
+            tabs: self.runtime_tab_snapshots_for(viewed_tab_id),
+            visible_panes: visible_panes.clone(),
+            mouse_selection: self.ui_mouse_selection_snapshot(),
+            status_bar: self.status_components.snapshot(),
+            pwd: self.pwd.clone(),
+            runtime_revision: self.runtime_revision,
+            view_revision: view.as_ref().map(|view| view.view_revision).unwrap_or(1),
+            view_id: view.as_ref().map(|view| view.view_id).unwrap_or(client_id),
+            viewed_tab_id,
+            viewport_cols: view.as_ref().and_then(|view| view.viewport_cols),
+            viewport_rows: view.as_ref().and_then(|view| view.viewport_rows),
+            visible_pane_ids: visible_panes.into_iter().map(|pane| pane.pane_id).collect(),
+        }
+    }
+
+    fn pane_handle_by_id_any(&self, pane_id: u64) -> Option<PaneHandle> {
+        let (tab_index, _) = self.server.tabs.find_pane_location(pane_id)?;
+        self.server
+            .tabs
+            .tab_tree(tab_index)?
+            .export_panes()
+            .into_iter()
+            .find(|pane| pane.pane.id() == pane_id)
+            .map(|pane| pane.pane)
+    }
+
     fn remote_server_for_delivery(&self, client_id: u64) -> Option<&remote::RemoteServer> {
         self.remote_server_for_client(client_id)
             .or(self.server.local_gui_server.as_ref())
@@ -48,11 +148,17 @@ impl BooApp {
 
     fn sync_remote_client_runtime_view(&mut self, client_id: u64, subscribe: bool) {
         let tabs = self.current_remote_tabs();
-        let ui_runtime_state = self.ui_runtime_state();
         let ui_appearance = self.ui_appearance_snapshot();
         let Some(server) = self.remote_server_for_delivery(client_id) else {
             return;
         };
+        let viewed_tab_id = self.active_runtime_tab_id();
+        let focused_pane_id = viewed_tab_id.and_then(|tab_id| self.default_focused_pane_for_tab(tab_id));
+        let visible_pane_ids = viewed_tab_id
+            .map(|tab_id| self.pane_ids_for_tab(tab_id))
+            .unwrap_or_default();
+        server.initialize_client_view(client_id, viewed_tab_id, focused_pane_id, &visible_pane_ids);
+        let ui_runtime_state = self.ui_runtime_state_for_client(client_id);
         server.send_tab_list(client_id, tabs.as_ref());
         server.send_ui_runtime_state(client_id, &ui_runtime_state);
         server.send_ui_appearance(client_id, &ui_appearance);
@@ -94,13 +200,22 @@ impl BooApp {
     fn broadcast_runtime_view_to_all_viewers(&mut self) -> Option<u32> {
         let focused_tab_id = self.active_runtime_tab_id();
         let tabs = self.current_remote_tabs();
-        let ui_runtime_state = self.ui_runtime_state();
         let ui_appearance = self.ui_appearance_snapshot();
+        self.bump_runtime_revision();
         self.remote_servers().for_each(|server| {
             server.send_tab_list_to_viewers(tabs.as_ref());
-            server.send_ui_runtime_state_to_viewers(&ui_runtime_state);
             server.send_ui_appearance_to_viewers(&ui_appearance);
         });
+        let client_ids = self
+            .remote_servers()
+            .flat_map(|server| server.clients_snapshot().clients.into_iter().map(|client| client.client_id))
+            .collect::<Vec<_>>();
+        for client_id in client_ids {
+            let ui_runtime_state = self.ui_runtime_state_for_client(client_id);
+            if let Some(server) = self.remote_server_for_delivery(client_id) {
+                server.send_ui_runtime_state(client_id, &ui_runtime_state);
+            }
+        }
         if let Some(active_tab_id) = focused_tab_id {
             self.publish_remote_tab(active_tab_id);
         }
@@ -384,7 +499,7 @@ impl BooApp {
                 // object. Runtime subscription/bootstrap is owned by
                 // RemoteConnected and UiRuntimeState.
                 let tabs = self.current_remote_tabs();
-                let ui_runtime_state = self.ui_runtime_state();
+                let ui_runtime_state = self.ui_runtime_state_for_client(client_id);
                 let ui_appearance = self.ui_appearance_snapshot();
                 if let Some(server) = self.remote_server_for_delivery(client_id) {
                     server.reply_tab_list(client_id, tabs.as_ref());
@@ -444,7 +559,10 @@ impl BooApp {
                 input_seq,
             } => {
                 let started_at = Instant::now();
-                let Some(active_tab_id) = self.active_runtime_tab_id() else {
+                let Some(view) = self.ensure_remote_client_view_state(client_id) else {
+                    return;
+                };
+                let Some(active_tab_id) = view.viewed_tab_id else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -454,7 +572,15 @@ impl BooApp {
                     }
                     return;
                 };
-                let Some(pane) = self.pane_for_tab(active_tab_id) else {
+                let Some(pane_id) = view
+                    .focused_pane_id
+                    .filter(|pane_id| view.visible_pane_ids.contains(pane_id))
+                    .or_else(|| self.default_focused_pane_for_tab(active_tab_id))
+                else {
+                    self.recover_remote_client_runtime_view(client_id);
+                    return;
+                };
+                let Some(pane) = self.pane_handle_by_id_any(pane_id) else {
                     self.recover_remote_client_runtime_view(client_id);
                     return;
                 };
@@ -501,7 +627,17 @@ impl BooApp {
                 cols,
                 rows,
             } => {
-                let Some(active_tab_id) = self.active_runtime_tab_id() else {
+                if let Some(server) = self.remote_server_for_client(client_id) {
+                    server.update_client_view(client_id, |view| {
+                        view.viewport_cols = Some(cols);
+                        view.viewport_rows = Some(rows);
+                        view.touch_view();
+                    });
+                }
+                let Some(view) = self.ensure_remote_client_view_state(client_id) else {
+                    return;
+                };
+                let Some(active_tab_id) = view.viewed_tab_id else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -515,7 +651,7 @@ impl BooApp {
                     self.recover_remote_client_runtime_view(client_id);
                     return;
                 };
-                if self.resize_viewport_cells(cols, rows) {
+                if Some(active_tab_id) == self.active_runtime_tab_id() && self.resize_viewport_cells(cols, rows) {
                     self.publish_remote_tab(active_tab_id);
                 }
             }
@@ -581,7 +717,10 @@ impl BooApp {
                 self.broadcast_runtime_view_to_all_viewers();
             }
             server::Command::RemoteFocusPane { client_id, pane_id } => {
-                let Some(active_tab_id) = self.active_runtime_tab_id() else {
+                let Some(mut view) = self.ensure_remote_client_view_state(client_id) else {
+                    return;
+                };
+                let Some(active_tab_id) = view.viewed_tab_id else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -591,13 +730,23 @@ impl BooApp {
                     }
                     return;
                 };
-                if !self.focus_runtime_tab(active_tab_id) {
-                    self.recover_remote_client_runtime_view(client_id);
-                    return;
-                }
-                if self.focus_pane_by_id(pane_id) {
-                    let _ = client_id;
-                    self.broadcast_runtime_view_to_all_viewers();
+                let valid_panes = self.pane_ids_for_tab(active_tab_id);
+                if valid_panes.contains(&pane_id) {
+                    view.focused_pane_id = Some(pane_id);
+                    view.visible_pane_ids = valid_panes.clone();
+                    if let Some(server) = self.remote_server_for_client(client_id) {
+                        server.update_client_view(client_id, |remote_view| {
+                            remote_view.focused_pane_id = Some(pane_id);
+                            remote_view.visible_pane_ids = valid_panes.clone();
+                            remote_view.touch_view();
+                        });
+                    }
+                    self.bump_runtime_revision();
+                    let ui_runtime_state = self.ui_runtime_state_for_client(client_id);
+                    if let Some(server) = self.remote_server_for_delivery(client_id) {
+                        server.send_ui_runtime_state(client_id, &ui_runtime_state);
+                    }
+                    self.publish_remote_tab(active_tab_id);
                 }
             }
             server::Command::RemoteDestroy { client_id, tab_id } => {
@@ -636,6 +785,107 @@ impl BooApp {
                 );
                 let _ = client_id;
             }
+            server::Command::RemoteRuntimeAction { client_id, action } => match action {
+                remote::RuntimeAction::SetViewedTab { view_id: _, tab_id } => {
+                    let valid_panes = self.pane_ids_for_tab(tab_id);
+                    let focused_pane_id = self.default_focused_pane_for_tab(tab_id);
+                    if let Some(server) = self.remote_server_for_client(client_id) {
+                        server.update_client_view(client_id, |view| {
+                            view.viewed_tab_id = Some(tab_id);
+                            view.focused_pane_id = focused_pane_id;
+                            view.visible_pane_ids = valid_panes.clone();
+                            view.touch_view();
+                        });
+                    }
+                    self.bump_runtime_revision();
+                    let ui_runtime_state = self.ui_runtime_state_for_client(client_id);
+                    if let Some(server) = self.remote_server_for_delivery(client_id) {
+                        server.send_ui_runtime_state(client_id, &ui_runtime_state);
+                    }
+                    self.publish_remote_tab(tab_id);
+                }
+                remote::RuntimeAction::FocusPane {
+                    view_id: _,
+                    tab_id,
+                    pane_id,
+                } => {
+                    self.handle_server_cmd(server::Command::RemoteFocusPane { client_id, pane_id });
+                    if let Some(server) = self.remote_server_for_client(client_id) {
+                        server.update_client_view(client_id, |view| {
+                            view.viewed_tab_id = Some(tab_id);
+                        });
+                    }
+                }
+                remote::RuntimeAction::NewTab { cols, rows, .. } => {
+                    self.handle_server_cmd(server::Command::RemoteCreate {
+                        client_id,
+                        cols: cols.unwrap_or(120),
+                        rows: rows.unwrap_or(36),
+                    });
+                }
+                remote::RuntimeAction::CloseTab { tab_id, .. } => {
+                    self.handle_server_cmd(server::Command::RemoteDestroy { client_id, tab_id });
+                }
+                remote::RuntimeAction::NextTab { .. } => {
+                    let Some(view) = self.ensure_remote_client_view_state(client_id) else {
+                        return;
+                    };
+                    let current_index = view
+                        .viewed_tab_id
+                        .and_then(|tab_id| self.server.tabs.find_index_by_tab_id(tab_id))
+                        .unwrap_or_else(|| self.server.tabs.active_index());
+                    let tab_count = self.server.tabs.len();
+                    if tab_count == 0 {
+                        return;
+                    }
+                    let next_index = (current_index + 1) % tab_count;
+                    if let Some(tab_id) = self.server.tabs.tab_id_for_index(next_index) {
+                        self.handle_server_cmd(server::Command::RemoteRuntimeAction {
+                            client_id,
+                            action: remote::RuntimeAction::SetViewedTab { view_id: view.view_id, tab_id },
+                        });
+                    }
+                }
+                remote::RuntimeAction::PrevTab { .. } => {
+                    let Some(view) = self.ensure_remote_client_view_state(client_id) else {
+                        return;
+                    };
+                    let current_index = view
+                        .viewed_tab_id
+                        .and_then(|tab_id| self.server.tabs.find_index_by_tab_id(tab_id))
+                        .unwrap_or_else(|| self.server.tabs.active_index());
+                    let tab_count = self.server.tabs.len();
+                    if tab_count == 0 {
+                        return;
+                    }
+                    let next_index = (current_index + tab_count - 1) % tab_count;
+                    if let Some(tab_id) = self.server.tabs.tab_id_for_index(next_index) {
+                        self.handle_server_cmd(server::Command::RemoteRuntimeAction {
+                            client_id,
+                            action: remote::RuntimeAction::SetViewedTab { view_id: view.view_id, tab_id },
+                        });
+                    }
+                }
+                remote::RuntimeAction::NewSplit { direction, .. } => {
+                    let before = self.local_gui_transport_state();
+                    self.create_split(Self::split_direction_from_str(direction.as_deref().unwrap_or("right")));
+                    self.publish_local_gui_after_ui_action(&before);
+                    self.broadcast_runtime_view_to_all_viewers();
+                }
+                remote::RuntimeAction::ResizeSplit { direction, amount, .. } => {
+                    let direction = match direction.as_str() {
+                        "left" => crate::bindings::Direction::Left,
+                        "right" => crate::bindings::Direction::Right,
+                        "up" => crate::bindings::Direction::Up,
+                        _ => crate::bindings::Direction::Down,
+                    };
+                    self.dispatch_binding_action(crate::bindings::Action::ResizeSplit(
+                        direction,
+                        amount,
+                    ));
+                    self.broadcast_runtime_view_to_all_viewers();
+                }
+            },
         }
     }
 
@@ -681,59 +931,45 @@ impl BooApp {
         (width, height)
     }
 
-    pub(crate) fn publish_remote_tab(&self, tab_id: u32) {
+    pub(crate) fn publish_remote_tab(&mut self, tab_id: u32) {
         let started_at = Instant::now();
         let servers = self.remote_servers().collect::<Vec<_>>();
         if servers.is_empty() {
             return;
         }
-        let Some(pane) = self.pane_for_tab(tab_id) else {
-            log_server_latency("publish_remote_tab", started_at);
-            return;
-        };
-        let Some(state) = self.remote_full_state_for_pane(pane.id()) else {
-            log_server_latency("publish_remote_tab", started_at);
-            return;
-        };
-        let needs_local_pane_states = servers
-            .iter()
-            .any(|server| server.has_local_runtime_viewers());
-        let pane_states = if needs_local_pane_states {
-            self.server
-                .tabs
-                .find_index_by_tab_id(tab_id)
-                .and_then(|tab_index| self.server.tabs.tab_tree(tab_index))
-                .map(|tree| {
-                    let focused_pane_id = tree.focused_pane().id();
-                    tree.export_panes()
-                        .into_iter()
-                        .filter_map(|exported| {
-                            let pane_id = exported.pane.id();
-                            if pane_id == focused_pane_id {
-                                return None;
-                            }
-                            self.remote_full_state_for_pane(pane_id)
-                                .map(|state| (pane_id, state))
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        if needs_local_pane_states {
-            let visible_pane_ids = pane_states
-                .iter()
-                .map(|(pane_id, _)| *pane_id)
-                .collect::<Vec<_>>();
-            for server in &servers {
-                server.retain_local_viewer_pane_states(&visible_pane_ids);
-            }
-        }
         for server in servers {
-            server.send_full_state_to_viewers(tab_id, Arc::clone(&state));
-            for (pane_id, pane_state) in &pane_states {
-                server.send_pane_state_to_local_viewers(tab_id, *pane_id, Arc::clone(pane_state));
+            let client_ids = server.clients_snapshot().clients.into_iter().map(|client| client.client_id).collect::<Vec<_>>();
+            for client_id in client_ids {
+                let Some(view) = server.client_runtime_view(client_id) else {
+                    continue;
+                };
+                if !view.subscribed_to_runtime || view.viewed_tab_id != Some(tab_id) {
+                    continue;
+                }
+                let focused_pane_id = view
+                    .focused_pane_id
+                    .filter(|pane_id| view.visible_pane_ids.contains(pane_id))
+                    .or_else(|| self.default_focused_pane_for_tab(tab_id));
+                if let Some(focused_pane_id) = focused_pane_id
+                    && let Some(state) = self.remote_full_state_for_pane(focused_pane_id)
+                {
+                    server.send_full_state_to_client(client_id, tab_id, Arc::clone(&state));
+                }
+                for pane_id in &view.visible_pane_ids {
+                    if Some(*pane_id) == focused_pane_id {
+                        continue;
+                    }
+                    if let Some(pane_state) = self.remote_full_state_for_pane(*pane_id) {
+                        server.send_pane_state_to_client(
+                            client_id,
+                            tab_id,
+                            *pane_id,
+                            self.runtime_revision,
+                            self.runtime_revision,
+                            Arc::clone(&pane_state),
+                        );
+                    }
+                }
             }
         }
         log_server_latency("publish_remote_tab", started_at);

@@ -294,6 +294,8 @@ mod tests {
                             active: true,
                             title: "Tab 1".to_string(),
                             pane_count: 1,
+                            focused_pane: Some(1),
+                            pane_ids: vec![1],
                         }],
                         visible_panes: vec![],
                         mouse_selection: UiMouseSelectionSnapshot::default(),
@@ -302,6 +304,13 @@ mod tests {
                             right: vec![],
                         },
                         pwd: "/tmp".to_string(),
+                        runtime_revision: 1,
+                        view_revision: 1,
+                        view_id: 1,
+                        viewed_tab_id: Some(77),
+                        viewport_cols: None,
+                        viewport_rows: None,
+                        visible_pane_ids: vec![1],
                     })
                     .expect("encode runtime state"),
                 ))

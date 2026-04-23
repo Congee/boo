@@ -3252,6 +3252,13 @@ mod tests {
             },
             status_bar: crate::status_components::UiStatusBarSnapshot::default(),
             pwd: "/tmp".to_string(),
+            runtime_revision: 1,
+            view_revision: 1,
+            view_id: 1,
+            viewed_tab_id: Some(7),
+            viewport_cols: None,
+            viewport_rows: None,
+            visible_pane_ids: vec![7],
         });
 
         assert!(app.mouse_selection.active);
@@ -3272,11 +3279,20 @@ mod tests {
                 active: true,
                 title: "shell".to_string(),
                 pane_count: 1,
+                focused_pane: Some(7),
+                pane_ids: vec![7],
             }],
             visible_panes: vec![test_pane_with_id(7, 0.0, 0.0, 80.0, 25.0)],
             mouse_selection: control::UiMouseSelectionSnapshot::default(),
             status_bar: crate::status_components::UiStatusBarSnapshot::default(),
             pwd: String::new(),
+            runtime_revision: 1,
+            view_revision: 1,
+            view_id: 1,
+            viewed_tab_id: Some(7),
+            viewport_cols: None,
+            viewport_rows: None,
+            visible_pane_ids: vec![7],
         }));
         app.handle_stream_event(LocalStreamEvent::FullState {
             ack_input_seq: None,
@@ -3609,6 +3625,13 @@ mod tests {
             focused_pane: 1,
             mouse_selection: control::UiMouseSelectionSnapshot::default(),
             status_bar: crate::status_components::UiStatusBarSnapshot::default(),
+            runtime_revision: 1,
+            view_revision: 1,
+            view_id: 1,
+            viewed_tab_id: Some(1),
+            viewport_cols: None,
+            viewport_rows: None,
+            visible_pane_ids: vec![],
         });
         let runtime_b = LocalStreamEvent::UiRuntimeState(control::UiRuntimeState {
             tabs: vec![],
@@ -3618,6 +3641,13 @@ mod tests {
             focused_pane: 2,
             mouse_selection: control::UiMouseSelectionSnapshot::default(),
             status_bar: crate::status_components::UiStatusBarSnapshot::default(),
+            runtime_revision: 2,
+            view_revision: 2,
+            view_id: 1,
+            viewed_tab_id: Some(2),
+            viewport_cols: None,
+            viewport_rows: None,
+            visible_pane_ids: vec![],
         });
         let appearance_a = LocalStreamEvent::UiAppearance(appearance("A"));
         let appearance_b = LocalStreamEvent::UiAppearance(appearance("B"));
@@ -3861,11 +3891,20 @@ mod tests {
                 active: true,
                 title: "shell".to_string(),
                 pane_count: 1,
+                focused_pane: Some(7),
+                pane_ids: vec![7],
             }],
             visible_panes: vec![test_pane_with_id(7, 0.0, 0.0, 80.0, 25.0)],
             mouse_selection: control::UiMouseSelectionSnapshot::default(),
             status_bar: crate::status_components::UiStatusBarSnapshot::default(),
             pwd: "/tmp".to_string(),
+            runtime_revision: 1,
+            view_revision: 1,
+            view_id: 1,
+            viewed_tab_id: Some(7),
+            viewport_cols: None,
+            viewport_rows: None,
+            visible_pane_ids: vec![7],
         }));
 
         assert_eq!(app.active_remote_tab_id, Some(7));

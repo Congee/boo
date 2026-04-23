@@ -509,6 +509,7 @@ struct BooApp {
     cursor_blink_interval: std::time::Duration,
     cursor_blink_epoch: std::time::Instant,
     appearance_revision: u64,
+    runtime_revision: u64,
     surface_initialized_once: bool,
     app_focused: bool,
     dirty_remote_tabs: Vec<u32>,
