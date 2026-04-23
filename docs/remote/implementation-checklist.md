@@ -3,6 +3,27 @@
 This page tracks the current remote-runtime redesign toward a shared server-owned
 runtime plus per-screen view state.
 
+## Status
+
+This redesign pass is complete.
+
+Implemented outcomes:
+
+- one shared server-owned runtime truth for tabs, panes, layout, and semantic
+  mutations
+- one server-owned per-screen view state for viewed tab, focused pane, visible
+  panes, viewport, and attach/detach lifecycle
+- pane-scoped streaming with `tab_id + pane_id + pane/runtime revision`
+  linkage
+- focused-pane-first per-screen publish ordering
+- normalized split-ratio resizing that maps correctly into different screen
+  sizes
+- detached-view timeout cleanup without immediately destroying shared runtime
+  state
+
+Remaining follow-up work is intentionally post-v1 and is documented in the
+deferred section at the bottom of this file.
+
 ## Current Emphasis
 
 - move remote targeting/focus semantics from client-owned selection to

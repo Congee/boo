@@ -12,6 +12,8 @@ boo --host <ssh-host>
 - forward the remote control socket
 - forward the remote `.stream` socket
 - connect the local GUI/client to the forwarded local sockets
+- consume the same server-owned runtime/view protocol used by other remote
+  clients
 
 ## Why This Exists
 
@@ -36,6 +38,8 @@ Prefer direct socket-level checks:
 - `get-ui-snapshot` over the tunnel
 - tab creation through the forwarded path
 - `.stream` runtime-view update behavior for the current viewer state
+- viewed-tab/focused-pane divergence behavior across concurrent viewers
+- pane-scoped runtime updates carrying revision linkage
 
 ## Related Docs
 

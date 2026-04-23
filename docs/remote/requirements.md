@@ -25,6 +25,26 @@ time, even though rollout and UX differ today.
   `authorized_keys`-style model and use platform keychain or agent integration
   client-side rather than storing private keys inside Boo
 
+## Implemented Runtime-View Results
+
+The completed redesign now provides:
+
+- one shared runtime truth for:
+  - tabs and pane trees
+  - pane content/state
+  - shared layout stored as normalized split ratios
+  - semantic runtime mutations
+- one server-owned per-screen view state for:
+  - viewed tab
+  - focused pane
+  - visible panes
+  - viewport size
+  - attach/detach + idle-timeout lifecycle
+- pane-scoped terminal streaming keyed by `tab_id -> pane_id`
+- explicit runtime/view/pane revision linkage for stale-update rejection and
+  refresh
+- per-screen focused-pane-first delivery ordering
+
 ## iOS Host Runtime Model
 
 For iOS, the product direction is now:
@@ -52,6 +72,10 @@ terminal that is not the canonical writable terminal for that host. Future
 research should treat this as a host-runtime ownership problem, not as a mere
 keyboard-focus bug.
 
+With the redesign complete, iOS now attaches to a server-owned view, detaches on
+UI disappearance, and may reattach to that view during the idle timeout window
+without creating a replacement runtime tab.
+
 ## Tailscale Constraint
 
 - Boo iOS currently uses the Tailscale API only for device discovery.
@@ -73,6 +97,12 @@ The remote product should preserve three verification layers:
 1. protocol-level verification
 2. end-to-end transport verification
 3. manual UX verification
+
+The current implemented verification baseline for this redesign is:
+
+- `cargo check -q`
+- `cargo test -q runtime_server::tests::`
+- `cargo test -q client_gui::tests::`
 
 ## Related Docs
 
