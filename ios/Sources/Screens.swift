@@ -1346,7 +1346,6 @@ struct TerminalTabScreen: View {
     private func forceCloseHostTabIfNeeded(expectedTabId: UInt32) {
         guard closingHostTabId == expectedTabId else { return }
         closingHostTabId = nil
-        client.detach()
         monitor.disconnect()
         DispatchQueue.main.async {
             onBack()

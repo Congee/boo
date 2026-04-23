@@ -111,7 +111,6 @@ enum WireMessageType: UInt8 {
     case auth = 0x01
     case listTabs = 0x02
     case attach = 0x03
-    case detach = 0x04
     case create = 0x05
     case input = 0x06
     case resize = 0x07
@@ -332,7 +331,6 @@ final class RemoteValidator {
             self.lastScreenText.contains(marker)
         }
 
-        sendMessage(type: .detach, payload: Data())
         sendMessage(type: .destroy, payload: attachPayload)
     }
 

@@ -831,6 +831,7 @@ impl BooApp {
                 self.invalidate_remote_tabs_cache();
                 let tabs = self.current_remote_tabs();
                 let focused_tab_id = self.server.tabs.active_tab_id();
+                let ui_state = self.ui_runtime_state();
                 log::info!(
                     "remote_destroy_done client_id={client_id} destroyed_tab={target} tabs_after={} focused_after={focused_tab_id:?}",
                     self.server.tabs.len()
@@ -841,10 +842,13 @@ impl BooApp {
                     .or(self.server.remote_server.as_ref())
                 {
                     server.send_tab_exited(target);
+                    server.send_ui_runtime_state(client_id, &ui_state);
                     server.send_tab_list(client_id, tabs.as_ref());
-                    server.send_detached(client_id);
                     if let Some(tab_id) = focused_tab_id {
+                        server.send_tab_attached(client_id, tab_id, None);
                         self.publish_remote_tab(tab_id);
+                    } else {
+                        server.send_detached(client_id);
                     }
                 }
             }
