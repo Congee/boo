@@ -35,7 +35,7 @@ Prefer direct socket-level checks:
 - forwarded control socket health
 - `get-ui-snapshot` over the tunnel
 - tab creation through the forwarded path
-- `.stream` runtime-view update behavior
+- `.stream` runtime-view update behavior for the current viewer state
 
 ## Related Docs
 

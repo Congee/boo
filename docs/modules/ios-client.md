@@ -21,7 +21,7 @@ It handles:
 - optional Tailscale device discovery through the Tailscale API
 - auth
 - runtime-view bootstrap
-- tab metadata and current-view state
+- tab metadata and current viewer state
 - trusted server identity pinning
 - terminal state decoding and presentation
 

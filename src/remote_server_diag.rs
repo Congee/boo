@@ -22,7 +22,7 @@ pub(crate) fn clients_snapshot(
     let viewing_clients = state
         .clients
         .values()
-        .filter(|client| client.runtime_view.visible_tab_id.is_some())
+        .filter(|client| client.runtime_view.viewing_tab_id.is_some())
         .count();
     let pending_auth_clients = state
         .clients
@@ -83,7 +83,7 @@ fn client_info_for_client(
         },
         server_socket_path: local_socket_path.map(|path| path.display().to_string()),
         challenge_pending: false,
-        viewing_tab: client.runtime_view.visible_tab_id,
+        viewing_tab: client.runtime_view.viewing_tab_id,
         has_cached_state: client.runtime_view.last_state.is_some(),
         pane_state_count: client.runtime_view.pane_states.len(),
         latest_input_seq: client.runtime_view.latest_input_seq,
@@ -128,7 +128,7 @@ mod tests {
             ClientState {
                 last_heartbeat_at: Some(Instant::now()),
                 runtime_view: ClientRuntimeView {
-                    visible_tab_id: Some(11),
+                    viewing_tab_id: Some(11),
                     last_state: Some(Arc::new(RemoteFullState {
                         rows: 1,
                         cols: 1,

@@ -26,13 +26,13 @@ pub(crate) const AUTH_CHALLENGE_WINDOW: Duration = Duration::from_secs(30);
 /// treats it as stale and tears the connection down.
 pub(crate) const DIRECT_CLIENT_HEARTBEAT_WINDOW: Duration = Duration::from_secs(20);
 
-/// Runtime-view subscription state cached per connected client.
+/// Runtime-view state cached per connected client.
 ///
 /// The authoritative tab/pane/runtime model lives in the server runtime. This
-/// struct only tracks which tab a given stream is currently subscribed to plus
-/// the cached payloads/full states needed for efficient transport updates.
+/// struct only tracks which tab a given viewer is currently showing plus the
+/// cached payloads/full states needed for efficient transport updates.
 pub(crate) struct ClientRuntimeView {
-    pub(crate) visible_tab_id: Option<u32>,
+    pub(crate) viewing_tab_id: Option<u32>,
     pub(crate) last_tab_list_payload: Option<Vec<u8>>,
     pub(crate) last_ui_runtime_state_payload: Option<Vec<u8>>,
     pub(crate) last_ui_appearance_payload: Option<Vec<u8>>,
@@ -44,7 +44,7 @@ pub(crate) struct ClientRuntimeView {
 impl ClientRuntimeView {
     pub(crate) fn idle() -> Self {
         Self {
-            visible_tab_id: None,
+            viewing_tab_id: None,
             last_tab_list_payload: None,
             last_ui_runtime_state_payload: None,
             last_ui_appearance_payload: None,

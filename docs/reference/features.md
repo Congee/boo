@@ -30,7 +30,7 @@ for the feature surface and current backlog themes.
 
 - SSH-backed desktop remote via `boo --host <ssh-host>`
 - Boo-native remote daemon for direct and iOS clients
-- iOS SwiftUI client with Bonjour discovery and runtime-view bootstrap
+- iOS SwiftUI client with Bonjour discovery and runtime-view bootstrap onto the shared server state
 
 ### Platform Runtime
 

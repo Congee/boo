@@ -27,7 +27,7 @@ mod tests {
             authenticated_at: Some(Instant::now()),
             last_heartbeat_at: None,
             runtime_view: ClientRuntimeView {
-                visible_tab_id: viewing_tab,
+                viewing_tab_id: viewing_tab,
                 ..ClientRuntimeView::idle()
             },
             is_local,
@@ -203,11 +203,11 @@ mod tests {
         server.retarget_viewing_tab(22);
 
         let guard = state.lock().expect("remote server state poisoned");
-        assert_eq!(guard.clients.get(&1).and_then(|c| c.runtime_view.visible_tab_id), Some(22));
-        assert_eq!(guard.clients.get(&5).and_then(|c| c.runtime_view.visible_tab_id), Some(22));
-        assert_eq!(guard.clients.get(&2).and_then(|c| c.runtime_view.visible_tab_id), None);
-        assert_eq!(guard.clients.get(&3).and_then(|c| c.runtime_view.visible_tab_id), Some(22));
-        assert_eq!(guard.clients.get(&4).and_then(|c| c.runtime_view.visible_tab_id), Some(22));
+        assert_eq!(guard.clients.get(&1).and_then(|c| c.runtime_view.viewing_tab_id), Some(22));
+        assert_eq!(guard.clients.get(&5).and_then(|c| c.runtime_view.viewing_tab_id), Some(22));
+        assert_eq!(guard.clients.get(&2).and_then(|c| c.runtime_view.viewing_tab_id), None);
+        assert_eq!(guard.clients.get(&3).and_then(|c| c.runtime_view.viewing_tab_id), Some(22));
+        assert_eq!(guard.clients.get(&4).and_then(|c| c.runtime_view.viewing_tab_id), Some(22));
         assert!(local_idle_rx.try_recv().is_err());
         assert!(local_same_tab_rx.try_recv().is_err());
         assert!(remote_viewer_rx.try_recv().is_err());

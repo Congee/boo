@@ -41,7 +41,7 @@ files own narrower responsibilities such as:
 - supports full-state and delta publishing
 - supports heartbeat and reconnect-oriented metadata
 - supports daemon identity metadata
-- keeps only thin per-viewer current-tab/cache bookkeeping in the transport layer
+- keeps only thin per-viewer current-tab and stream-cache bookkeeping in the transport layer
 - exposed diagnostics through `boo remote-clients`
 
 ## Related Docs

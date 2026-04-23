@@ -325,10 +325,10 @@ impl From<remote::RemoteCmd> for Command {
             }
             remote::RemoteCmd::Destroy {
                 client_id,
-                visible_tab_id,
+                tab_id,
             } => Self::RemoteDestroy {
                 client_id,
-                tab_id: visible_tab_id,
+                tab_id,
             },
         }
     }

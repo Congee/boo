@@ -112,7 +112,7 @@ pub enum RemoteCmd {
     },
     Destroy {
         client_id: u64,
-        visible_tab_id: Option<u32>,
+        tab_id: Option<u32>,
     },
 }
 
@@ -127,7 +127,7 @@ use crate::remote_server_control::{
     send_ui_appearance as send_local_ui_appearance,
     send_ui_appearance_to_local_clients as send_ui_appearance_to_all_local_clients,
     send_ui_runtime_state as send_local_ui_runtime_state,
-    send_ui_runtime_state_to_local_viewers as send_ui_runtime_state_to_subscribed_locals,
+    send_ui_runtime_state_to_local_viewers as send_ui_runtime_state_to_local_viewers_inner,
 };
 use crate::remote_server_diag::clients_snapshot as build_clients_snapshot;
 use crate::remote_server_stream::{
@@ -283,28 +283,28 @@ impl RemoteServer {
         state
             .clients
             .values()
-            .any(|client| client.runtime_view.visible_tab_id.is_some())
+            .any(|client| client.runtime_view.viewing_tab_id.is_some())
     }
 
-    pub fn local_viewing_tab(&self, visible_tab_id: u32) -> bool {
+    pub fn local_viewing_tab(&self, viewing_tab_id: u32) -> bool {
         let state = self.state.lock().expect("remote server state poisoned");
         state
             .clients
             .values()
-            .any(|client| client.is_local && client.runtime_view.visible_tab_id == Some(visible_tab_id))
+            .any(|client| client.is_local && client.runtime_view.viewing_tab_id == Some(viewing_tab_id))
     }
 
-    pub fn client_visible_tab(&self, client_id: u64) -> Option<u32> {
+    pub fn client_viewing_tab(&self, client_id: u64) -> Option<u32> {
         let state = self.state.lock().expect("remote server state poisoned");
         state
             .clients
             .get(&client_id)
-            .and_then(|client| client.runtime_view.visible_tab_id)
+            .and_then(|client| client.runtime_view.viewing_tab_id)
     }
 
     #[allow(dead_code)]
     pub fn client_tab(&self, client_id: u64) -> Option<u32> {
-        self.client_visible_tab(client_id)
+        self.client_viewing_tab(client_id)
     }
 
     #[cfg(test)]
@@ -362,7 +362,7 @@ impl RemoteServer {
                 .clients
                 .iter()
                 .filter_map(|(client_id, client)| {
-                    client.runtime_view.visible_tab_id.is_some().then_some(*client_id)
+                    client.runtime_view.viewing_tab_id.is_some().then_some(*client_id)
                 })
                 .collect::<Vec<_>>()
         };
@@ -371,20 +371,20 @@ impl RemoteServer {
         }
     }
 
-    pub fn set_client_visible_tab(&self, client_id: u64, visible_tab_id: u32) {
+    pub fn set_client_viewing_tab(&self, client_id: u64, viewing_tab_id: u32) {
         self.update_client(client_id, |client| {
-            let same_tab = client.runtime_view.visible_tab_id == Some(visible_tab_id);
-            client.runtime_view.visible_tab_id = Some(visible_tab_id);
+            let same_tab = client.runtime_view.viewing_tab_id == Some(viewing_tab_id);
+            client.runtime_view.viewing_tab_id = Some(viewing_tab_id);
             if !same_tab {
                 client.runtime_view.clear_stream_state();
             }
         });
-        log::info!("remote runtime subscription retargeted: client_id={client_id} visible_tab_id={visible_tab_id}");
+        log::info!("remote runtime viewer retargeted: client_id={client_id} viewing_tab_id={viewing_tab_id}");
     }
 
-    pub fn clear_client_visible_tab(&self, client_id: u64) {
+    pub fn clear_client_viewing_tab(&self, client_id: u64) {
         self.update_client(client_id, |client| {
-            client.runtime_view.visible_tab_id = None;
+            client.runtime_view.viewing_tab_id = None;
             client.runtime_view.clear_stream_state();
         });
         log::info!("remote runtime view cleared: client_id={client_id}");
@@ -411,7 +411,7 @@ impl RemoteServer {
         visible_tab_id: u32,
         state: &crate::control::UiRuntimeState,
     ) {
-        send_ui_runtime_state_to_subscribed_locals(&self.state, visible_tab_id, state);
+        send_ui_runtime_state_to_local_viewers_inner(&self.state, visible_tab_id, state);
     }
 
     pub fn send_ui_runtime_state_to_viewers(&self, state: &crate::control::UiRuntimeState) {
@@ -421,7 +421,7 @@ impl RemoteServer {
                 .clients
                 .iter()
                 .filter_map(|(client_id, client)| {
-                    client.runtime_view.visible_tab_id.is_some().then_some(*client_id)
+                    client.runtime_view.viewing_tab_id.is_some().then_some(*client_id)
                 })
                 .collect::<Vec<_>>()
         };
@@ -430,16 +430,16 @@ impl RemoteServer {
         }
     }
 
-    pub fn retarget_viewing_tab(&self, visible_tab_id: u32) -> bool {
+    pub fn retarget_viewing_tab(&self, viewing_tab_id: u32) -> bool {
         let client_ids = {
             let state_guard = self.state.lock().expect("remote server state poisoned");
-            retarget_viewer_client_ids_to_tab(&state_guard, visible_tab_id)
+            retarget_viewer_client_ids_to_tab(&state_guard, viewing_tab_id)
         };
         if client_ids.is_empty() {
             return false;
         }
         for client_id in client_ids {
-            self.set_client_visible_tab(client_id, visible_tab_id);
+            self.set_client_viewing_tab(client_id, viewing_tab_id);
         }
         true
     }
@@ -469,7 +469,7 @@ impl RemoteServer {
                 .clients
                 .iter()
                 .filter_map(|(client_id, client)| {
-                    client.runtime_view.visible_tab_id.is_some().then_some(*client_id)
+                    client.runtime_view.viewing_tab_id.is_some().then_some(*client_id)
                 })
                 .collect::<Vec<_>>()
         };

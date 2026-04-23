@@ -92,7 +92,7 @@ explicitly attached to, plus optional resume/lease metadata.
 
 What remains is only:
 - `ClientRuntimeView`
-  - current visible tab id for this client stream
+  - current visible tab id for this viewer stream
   - cached tab-list/runtime/appearance payloads
   - cached terminal full state and pane states
   - latest acknowledged input sequence
@@ -134,6 +134,7 @@ The runtime viewer should carry:
 - appearance state
 - focus state
 - status state
+- thin viewer-local cache state for incremental streaming
 
 ### Runtime state should contain tabs if tabs exist in the UI
 
