@@ -59,6 +59,9 @@ private enum OutboundRuntimeAction: Encodable {
     case closeTab(viewId: UInt64, tabId: UInt32?)
     case nextTab(viewId: UInt64)
     case prevTab(viewId: UInt64)
+    case attachView(viewId: UInt64)
+    case detachView(viewId: UInt64)
+    case resizeSplit(viewId: UInt64, direction: String, amount: UInt16, ratio: Double?)
 
     private enum CodingKeys: String, CodingKey {
         case kind
@@ -67,6 +70,9 @@ private enum OutboundRuntimeAction: Encodable {
         case paneId
         case cols
         case rows
+        case direction
+        case amount
+        case ratio
     }
 
     private enum Kind: String, Encodable {
@@ -76,6 +82,9 @@ private enum OutboundRuntimeAction: Encodable {
         case closeTab = "close_tab"
         case nextTab = "next_tab"
         case prevTab = "prev_tab"
+        case attachView = "attach_view"
+        case detachView = "detach_view"
+        case resizeSplit = "resize_split"
     }
 
     func encode(to encoder: Encoder) throws {
@@ -105,6 +114,18 @@ private enum OutboundRuntimeAction: Encodable {
         case .prevTab(let viewId):
             try container.encode(Kind.prevTab, forKey: .kind)
             try container.encode(viewId, forKey: .viewId)
+        case .attachView(let viewId):
+            try container.encode(Kind.attachView, forKey: .kind)
+            try container.encode(viewId, forKey: .viewId)
+        case .detachView(let viewId):
+            try container.encode(Kind.detachView, forKey: .kind)
+            try container.encode(viewId, forKey: .viewId)
+        case .resizeSplit(let viewId, let direction, let amount, let ratio):
+            try container.encode(Kind.resizeSplit, forKey: .kind)
+            try container.encode(viewId, forKey: .viewId)
+            try container.encode(direction, forKey: .direction)
+            try container.encode(amount, forKey: .amount)
+            try container.encodeIfPresent(ratio, forKey: .ratio)
         }
     }
 }
@@ -982,6 +1003,29 @@ final class GSPClient: ObservableObject {
     func prevTab() {
         guard currentViewId != 0 else { return }
         sendRuntimeAction(.prevTab(viewId: currentViewId))
+    }
+
+    func resizeSplit(direction: String, ratio: Double) {
+        guard currentViewId != 0 else { return }
+        let clamped = min(max(ratio, 0.1), 0.9)
+        sendRuntimeAction(
+            .resizeSplit(
+                viewId: currentViewId,
+                direction: direction,
+                amount: 0,
+                ratio: clamped
+            )
+        )
+    }
+
+    func attachView() {
+        guard currentViewId != 0 else { return }
+        sendRuntimeAction(.attachView(viewId: currentViewId))
+    }
+
+    func detachView() {
+        guard currentViewId != 0 else { return }
+        sendRuntimeAction(.detachView(viewId: currentViewId))
     }
 
     func sendHeartbeat() {

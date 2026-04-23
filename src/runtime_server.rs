@@ -105,8 +105,12 @@ impl BooApp {
                     .or_else(|| self.default_focused_pane_for_tab(tab_id))
             })
             .unwrap_or_default();
+        let viewport_cols = view.as_ref().and_then(|view| view.viewport_cols);
+        let viewport_rows = view.as_ref().and_then(|view| view.viewport_rows);
         let visible_panes = viewed_tab_id
-            .map(|tab_id| self.visible_pane_snapshots_for(tab_id, focused_pane))
+            .map(|tab_id| {
+                self.visible_pane_snapshots_for(tab_id, focused_pane, viewport_cols, viewport_rows)
+            })
             .unwrap_or_default();
         let active_tab = viewed_tab_id
             .and_then(|tab_id| self.server.tabs.find_index_by_tab_id(tab_id))
@@ -123,8 +127,8 @@ impl BooApp {
             view_revision: view.as_ref().map(|view| view.view_revision).unwrap_or(1),
             view_id: view.as_ref().map(|view| view.view_id).unwrap_or(client_id),
             viewed_tab_id,
-            viewport_cols: view.as_ref().and_then(|view| view.viewport_cols),
-            viewport_rows: view.as_ref().and_then(|view| view.viewport_rows),
+            viewport_cols,
+            viewport_rows,
             visible_pane_ids: visible_panes.into_iter().map(|pane| pane.pane_id).collect(),
         }
     }
@@ -241,7 +245,7 @@ impl BooApp {
         true
     }
 
-    fn broadcast_runtime_view_to_all_viewers(&mut self) -> Option<u32> {
+    pub(crate) fn broadcast_runtime_view_to_all_viewers(&mut self) -> Option<u32> {
         let focused_tab_id = self.active_runtime_tab_id();
         let tabs = self.current_remote_tabs();
         let ui_appearance = self.ui_appearance_snapshot();
@@ -938,23 +942,84 @@ impl BooApp {
                         });
                     }
                 }
+                remote::RuntimeAction::AttachView { .. } => {
+                    if let Some(server) = self.remote_server_for_client(client_id) {
+                        server.update_client_view(client_id, |view| {
+                            view.attach_ui();
+                            view.subscribed_to_runtime = true;
+                        });
+                    }
+                    let ui_runtime_state = self.ui_runtime_state_for_client(client_id);
+                    if let Some(server) = self.remote_server_for_delivery(client_id) {
+                        server.send_ui_runtime_state(client_id, &ui_runtime_state);
+                    }
+                    if let Some(tab_id) = ui_runtime_state.viewed_tab_id {
+                        self.publish_remote_tab(tab_id);
+                    }
+                }
+                remote::RuntimeAction::DetachView { .. } => {
+                    if let Some(server) = self.remote_server_for_client(client_id) {
+                        server.update_client_view(client_id, |view| {
+                            view.detach_ui();
+                            view.subscribed_to_runtime = false;
+                        });
+                    }
+                }
                 remote::RuntimeAction::NewSplit { direction, .. } => {
                     let before = self.local_gui_transport_state();
                     self.create_split(Self::split_direction_from_str(direction.as_deref().unwrap_or("right")));
                     self.publish_local_gui_after_ui_action(&before);
                     self.broadcast_runtime_view_to_all_viewers();
                 }
-                remote::RuntimeAction::ResizeSplit { direction, amount, .. } => {
-                    let direction = match direction.as_str() {
-                        "left" => crate::bindings::Direction::Left,
-                        "right" => crate::bindings::Direction::Right,
-                        "up" => crate::bindings::Direction::Up,
-                        _ => crate::bindings::Direction::Down,
+                remote::RuntimeAction::ResizeSplit {
+                    direction,
+                    amount,
+                    ratio,
+                    ..
+                } => {
+                    let Some(view) = self.ensure_remote_client_view_state(client_id) else {
+                        return;
                     };
-                    self.dispatch_binding_action(crate::bindings::Action::ResizeSplit(
-                        direction,
-                        amount,
-                    ));
+                    let Some(tab_id) = view.viewed_tab_id else {
+                        return;
+                    };
+                    let target_pane_id = view
+                        .focused_pane_id
+                        .filter(|pane_id| self.pane_ids_for_tab(tab_id).contains(pane_id))
+                        .or_else(|| self.default_focused_pane_for_tab(tab_id));
+                    let axis = match direction.as_str() {
+                        "left" | "right" => crate::splits::Direction::Horizontal,
+                        "up" | "down" => crate::splits::Direction::Vertical,
+                        _ => crate::splits::Direction::Horizontal,
+                    };
+                    if let (Some(ratio), Some(target_pane_id)) = (ratio, target_pane_id) {
+                        let frame = match view.viewport_cols.zip(view.viewport_rows) {
+                            Some((cols, rows)) => {
+                                let (width, height) = self.tab_size_pixels(cols, rows);
+                                crate::platform::Rect::new(
+                                    crate::platform::Point::new(0.0, 0.0),
+                                    crate::platform::Size::new(width as f64, height as f64),
+                                )
+                            }
+                            None => self.terminal_frame(),
+                        };
+                        if let Some(tab_index) = self.server.tabs.find_index_by_tab_id(tab_id)
+                            && let Some(tree) = self.server.tabs.tab_tree_mut(tab_index)
+                        {
+                            tree.resize_pane_to_ratio(frame, target_pane_id, axis, ratio);
+                        }
+                    } else {
+                        let direction = match direction.as_str() {
+                            "left" => crate::bindings::Direction::Left,
+                            "right" => crate::bindings::Direction::Right,
+                            "up" => crate::bindings::Direction::Up,
+                            _ => crate::bindings::Direction::Down,
+                        };
+                        self.dispatch_binding_action(crate::bindings::Action::ResizeSplit(
+                            direction,
+                            amount,
+                        ));
+                    }
                     self.broadcast_runtime_view_to_all_viewers();
                 }
             },
@@ -1570,5 +1635,121 @@ mod tests {
             }
         }
         assert_eq!(refreshed_ty, Some(MessageType::UiPaneFullState));
+    }
+
+    #[test]
+    fn normalized_split_resize_reflects_across_different_screen_sizes() {
+        let mut app = BooApp::new_headless();
+        app.init_surface();
+        app.create_split(crate::bindings::SplitDirection::Right);
+        let tab_id = app.active_runtime_tab_id().expect("active tab");
+        let pane_ids = app.pane_ids_for_tab(tab_id);
+        install_test_remote_server(&mut app, &[1, 2]);
+        app.sync_remote_client_runtime_view(1, true);
+        app.sync_remote_client_runtime_view(2, true);
+        {
+            let server = app.server.remote_server.as_ref().expect("remote server");
+            server.update_client_view(1, |view| {
+                view.viewed_tab_id = Some(tab_id);
+                view.focused_pane_id = Some(pane_ids[0]);
+                view.visible_pane_ids = pane_ids.clone();
+                view.viewport_cols = Some(120);
+                view.viewport_rows = Some(40);
+                view.touch_view();
+            });
+            server.update_client_view(2, |view| {
+                view.viewed_tab_id = Some(tab_id);
+                view.focused_pane_id = Some(pane_ids[0]);
+                view.visible_pane_ids = pane_ids.clone();
+                view.viewport_cols = Some(80);
+                view.viewport_rows = Some(24);
+                view.touch_view();
+            });
+        }
+
+        app.handle_server_cmd(crate::server::Command::RemoteRuntimeAction {
+            client_id: 1,
+            action: crate::remote::RuntimeAction::ResizeSplit {
+                view_id: 1,
+                direction: "right".to_string(),
+                amount: 0,
+                ratio: Some(0.7),
+            },
+        });
+
+        let first_state = app.ui_runtime_state_for_client(1);
+        let second_state = app.ui_runtime_state_for_client(2);
+        let first_ratio = first_state
+            .visible_panes
+            .iter()
+            .find_map(|pane| pane.split_ratio)
+            .expect("first split ratio");
+        let second_ratio = second_state
+            .visible_panes
+            .iter()
+            .find_map(|pane| pane.split_ratio)
+            .expect("second split ratio");
+        assert!((first_ratio - 0.7).abs() < 0.0001);
+        assert!((second_ratio - 0.7).abs() < 0.0001);
+        let first_width = first_state
+            .visible_panes
+            .iter()
+            .find(|pane| pane.pane_id == pane_ids[0])
+            .expect("first pane")
+            .frame
+            .width;
+        let second_width = second_state
+            .visible_panes
+            .iter()
+            .find(|pane| pane.pane_id == pane_ids[0])
+            .expect("second pane")
+            .frame
+            .width;
+        assert!(first_width > second_width);
+    }
+
+    #[test]
+    fn detaching_view_keeps_runtime_view_until_idle_timeout() {
+        let mut app = BooApp::new_headless();
+        app.init_surface();
+        install_test_remote_server(&mut app, &[1]);
+        app.sync_remote_client_runtime_view(1, true);
+
+        app.handle_server_cmd(crate::server::Command::RemoteRuntimeAction {
+            client_id: 1,
+            action: crate::remote::RuntimeAction::DetachView { view_id: 1 },
+        });
+
+        let server = app.server.remote_server.as_ref().expect("remote server");
+        let snapshot = server.client_runtime_view(1).expect("view snapshot");
+        assert!(!snapshot.ui_attached);
+        assert!(!snapshot.subscribed_to_runtime);
+        assert!(snapshot.viewed_tab_id.is_some());
+    }
+
+    #[test]
+    fn idle_timeout_clears_detached_runtime_view() {
+        let mut app = BooApp::new_headless();
+        app.init_surface();
+        install_test_remote_server(&mut app, &[1]);
+        app.sync_remote_client_runtime_view(1, true);
+        let server = app.server.remote_server.as_ref().expect("remote server");
+        server.update_client_view(1, |view| {
+            view.detach_ui();
+            view.subscribed_to_runtime = false;
+            view.detached_at = Some(
+                std::time::Instant::now()
+                    - crate::remote_state::VIEW_IDLE_TIMEOUT
+                    - Duration::from_secs(1),
+            );
+        });
+
+        let expired = server.sweep_idle_views(crate::remote_state::VIEW_IDLE_TIMEOUT);
+        assert_eq!(expired, vec![1]);
+        let snapshot = server.client_runtime_view(1).expect("view snapshot");
+        assert!(!snapshot.ui_attached);
+        assert!(!snapshot.subscribed_to_runtime);
+        assert_eq!(snapshot.viewed_tab_id, None);
+        assert!(snapshot.visible_pane_ids.is_empty());
     }
 }

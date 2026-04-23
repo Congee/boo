@@ -708,6 +708,13 @@ impl BooApp {
         if remote_cmd_budget == 0 {
             more_server_cmds_pending = true;
         }
+        let expired_idle_views = self
+            .remote_servers()
+            .flat_map(|server| server.sweep_idle_views(crate::remote_state::VIEW_IDLE_TIMEOUT))
+            .collect::<Vec<_>>();
+        if !expired_idle_views.is_empty() {
+            self.broadcast_runtime_view_to_all_viewers();
+        }
         if !self.dirty_remote_tabs.is_empty() {
             let _scope =
                 crate::profiling::scope("server.publish_remote_state", crate::profiling::Kind::Cpu);

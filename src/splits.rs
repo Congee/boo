@@ -355,6 +355,22 @@ impl SplitTree {
         }
     }
 
+    pub fn resize_pane_to_ratio(
+        &mut self,
+        frame: Rect,
+        pane_id: crate::pane::PaneId,
+        axis: Direction,
+        ratio: f64,
+    ) -> bool {
+        let Some(root) = self.root.as_mut() else {
+            return false;
+        };
+        let Some(target_id) = find_leaf_id_by_pane(root, pane_id) else {
+            return false;
+        };
+        resize_toward_leaf_to_ratio(root, frame, target_id, axis, ratio.clamp(0.1, 0.9)).1
+    }
+
     /// Find the leaf at a given point and set focus to it.
     pub fn focus_at(&mut self, frame: Rect, point: (f64, f64)) -> bool {
         if let Some(ref root) = self.root
@@ -813,6 +829,51 @@ fn resize_toward_leaf_by_cells(
                 };
                 let delta = (delta_cells as f64 * cell_extent) / usable_extent;
                 *ratio = (*ratio + delta).clamp(0.1, 0.9);
+                (true, true)
+            } else {
+                (true, false)
+            }
+        }
+    }
+}
+
+fn resize_toward_leaf_to_ratio(
+    node: &mut Node,
+    frame: Rect,
+    target: LeafId,
+    axis: Direction,
+    ratio: f64,
+) -> (bool, bool) {
+    match node {
+        Node::Leaf { id, .. } => (*id == target, false),
+        Node::Split {
+            direction,
+            first,
+            second,
+            ratio: current_ratio,
+        } => {
+            let (first_frame, second_frame) = split_frame(frame, *direction, *current_ratio);
+            let (found, done) =
+                resize_toward_leaf_to_ratio(first, first_frame, target, axis, ratio);
+            if found && done {
+                return (true, true);
+            }
+
+            let (found, done) = if found {
+                (true, false)
+            } else {
+                resize_toward_leaf_to_ratio(second, second_frame, target, axis, ratio)
+            };
+
+            if !found {
+                return (false, false);
+            }
+            if done {
+                return (true, true);
+            }
+
+            if *direction == axis {
+                *current_ratio = ratio;
                 (true, true)
             } else {
                 (true, false)

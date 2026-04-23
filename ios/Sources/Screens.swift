@@ -983,6 +983,7 @@ struct TerminalTabScreen: View {
         }
         .onAppear {
             applyUITestForcedErrorIfNeeded()
+            client.attachView()
             guard !isDisconnected, client.activeTabId != nil else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 keyboardFocused = true
@@ -993,6 +994,7 @@ struct TerminalTabScreen: View {
         }
         .onChange(of: client.activeTabId) { _, activeTabId in
             if activeTabId != nil {
+                client.attachView()
                 keyboardFocused = false
                 DispatchQueue.main.async {
                     keyboardFocused = true
@@ -1007,6 +1009,7 @@ struct TerminalTabScreen: View {
         }
         .onDisappear {
             keyboardFocused = false
+            client.detachView()
         }
     }
 
@@ -1136,6 +1139,21 @@ struct TerminalTabScreen: View {
                                 keyboardFocused = true
                             }
                         }
+
+                        ForEach(Array(runtimePaneDividers(runtimeState.visiblePanes).enumerated()), id: \.offset) { _, divider in
+                            Rectangle()
+                                .fill(Color.clear)
+                                .frame(width: divider.hitWidth, height: divider.hitHeight)
+                                .position(x: divider.center.x, y: divider.center.y)
+                                .contentShape(Rectangle())
+                                .gesture(
+                                    DragGesture(minimumDistance: 4)
+                                        .onEnded { value in
+                                            guard let ratio = divider.normalizedRatio(for: value.location) else { return }
+                                            client.resizeSplit(direction: divider.runtimeDirection, ratio: ratio)
+                                        }
+                                )
+                        }
                     }
                     .background(.black)
                     .onAppear {
@@ -1177,6 +1195,19 @@ struct TerminalTabScreen: View {
         .overlay {
             runtimeOpeningOverlay
         }
+    }
+
+    private func runtimePaneDividers(_ panes: [DecodedRuntimePane]) -> [RuntimePaneDivider] {
+        var dividers: [RuntimePaneDivider] = []
+        for (index, first) in panes.enumerated() {
+            for second in panes.dropFirst(index + 1) {
+                if let divider = RuntimePaneDivider.make(first: first, second: second),
+                   !dividers.contains(where: { $0.isSame(as: divider) }) {
+                    dividers.append(divider)
+                }
+            }
+        }
+        return dividers
     }
 
     private var terminalKeyboardBridge: some View {
@@ -1808,5 +1839,89 @@ struct SettingsScreen: View {
         nodeName = ""
         nodeHost = ""
         nodePort = BooDefaultRemotePortText
+    }
+}
+
+private struct RuntimePaneDivider {
+    enum Axis {
+        case horizontal
+        case vertical
+    }
+
+    let axis: Axis
+    let union: CGRect
+    let center: CGPoint
+    let hitWidth: CGFloat
+    let hitHeight: CGFloat
+
+    var runtimeDirection: String {
+        switch axis {
+        case .horizontal: return "down"
+        case .vertical: return "right"
+        }
+    }
+
+    func normalizedRatio(for location: CGPoint) -> Double? {
+        switch axis {
+        case .horizontal:
+            guard union.height > 1 else { return nil }
+            return Double((location.y - union.minY) / union.height)
+        case .vertical:
+            guard union.width > 1 else { return nil }
+            return Double((location.x - union.minX) / union.width)
+        }
+    }
+
+    func isSame(as other: RuntimePaneDivider) -> Bool {
+        axis == other.axis
+            && abs(center.x - other.center.x) < 0.5
+            && abs(center.y - other.center.y) < 0.5
+            && abs(hitWidth - other.hitWidth) < 0.5
+            && abs(hitHeight - other.hitHeight) < 0.5
+    }
+
+    static func make(first: RemoteRuntimePaneSnapshot, second: RemoteRuntimePaneSnapshot) -> RuntimePaneDivider? {
+        let left = CGRect(x: first.frame.x, y: first.frame.y, width: first.frame.width, height: first.frame.height)
+        let right = CGRect(x: second.frame.x, y: second.frame.y, width: second.frame.width, height: second.frame.height)
+
+        if let divider = verticalDivider(left: left, right: right) ?? verticalDivider(left: right, right: left) {
+            return divider
+        }
+        if let divider = horizontalDivider(top: left, bottom: right) ?? horizontalDivider(top: right, bottom: left) {
+            return divider
+        }
+        return nil
+    }
+
+    private static func verticalDivider(left: CGRect, right: CGRect) -> RuntimePaneDivider? {
+        let leftEdge = left.maxX
+        let gap = right.minX - leftEdge
+        guard (0 ... 2).contains(gap) else { return nil }
+        let top = max(left.minY, right.minY)
+        let bottom = min(left.maxY, right.maxY)
+        guard bottom - top > 1 else { return nil }
+        return RuntimePaneDivider(
+            axis: .vertical,
+            union: left.union(right),
+            center: CGPoint(x: leftEdge + gap * 0.5, y: (top + bottom) * 0.5),
+            hitWidth: 28,
+            hitHeight: bottom - top
+        )
+    }
+
+    private static func horizontalDivider(top: CGRect, bottom: CGRect) -> RuntimePaneDivider? {
+        let topEdge = top.maxY
+        let gap = bottom.minY - topEdge
+        guard (0 ... 2).contains(gap) else { return nil }
+        let left = max(top.minX, bottom.minX)
+        let right = min(top.maxX, bottom.maxX)
+        guard right - left > 1 else { return nil }
+        return RuntimePaneDivider(
+            axis: .horizontal,
+            union: top.union(bottom),
+            center: CGPoint(x: (left + right) * 0.5, y: topEdge + gap * 0.5),
+            hitWidth: right - left,
+            hitHeight: 28
+        )
     }
 }

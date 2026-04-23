@@ -74,6 +74,12 @@ pub enum RuntimeAction {
     PrevTab {
         view_id: u64,
     },
+    AttachView {
+        view_id: u64,
+    },
+    DetachView {
+        view_id: u64,
+    },
     NewSplit {
         view_id: u64,
         direction: Option<String>,
@@ -82,6 +88,7 @@ pub enum RuntimeAction {
         view_id: u64,
         direction: String,
         amount: u16,
+        ratio: Option<f64>,
     },
 }
 
@@ -446,6 +453,8 @@ impl RemoteServer {
             client.runtime_view.viewed_tab_id = viewed_tab_id;
             client.runtime_view.focused_pane_id = focused_pane_id;
             client.runtime_view.visible_pane_ids = visible_pane_ids.to_vec();
+            client.runtime_view.ui_attached = true;
+            client.runtime_view.detached_at = None;
             client.runtime_view.touch_view();
         });
     }
@@ -482,6 +491,34 @@ impl RemoteServer {
             client.runtime_view.clear_stream_state();
         });
         log::info!("remote runtime view cleared: client_id={client_id}");
+    }
+
+    pub fn sweep_idle_views(&self, idle_timeout: std::time::Duration) -> Vec<u64> {
+        let mut expired = Vec::new();
+        let now = Instant::now();
+        let mut state = self.state.lock().expect("remote server state poisoned");
+        for (client_id, client) in &mut state.clients {
+            let Some(detached_at) = client.runtime_view.detached_at else {
+                continue;
+            };
+            if client.runtime_view.ui_attached {
+                continue;
+            }
+            if now.saturating_duration_since(detached_at) < idle_timeout {
+                continue;
+            }
+            client.runtime_view.subscribed_to_runtime = false;
+            client.runtime_view.viewed_tab_id = None;
+            client.runtime_view.focused_pane_id = None;
+            client.runtime_view.visible_pane_ids.clear();
+            client.runtime_view.viewport_cols = None;
+            client.runtime_view.viewport_rows = None;
+            client.runtime_view.detached_at = None;
+            client.runtime_view.clear_stream_state();
+            client.runtime_view.touch_view();
+            expired.push(*client_id);
+        }
+        expired
     }
 
     pub fn send_error(&self, client_id: u64, code: RemoteErrorCode, message: &str) {
@@ -661,6 +698,7 @@ pub struct ClientRuntimeViewSnapshot {
     pub viewport_cols: Option<u16>,
     pub viewport_rows: Option<u16>,
     pub visible_pane_ids: Vec<u64>,
+    pub ui_attached: bool,
 }
 
 impl From<&ClientRuntimeView> for ClientRuntimeViewSnapshot {
@@ -674,6 +712,7 @@ impl From<&ClientRuntimeView> for ClientRuntimeViewSnapshot {
             viewport_cols: value.viewport_cols,
             viewport_rows: value.viewport_rows,
             visible_pane_ids: value.visible_pane_ids.clone(),
+            ui_attached: value.ui_attached,
         }
     }
 }

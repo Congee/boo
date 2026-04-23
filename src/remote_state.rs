@@ -27,6 +27,7 @@ pub(crate) const AUTH_CHALLENGE_WINDOW: Duration = Duration::from_secs(30);
 /// Max silence from a direct (non-local) authenticated client before the daemon
 /// treats it as stale and tears the connection down.
 pub(crate) const DIRECT_CLIENT_HEARTBEAT_WINDOW: Duration = Duration::from_secs(20);
+pub(crate) const VIEW_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Runtime-view state cached per connected client.
 ///
@@ -42,6 +43,8 @@ pub(crate) struct ClientRuntimeView {
     pub(crate) viewport_cols: Option<u16>,
     pub(crate) viewport_rows: Option<u16>,
     pub(crate) visible_pane_ids: Vec<u64>,
+    pub(crate) ui_attached: bool,
+    pub(crate) detached_at: Option<Instant>,
     pub(crate) last_tab_list_payload: Option<Vec<u8>>,
     pub(crate) last_ui_runtime_state_payload: Option<Vec<u8>>,
     pub(crate) last_ui_appearance_payload: Option<Vec<u8>>,
@@ -61,6 +64,8 @@ impl ClientRuntimeView {
             viewport_cols: None,
             viewport_rows: None,
             visible_pane_ids: Vec::new(),
+            ui_attached: true,
+            detached_at: None,
             last_tab_list_payload: None,
             last_ui_runtime_state_payload: None,
             last_ui_appearance_payload: None,
@@ -79,6 +84,18 @@ impl ClientRuntimeView {
     pub(crate) fn touch_view(&mut self) {
         self.view_revision = self.view_revision.wrapping_add(1).max(1);
         self.clear_stream_state();
+    }
+
+    pub(crate) fn attach_ui(&mut self) {
+        self.ui_attached = true;
+        self.detached_at = None;
+        self.touch_view();
+    }
+
+    pub(crate) fn detach_ui(&mut self) {
+        self.ui_attached = false;
+        self.detached_at = Some(Instant::now());
+        self.touch_view();
     }
 }
 

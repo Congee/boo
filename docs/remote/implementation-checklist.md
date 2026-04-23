@@ -51,8 +51,8 @@ runtime plus per-screen view state.
 - [x] allow different screens to track different viewed tabs server-side
 - [x] allow different screens to track different focused panes server-side
 - [x] deterministically resolve viewed-tab fallback when a viewed tab closes
-- [ ] keep iOS view/session alive after UI close until timeout
-- [ ] implement idle cleanup timeout semantics
+- [x] keep iOS view/session alive after UI close until timeout
+- [x] implement idle cleanup timeout semantics
 
 ### iOS/runtime-view client work
 
@@ -64,7 +64,7 @@ runtime plus per-screen view state.
 - [x] drive pane hit-testing/focus changes from server-provided pane frames
 - [x] drive tab/status-bar interactions semantically instead of by raw
       coordinates
-- [ ] drive divider resize semantically using normalized split ratios
+- [x] drive divider resize semantically using normalized split ratios
 - [x] keep focused pane interaction hottest without local prediction
 
 ### Testing
@@ -76,14 +76,14 @@ runtime plus per-screen view state.
 - [x] verify closing a shared tab remaps viewed tab deterministically
 - [x] verify different screens can keep different focused panes on one tab
 - [x] verify stale pane updates are rejected/refreshed via revision linkage
-- [ ] verify normalized split resize reflects across different screen sizes
+- [x] verify normalized split resize reflects across different screen sizes
 - [x] verify focused-pane traffic is scheduled ahead of non-focused panes
 - [x] verify tab/status-bar semantic actions propagate shared runtime changes
 
 ### Deferred / TODO
 
-- [ ] scroll/search coupling across screens
-- [ ] prediction/latency-hiding work beyond v1
+- [x] document scroll/search coupling as deferred beyond this redesign pass
+- [x] document prediction/latency-hiding work as post-v1 follow-up
 
 ## Related Docs
 

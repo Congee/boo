@@ -32,8 +32,19 @@ impl BooApp {
         &self,
         tab_id: u32,
         focused_pane_id: u64,
+        viewport_cols: Option<u16>,
+        viewport_rows: Option<u16>,
     ) -> Vec<control::UiPaneSnapshot> {
-        let terminal_frame = self.terminal_frame();
+        let terminal_frame = match viewport_cols.zip(viewport_rows) {
+            Some((cols, rows)) => {
+                let (width, height) = self.tab_size_pixels(cols, rows);
+                platform::Rect::new(
+                    platform::Point::new(0.0, 0.0),
+                    platform::Size::new(width as f64, height as f64),
+                )
+            }
+            None => self.terminal_frame(),
+        };
         self.server
             .tabs
             .find_index_by_tab_id(tab_id)
@@ -178,7 +189,14 @@ impl BooApp {
         self.server
             .tabs
             .active_tab_id()
-            .map(|tab_id| self.visible_pane_snapshots_for(tab_id, self.server.tabs.focused_pane().id()))
+            .map(|tab_id| {
+                self.visible_pane_snapshots_for(
+                    tab_id,
+                    self.server.tabs.focused_pane().id(),
+                    None,
+                    None,
+                )
+            })
             .unwrap_or_default()
     }
 

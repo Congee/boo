@@ -145,6 +145,10 @@ impl TabManager {
         self.tabs.get_mut(self.active).map(|t| &mut t.tree)
     }
 
+    pub fn tab_tree_mut(&mut self, index: usize) -> Option<&mut SplitTree> {
+        self.tabs.get_mut(index).map(|t| &mut t.tree)
+    }
+
     pub fn focused_pane(&self) -> PaneHandle {
         self.active_tree()
             .map(|t| t.focused_pane())
