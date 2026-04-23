@@ -757,7 +757,6 @@ final class GSPClient: ObservableObject {
     @Published var runtimeState: RemoteRuntimeStateSnapshot?
     @Published var screen = ScreenState()
     @Published var attachedTabId: UInt32?
-    @Published var pendingAttachedTabId: UInt32?
     @Published var lastErrorKind: ClientWireErrorKind?
     @Published var lastError: String?
 
@@ -822,7 +821,6 @@ final class GSPClient: ObservableObject {
             "connected=\(connected)",
             "authenticated=\(authenticated)",
             "attached=\(attachedTabId.map(String.init) ?? "nil")",
-            "pendingAttached=\(pendingAttachedTabId.map(String.init) ?? "nil")",
             "runtimeActive=\(runtimeActiveTabId.map(String.init) ?? "nil")",
             "pendingCreate=\(pendingHostTabCreation)",
             "suppressed=\(autoTabBootstrapSuppressed)",
@@ -860,7 +858,6 @@ final class GSPClient: ObservableObject {
         lastHeartbeatSent = nil
         pendingHeartbeatToken = nil
         attachedTabId = nil
-        pendingAttachedTabId = nil
         pendingHostTabCreation = false
         autoTabBootstrapSuppressed = false
         tabs = []
@@ -904,7 +901,6 @@ final class GSPClient: ObservableObject {
         debugLog("suppressAutomaticTabBootstrap")
         autoTabBootstrapSuppressed = true
         pendingHostTabCreation = false
-        pendingAttachedTabId = nil
     }
 
     func configureTrustedServerIdentity(_ identityId: String?) {
@@ -1246,7 +1242,6 @@ final class GSPClient: ObservableObject {
             attachedTabId = runtimeActiveTabId
             if attachedTabId != nil {
                 pendingHostTabCreation = false
-                pendingAttachedTabId = nil
             }
             if authenticated {
                 bootstrapCanonicalHostTab(trigger: "runtimeState")
@@ -1263,7 +1258,7 @@ final class GSPClient: ObservableObject {
     }
 
     private var shouldPreserveRemoteStateOnReconnect: Bool {
-        pendingAttachedTabId != nil || !tabs.isEmpty
+        !tabs.isEmpty
     }
 
     private func protocolError(_ message: String) {
@@ -1287,7 +1282,6 @@ final class GSPClient: ObservableObject {
             serverInstanceId = nil
             serverIdentityId = nil
             attachedTabId = nil
-            pendingAttachedTabId = nil
             tabs = []
             runtimeState = nil
             screen = ScreenState()
@@ -1340,7 +1334,6 @@ final class GSPClient: ObservableObject {
     private func bootstrapCanonicalHostTab(trigger: String) {
         guard authenticated else { return }
         guard attachedTabId == nil else { return }
-        guard pendingAttachedTabId == nil else { return }
         guard !autoTabBootstrapSuppressed else { return }
 
         if let runtimeState,
@@ -1423,10 +1416,8 @@ final class GSPClient: ObservableObject {
             switch message {
             case .tabExited:
                 pendingHostTabCreation = false
-                pendingAttachedTabId = nil
-            case .errorMsg where pendingAttachedTabId != nil:
+            case .errorMsg:
                 pendingHostTabCreation = false
-                pendingAttachedTabId = nil
             default:
                 break
             }
@@ -1435,7 +1426,6 @@ final class GSPClient: ObservableObject {
         attachedTabId = nextAttachedTabId
         if attachedTabId != nil {
             pendingHostTabCreation = false
-            pendingAttachedTabId = nil
         }
         if let decodedScreen = state.screen {
             applyDecodedScreen(decodedScreen)
@@ -1481,7 +1471,6 @@ final class GSPClient: ObservableObject {
         if message == .errorMsg {
             switch lastErrorKind {
             case .unknownTab, .notAttached:
-                pendingAttachedTabId = nil
                 pendingHostTabCreation = false
                 bootstrapCanonicalHostTab(trigger: "errorRecovery")
             default:

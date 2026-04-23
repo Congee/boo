@@ -761,7 +761,7 @@ struct ConnectScreen: View {
         let sameEndpoint = monitor.lastHost == host && monitor.lastPort == port
         let sameDisplayName = monitor.lastDisplayName == nodeName && monitor.lastPort == port
         guard sameEndpoint || sameDisplayName else { return false }
-        guard client.attachedTabId != nil || client.pendingAttachedTabId != nil else {
+        guard client.attachedTabId != nil else {
             return false
         }
         switch monitor.status {
@@ -1329,9 +1329,7 @@ struct TerminalTabScreen: View {
     private func finalizeHostTabCloseIfNeeded() -> Bool {
         guard let closingHostTabId else { return false }
         let tabStillVisible = visibleTabs.contains(where: { $0.id == closingHostTabId })
-        let tabStillAttached =
-            client.attachedTabId == closingHostTabId ||
-            client.pendingAttachedTabId == closingHostTabId
+        let tabStillAttached = client.attachedTabId == closingHostTabId
         guard !tabStillVisible, !tabStillAttached else { return false }
         self.closingHostTabId = nil
         monitor.disconnect()
