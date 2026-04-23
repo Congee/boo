@@ -1,6 +1,6 @@
 import Foundation
 
-struct SessionInfo: Identifiable {
+struct RemoteTabInfo: Identifiable {
     let id: UInt32
     let name: String
     let title: String
@@ -8,3 +8,5 @@ struct SessionInfo: Identifiable {
     let attached: Bool
     let childExited: Bool
 }
+
+typealias SessionInfo = RemoteTabInfo

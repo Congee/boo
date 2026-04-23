@@ -1,6 +1,6 @@
 import Foundation
 
-struct DecodedWireSessionInfo: Equatable {
+struct DecodedWireTabInfo: Equatable {
     let id: UInt32
     let name: String
     let title: String
@@ -8,6 +8,8 @@ struct DecodedWireSessionInfo: Equatable {
     let attached: Bool
     let childExited: Bool
 }
+
+typealias DecodedWireSessionInfo = DecodedWireTabInfo
 
 struct DecodedWireCell: Equatable {
     var codepoint: UInt32 = 0
@@ -37,13 +39,13 @@ enum WireCodec {
     private static let remoteFullStateHeaderLen = 14
     private static let remoteDeltaHeaderLen = 13
 
-    static func decodeSessionList(_ data: Data) -> [DecodedWireSessionInfo] {
+    static func decodeTabList(_ data: Data) -> [DecodedWireTabInfo] {
         guard data.count >= 4 else { return [] }
         let count = data.withUnsafeBytes {
             Int(UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self)))
         }
         var offset = 4
-        var items: [DecodedWireSessionInfo] = []
+        var items: [DecodedWireTabInfo] = []
         func readString() -> String {
             guard offset + 2 <= data.count else { return "" }
             let len = data.withUnsafeBytes {
@@ -68,7 +70,7 @@ enum WireCodec {
             let flags = data[offset]
             offset += 1
             items.append(
-                DecodedWireSessionInfo(
+                DecodedWireTabInfo(
                     id: id,
                     name: name,
                     title: title,
@@ -79,6 +81,10 @@ enum WireCodec {
             )
         }
         return items
+    }
+
+    static func decodeSessionList(_ data: Data) -> [DecodedWireSessionInfo] {
+        decodeTabList(data)
     }
 
     static func decodeFullState(_ data: Data) -> DecodedWireScreenState? {

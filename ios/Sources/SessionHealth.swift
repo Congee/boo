@@ -1,19 +1,19 @@
 import Foundation
 
-enum AttachedSessionHealth: Equatable {
+enum AttachedTabHealth: Equatable {
     case unattached
-    case unreachable(sessionId: UInt32)
-    case exited(sessionId: UInt32)
-    case reachable(sessionId: UInt32)
+    case unreachable(tabId: UInt32)
+    case exited(tabId: UInt32)
+    case reachable(tabId: UInt32)
 
     var issue: String? {
         switch self {
         case .unattached:
-            return "Session is not attached"
-        case .unreachable(let sessionId):
-            return "Session \(sessionId) is unreachable"
-        case .exited(let sessionId):
-            return "Session \(sessionId) has exited"
+            return "Tab is not attached"
+        case .unreachable(let tabId):
+            return "Tab \(tabId) is unreachable"
+        case .exited(let tabId):
+            return "Tab \(tabId) has exited"
         case .reachable:
             return nil
         }
@@ -23,12 +23,12 @@ enum AttachedSessionHealth: Equatable {
         switch self {
         case .unattached:
             return nil
-        case .unreachable(let sessionId):
-            return "session \(sessionId) unreachable"
-        case .exited(let sessionId):
-            return "session \(sessionId) exited"
+        case .unreachable(let tabId):
+            return "tab \(tabId) unreachable"
+        case .exited(let tabId):
+            return "tab \(tabId) exited"
         case .reachable:
-            return "session reachable"
+            return "tab reachable"
         }
     }
 
@@ -46,13 +46,19 @@ enum AttachedSessionHealth: Equatable {
     }
 }
 
+typealias AttachedSessionHealth = AttachedTabHealth
+
+func resolveAttachedTabHealth(attachedTabId: UInt32?, tabs: [RemoteTabInfo]) -> AttachedTabHealth {
+    guard let tabId = attachedTabId else { return .unattached }
+    guard let tab = tabs.first(where: { $0.id == tabId }) else {
+        return .unreachable(tabId: tabId)
+    }
+    if tab.childExited {
+        return .exited(tabId: tabId)
+    }
+    return .reachable(tabId: tabId)
+}
+
 func resolveAttachedSessionHealth(attachedSessionId: UInt32?, sessions: [SessionInfo]) -> AttachedSessionHealth {
-    guard let sessionId = attachedSessionId else { return .unattached }
-    guard let session = sessions.first(where: { $0.id == sessionId }) else {
-        return .unreachable(sessionId: sessionId)
-    }
-    if session.childExited {
-        return .exited(sessionId: sessionId)
-    }
-    return .reachable(sessionId: sessionId)
+    resolveAttachedTabHealth(attachedTabId: attachedSessionId, tabs: sessions)
 }
