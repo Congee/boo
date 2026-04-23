@@ -11,6 +11,7 @@ enum GSPMessageType: UInt8 {
     case scroll = 0x0a
     case appMouseEvent = 0x10
     case heartbeat = 0x11
+    case runtimeAction = 0x12
 
     case authOk = 0x80
     case authFail = 0x81
@@ -45,6 +46,63 @@ private enum OutboundAppMouseEvent: Encodable {
         switch self {
         case .wheelScrolledLines(let payload):
             try container.encode(payload, forKey: .WheelScrolledLines)
+        }
+    }
+}
+
+private enum OutboundRuntimeAction: Encodable {
+    case setViewedTab(viewId: UInt64, tabId: UInt32)
+    case focusPane(viewId: UInt64, tabId: UInt32, paneId: UInt64)
+    case newTab(viewId: UInt64, cols: UInt16?, rows: UInt16?)
+    case closeTab(viewId: UInt64, tabId: UInt32?)
+    case nextTab(viewId: UInt64)
+    case prevTab(viewId: UInt64)
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case viewId
+        case tabId
+        case paneId
+        case cols
+        case rows
+    }
+
+    private enum Kind: String, Encodable {
+        case setViewedTab = "set_viewed_tab"
+        case focusPane = "focus_pane"
+        case newTab = "new_tab"
+        case closeTab = "close_tab"
+        case nextTab = "next_tab"
+        case prevTab = "prev_tab"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .setViewedTab(let viewId, let tabId):
+            try container.encode(Kind.setViewedTab, forKey: .kind)
+            try container.encode(viewId, forKey: .viewId)
+            try container.encode(tabId, forKey: .tabId)
+        case .focusPane(let viewId, let tabId, let paneId):
+            try container.encode(Kind.focusPane, forKey: .kind)
+            try container.encode(viewId, forKey: .viewId)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encode(paneId, forKey: .paneId)
+        case .newTab(let viewId, let cols, let rows):
+            try container.encode(Kind.newTab, forKey: .kind)
+            try container.encode(viewId, forKey: .viewId)
+            try container.encodeIfPresent(cols, forKey: .cols)
+            try container.encodeIfPresent(rows, forKey: .rows)
+        case .closeTab(let viewId, let tabId):
+            try container.encode(Kind.closeTab, forKey: .kind)
+            try container.encode(viewId, forKey: .viewId)
+            try container.encodeIfPresent(tabId, forKey: .tabId)
+        case .nextTab(let viewId):
+            try container.encode(Kind.nextTab, forKey: .kind)
+            try container.encode(viewId, forKey: .viewId)
+        case .prevTab(let viewId):
+            try container.encode(Kind.prevTab, forKey: .kind)
+            try container.encode(viewId, forKey: .viewId)
         }
     }
 }
@@ -757,11 +815,14 @@ final class GSPClient: ObservableObject {
     private nonisolated static let headerLen = 7
 
     private var runtimeActiveTabId: UInt32? {
-        guard let runtimeState,
-              runtimeState.tabs.indices.contains(runtimeState.activeTab) else {
-            return nil
-        }
-        return runtimeState.tabs[runtimeState.activeTab].tabId
+        runtimeState?.viewedTabId
+            ?? {
+                guard let runtimeState,
+                      runtimeState.tabs.indices.contains(runtimeState.activeTab) else {
+                    return nil
+                }
+                return runtimeState.tabs[runtimeState.activeTab].tabId
+            }()
     }
 
     var handshakeSummary: String? {
@@ -883,6 +944,40 @@ final class GSPClient: ObservableObject {
         sendMessage(type: .appMouseEvent, payload: payload)
     }
 
+    private var currentViewId: UInt64 {
+        runtimeState?.viewId ?? 0
+    }
+
+    func setViewedTab(_ tabId: UInt32) {
+        guard currentViewId != 0 else { return }
+        sendRuntimeAction(.setViewedTab(viewId: currentViewId, tabId: tabId))
+    }
+
+    func focusPane(tabId: UInt32, paneId: UInt64) {
+        guard currentViewId != 0 else { return }
+        sendRuntimeAction(.focusPane(viewId: currentViewId, tabId: tabId, paneId: paneId))
+    }
+
+    func newTab(cols: UInt16? = nil, rows: UInt16? = nil) {
+        guard currentViewId != 0 else { return }
+        sendRuntimeAction(.newTab(viewId: currentViewId, cols: cols, rows: rows))
+    }
+
+    func closeViewedTab() {
+        guard currentViewId != 0 else { return }
+        sendRuntimeAction(.closeTab(viewId: currentViewId, tabId: runtimeState?.viewedTabId))
+    }
+
+    func nextTab() {
+        guard currentViewId != 0 else { return }
+        sendRuntimeAction(.nextTab(viewId: currentViewId))
+    }
+
+    func prevTab() {
+        guard currentViewId != 0 else { return }
+        sendRuntimeAction(.prevTab(viewId: currentViewId))
+    }
+
     func sendHeartbeat() {
         let token = UInt64(Date().timeIntervalSince1970 * 1000)
         pendingHeartbeatToken = token
@@ -968,6 +1063,11 @@ final class GSPClient: ObservableObject {
                 }
             }
         )
+    }
+
+    private func sendRuntimeAction(_ action: OutboundRuntimeAction) {
+        guard let payload = try? JSONEncoder().encode(action) else { return }
+        sendMessage(type: .runtimeAction, payload: payload)
     }
 
     private func prepareForConnectionAttempt() {

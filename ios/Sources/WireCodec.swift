@@ -38,6 +38,8 @@ struct RemoteRuntimeTabSnapshot: Decodable, Equatable {
     let active: Bool
     let title: String
     let paneCount: Int
+    let focusedPane: UInt64?
+    let paneIds: [UInt64]
 }
 
 struct RemoteRuntimeStateSnapshot: Decodable, Equatable {
@@ -45,6 +47,13 @@ struct RemoteRuntimeStateSnapshot: Decodable, Equatable {
     let focusedPane: UInt64
     let tabs: [RemoteRuntimeTabSnapshot]
     let pwd: String
+    let runtimeRevision: UInt64
+    let viewRevision: UInt64
+    let viewId: UInt64
+    let viewedTabId: UInt32?
+    let viewportCols: UInt16?
+    let viewportRows: UInt16?
+    let visiblePaneIds: [UInt64]
 }
 
 func decodeRemoteRuntimeState(_ payload: Data) -> RemoteRuntimeStateSnapshot? {

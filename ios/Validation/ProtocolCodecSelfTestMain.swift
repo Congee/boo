@@ -26,13 +26,22 @@ struct ProtocolCodecSelfTestMain {
         {
           "active_tab": 0,
           "focused_pane": 7,
+          "runtime_revision": 3,
+          "view_revision": 4,
+          "view_id": 9,
+          "viewed_tab_id": 42,
+          "viewport_cols": 120,
+          "viewport_rows": 36,
+          "visible_pane_ids": [7, 8],
           "tabs": [
             {
               "tab_id": 42,
               "index": 0,
               "active": true,
               "title": "shell",
-              "pane_count": 1
+              "pane_count": 1,
+              "focused_pane": 7,
+              "pane_ids": [7]
             }
           ],
           "pwd": "/tmp"
@@ -42,6 +51,11 @@ struct ProtocolCodecSelfTestMain {
         assertEqual(runtimeState?.activeTab, 0, "runtime state active tab decode")
         assertEqual(runtimeState?.tabs.first?.tabId, 42, "runtime state tab id decode")
         assertEqual(runtimeState?.focusedPane, 7, "runtime state focused pane decode")
+        assertEqual(runtimeState?.runtimeRevision, 3, "runtime revision decode")
+        assertEqual(runtimeState?.viewRevision, 4, "view revision decode")
+        assertEqual(runtimeState?.viewId, 9, "view id decode")
+        assertEqual(runtimeState?.viewedTabId, 42, "viewed tab id decode")
+        assertEqual(runtimeState?.visiblePaneIds, [7, 8], "visible pane ids decode")
 
         guard let state = WireCodec.decodeFullState(makeFullStatePayload()) else {
             fputs("failed to decode full-state payload\n", stderr)
