@@ -83,7 +83,7 @@ fn client_info_for_client(
         },
         server_socket_path: local_socket_path.map(|path| path.display().to_string()),
         challenge_pending: false,
-        viewing_tab: client.runtime_view.current_tab_id,
+        current_tab: client.runtime_view.current_tab_id,
         has_cached_state: client.runtime_view.last_state.is_some(),
         pane_state_count: client.runtime_view.pane_states.len(),
         latest_input_seq: client.runtime_view.latest_input_seq,
@@ -188,7 +188,7 @@ mod tests {
         assert_eq!(client.transport_kind, "tcp");
         assert_eq!(client.server_socket_path, None);
         assert!(!client.challenge_pending);
-        assert_eq!(client.viewing_tab, Some(11));
+        assert_eq!(client.current_tab, Some(11));
         assert!(client.has_cached_state);
         assert_eq!(client.pane_state_count, 1);
         assert_eq!(client.latest_input_seq, Some(9));

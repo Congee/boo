@@ -17,7 +17,7 @@ mod tests {
 
     fn test_client(
         outbound: mpsc::Sender<OutboundMessage>,
-        viewing_tab: Option<u32>,
+        current_tab: Option<u32>,
         is_local: bool,
     ) -> ClientState {
         ClientState {
@@ -27,7 +27,7 @@ mod tests {
             authenticated_at: Some(Instant::now()),
             last_heartbeat_at: None,
             runtime_view: ClientRuntimeView {
-                current_tab_id: viewing_tab,
+                current_tab_id: current_tab,
                 ..ClientRuntimeView::idle()
             },
             is_local,

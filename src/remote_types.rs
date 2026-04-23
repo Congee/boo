@@ -27,7 +27,7 @@ pub struct RemoteClientInfo {
     pub transport_kind: String,
     pub server_socket_path: Option<String>,
     pub challenge_pending: bool,
-    pub viewing_tab: Option<u32>,
+    pub current_tab: Option<u32>,
     pub has_cached_state: bool,
     pub pane_state_count: usize,
     pub latest_input_seq: Option<u64>,
@@ -120,7 +120,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn remote_client_info_serializes_canonical_viewing_tab_field() {
+    fn remote_client_info_serializes_canonical_current_tab_field() {
         let value = serde_json::to_value(RemoteClientInfo {
             client_id: 7,
             authenticated: true,
@@ -128,7 +128,7 @@ mod tests {
             transport_kind: "quic-direct".into(),
             server_socket_path: None,
             challenge_pending: false,
-            viewing_tab: Some(42),
+            current_tab: Some(42),
             has_cached_state: true,
             pane_state_count: 2,
             latest_input_seq: Some(11),
@@ -141,7 +141,7 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(value.get("viewing_tab").and_then(|v| v.as_u64()), Some(42));
+        assert_eq!(value.get("current_tab").and_then(|v| v.as_u64()), Some(42));
         assert!(value.get("attached_tab").is_none());
     }
 

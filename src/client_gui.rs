@@ -756,7 +756,7 @@ impl ClientApp {
                 let viewing = snapshot
                     .clients
                     .iter()
-                    .filter(|client| client.viewing_tab.is_some())
+                    .filter(|client| client.current_tab.is_some())
                     .count();
                 let pending = snapshot
                     .clients
