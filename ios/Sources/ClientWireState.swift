@@ -62,9 +62,9 @@ enum ClientWireErrorKind: Equatable {
         case .authenticationFailed:
             return "Authentication failed"
         case .unknownSession:
-            return "unknown session"
+            return "unknown tab"
         case .failedCreateSession:
-            return "failed to create session"
+            return "failed to create tab"
         case .notAttached:
             return "not attached"
         case .attachmentResumeUnsupported:
