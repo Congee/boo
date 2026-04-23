@@ -41,7 +41,7 @@ pub(crate) fn run_remote_client_connection<R, W>(
                 connected_at: Instant::now(),
                 authenticated_at: Some(Instant::now()),
                 last_heartbeat_at: None,
-                runtime_subscription: ClientRuntimeSubscription::detached(),
+                runtime_subscription: ClientRuntimeSubscription::idle(),
                 is_local: false,
             },
         );

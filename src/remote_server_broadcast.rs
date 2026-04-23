@@ -28,7 +28,7 @@ mod tests {
             last_heartbeat_at: None,
             runtime_subscription: ClientRuntimeSubscription {
                 tab_id: attached_tab,
-                ..ClientRuntimeSubscription::detached()
+                ..ClientRuntimeSubscription::idle()
             },
             is_local,
         }
@@ -47,7 +47,7 @@ mod tests {
     }
 
     #[test]
-    fn send_ui_runtime_state_to_local_attached_only_targets_matching_tab() {
+    fn send_ui_runtime_state_to_local_subscribed_only_targets_matching_tab() {
         let (attached_tx, attached_rx) = mpsc::channel();
         let (unattached_tx, unattached_rx) = mpsc::channel();
         let mut state = empty_state();
@@ -55,7 +55,7 @@ mod tests {
         state.clients.insert(2, test_client(unattached_tx, None, true));
         let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
 
-        server.send_ui_runtime_state_to_local_attached(11, &sample_ui_state());
+        server.send_ui_runtime_state_to_local_subscribed(11, &sample_ui_state());
 
         match attached_rx.recv().expect("attached frame") {
             OutboundMessage::Frame(frame) => {
@@ -177,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn retarget_local_attached_to_tab_skips_same_tab_unattached_and_remote_clients() {
+    fn retarget_local_subscribed_to_tab_skips_same_tab_unsubscribed_and_remote_clients() {
         let (local_attached_tx, local_attached_rx) = mpsc::channel();
         let (local_attached_two_tx, local_attached_two_rx) = mpsc::channel();
         let (local_unattached_tx, local_unattached_rx) = mpsc::channel();
@@ -200,7 +200,7 @@ mod tests {
         let state = Arc::new(Mutex::new(state));
         let server = RemoteServer::for_test(Arc::clone(&state));
 
-        server.retarget_local_attached_to_tab(22);
+        server.retarget_local_subscribed_to_tab(22);
 
         let guard = state.lock().expect("remote server state poisoned");
         assert_eq!(guard.clients.get(&1).and_then(|c| c.runtime_subscription.tab_id), Some(22));
@@ -216,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn retain_local_attached_pane_states_prunes_invisible_panes() {
+    fn retain_local_subscribed_pane_states_prunes_invisible_panes() {
         let (tx, _rx) = mpsc::channel();
         let mut state = empty_state();
         let mut client = test_client(tx, Some(11), true);
@@ -264,7 +264,7 @@ mod tests {
         let state = Arc::new(Mutex::new(state));
         let server = RemoteServer::for_test(Arc::clone(&state));
 
-        server.retain_local_attached_pane_states(11, &[20]);
+        server.retain_local_subscribed_pane_states(11, &[20]);
 
         let guard = state.lock().expect("remote server state poisoned");
         let client = guard.clients.get(&1).expect("client state");

@@ -58,14 +58,14 @@ impl BooApp {
         let ui_state = self.ui_runtime_state();
         let retargeted = {
             let server = self.server.local_gui_server.as_ref().expect("local gui server");
-            server.retarget_local_attached_to_tab(tab_id)
+            server.retarget_local_subscribed_to_tab(tab_id)
         };
         if retargeted {
             self.invalidate_remote_tabs_cache();
         }
         let tabs = self.current_remote_tabs();
         let server = self.server.local_gui_server.as_ref().expect("local gui server");
-        server.send_ui_runtime_state_to_local_attached(tab_id, &ui_state);
+        server.send_ui_runtime_state_to_local_subscribed(tab_id, &ui_state);
         server.send_tab_list_to_local_clients(tabs.as_ref());
     }
 
@@ -882,13 +882,13 @@ impl BooApp {
         if needs_local_pane_states {
             let visible_pane_ids = pane_states.iter().map(|(pane_id, _)| *pane_id).collect::<Vec<_>>();
             for server in &servers {
-                server.retain_local_attached_pane_states(tab_id, &visible_pane_ids);
+                server.retain_local_subscribed_pane_states(tab_id, &visible_pane_ids);
             }
         }
         for server in servers {
-            server.send_full_state_to_attached(tab_id, Arc::clone(&state));
+            server.send_full_state_to_subscribed(tab_id, Arc::clone(&state));
             for (pane_id, pane_state) in &pane_states {
-                server.send_pane_state_to_local_attached(
+                server.send_pane_state_to_local_subscribed(
                     tab_id,
                     *pane_id,
                     Arc::clone(pane_state),

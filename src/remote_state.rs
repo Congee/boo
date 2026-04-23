@@ -42,7 +42,7 @@ pub(crate) struct ClientRuntimeSubscription {
 }
 
 impl ClientRuntimeSubscription {
-    pub(crate) fn detached() -> Self {
+    pub(crate) fn idle() -> Self {
         Self {
             tab_id: None,
             last_tab_list_payload: None,
@@ -74,7 +74,7 @@ impl ClientState {
             connected_at: Instant::now(),
             authenticated_at: authenticated.then(Instant::now),
             last_heartbeat_at: None,
-            runtime_subscription: ClientRuntimeSubscription::detached(),
+            runtime_subscription: ClientRuntimeSubscription::idle(),
             is_local,
         }
     }

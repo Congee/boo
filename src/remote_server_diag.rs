@@ -159,7 +159,7 @@ mod tests {
                         }),
                     )]),
                     latest_input_seq: Some(9),
-                    ..ClientRuntimeSubscription::detached()
+                    ..ClientRuntimeSubscription::idle()
                 },
                 ..remote_client(tx)
             },

@@ -127,7 +127,7 @@ use crate::remote_server_control::{
     send_ui_appearance as send_local_ui_appearance,
     send_ui_appearance_to_local_clients as send_ui_appearance_to_all_local_clients,
     send_ui_runtime_state as send_local_ui_runtime_state,
-    send_ui_runtime_state_to_local_attached as send_ui_runtime_state_to_attached_locals,
+    send_ui_runtime_state_to_local_subscribed as send_ui_runtime_state_to_subscribed_locals,
 };
 use crate::remote_server_diag::clients_snapshot as build_clients_snapshot;
 use crate::remote_server_stream::{
@@ -135,9 +135,9 @@ use crate::remote_server_stream::{
     send_state_to_client as publish_state_to_client,
 };
 use crate::remote_server_targets::{
-    client_ids_for_tab, local_attached_client_ids_for_tab,
-    retain_local_attached_pane_states as retain_local_attached_pane_states_inner,
-    retarget_local_attached_client_ids_for_tab,
+    client_ids_for_tab, local_subscribed_client_ids_for_tab,
+    retain_local_subscribed_pane_states as retain_local_subscribed_pane_states_inner,
+    retarget_local_subscribed_client_ids_for_tab,
 };
 use crate::remote_state::{ClientRuntimeSubscription, ClientState, State};
 
@@ -227,7 +227,7 @@ impl RemoteServer {
                             connected_at: Instant::now(),
                             authenticated_at: Some(Instant::now()),
                             last_heartbeat_at: None,
-                            runtime_subscription: ClientRuntimeSubscription::detached(),
+                            runtime_subscription: ClientRuntimeSubscription::idle(),
                             is_local: true,
                         },
                     );
@@ -308,16 +308,6 @@ impl RemoteServer {
             .clients
             .get(&client_id)
             .and_then(|client| client.runtime_subscription.tab_id)
-    }
-
-    #[allow(dead_code)]
-    pub fn has_attached_tabs(&self) -> bool {
-        self.has_runtime_subscribers()
-    }
-
-    #[allow(dead_code)]
-    pub fn local_attached_to_tab(&self, tab_id: u32) -> bool {
-        self.local_subscribed_to_tab(tab_id)
     }
 
     #[allow(dead_code)]
@@ -408,18 +398,18 @@ impl RemoteServer {
         send_local_ui_runtime_state(&self.state, client_id, state);
     }
 
-    pub fn send_ui_runtime_state_to_local_attached(
+    pub fn send_ui_runtime_state_to_local_subscribed(
         &self,
         tab_id: u32,
         state: &crate::control::UiRuntimeState,
     ) {
-        send_ui_runtime_state_to_attached_locals(&self.state, tab_id, state);
+        send_ui_runtime_state_to_subscribed_locals(&self.state, tab_id, state);
     }
 
-    pub fn retarget_local_attached_to_tab(&self, tab_id: u32) -> bool {
+    pub fn retarget_local_subscribed_to_tab(&self, tab_id: u32) -> bool {
         let client_ids = {
             let state_guard = self.state.lock().expect("remote server state poisoned");
-            retarget_local_attached_client_ids_for_tab(&state_guard, tab_id)
+            retarget_local_subscribed_client_ids_for_tab(&state_guard, tab_id)
         };
         if client_ids.is_empty() {
             return false;
@@ -445,14 +435,14 @@ impl RemoteServer {
         send_ui_appearance_to_all_local_clients(&self.state, appearance);
     }
 
-    pub fn send_full_state_to_attached(&self, tab_id: u32, state: Arc<RemoteFullState>) {
+    pub fn send_full_state_to_subscribed(&self, tab_id: u32, state: Arc<RemoteFullState>) {
         let client_ids = self.clients_for_tab(tab_id);
         for client_id in client_ids {
             publish_state_to_client(&self.state, client_id, tab_id, Arc::clone(&state));
         }
     }
 
-    pub fn send_pane_state_to_local_attached(
+    pub fn send_pane_state_to_local_subscribed(
         &self,
         tab_id: u32,
         pane_id: u64,
@@ -460,7 +450,7 @@ impl RemoteServer {
     ) {
         let client_ids = {
             let state_guard = self.state.lock().expect("remote server state poisoned");
-            local_attached_client_ids_for_tab(&state_guard, tab_id)
+            local_subscribed_client_ids_for_tab(&state_guard, tab_id)
         };
         for client_id in client_ids {
             publish_pane_state_to_client(
@@ -473,13 +463,13 @@ impl RemoteServer {
         }
     }
 
-    pub fn retain_local_attached_pane_states(
+    pub fn retain_local_subscribed_pane_states(
         &self,
         tab_id: u32,
         visible_pane_ids: &[u64],
     ) {
         let mut guard = self.state.lock().expect("remote server state poisoned");
-        retain_local_attached_pane_states_inner(&mut guard, tab_id, visible_pane_ids);
+        retain_local_subscribed_pane_states_inner(&mut guard, tab_id, visible_pane_ids);
     }
 
     pub fn send_tab_exited(&self, tab_id: u32) {

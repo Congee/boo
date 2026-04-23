@@ -3,7 +3,7 @@
 use crate::remote_state::State;
 use std::collections::HashSet;
 
-pub(crate) fn local_attached_client_ids_for_tab(state: &State, tab_id: u32) -> Vec<u64> {
+pub(crate) fn local_subscribed_client_ids_for_tab(state: &State, tab_id: u32) -> Vec<u64> {
     state
         .clients
         .iter()
@@ -13,7 +13,7 @@ pub(crate) fn local_attached_client_ids_for_tab(state: &State, tab_id: u32) -> V
         .collect()
 }
 
-pub(crate) fn retarget_local_attached_client_ids_for_tab(state: &State, tab_id: u32) -> Vec<u64> {
+pub(crate) fn retarget_local_subscribed_client_ids_for_tab(state: &State, tab_id: u32) -> Vec<u64> {
     state
         .clients
         .iter()
@@ -44,7 +44,7 @@ pub(crate) fn client_ids_for_tab(state: &State, tab_id: u32) -> Vec<u64> {
         .collect()
 }
 
-pub(crate) fn retain_local_attached_pane_states(
+pub(crate) fn retain_local_subscribed_pane_states(
     state: &mut State,
     tab_id: u32,
     visible_pane_ids: &[u64],

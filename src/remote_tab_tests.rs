@@ -183,7 +183,7 @@ mod tests {
                         tab_id: Some(11),
                         last_state: Some(Arc::clone(&cached_state)),
                         latest_input_seq: Some(9),
-                        ..ClientRuntimeSubscription::detached()
+                        ..ClientRuntimeSubscription::idle()
                     },
                     ..remote_client(outbound_tx)
                 },
