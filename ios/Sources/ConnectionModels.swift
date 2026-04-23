@@ -54,37 +54,11 @@ struct ResumeAttachmentMetadata: Codable, Equatable {
     var resumeToken: UInt64
     var recordedAt: Date
 
-    private enum CodingKeys: String, CodingKey {
-        case tabId
-        // Legacy decode fallback for older persisted iOS metadata.
-        case sessionId
-        case attachmentId
-        case resumeToken
-        case recordedAt
-    }
-
     init(tabId: UInt32, attachmentId: UInt64, resumeToken: UInt64, recordedAt: Date) {
         self.tabId = tabId
         self.attachmentId = attachmentId
         self.resumeToken = resumeToken
         self.recordedAt = recordedAt
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        tabId = try container.decodeIfPresent(UInt32.self, forKey: .tabId)
-            ?? container.decode(UInt32.self, forKey: .sessionId)
-        attachmentId = try container.decode(UInt64.self, forKey: .attachmentId)
-        resumeToken = try container.decode(UInt64.self, forKey: .resumeToken)
-        recordedAt = try container.decode(Date.self, forKey: .recordedAt)
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(tabId, forKey: .tabId)
-        try container.encode(attachmentId, forKey: .attachmentId)
-        try container.encode(resumeToken, forKey: .resumeToken)
-        try container.encode(recordedAt, forKey: .recordedAt)
     }
 }
 
@@ -93,33 +67,10 @@ struct HostTabMetadata: Codable, Equatable {
     var recordedAt: Date
     var modelVersion: Int?
 
-    private enum CodingKeys: String, CodingKey {
-        case tabId
-        // Legacy decode fallback for older persisted iOS metadata.
-        case sessionId
-        case recordedAt
-        case modelVersion
-    }
-
     init(tabId: UInt32, recordedAt: Date, modelVersion: Int?) {
         self.tabId = tabId
         self.recordedAt = recordedAt
         self.modelVersion = modelVersion
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        tabId = try container.decodeIfPresent(UInt32.self, forKey: .tabId)
-            ?? container.decode(UInt32.self, forKey: .sessionId)
-        recordedAt = try container.decode(Date.self, forKey: .recordedAt)
-        modelVersion = try container.decodeIfPresent(Int.self, forKey: .modelVersion)
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(tabId, forKey: .tabId)
-        try container.encode(recordedAt, forKey: .recordedAt)
-        try container.encodeIfPresent(modelVersion, forKey: .modelVersion)
     }
 }
 
@@ -223,6 +174,29 @@ private enum KeychainStringStore {
             )
         }
     }
+}
+
+func normalizeLegacyTabMetadataKeys(in data: Data) -> Data? {
+    guard let jsonObject = try? JSONSerialization.jsonObject(with: data) else {
+        return nil
+    }
+    let normalized = rewriteLegacyTabMetadataKeys(in: jsonObject)
+    return try? JSONSerialization.data(withJSONObject: normalized)
+}
+
+private func rewriteLegacyTabMetadataKeys(in value: Any) -> Any {
+    if let array = value as? [Any] {
+        return array.map(rewriteLegacyTabMetadataKeys(in:))
+    }
+    if let dict = value as? [String: Any] {
+        var rewritten: [String: Any] = [:]
+        for (key, nestedValue) in dict {
+            let rewrittenKey = key == "sessionId" ? "tabId" : key
+            rewritten[rewrittenKey] = rewriteLegacyTabMetadataKeys(in: nestedValue)
+        }
+        return rewritten
+    }
+    return value
 }
 
 @MainActor
@@ -465,9 +439,9 @@ final class ConnectionStore: ObservableObject {
 
     private func loadResumeAttachments() {
         guard let data = UserDefaults.standard.data(forKey: resumeAttachmentsKey),
-              let attachments = try? JSONDecoder().decode([String: ResumeAttachmentMetadata].self, from: data) else { return }
+              let normalized = normalizeLegacyTabMetadataKeys(in: data),
+              let attachments = try? JSONDecoder().decode([String: ResumeAttachmentMetadata].self, from: normalized) else { return }
         resumeAttachments = attachments
-        // Rewrite any legacy sessionId-based payloads into canonical tabId storage.
         saveResumeAttachments()
     }
 
@@ -479,9 +453,9 @@ final class ConnectionStore: ObservableObject {
     private func loadHostTabs() {
         let defaults = UserDefaults.standard
         guard let data = defaults.data(forKey: hostTabsKey) ?? defaults.data(forKey: legacyHostTabsKey),
-              let tabs = try? JSONDecoder().decode([String: HostTabMetadata].self, from: data) else { return }
+              let normalized = normalizeLegacyTabMetadataKeys(in: data),
+              let tabs = try? JSONDecoder().decode([String: HostTabMetadata].self, from: normalized) else { return }
         hostTabs = tabs
-        // Rewrite any legacy hostSessions/sessionId payloads into canonical hostTabs/tabId storage.
         saveHostTabs()
     }
 

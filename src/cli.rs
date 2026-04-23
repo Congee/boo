@@ -147,8 +147,6 @@ pub enum Command {
         expect_server_identity: Option<String>,
     },
     /// List tabs from a Boo-native QUIC remote daemon directly
-    // Legacy alias kept so older scripts keep working during the tab migration.
-    #[command(alias = "remote-daemon-sessions")]
     RemoteDaemonTabs {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
@@ -180,8 +178,7 @@ pub enum Command {
         host: String,
         #[arg(long)]
         port: u16,
-        // Legacy flag alias kept so older scripts keep working during the tab migration.
-        #[arg(long = "tab-id", alias = "session-id")]
+        #[arg(long = "tab-id")]
         tab_id: u32,
         #[arg(long = "expect-server-identity")]
         expect_server_identity: Option<String>,
@@ -831,39 +828,6 @@ mod tests {
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
                 assert_eq!(attachment_id, Some(99));
                 assert_eq!(resume_token, Some(1234));
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_remote_daemon_tabs_legacy_sessions_alias() {
-        let cli = Cli::parse_from([
-            "boo",
-            "remote-daemon-sessions",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            DEFAULT_REMOTE_PORT_STR,
-        ]);
-        assert!(matches!(cli.command, Some(super::Command::RemoteDaemonTabs { .. })));
-    }
-
-    #[test]
-    fn parse_remote_daemon_attach_legacy_session_id_flag_alias() {
-        let cli = Cli::parse_from([
-            "boo",
-            "remote-daemon-attach",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            DEFAULT_REMOTE_PORT_STR,
-            "--session-id",
-            "42",
-        ]);
-        match cli.command {
-            Some(super::Command::RemoteDaemonAttach { tab_id, .. }) => {
-                assert_eq!(tab_id, 42);
             }
             other => panic!("unexpected command: {other:?}"),
         }

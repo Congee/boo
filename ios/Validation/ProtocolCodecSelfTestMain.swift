@@ -30,8 +30,9 @@ struct ProtocolCodecSelfTestMain {
           "recordedAt": "2026-04-22T12:00:00Z"
         }
         """.data(using: .utf8)!
+        let normalizedResumeMetadata = normalizeLegacyTabMetadataKeys(in: legacyResumeMetadata) ?? legacyResumeMetadata
         let decodedResumeMetadata = tryOrExit(
-            decoder.decode(ResumeAttachmentMetadata.self, from: legacyResumeMetadata),
+            decoder.decode(ResumeAttachmentMetadata.self, from: normalizedResumeMetadata),
             "resume metadata legacy decode"
         )
         assertEqual(decodedResumeMetadata.tabId, 42, "resume metadata legacy sessionId decode")
@@ -50,8 +51,9 @@ struct ProtocolCodecSelfTestMain {
           "modelVersion": 1
         }
         """.data(using: .utf8)!
+        let normalizedHostMetadata = normalizeLegacyTabMetadataKeys(in: legacyHostMetadata) ?? legacyHostMetadata
         let decodedHostMetadata = tryOrExit(
-            decoder.decode(HostTabMetadata.self, from: legacyHostMetadata),
+            decoder.decode(HostTabMetadata.self, from: normalizedHostMetadata),
             "host tab metadata legacy decode"
         )
         assertEqual(decodedHostMetadata.tabId, 7, "host tab metadata legacy sessionId decode")

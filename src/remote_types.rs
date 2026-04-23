@@ -28,8 +28,6 @@ pub struct RemoteClientInfo {
     pub transport_kind: String,
     pub server_socket_path: Option<String>,
     pub challenge_pending: bool,
-    // Legacy JSON alias kept so older clients and cached snapshots still decode.
-    #[serde(rename = "attached_tab", alias = "attached_session")]
     pub attached_tab: Option<u32>,
     pub attachment_id: Option<u64>,
     pub resume_token_present: bool,
@@ -47,8 +45,6 @@ pub struct RemoteClientInfo {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct RevivableAttachmentInfo {
     pub attachment_id: u64,
-    // Legacy JSON alias kept so older clients and cached snapshots still decode.
-    #[serde(rename = "tab_id", alias = "session_id")]
     pub tab_id: u32,
     pub resume_token_present: bool,
     pub has_cached_state: bool,
@@ -120,8 +116,6 @@ pub struct RemoteTabListSummary {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct RemoteAttachedSummary {
-    // Legacy JSON alias kept so older clients and cached snapshots still decode.
-    #[serde(rename = "tab_id", alias = "session_id")]
     pub tab_id: u32,
     pub attachment_id: Option<u64>,
     pub resume_token: Option<u64>,
@@ -157,8 +151,6 @@ pub struct RemoteCreateSummary {
     pub server_instance_id: Option<String>,
     pub server_identity_id: Option<String>,
     pub heartbeat_rtt_ms: u64,
-    // Legacy JSON alias kept so older clients and cached snapshots still decode.
-    #[serde(rename = "tab_id", alias = "session_id")]
     pub tab_id: u32,
 }
 
@@ -171,79 +163,6 @@ pub struct RemoteUpgradeProbeSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn remote_client_info_decodes_legacy_attached_session_alias() {
-        let value = serde_json::json!({
-            "client_id": 7,
-            "authenticated": true,
-            "is_local": false,
-            "transport_kind": "quic-direct",
-            "server_socket_path": null,
-            "challenge_pending": false,
-            "attached_session": 42,
-            "attachment_id": 9,
-            "resume_token_present": true,
-            "has_cached_state": true,
-            "pane_state_count": 2,
-            "latest_input_seq": 11,
-            "connection_age_ms": 100,
-            "authenticated_age_ms": 80,
-            "last_heartbeat_age_ms": 5,
-            "heartbeat_expires_in_ms": 50,
-            "heartbeat_overdue": false,
-            "challenge_expires_in_ms": null
-        });
-
-        let decoded: RemoteClientInfo = serde_json::from_value(value).unwrap();
-        assert_eq!(decoded.attached_tab, Some(42));
-    }
-
-    #[test]
-    fn revivable_attachment_info_decodes_legacy_session_id_alias() {
-        let value = serde_json::json!({
-            "attachment_id": 9,
-            "session_id": 42,
-            "resume_token_present": true,
-            "has_cached_state": true,
-            "pane_state_count": 2,
-            "latest_input_seq": 11,
-            "revive_expires_in_ms": 5000
-        });
-
-        let decoded: RevivableAttachmentInfo = serde_json::from_value(value).unwrap();
-        assert_eq!(decoded.tab_id, 42);
-    }
-
-    #[test]
-    fn remote_attached_summary_decodes_legacy_session_id_alias() {
-        let value = serde_json::json!({
-            "session_id": 42,
-            "attachment_id": 9,
-            "resume_token": 13
-        });
-
-        let decoded: RemoteAttachedSummary = serde_json::from_value(value).unwrap();
-        assert_eq!(decoded.tab_id, 42);
-    }
-
-    #[test]
-    fn remote_create_summary_decodes_legacy_session_id_alias() {
-        let value = serde_json::json!({
-            "host": "127.0.0.1",
-            "port": 7337,
-            "protocol_version": 1,
-            "capabilities": 0,
-            "build_id": "debug",
-            "server_instance_id": "instance",
-            "server_identity_id": "identity",
-            "heartbeat_rtt_ms": 12,
-            "session_id": 42
-        });
-
-        let decoded: RemoteCreateSummary = serde_json::from_value(value).unwrap();
-        assert_eq!(decoded.tab_id, 42);
-    }
 
     #[test]
     fn remote_client_info_serializes_canonical_attached_tab_field() {
