@@ -7,8 +7,8 @@ import sys
 
 
 MAGIC = b"GS"
-MSG_LIST_SESSIONS = 0x02
-MSG_SESSION_LIST = 0x82
+MSG_LIST_TABS = 0x02
+MSG_TAB_LIST = 0x82
 
 
 def encode_message(message_type: int, payload: bytes) -> bytes:
@@ -48,27 +48,27 @@ def decode_string(payload: bytes, offset: int) -> tuple[str, int]:
     return value, offset + length
 
 
-def decode_session_list(payload: bytes) -> list[dict[str, object]]:
+def decode_tab_list(payload: bytes) -> list[dict[str, object]]:
     if len(payload) < 4:
-        raise RuntimeError("truncated session list")
+        raise RuntimeError("truncated tab list")
     count = struct.unpack("<I", payload[:4])[0]
     offset = 4
-    sessions: list[dict[str, object]] = []
+    tabs: list[dict[str, object]] = []
     for _ in range(count):
         if offset + 4 > len(payload):
-            raise RuntimeError("truncated session id")
-        session_id = struct.unpack("<I", payload[offset : offset + 4])[0]
+            raise RuntimeError("truncated tab id")
+        tab_id = struct.unpack("<I", payload[offset : offset + 4])[0]
         offset += 4
         name, offset = decode_string(payload, offset)
         title, offset = decode_string(payload, offset)
         pwd, offset = decode_string(payload, offset)
         if offset >= len(payload):
-            raise RuntimeError("truncated session flags")
+            raise RuntimeError("truncated tab flags")
         flags = payload[offset]
         offset += 1
-        sessions.append(
+        tabs.append(
             {
-                "id": session_id,
+                "id": tab_id,
                 "name": name,
                 "title": title,
                 "pwd": pwd,
@@ -76,7 +76,7 @@ def decode_session_list(payload: bytes) -> list[dict[str, object]]:
                 "child_exited": bool(flags & 0x02),
             }
         )
-    return sessions
+    return tabs
 
 
 def main() -> int:
@@ -86,17 +86,17 @@ def main() -> int:
 
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
         sock.connect(f"{args.socket}.stream")
-        sock.sendall(encode_message(MSG_LIST_SESSIONS, b""))
+        sock.sendall(encode_message(MSG_LIST_TABS, b""))
         ignored: list[str] = []
         for _ in range(8):
             message_type, payload = read_message(sock)
-            if message_type == MSG_SESSION_LIST:
+            if message_type == MSG_TAB_LIST:
                 print(
                     json.dumps(
                         {
                             "ok": True,
                             "ignored_message_types": ignored,
-                            "sessions": decode_session_list(payload),
+                            "tabs": decode_tab_list(payload),
                         }
                     )
                 )
@@ -107,7 +107,7 @@ def main() -> int:
         json.dumps(
             {
                 "ok": False,
-                "error": "did not receive session list",
+                "error": "did not receive tab list",
                 "ignored_message_types": ignored,
             }
         )
