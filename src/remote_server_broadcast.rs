@@ -17,7 +17,7 @@ mod tests {
 
     fn test_client(
         outbound: mpsc::Sender<OutboundMessage>,
-        attached_tab: Option<u32>,
+        subscribed_tab: Option<u32>,
         is_local: bool,
     ) -> ClientState {
         ClientState {
@@ -27,7 +27,7 @@ mod tests {
             authenticated_at: Some(Instant::now()),
             last_heartbeat_at: None,
             runtime_subscription: ClientRuntimeSubscription {
-                tab_id: attached_tab,
+                tab_id: subscribed_tab,
                 ..ClientRuntimeSubscription::idle()
             },
             is_local,
@@ -48,23 +48,23 @@ mod tests {
 
     #[test]
     fn send_ui_runtime_state_to_local_subscribed_only_targets_matching_tab() {
-        let (attached_tx, attached_rx) = mpsc::channel();
-        let (unattached_tx, unattached_rx) = mpsc::channel();
+        let (subscribed_tx, subscribed_rx) = mpsc::channel();
+        let (idle_tx, idle_rx) = mpsc::channel();
         let mut state = empty_state();
-        state.clients.insert(1, test_client(attached_tx, Some(11), true));
-        state.clients.insert(2, test_client(unattached_tx, None, true));
+        state.clients.insert(1, test_client(subscribed_tx, Some(11), true));
+        state.clients.insert(2, test_client(idle_tx, None, true));
         let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
 
         server.send_ui_runtime_state_to_local_subscribed(11, &sample_ui_state());
 
-        match attached_rx.recv().expect("attached frame") {
+        match subscribed_rx.recv().expect("subscribed frame") {
             OutboundMessage::Frame(frame) => {
                 assert_eq!(&frame[..2], &MAGIC);
                 assert_eq!(frame[2], MessageType::UiRuntimeState as u8);
             }
             OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
         }
-        assert!(unattached_rx.try_recv().is_err());
+        assert!(idle_rx.try_recv().is_err());
     }
 
     #[test]
@@ -178,25 +178,25 @@ mod tests {
 
     #[test]
     fn retarget_local_subscribed_to_tab_skips_same_tab_unsubscribed_and_remote_clients() {
-        let (local_attached_tx, local_attached_rx) = mpsc::channel();
-        let (local_attached_two_tx, local_attached_two_rx) = mpsc::channel();
-        let (local_unattached_tx, local_unattached_rx) = mpsc::channel();
+        let (local_subscribed_tx, local_subscribed_rx) = mpsc::channel();
+        let (local_subscribed_two_tx, local_subscribed_two_rx) = mpsc::channel();
+        let (local_idle_tx, local_idle_rx) = mpsc::channel();
         let (local_same_tab_tx, local_same_tab_rx) = mpsc::channel();
-        let (remote_attached_tx, remote_attached_rx) = mpsc::channel();
+        let (remote_subscribed_tx, remote_subscribed_rx) = mpsc::channel();
         let mut state = empty_state();
         state
             .clients
-            .insert(1, test_client(local_attached_tx, Some(11), true));
+            .insert(1, test_client(local_subscribed_tx, Some(11), true));
         state
             .clients
-            .insert(5, test_client(local_attached_two_tx, Some(11), true));
-        state.clients.insert(2, test_client(local_unattached_tx, None, true));
+            .insert(5, test_client(local_subscribed_two_tx, Some(11), true));
+        state.clients.insert(2, test_client(local_idle_tx, None, true));
         state
             .clients
             .insert(3, test_client(local_same_tab_tx, Some(22), true));
         state
             .clients
-            .insert(4, test_client(remote_attached_tx, Some(11), false));
+            .insert(4, test_client(remote_subscribed_tx, Some(11), false));
         let state = Arc::new(Mutex::new(state));
         let server = RemoteServer::for_test(Arc::clone(&state));
 
@@ -208,11 +208,11 @@ mod tests {
         assert_eq!(guard.clients.get(&2).and_then(|c| c.runtime_subscription.tab_id), None);
         assert_eq!(guard.clients.get(&3).and_then(|c| c.runtime_subscription.tab_id), Some(22));
         assert_eq!(guard.clients.get(&4).and_then(|c| c.runtime_subscription.tab_id), Some(11));
-        assert!(local_unattached_rx.try_recv().is_err());
+        assert!(local_idle_rx.try_recv().is_err());
         assert!(local_same_tab_rx.try_recv().is_err());
-        assert!(remote_attached_rx.try_recv().is_err());
-        assert!(local_attached_rx.try_recv().is_err());
-        assert!(local_attached_two_rx.try_recv().is_err());
+        assert!(remote_subscribed_rx.try_recv().is_err());
+        assert!(local_subscribed_rx.try_recv().is_err());
+        assert!(local_subscribed_two_rx.try_recv().is_err());
     }
 
     #[test]

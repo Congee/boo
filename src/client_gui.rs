@@ -103,7 +103,7 @@ struct GuiTestStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClientMode {
     Bootstrapping,
-    Attached,
+    Active,
     Recovering,
 }
 
@@ -271,7 +271,7 @@ impl ClientApp {
     }
 
     fn stream_ready_for_terminal_io(&self) -> bool {
-        self.stream_tx.is_some() && matches!(self.mode, ClientMode::Attached)
+        self.stream_tx.is_some() && matches!(self.mode, ClientMode::Active)
     }
 
     fn theme_color(color: crate::config::RgbColor, alpha: f32) -> Color {
@@ -720,7 +720,7 @@ impl ClientApp {
         crate::profiling::record_units(reason.profile_path(), crate::profiling::Kind::Io, 1);
         match self.client.get_ui_snapshot() {
             Ok(snapshot) => {
-                if matches!(self.mode, ClientMode::Attached) {
+                if matches!(self.mode, ClientMode::Active) {
                     self.steady_state_snapshot_requests =
                         self.steady_state_snapshot_requests.saturating_add(1);
                     crate::profiling::record_units(
@@ -782,7 +782,7 @@ impl ClientApp {
     }
 
     fn on_tick(&mut self) {
-        if matches!(self.mode, ClientMode::Attached)
+        if matches!(self.mode, ClientMode::Active)
             || self.stream_tx.is_some()
             || self.has_paintable_terminal()
         {
@@ -983,7 +983,7 @@ impl ClientApp {
                     .filter(|tab| !tab.child_exited)
                     .collect();
                 self.apply_remote_tabs(&tabs);
-                if matches!(self.mode, ClientMode::Attached)
+                if matches!(self.mode, ClientMode::Active)
                     && self
                         .active_remote_tab_id
                         .map(|tab_id| {
@@ -1056,7 +1056,7 @@ impl ClientApp {
                     "client.stream.apply_full",
                     crate::profiling::Kind::Cpu,
                 );
-                self.mode = ClientMode::Attached;
+                self.mode = ClientMode::Active;
                 let revision_seed = self.allocate_full_snapshot_revision_seed(state.rows as usize);
                 self.terminal_snapshot_generation = self.allocate_snapshot_generation();
                 if self.focused_pane_id != 0 {
@@ -1294,7 +1294,7 @@ impl ClientApp {
         let status_value = GuiTestStatus {
             mode: match self.mode {
                 ClientMode::Bootstrapping => "bootstrapping",
-                ClientMode::Attached => "attached",
+                ClientMode::Active => "active",
                 ClientMode::Recovering => "recovering",
             },
             stream_ready: self.stream_ready_for_terminal_io(),
@@ -2949,7 +2949,7 @@ fn build_status_right(
                     right_parts.push(format!("{remote_prefix}: recovering"))
                 }
             }
-            ClientMode::Attached => right_parts.push(format!("{remote_prefix}: connected")),
+            ClientMode::Active => right_parts.push(format!("{remote_prefix}: connected")),
         }
     }
     if ui_state.pane_count > 1 {
@@ -3223,7 +3223,7 @@ mod tests {
         let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
         let (tx, rx) = std::sync::mpsc::channel();
         app.stream_tx = Some(tx);
-        app.mode = ClientMode::Attached;
+        app.mode = ClientMode::Active;
 
         app.handle_input_method(input_method::Event::Preedit("かな".to_string(), Some(0..6)));
         assert_eq!(app.preedit_text, "かな");
@@ -3241,7 +3241,7 @@ mod tests {
     fn apply_ui_runtime_state_tracks_mouse_selection() {
         let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
         app.active_remote_tab_id = Some(7);
-        app.mode = ClientMode::Attached;
+        app.mode = ClientMode::Active;
         app.apply_ui_runtime_state(control::UiRuntimeState {
             active_tab: 0,
             focused_pane: 7,
@@ -3315,7 +3315,7 @@ mod tests {
         });
 
         assert!(app.bootstrapped);
-        assert!(matches!(app.mode, ClientMode::Attached));
+        assert!(matches!(app.mode, ClientMode::Active));
         assert!(app.has_paintable_terminal());
     }
 
@@ -3378,7 +3378,7 @@ mod tests {
         let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
         let (tx, rx) = std::sync::mpsc::channel();
         app.stream_tx = Some(tx);
-        app.mode = ClientMode::Attached;
+        app.mode = ClientMode::Active;
 
         app.handle_keyboard(keyboard::Event::KeyPressed {
             key: keyboard::Key::Character("'".into()),
@@ -3899,7 +3899,7 @@ mod tests {
         let (mut app, _) = ClientApp::new("/tmp/test.sock".to_string());
         let (tx, _rx) = std::sync::mpsc::channel();
         app.stream_tx = Some(tx);
-        app.mode = ClientMode::Attached;
+        app.mode = ClientMode::Active;
         app.active_remote_tab_id = Some(7);
         app.should_exit = true;
         app.last_error = Some("stale".to_string());
@@ -3915,7 +3915,7 @@ mod tests {
     #[test]
     fn disconnect_enters_recovering_without_dropping_active_tab() {
         let (mut app, _) = ClientApp::new("/tmp/test.sock".to_string());
-        app.mode = ClientMode::Attached;
+        app.mode = ClientMode::Active;
         app.active_remote_tab_id = Some(7);
         app.should_exit = true;
 
@@ -3999,14 +3999,14 @@ mod tests {
     }
 
     #[test]
-    fn fallback_status_right_shows_attached_state_and_context() {
+    fn fallback_status_right_shows_active_state_and_context() {
         let ui_state = ClientUiState {
             pane_count: 2,
             pwd: "/repo".to_string(),
             ..ClientUiState::default()
         };
         assert_eq!(
-            build_status_right(&ui_state, ClientMode::Attached, None, None, None, None),
+            build_status_right(&ui_state, ClientMode::Active, None, None, None, None),
             "remote: connected  2 panes  /repo"
         );
     }
@@ -4039,7 +4039,7 @@ mod tests {
         assert_eq!(
             build_status_right(
                 &ui_state,
-                ClientMode::Attached,
+                ClientMode::Active,
                 None,
                 None,
                 Some("example-mbp.local"),
