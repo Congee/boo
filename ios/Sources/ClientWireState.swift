@@ -151,10 +151,8 @@ struct ClientWireState: Equatable {
         serverInstanceId: String? = nil,
         serverIdentityId: String? = nil,
         tabs: [DecodedWireTabInfo] = [],
-        sessions: [DecodedWireSessionInfo]? = nil,
         screen: DecodedWireScreenState? = nil,
         attachedTabId: UInt32? = nil,
-        attachedSessionId: UInt32? = nil,
         attachmentId: UInt64? = nil,
         resumeToken: UInt64? = nil,
         lastErrorKind: ClientWireErrorKind? = nil,
@@ -166,23 +164,13 @@ struct ClientWireState: Equatable {
         self.serverBuildId = serverBuildId
         self.serverInstanceId = serverInstanceId
         self.serverIdentityId = serverIdentityId
-        self.tabs = sessions ?? tabs
+        self.tabs = tabs
         self.screen = screen
-        self.attachedTabId = attachedSessionId ?? attachedTabId
+        self.attachedTabId = attachedTabId
         self.attachmentId = attachmentId
         self.resumeToken = resumeToken
         self.lastErrorKind = lastErrorKind
         self.lastError = lastError
-    }
-
-    var sessions: [DecodedWireSessionInfo] {
-        get { tabs }
-        set { tabs = newValue }
-    }
-
-    var attachedSessionId: UInt32? {
-        get { attachedTabId }
-        set { attachedTabId = newValue }
     }
 }
 
