@@ -753,10 +753,10 @@ impl ClientApp {
         }
         self.remote_debug_summary = match self.client.get_remote_clients() {
             Ok(snapshot) => {
-                let attached = snapshot
+                let subscribed = snapshot
                     .clients
                     .iter()
-                    .filter(|client| client.attached_tab.is_some())
+                    .filter(|client| client.subscribed_tab.is_some())
                     .count();
                 let pending = snapshot
                     .clients
@@ -772,7 +772,7 @@ impl ClientApp {
                     "diag s={} c={} a={} p={} h={}",
                     snapshot.servers.len(),
                     snapshot.clients.len(),
-                    attached,
+                    subscribed,
                     pending,
                     stale_heartbeats
                 ))

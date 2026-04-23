@@ -19,7 +19,7 @@ pub(crate) fn clients_snapshot(
 ) -> RemoteClientsSnapshot {
     let now = Instant::now();
     let connected_clients = state.clients.len();
-    let attached_clients = state
+    let subscribed_clients = state
         .clients
         .values()
         .filter(|client| client.runtime_subscription.tab_id.is_some())
@@ -41,7 +41,7 @@ pub(crate) fn clients_snapshot(
         auth_challenge_window_ms: AUTH_CHALLENGE_WINDOW.as_millis() as u64,
         heartbeat_window_ms: DIRECT_CLIENT_HEARTBEAT_WINDOW.as_millis() as u64,
         connected_clients,
-        attached_clients,
+        subscribed_clients,
         pending_auth_clients,
     }];
     let mut clients = state
@@ -83,7 +83,7 @@ fn client_info_for_client(
         },
         server_socket_path: local_socket_path.map(|path| path.display().to_string()),
         challenge_pending: false,
-        attached_tab: client.runtime_subscription.tab_id,
+        subscribed_tab: client.runtime_subscription.tab_id,
         has_cached_state: client.runtime_subscription.last_state.is_some(),
         pane_state_count: client.runtime_subscription.pane_states.len(),
         latest_input_seq: client.runtime_subscription.latest_input_seq,
@@ -178,7 +178,7 @@ mod tests {
             DIRECT_CLIENT_HEARTBEAT_WINDOW.as_millis() as u64
         );
         assert_eq!(server_info.connected_clients, 1);
-        assert_eq!(server_info.attached_clients, 1);
+        assert_eq!(server_info.subscribed_clients, 1);
         assert_eq!(server_info.pending_auth_clients, 0);
         assert_eq!(snapshot.clients.len(), 1);
         let client = &snapshot.clients[0];
@@ -188,7 +188,7 @@ mod tests {
         assert_eq!(client.transport_kind, "tcp");
         assert_eq!(client.server_socket_path, None);
         assert!(!client.challenge_pending);
-        assert_eq!(client.attached_tab, Some(11));
+        assert_eq!(client.subscribed_tab, Some(11));
         assert!(client.has_cached_state);
         assert_eq!(client.pane_state_count, 1);
         assert_eq!(client.latest_input_seq, Some(9));
@@ -223,7 +223,7 @@ mod tests {
         let snapshot = clients_snapshot(&state, None, None, None);
         assert_eq!(snapshot.servers.len(), 1);
         assert_eq!(snapshot.servers[0].connected_clients, 1);
-        assert_eq!(snapshot.servers[0].attached_clients, 0);
+        assert_eq!(snapshot.servers[0].subscribed_clients, 0);
         assert_eq!(snapshot.servers[0].pending_auth_clients, 0);
         assert_eq!(snapshot.clients.len(), 1);
         let client = &snapshot.clients[0];

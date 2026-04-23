@@ -1071,7 +1071,7 @@ mod tests {
                                 auth_challenge_window_ms: 10_000,
                                 heartbeat_window_ms: 20_000,
                                 connected_clients: 1,
-                                attached_clients: 1,
+                                subscribed_clients: 1,
                                 pending_auth_clients: 0,
                             }],
                             clients: vec![crate::remote::RemoteClientInfo {
@@ -1081,7 +1081,7 @@ mod tests {
                                 transport_kind: "tcp".to_string(),
                                 server_socket_path: Some("/tmp/boo.sock".to_string()),
                                 challenge_pending: false,
-                                attached_tab: Some(11),
+                                subscribed_tab: Some(11),
                                 has_cached_state: true,
                                 pane_state_count: 1,
                                 latest_input_seq: Some(9),
@@ -1106,7 +1106,7 @@ mod tests {
             Response::RemoteClients { snapshot } => {
                 assert_eq!(snapshot.clients.len(), 1);
                 assert_eq!(snapshot.clients[0].client_id, 7);
-                assert_eq!(snapshot.clients[0].attached_tab, Some(11));
+                assert_eq!(snapshot.clients[0].subscribed_tab, Some(11));
             }
             other => panic!("unexpected response: {other:?}"),
         }
