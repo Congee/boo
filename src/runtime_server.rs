@@ -317,8 +317,8 @@ impl BooApp {
                             .or(self.server.remote_server.as_ref())
                             .is_some_and(|server| server.client_subscription_tab(client_id).is_none())
                 });
-                if let Some(tab_id) = bootstrap_tab_id,
-                   let Some(server) = self
+                if let Some(tab_id) = bootstrap_tab_id
+                    && let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
@@ -350,8 +350,8 @@ impl BooApp {
                             .or(self.server.remote_server.as_ref())
                             .is_some_and(|server| server.client_subscription_tab(client_id).is_none())
                 });
-                if let Some(tab_id) = bootstrap_tab_id,
-                   let Some(server) = self
+                if let Some(tab_id) = bootstrap_tab_id
+                    && let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())

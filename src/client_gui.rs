@@ -241,7 +241,6 @@ impl ClientApp {
         {
             self.active_remote_tab_id = Some(active_tab_id);
             self.should_exit = false;
-            self.send_stream_command(StreamCommand::AttachTab(active_tab_id));
         }
         self.ui_state = ui_state;
         self.visible_panes = state.visible_panes;
@@ -2145,7 +2144,6 @@ pub(crate) struct RemoteRowDelta {
 #[derive(Clone, Debug)]
 pub(crate) enum StreamCommand {
     ListTabs,
-    AttachTab(u32),
     AppKeyEvent { event: AppKeyEvent },
     AppMouseEvent { event: AppMouseEvent },
     ExecuteCommand { input: String },
@@ -2196,11 +2194,6 @@ fn local_stream_subscription(
                                 &mut write,
                                 remote::MESSAGE_TYPE_LIST_TABS,
                                 &[],
-                            ),
-                            StreamCommand::AttachTab(tab_id) => write_stream_message(
-                                &mut write,
-                                remote::MessageType::Attach,
-                                &tab_id.to_le_bytes(),
                             ),
                             StreamCommand::AppKeyEvent { event } => {
                                 let Ok(payload) = serde_json::to_vec(&event) else {
