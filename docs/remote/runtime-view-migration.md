@@ -218,7 +218,8 @@ Authoritative appearance for the current runtime view:
 ### Pane terminal payloads
 
 Pane terminal content remains streamed as full-state / delta data. Today this
-is still attached to a subscribed tab transport target; the long-term shape is:
+is still cached per viewer around the tab currently visible in that viewer; the
+long-term shape is:
 
 - full state for visible pane terminals
 - delta updates for pane terminals
@@ -234,19 +235,20 @@ Preferred runtime-view actions:
 - `focusPane(paneId)`
 - `createTab(cols, rows)`
 - `closeTab(tabId)`
-- `sendInput(bytes)` to the focused pane in the subscribed runtime view
+- `sendInput(bytes)` to the focused pane in the current runtime view
 - `sendAppKey(event)` to the focused pane/runtime
 - `sendAppMouse(event)` to the focused pane/runtime
 - `resizeViewport(cols, rows)`
 - `scrollPane(paneId, delta)` via app mouse wheel events
 
-Temporary transport-compatibility actions that still exist:
+Temporary viewer-bookkeeping state that still exists:
 
-- `attach(tabId, attachmentId, resumeToken?)`
-- `detach`
+- current visible tab id for each viewer stream
+- per-viewer cached full state / pane state
 
 These are no longer product-level session selection. They only exist to keep
-terminal streaming/resume working while runtime-view delivery remains tab-scoped.
+incremental terminal streaming efficient while runtime-view delivery still
+tracks what each viewer is showing.
 
 ## Why not pure coordinate-driven interaction?
 
@@ -278,9 +280,9 @@ Phase 1 output should be:
 
 - no new code uses `session` to mean tab identity
 - internal transport state is split into:
-  - runtime subscription
-  - attachment lease
-  - revivable subscription cache
+  - runtime viewer
+  - viewer-local cache state
+  - compatibility wrappers only at the boundary
 - diagnostics can still expose legacy field names for compatibility, but server
   state should stop mixing them together in one struct
 
@@ -318,13 +320,13 @@ Current implementation progress:
 - iOS no longer persists a host-scoped preferred tab as a product-level choice;
   reconnect bootstrap now prefers current runtime state
 - iOS no longer persists resume-attachment metadata as product state
-- remaining attach/detach behavior is transport-only compatibility for terminal
-  streaming, not a product-level "session selection" concept
+- remaining visible-tab state is viewer bookkeeping for transport caching, not a
+  product-level "session selection" concept
 
 ### Phase 3: Pane/runtime action model
 
 - send focus/input/scroll actions against pane or tab ids
-- stop using attach/detach as the primary interaction model
+- stop using per-viewer tab targeting as the primary interaction model
 
 ### Phase 4: Remove session protocol surfaces
 
@@ -355,7 +357,7 @@ as historical or migration-only code:
 The next protocol step is to keep shrinking the remaining historical transport
 surface while shifting internals and client bootstrap to:
 
-- runtime subscription
+- runtime viewer
 - semantic tab/pane actions
 - compatibility wrappers only at the wire boundary
 

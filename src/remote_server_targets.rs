@@ -13,7 +13,7 @@ pub(crate) fn local_viewer_client_ids(state: &State) -> Vec<u64> {
         .collect()
 }
 
-pub(crate) fn retarget_subscribed_client_ids_for_tab(state: &State, visible_tab_id: u32) -> Vec<u64> {
+pub(crate) fn retarget_viewer_client_ids_to_tab(state: &State, visible_tab_id: u32) -> Vec<u64> {
     state
         .clients
         .iter()
@@ -43,7 +43,7 @@ pub(crate) fn viewer_client_ids(state: &State) -> Vec<u64> {
         .collect()
 }
 
-pub(crate) fn retain_local_subscribed_pane_states(
+pub(crate) fn retain_local_viewer_pane_states(
     state: &mut State,
     visible_pane_ids: &[u64],
 ) {

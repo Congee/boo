@@ -136,8 +136,8 @@ use crate::remote_server_stream::{
 };
 use crate::remote_server_targets::{
     local_viewer_client_ids,
-    retain_local_subscribed_pane_states as retain_local_subscribed_pane_states_inner,
-    retarget_subscribed_client_ids_for_tab, viewer_client_ids,
+    retain_local_viewer_pane_states as retain_local_viewer_pane_states_inner,
+    retarget_viewer_client_ids_to_tab, viewer_client_ids,
 };
 use crate::remote_state::{ClientRuntimeView, ClientState, State};
 
@@ -433,7 +433,7 @@ impl RemoteServer {
     pub fn retarget_viewing_tab(&self, visible_tab_id: u32) -> bool {
         let client_ids = {
             let state_guard = self.state.lock().expect("remote server state poisoned");
-            retarget_subscribed_client_ids_for_tab(&state_guard, visible_tab_id)
+            retarget_viewer_client_ids_to_tab(&state_guard, visible_tab_id)
         };
         if client_ids.is_empty() {
             return false;
@@ -506,12 +506,12 @@ impl RemoteServer {
         }
     }
 
-    pub fn retain_local_subscribed_pane_states(
+    pub fn retain_local_viewer_pane_states(
         &self,
         visible_pane_ids: &[u64],
     ) {
         let mut guard = self.state.lock().expect("remote server state poisoned");
-        retain_local_subscribed_pane_states_inner(&mut guard, visible_pane_ids);
+        retain_local_viewer_pane_states_inner(&mut guard, visible_pane_ids);
     }
 
     pub fn record_input_seq(&self, client_id: u64, input_seq: Option<u64>) {
