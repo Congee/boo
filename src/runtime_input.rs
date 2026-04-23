@@ -1274,19 +1274,19 @@ impl BooApp {
                     log::info!("set: {key} = {val}");
                 }
             }
-            "load-session" => {
+            "load-layout" => {
                 if let Some(name) = arg1 {
-                    self.load_session(name);
+                    self.load_layout(name);
                 }
             }
-            "save-session" => {
+            "save-layout" => {
                 if let Some(name) = arg1 {
-                    self.save_current_session(name);
+                    self.save_current_layout(name);
                 }
             }
-            "list-sessions" => {
-                let sessions = session::list_sessions();
-                log::info!("sessions: {}", sessions.join(", "));
+            "list-layouts" => {
+                let layouts = layout::list_layouts();
+                log::info!("layouts: {}", layouts.join(", "));
             }
             _ => {
                 if let Ok(n) = cmd.parse::<i64>() {
@@ -1642,14 +1642,14 @@ impl BooApp {
     }
 }
 
-fn parse_tab_layout_name(name: &str) -> Option<session::TabLayout> {
+fn parse_tab_layout_name(name: &str) -> Option<layout::TabLayout> {
     match name {
-        "manual" => Some(session::TabLayout::Manual),
-        "even-horizontal" => Some(session::TabLayout::EvenHorizontal),
-        "even-vertical" => Some(session::TabLayout::EvenVertical),
-        "main-horizontal" => Some(session::TabLayout::MainHorizontal),
-        "main-vertical" => Some(session::TabLayout::MainVertical),
-        "tiled" => Some(session::TabLayout::Tiled),
+        "manual" => Some(layout::TabLayout::Manual),
+        "even-horizontal" => Some(layout::TabLayout::EvenHorizontal),
+        "even-vertical" => Some(layout::TabLayout::EvenVertical),
+        "main-horizontal" => Some(layout::TabLayout::MainHorizontal),
+        "main-vertical" => Some(layout::TabLayout::MainVertical),
+        "tiled" => Some(layout::TabLayout::Tiled),
         _ => None,
     }
 }

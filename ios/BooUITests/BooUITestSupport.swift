@@ -260,13 +260,13 @@ class BooUITestCase: XCTestCase {
         guard terminal.exists else {
             return false
         }
-        let attachedExpectation = NSPredicate(format: "label BEGINSWITH %@", "attached-")
-        let attachResult = XCTWaiter.wait(
-            for: [XCTNSPredicateExpectation(predicate: attachedExpectation, object: terminal)],
+        let activeExpectation = NSPredicate(format: "label BEGINSWITH %@", "active-")
+        let activeResult = XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: activeExpectation, object: terminal)],
             timeout: 10
         )
-        XCTAssertEqual(attachResult, .completed, "terminal did not attach", file: file, line: line)
-        guard attachResult == .completed else {
+        XCTAssertEqual(activeResult, .completed, "terminal did not become active", file: file, line: line)
+        guard activeResult == .completed else {
             return false
         }
 

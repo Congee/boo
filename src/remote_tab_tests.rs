@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::remote::{DirectTransportSession, RemoteTabInfo};
+    use crate::remote::{DirectTransportClient, RemoteTabInfo};
     use crate::remote_auth::read_loop;
     use crate::remote_batcher::OutboundMessage;
     use crate::remote_state::{
@@ -87,13 +87,14 @@ mod tests {
                         name: "unix".to_string(),
                         title: "shell".to_string(),
                         pwd: "/tmp".to_string(),
+                        active: true,
                         child_exited: false,
                     }]),
                 ))
                 .expect("write tab list");
         });
 
-        let mut client = DirectTransportSession::connect_over_stream(
+        let mut client = DirectTransportClient::connect_over_stream(
             client_stream,
             "unix-test".to_string(),
             0,
@@ -149,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn heartbeat_timeout_preserves_revivable_attachment_for_remote_client() {
+    fn heartbeat_timeout_preserves_runtime_view_cache_for_remote_client() {
         let (outbound_tx, outbound_rx) = mpsc::channel();
         let cached_state = Arc::new(RemoteFullState {
             rows: 1,

@@ -9,7 +9,7 @@ The CLI is defined in `src/cli.rs` and uses `clap`.
 - `boo --headless`
 - `boo --host <ssh-host>`
 - `boo ls`
-- `boo new-session`
+- `boo new-tab`
 - `boo kill-server`
 - `boo remote-clients`
 
@@ -24,8 +24,8 @@ The CLI is defined in `src/cli.rs` and uses `clap`.
 
 ## Mental Model
 
-- local mode: attach to the local session server
-- server mode: run the long-lived session owner directly
+- local mode: view the local runtime server
+- server mode: run the long-lived runtime owner directly
 - headless mode: run the shared runtime without a GUI
 - SSH remote mode: use SSH to bootstrap and forward the remote local-socket
   contract

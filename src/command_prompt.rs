@@ -226,18 +226,18 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         args: "<key> <value>",
     },
     CommandDef {
-        name: "load-session",
-        description: "load a session layout",
+        name: "load-layout",
+        description: "load a saved layout",
         args: "<name>",
     },
     CommandDef {
-        name: "save-session",
+        name: "save-layout",
         description: "save current layout",
         args: "<name>",
     },
     CommandDef {
-        name: "list-sessions",
-        description: "list available sessions",
+        name: "list-layouts",
+        description: "list available layouts",
         args: "",
     },
 ];

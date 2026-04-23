@@ -1,7 +1,7 @@
 //! Public direct-client RPCs over QUIC. Identity is enforced by the
 //! higher-level Boo handshake and the surrounding network substrate.
 
-use crate::remote::DirectTransportSession;
+use crate::remote::DirectTransportClient;
 use crate::remote_types::{
     DirectTransportKind, RemoteCreateSummary, RemoteProbeSummary,
     RemoteTabListSummary, RemoteUpgradeProbeSummary,
@@ -19,7 +19,7 @@ pub fn select_direct_transport(
 }
 
 fn probe_summary_from_transport(
-    client: &mut DirectTransportSession<crate::remote_quic::QuicDirectStream>,
+    client: &mut DirectTransportClient<crate::remote_quic::QuicDirectStream>,
     port: u16,
 ) -> Result<RemoteProbeSummary, String> {
     let heartbeat_rtt_ms = client.heartbeat_round_trip(b"boo-remote-probe")?;
@@ -59,7 +59,7 @@ pub fn probe_selected_direct_transport(
 }
 
 fn list_summary_from_transport(
-    client: &mut DirectTransportSession<crate::remote_quic::QuicDirectStream>,
+    client: &mut DirectTransportClient<crate::remote_quic::QuicDirectStream>,
     port: u16,
 ) -> Result<RemoteTabListSummary, String> {
     let heartbeat_rtt_ms = client.heartbeat_round_trip(b"boo-remote-list")?;
@@ -87,7 +87,7 @@ pub fn list_remote_daemon_tabs(
 }
 
 fn create_summary_from_transport(
-    client: &mut DirectTransportSession<crate::remote_quic::QuicDirectStream>,
+    client: &mut DirectTransportClient<crate::remote_quic::QuicDirectStream>,
     port: u16,
     cols: u16,
     rows: u16,
@@ -196,6 +196,7 @@ mod tests {
                         name: "dev".to_string(),
                         title: "shell".to_string(),
                         pwd: "/home/example/dev/boo".to_string(),
+                        active: true,
                         child_exited: false,
                     }]),
                 ))
@@ -285,6 +286,7 @@ mod tests {
                         name: "Tab 1".to_string(),
                         title: "Tab 1".to_string(),
                         pwd: "/tmp".to_string(),
+                        active: true,
                         child_exited: false,
                     }]),
                 ))

@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use unicode_script::Script;
 
-static STARTUP_SESSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static STARTUP_LAYOUT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static STARTUP_CONTROL_SOCKET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_HOST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static STARTUP_REMOTE_WORKDIR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -22,7 +22,7 @@ static STARTUP_REMOTE_BIND_ADDRESS: std::sync::OnceLock<String> = std::sync::Onc
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct StartupOverrides {
-    session: Option<String>,
+    layout: Option<String>,
     control_socket: Option<String>,
     remote_host: Option<String>,
     remote_workdir: Option<String>,
@@ -157,8 +157,8 @@ const REMOTE_SERVER_READY_POLL_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(100);
 
 pub fn parse_startup_args(cli: &crate::cli::Cli) -> bool {
-    if let Some(name) = cli.global.session.as_ref() {
-        STARTUP_SESSION.set(name.clone()).ok();
+    if let Some(name) = cli.global.layout.as_ref() {
+        STARTUP_LAYOUT.set(name.clone()).ok();
     }
     if let Some(path) = cli.global.socket.as_ref() {
         STARTUP_CONTROL_SOCKET.set(path.clone()).ok();
@@ -191,7 +191,7 @@ pub fn parse_startup_args(cli: &crate::cli::Cli) -> bool {
 
 fn startup_overrides() -> StartupOverrides {
     StartupOverrides {
-        session: STARTUP_SESSION.get().cloned(),
+        layout: STARTUP_LAYOUT.get().cloned(),
         control_socket: STARTUP_CONTROL_SOCKET.get().cloned(),
         remote_host: STARTUP_REMOTE_HOST.get().cloned(),
         remote_workdir: STARTUP_REMOTE_WORKDIR.get().cloned(),
@@ -247,8 +247,8 @@ fn apply_startup_overrides(
     boo_config
 }
 
-pub fn startup_session() -> Option<&'static str> {
-    STARTUP_SESSION.get().map(String::as_str)
+pub fn startup_layout() -> Option<&'static str> {
+    STARTUP_LAYOUT.get().map(String::as_str)
 }
 
 pub fn startup_control_socket() -> Option<&'static str> {
@@ -461,8 +461,8 @@ pub fn ensure_server_running(socket_path: &str, boo_config: &config::Config) -> 
     if let Some(port) = boo_config.remote_port {
         command.arg("--remote-port").arg(port.to_string());
     }
-    if let Some(name) = startup_session() {
-        command.arg("--session").arg(name);
+    if let Some(name) = startup_layout() {
+        command.arg("--layout").arg(name);
     }
     command
         .stdout(std::process::Stdio::null())

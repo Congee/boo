@@ -6,10 +6,8 @@ import UIKit
 enum GSPMessageType: UInt8 {
     case auth = 0x01
     case listTabs = 0x02
-    case create = 0x05
     case input = 0x06
     case resize = 0x07
-    case destroy = 0x08
     case scroll = 0x0a
     case appMouseEvent = 0x10
     case heartbeat = 0x11
@@ -768,8 +766,6 @@ final class GSPClient: ObservableObject {
     private var pendingHeartbeatToken: UInt64?
     private var expectedServerIdentityId: String?
     private var connectionGeneration: UInt64 = 0
-    private var pendingHostTabCreation = false
-    private var autoTabBootstrapSuppressed = false
     private var connectStartedAt: Date?
     private var authRequestedAt: Date?
     private var tabListRequestedAt: Date?
@@ -822,8 +818,6 @@ final class GSPClient: ObservableObject {
             "authenticated=\(authenticated)",
             "active=\(activeTabId.map(String.init) ?? "nil")",
             "runtimeActive=\(runtimeActiveTabId.map(String.init) ?? "nil")",
-            "pendingCreate=\(pendingHostTabCreation)",
-            "suppressed=\(autoTabBootstrapSuppressed)",
             "tabs=[\(tabIds)]",
             "lastError=\(lastError ?? "<none>")",
         ].joined(separator: " ")
@@ -858,8 +852,6 @@ final class GSPClient: ObservableObject {
         lastHeartbeatSent = nil
         pendingHeartbeatToken = nil
         activeTabId = nil
-        pendingHostTabCreation = false
-        autoTabBootstrapSuppressed = false
         tabs = []
         runtimeState = nil
         screen = ScreenState()
@@ -875,32 +867,6 @@ final class GSPClient: ObservableObject {
         debugLog("send listTabs")
         tabListRequestedAt = Date()
         sendMessage(type: .listTabs, payload: Data())
-    }
-
-    func createTab(cols: UInt16 = 120, rows: UInt16 = 36) {
-        debugLog("send createTab cols=\(cols) rows=\(rows)")
-        pendingHostTabCreation = true
-        var payload = Data(count: 4)
-        payload.withUnsafeMutableBytes { buf in
-            buf.storeBytes(of: cols.littleEndian, as: UInt16.self)
-            buf.storeBytes(of: rows.littleEndian, toByteOffset: 2, as: UInt16.self)
-        }
-        sendMessage(type: .create, payload: payload)
-    }
-
-    func destroyTab(tabId: UInt32) {
-        debugLog("send destroyTab id=\(tabId)")
-        var payload = Data(count: 4)
-        payload.withUnsafeMutableBytes { buf in
-            buf.storeBytes(of: tabId.littleEndian, as: UInt32.self)
-        }
-        sendMessage(type: .destroy, payload: payload)
-    }
-
-    func suppressAutomaticTabBootstrap() {
-        debugLog("suppressAutomaticTabBootstrap")
-        autoTabBootstrapSuppressed = true
-        pendingHostTabCreation = false
     }
 
     func configureTrustedServerIdentity(_ identityId: String?) {
@@ -1238,9 +1204,6 @@ final class GSPClient: ObservableObject {
             guard let decodedRuntimeState = decodeRemoteRuntimeState(payload) else { return }
             runtimeState = decodedRuntimeState
             activeTabId = runtimeActiveTabId
-            if activeTabId != nil {
-                pendingHostTabCreation = false
-            }
             if authenticated {
                 bootstrapCanonicalHostTab(trigger: "runtimeState")
             }
@@ -1299,6 +1262,7 @@ final class GSPClient: ObservableObject {
                 name: $0.name,
                 title: $0.title,
                 pwd: $0.pwd,
+                active: $0.active,
                 childExited: $0.childExited
             )
         }
@@ -1330,7 +1294,6 @@ final class GSPClient: ObservableObject {
     private func bootstrapCanonicalHostTab(trigger: String) {
         guard authenticated else { return }
         guard activeTabId == nil else { return }
-        guard !autoTabBootstrapSuppressed else { return }
 
         if let runtimeState,
            runtimeState.tabs.indices.contains(runtimeState.activeTab) {
@@ -1339,8 +1302,27 @@ final class GSPClient: ObservableObject {
             return
         }
 
-        debugLog("bootstrapCanonicalHostTab trigger=\(trigger) create")
-        createTab()
+        if let fallbackTabId = tabs.first(where: { $0.active && !$0.childExited })?.id
+            ?? tabs.last(where: { !$0.childExited })?.id {
+            debugLog("bootstrapCanonicalHostTab trigger=\(trigger) fallback existing tabId=\(fallbackTabId)")
+            activeTabId = fallbackTabId
+            if matchesRecoverableMissingActiveTabError(lastErrorKind) {
+                lastErrorKind = nil
+                lastError = nil
+            }
+            return
+        }
+
+        debugLog("bootstrapCanonicalHostTab trigger=\(trigger) waiting for server runtime tab")
+    }
+
+    private func matchesRecoverableMissingActiveTabError(_ kind: ClientWireErrorKind?) -> Bool {
+        switch kind {
+        case .noActiveTab, .unknownTab:
+            return true
+        default:
+            return false
+        }
     }
 
     private func applyReducedMessage(_ message: ClientWireMessageType, payload: Data) {
@@ -1357,6 +1339,7 @@ final class GSPClient: ObservableObject {
                     name: $0.name,
                     title: $0.title,
                     pwd: $0.pwd,
+                    active: $0.active,
                     childExited: $0.childExited
                 )
             },
@@ -1407,21 +1390,8 @@ final class GSPClient: ObservableObject {
         lastError = state.lastError
         let fallbackActiveTabId = state.activeTabId
         let nextActiveTabId = runtimeActiveTabId ?? fallbackActiveTabId
-        if nextActiveTabId == nil {
-            switch message {
-            case .tabExited:
-                pendingHostTabCreation = false
-            case .errorMsg:
-                pendingHostTabCreation = false
-            default:
-                break
-            }
-        }
         applyDecodedTabs(state.tabs)
         activeTabId = nextActiveTabId
-        if activeTabId != nil {
-            pendingHostTabCreation = false
-        }
         if let decodedScreen = state.screen {
             applyDecodedScreen(decodedScreen)
             screen.objectWillChange.send()
@@ -1438,8 +1408,6 @@ final class GSPClient: ObservableObject {
         switch effect {
         case .none:
             break
-        case .listTabs:
-            listTabs()
         }
 
         if message == .authOk {
@@ -1461,7 +1429,6 @@ final class GSPClient: ObservableObject {
         if message == .errorMsg {
             switch lastErrorKind {
             case .unknownTab, .noActiveTab:
-                pendingHostTabCreation = false
                 bootstrapCanonicalHostTab(trigger: "errorRecovery")
             default:
                 break

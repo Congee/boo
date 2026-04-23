@@ -723,6 +723,7 @@ impl BooApp {
                         .as_ref()
                         .map(|snapshot| snapshot.pwd.clone())
                         .unwrap_or_default(),
+                    active: self.server.tabs.active_index() == tab.index,
                     child_exited: pane.id() == 0 || terminal.is_none(),
                 }
             })

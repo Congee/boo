@@ -33,15 +33,18 @@ For iOS, the product direction is now:
 - reconnecting to the same host should reopen or recover that same host-owned
   tab/runtime state rather than listing multiple candidate tabs heuristically
 - the client should connect to runtime state, not pick from a host-local
-  legacy session pool
+  legacy lifecycle pool
 
 Two architectural models are worth keeping explicit:
 
 1. Rejected legacy model:
-   one host -> legacy `listSessions()` bootstrap -> choose a session heuristically -> attach
+   one host -> legacy list-and-pick bootstrap -> choose a lifecycle target heuristically
 2. Desired host-scoped model:
    one host -> one canonical Boo runtime view for iOS -> reopen or recover that
    same host-owned tab/runtime state until the user explicitly closes it
+
+In the live product path, iOS now bootstraps from runtime state first and does
+not use the old list-and-pick heuristic as its primary flow.
 
 The first model is structurally wrong for iOS because it allows a visible
 terminal that is not the canonical writable terminal for that host. Future

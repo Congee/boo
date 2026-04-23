@@ -17,7 +17,7 @@ use rustls::{DigitallySignedStruct, RootCertStore, SignatureScheme};
 use tokio::runtime::{Builder, Runtime};
 
 use crate::remote::RemoteCmd;
-use crate::remote_direct_transport::DirectTransportSession;
+use crate::remote_direct_transport::DirectTransportClient;
 use crate::remote_listener::run_remote_client_connection;
 use crate::remote_state::State;
 
@@ -101,7 +101,7 @@ pub(crate) fn connect_direct(
     host: &str,
     port: u16,
     expected_server_identity: Option<&str>,
-) -> Result<DirectTransportSession<QuicDirectStream>, String> {
+) -> Result<DirectTransportClient<QuicDirectStream>, String> {
     let addr = (host, port)
         .to_socket_addrs()
         .map_err(|error| format!("failed to resolve {host}:{port}: {error}"))?
@@ -148,7 +148,7 @@ pub(crate) fn connect_direct(
     let (send, recv) = runtime
         .block_on(connection.open_bi())
         .map_err(|error| format!("failed to open quic stream to {host}:{port}: {error}"))?;
-    DirectTransportSession::connect_over_stream(
+    DirectTransportClient::connect_over_stream(
         QuicDirectStream {
             send: Mutex::new(send),
             recv: Mutex::new(recv),

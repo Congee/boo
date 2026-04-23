@@ -29,12 +29,23 @@ See [../remote/ssh-desktop.md](../remote/ssh-desktop.md).
 
 The native daemon supports:
 
+- runtime-state bootstrap
 - tab listing
-- attach/detach
 - create/resize/input/destroy
 - full state and deltas
 - auth and heartbeat
 - iOS client consumption
+
+The current live model is:
+
+- clients are runtime viewers
+- the server stays authoritative for runtime state, tabs, panes, and terminal
+  content
+- clients keep only thin viewer-local bookkeeping such as current-tab display
+  and stream caches
+
+Remote clients do not own terminal lifecycle objects; they view and control the
+server-owned runtime.
 
 Primary code:
 

@@ -11,9 +11,9 @@ The control socket is the local request/response IPC surface for boo.
 It is used for:
 
 - server readiness checks
-- listing sessions
-- creating sessions
-- querying UI/session state
+- listing runtime state
+- creating runtime objects
+- querying UI/runtime state
 - diagnostic and automation workflows
 
 Default transport:

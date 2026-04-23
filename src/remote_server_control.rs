@@ -1,4 +1,4 @@
-//! Cached control-payload helpers for local remote clients.
+//! Cached control-payload helpers for remote runtime-view clients.
 
 use crate::remote::RemoteTabInfo;
 use crate::remote_batcher::OutboundMessage;
@@ -64,16 +64,6 @@ pub(crate) fn send_ui_runtime_state(
     client_id: u64,
     runtime_state: &crate::control::UiRuntimeState,
 ) {
-    let is_local = {
-        let guard = state.lock().expect("remote server state poisoned");
-        guard
-            .clients
-            .get(&client_id)
-            .is_some_and(|client| client.is_local)
-    };
-    if !is_local {
-        return;
-    }
     let Ok(payload) = serde_json::to_vec(runtime_state) else {
         return;
     };
@@ -114,16 +104,6 @@ pub(crate) fn send_ui_appearance(
     client_id: u64,
     appearance: &crate::control::UiAppearanceSnapshot,
 ) {
-    let is_local = {
-        let guard = state.lock().expect("remote server state poisoned");
-        guard
-            .clients
-            .get(&client_id)
-            .is_some_and(|client| client.is_local)
-    };
-    if !is_local {
-        return;
-    }
     let Ok(payload) = serde_json::to_vec(appearance) else {
         return;
     };

@@ -4,7 +4,6 @@ enum ClientWireMessageType {
     case authOk
     case authFail
     case tabList
-    case tabCreated
     case tabExited
     case fullState
     case delta
@@ -23,7 +22,6 @@ enum ClientWireErrorCode: UInt16, Equatable {
 
 enum ClientWireEffect: Equatable {
     case none
-    case listTabs
 }
 
 enum ClientWireErrorKind: Equatable {
@@ -251,7 +249,7 @@ enum ClientWireReducer {
             }
             state.lastErrorKind = nil
             state.lastError = nil
-            return .listTabs
+            return .none
         case .authFail:
             state.lastErrorKind = .authenticationFailed
             state.lastError = ClientWireErrorKind.authenticationFailed.message
@@ -260,8 +258,6 @@ enum ClientWireReducer {
             state.tabs = WireCodec.decodeTabList(payload)
             return .none
         case .tabExited:
-            return .none
-        case .tabCreated:
             return .none
         case .fullState:
             state.screen = WireCodec.decodeFullState(payload)

@@ -148,29 +148,6 @@ private enum KeychainStringStore {
     }
 }
 
-func normalizeLegacyTabMetadataKeys(in data: Data) -> Data? {
-    guard let jsonObject = try? JSONSerialization.jsonObject(with: data) else {
-        return nil
-    }
-    let normalized = rewriteLegacyTabMetadataKeys(in: jsonObject)
-    return try? JSONSerialization.data(withJSONObject: normalized)
-}
-
-private func rewriteLegacyTabMetadataKeys(in value: Any) -> Any {
-    if let array = value as? [Any] {
-        return array.map(rewriteLegacyTabMetadataKeys(in:))
-    }
-    if let dict = value as? [String: Any] {
-        var rewritten: [String: Any] = [:]
-        for (key, nestedValue) in dict {
-            let rewrittenKey = key == "sessionId" ? "tabId" : key
-            rewritten[rewrittenKey] = rewriteLegacyTabMetadataKeys(in: nestedValue)
-        }
-        return rewritten
-    }
-    return value
-}
-
 @MainActor
 final class ConnectionStore: ObservableObject {
     @Published var savedNodes: [SavedNode] = []
@@ -196,7 +173,6 @@ final class ConnectionStore: ObservableObject {
         loadNodes()
         loadHistory()
         loadTrustedServerIdentities()
-        clearLegacyHostTabStorage()
         loadTailscaleSettings()
         loadTerminalDisplaySettings()
         refreshTailscaleTokenStatus()
@@ -357,13 +333,6 @@ final class ConnectionStore: ObservableObject {
         UserDefaults.standard.set(data, forKey: trustedIdentitiesKey)
     }
 
-    private func clearLegacyHostTabStorage() {
-        let defaults = UserDefaults.standard
-        defaults.removeObject(forKey: "boo.remote.hostTabs\(storageNamespaceSuffix)")
-        defaults.removeObject(forKey: "boo.remote.hostSessions\(storageNamespaceSuffix)")
-        defaults.removeObject(forKey: "boo.remote.resumeAttachments\(storageNamespaceSuffix)")
-    }
-
     private func loadTailscaleSettings() {
         guard let data = UserDefaults.standard.data(forKey: tailscaleSettingsKey),
               let settings = try? JSONDecoder().decode(TailscaleDiscoverySettings.self, from: data) else { return }
@@ -393,8 +362,6 @@ final class ConnectionStore: ObservableObject {
             UserDefaults.standard.removeObject(forKey: nodesKey)
             UserDefaults.standard.removeObject(forKey: historyKey)
             UserDefaults.standard.removeObject(forKey: trustedIdentitiesKey)
-            UserDefaults.standard.removeObject(forKey: "boo.remote.hostTabs\(storageNamespaceSuffix)")
-            UserDefaults.standard.removeObject(forKey: "boo.remote.hostSessions\(storageNamespaceSuffix)")
             UserDefaults.standard.removeObject(forKey: tailscaleSettingsKey)
             UserDefaults.standard.removeObject(forKey: terminalDisplaySettingsKey)
             try? KeychainStringStore.delete(service: tailscaleTokenService, account: tailscaleTokenAccount)

@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Instant;
 
-pub(crate) use crate::remote_direct_transport::DirectTransportSession;
+pub(crate) use crate::remote_direct_transport::DirectTransportClient;
 
 // Re-export the public data types so existing callers of
 // `crate::remote::RemoteProbeSummary` etc. keep working unchanged.
@@ -151,12 +151,36 @@ pub struct RemoteServer {
     port: Option<u16>,
 }
 
+fn persistent_server_identity_id() -> String {
+    if let Ok(identity) = std::env::var("BOO_REMOTE_SERVER_IDENTITY") {
+        let identity = identity.trim();
+        if !identity.is_empty() {
+            return identity.to_string();
+        }
+    }
+
+    let path = crate::config::config_dir().join("remote_identity");
+    if let Ok(identity) = std::fs::read_to_string(&path) {
+        let identity = identity.trim();
+        if !identity.is_empty() {
+            return identity.to_string();
+        }
+    }
+
+    let identity = random_instance_id();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, format!("{identity}\n"));
+    identity
+}
+
 impl RemoteServer {
     pub fn start(config: RemoteConfig) -> io::Result<(Self, mpsc::Receiver<RemoteCmd>)> {
         let bind_address = config.effective_bind_address().to_string();
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::new(),
-            server_identity_id: random_instance_id(),
+            server_identity_id: persistent_server_identity_id(),
             server_instance_id: random_instance_id(),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -203,7 +227,7 @@ impl RemoteServer {
         let listener = UnixListener::bind(&socket_path)?;
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::new(),
-            server_identity_id: random_instance_id(),
+            server_identity_id: persistent_server_identity_id(),
             server_instance_id: random_instance_id(),
         }));
         let state_for_listener = Arc::clone(&state);

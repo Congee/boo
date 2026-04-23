@@ -26,7 +26,7 @@ This is the structured documentation hub for boo.
 
 - [modules/vt-backend-core.md](./modules/vt-backend-core.md)
 - [modules/control-socket.md](./modules/control-socket.md)
-- [modules/session-server.md](./modules/session-server.md)
+- [modules/runtime-server.md](./modules/runtime-server.md)
 - [modules/renderer.md](./modules/renderer.md)
 - [modules/remote-daemon.md](./modules/remote-daemon.md)
 - [modules/ios-client.md](./modules/ios-client.md)

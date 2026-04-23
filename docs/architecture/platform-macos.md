@@ -15,5 +15,5 @@ Platform-specific responsibilities:
 - clipboard and notifications
 - macOS event plumbing
 
-The design goal is to keep terminal state and session logic out of the
+The design goal is to keep terminal state and runtime logic out of the
 platform-specific layer whenever possible.

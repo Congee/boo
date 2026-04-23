@@ -5,5 +5,6 @@ struct RemoteTabInfo: Identifiable {
     let name: String
     let title: String
     let pwd: String
+    let active: Bool
     let childExited: Bool
 }

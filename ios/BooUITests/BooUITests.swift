@@ -35,7 +35,7 @@ final class BooAppLaunchTests: BooUITestCase {
         """
     }
 
-    private func attachStateSnapshot(_ app: XCUIApplication) -> String {
+    private func activeTabStateSnapshot(_ app: XCUIApplication) -> String {
         let terminal = app.otherElements["terminal-screen"]
         let label = terminal.exists ? terminal.label : "<no terminal>"
         let value = terminal.exists ? String(describing: terminal.value ?? "<nil>") : "<no terminal>"
@@ -94,15 +94,15 @@ final class BooAppLaunchTests: BooUITestCase {
         let terminal = app.otherElements["terminal-screen"]
         XCTAssertTrue(terminal.waitForExistence(timeout: 10), file: file, line: line)
 
-        let attachedExpectation = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label BEGINSWITH %@", "attached-"),
+        let activeExpectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label BEGINSWITH %@", "active-"),
             object: terminal
         )
-        let attachedResult = XCTWaiter.wait(for: [attachedExpectation], timeout: 10)
+        let activeResult = XCTWaiter.wait(for: [activeExpectation], timeout: 10)
         XCTAssertEqual(
-            attachedResult,
+            activeResult,
             .completed,
-            "terminal never reached attached state before typing: \(attachStateSnapshot(app))\n\(uiStateSnapshot(app))",
+            "terminal never reached active state before typing: \(activeTabStateSnapshot(app))\n\(uiStateSnapshot(app))",
             file: file,
             line: line
         )
@@ -130,11 +130,11 @@ final class BooAppLaunchTests: BooUITestCase {
 
         XCTAssertTrue(
             typedSuccessfully,
-            "typed text did not appear in terminal: \(attachStateSnapshot(app))\n\(uiStateSnapshot(app))",
+            "typed text did not appear in terminal: \(activeTabStateSnapshot(app))\n\(uiStateSnapshot(app))",
             file: file,
             line: line
         )
-        XCTAssertTrue(attachedExpectation.predicate.evaluate(with: terminal), "terminal lost attachment after typing: \(attachStateSnapshot(app))", file: file, line: line)
+        XCTAssertTrue(activeExpectation.predicate.evaluate(with: terminal), "terminal lost active tab after typing: \(activeTabStateSnapshot(app))", file: file, line: line)
     }
 
     private func dragTerminal(_ terminal: XCUIElement, upward: Bool) {
@@ -490,7 +490,7 @@ final class BooAppLaunchTests: BooUITestCase {
     }
 
     func testOpenLiveTabAndType() {
-        let app = makeApp(autoConnect: false, resetStorage: false)
+        let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
         app.launch()
         app.tap()
@@ -500,7 +500,7 @@ final class BooAppLaunchTests: BooUITestCase {
     }
 
     func testOpenLiveTabShowsCustomKeyboardAccessory() {
-        let app = makeApp(autoConnect: false, resetStorage: false)
+        let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
         app.launch()
         app.tap()
@@ -530,7 +530,7 @@ final class BooAppLaunchTests: BooUITestCase {
     }
 
     func testKeyboardAccessoryCtrlLClearsVisibleTerminal() {
-        let app = makeApp(autoConnect: false, resetStorage: false)
+        let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
         app.launch()
         app.tap()
@@ -563,7 +563,7 @@ final class BooAppLaunchTests: BooUITestCase {
     }
 
     func testKeyboardAccessoryRepeatableKeyRepeats() {
-        let app = makeApp(autoConnect: false, resetStorage: false)
+        let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
         app.launch()
         app.tap()
@@ -590,7 +590,7 @@ final class BooAppLaunchTests: BooUITestCase {
     }
 
     func testFingerScrollUsesTerminalScrollPath() {
-        let app = makeApp(autoConnect: false, resetStorage: false)
+        let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
         app.launch()
         app.tap()
@@ -648,7 +648,7 @@ final class BooAppLaunchTests: BooUITestCase {
     }
 
     func testDashboardRowShowsLatencyMetricAfterConnect() {
-        let app = makeApp(autoConnect: false, resetStorage: false, includeConfiguredHost: false)
+        let app = makeApp(autoConnect: false, resetStorage: true, includeConfiguredHost: false)
         _ = installSystemAlertHandler(for: app)
         app.launch()
         app.tap()
@@ -777,7 +777,7 @@ final class BooAppLaunchTests: BooUITestCase {
     }
 
     func testSwipeBackFromTerminalReturnsToConnectScreen() {
-        let app = makeApp(autoConnect: false, resetStorage: false)
+        let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
         app.launch()
         app.tap()
@@ -804,7 +804,7 @@ final class BooAppLaunchTests: BooUITestCase {
     }
 
     func testFloatingBackButtonReturnsToConnectScreen() {
-        let app = makeApp(autoConnect: false, resetStorage: false)
+        let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
         app.launch()
         app.tap()
@@ -827,7 +827,7 @@ final class BooAppLaunchTests: BooUITestCase {
     }
 
     func testReconnectAndTypeAgainAfterBackNavigation() {
-        let app = makeApp(autoConnect: false, resetStorage: false)
+        let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
         app.launch()
         app.tap()
@@ -847,7 +847,7 @@ final class BooAppLaunchTests: BooUITestCase {
     }
 
     func testFastSwipeBackAndReconnectStress() {
-        let app = makeApp(autoConnect: false, resetStorage: false, includeConfiguredHost: false)
+        let app = makeApp(autoConnect: false, resetStorage: true, includeConfiguredHost: false)
         _ = installSystemAlertHandler(for: app)
         app.launch()
         app.tap()
@@ -875,15 +875,15 @@ final class BooAppLaunchTests: BooUITestCase {
             firstRow.tap()
 
             waitForTerminalScreen(app)
-            let attachedExpectation = XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "label BEGINSWITH %@", "attached-"),
+            let activeExpectation = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "label BEGINSWITH %@", "active-"),
                 object: terminal
             )
-            let attachedResult = XCTWaiter.wait(for: [attachedExpectation], timeout: 10)
+            let activeResult = XCTWaiter.wait(for: [activeExpectation], timeout: 10)
             XCTAssertEqual(
-                attachedResult,
+                activeResult,
                 .completed,
-                "terminal did not reattach after fast reconnect on iteration \(iteration):\n\(uiStateSnapshot(app))",
+                "terminal did not become active after fast reconnect on iteration \(iteration):\n\(uiStateSnapshot(app))",
                 file: #filePath,
                 line: #line
             )
@@ -893,7 +893,7 @@ final class BooAppLaunchTests: BooUITestCase {
     }
 
     func testKeyboardDismissAndRefocusStillTypes() {
-        let app = makeApp(autoConnect: false, resetStorage: false)
+        let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
         app.launch()
         app.tap()
@@ -913,11 +913,11 @@ final class BooAppLaunchTests: BooUITestCase {
         assertTerminalCanType(app, marker: "BOO_UI_TYPED_REFOCUS")
     }
 
-    func testNewTabRecoveryActionStillTypes() {
+    func testTerminalErrorBannerDoesNotOfferClientOwnedTabs() {
         let app = makeApp(
             autoConnect: false,
-            resetStorage: false,
-            forcedTerminalErrorKind: "attachmentResumeWindowExpired"
+            resetStorage: true,
+            forcedTerminalErrorKind: "authenticationFailed"
         )
         _ = installSystemAlertHandler(for: app)
         app.launch()
@@ -925,27 +925,17 @@ final class BooAppLaunchTests: BooUITestCase {
 
         guard openLiveTerminal(app) else { return }
 
-        let terminal = app.otherElements["terminal-screen"]
-        let originalLabel = terminal.label
-
-        let newTabButton = app.buttons["new-tab-button"]
-        XCTAssertTrue(newTabButton.waitForExistence(timeout: 5))
-        newTabButton.tap()
-
-        let labelChange = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label != %@", originalLabel),
-            object: terminal
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [labelChange], timeout: 10), .completed)
-
-        assertTerminalCanType(app, marker: "BOO_UI_TYPED_NEW")
+        XCTAssertTrue(app.staticTexts["terminal-banner-label"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["new-tab-button"].exists)
+        XCTAssertFalse(app.buttons["close-tab-button"].exists)
+        XCTAssertTrue(app.buttons["disconnect-tab-button"].exists)
     }
 
-    func testCloseTabRecoveryActionStillTypes() {
+    func testDisconnectErrorBannerReturnsToConnectScreen() {
         let app = makeApp(
             autoConnect: false,
-            resetStorage: false,
-            forcedTerminalErrorKind: "attachmentResumeWindowExpired"
+            resetStorage: true,
+            forcedTerminalErrorKind: "authenticationFailed"
         )
         _ = installSystemAlertHandler(for: app)
         app.launch()
@@ -953,31 +943,10 @@ final class BooAppLaunchTests: BooUITestCase {
 
         guard openLiveTerminal(app) else { return }
 
-        let terminal = app.otherElements["terminal-screen"]
-        let firstLabel = terminal.label
-
-        let newTabButton = app.buttons["new-tab-button"]
-        XCTAssertTrue(newTabButton.waitForExistence(timeout: 5))
-        newTabButton.tap()
-
-        let labelChange = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label != %@", firstLabel),
-            object: terminal
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [labelChange], timeout: 10), .completed)
-        let secondLabel = terminal.label
-
-        let closeTabButton = app.buttons["close-tab-button"]
-        XCTAssertTrue(closeTabButton.waitForExistence(timeout: 5))
-        closeTabButton.tap()
-
-        let relabeled = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label != %@", secondLabel),
-            object: terminal
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [relabeled], timeout: 10), .completed)
-
-        assertTerminalCanType(app, marker: "BOO_UI_TYPED_CLOSE")
+        let disconnectButton = app.buttons["disconnect-tab-button"]
+        XCTAssertTrue(disconnectButton.waitForExistence(timeout: 5))
+        disconnectButton.tap()
+        waitForConnectScreen(app)
     }
 
     func testConnectScreenElementsAppear() {
@@ -991,8 +960,8 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTAssertTrue(app.buttons["connect-button"].exists)
     }
 
-    func testAutoConnectCanCreateAndAttachTab() {
-        let app = makeApp(autoConnect: false, resetStorage: false)
+    func testOpenLiveTerminalCanDismissKeyboard() {
+        let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
         app.launch()
         app.tap()

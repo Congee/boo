@@ -36,7 +36,7 @@ It handles:
 - therefore current Tailscale dashboard metrics are app-level Boo service probes on the configured port, not Tailscale-native peer/path telemetry
 - connects through resolved Network framework endpoints
 - supports saved nodes and connection history
-- bootstraps from runtime state rather than selecting an attach target
+- bootstraps from runtime state rather than selecting a client-owned target
 - if Bonjour browsing returns local-network authorization failure, the app now shows a direct error and an `Open iPad Settings` action instead of silently showing an empty discovery list
 
 ## Verification

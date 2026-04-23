@@ -2570,6 +2570,7 @@ fn decode_remote_tab_list(payload: &[u8]) -> Option<Vec<remote::RemoteTabInfo>> 
             name,
             title,
             pwd,
+            active: (flags & 0x01) != 0,
             child_exited: (flags & 0x02) != 0,
         });
     }
@@ -3841,7 +3842,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_state_bootstrap_attaches_active_tab() {
+    fn runtime_state_bootstrap_uses_active_tab() {
         let (mut app, _rx) = ClientApp::new("/tmp/test.sock".to_string());
         let (stream_tx, stream_rx) = std::sync::mpsc::channel();
         app.stream_tx = Some(stream_tx);
@@ -3877,6 +3878,7 @@ mod tests {
             name: "shell".to_string(),
             title: "shell".to_string(),
             pwd: "/tmp".to_string(),
+            active: false,
             child_exited: false,
         }]));
 

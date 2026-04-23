@@ -1,6 +1,6 @@
-//! Session layout manager — declarative session configs for predefined layouts.
+//! Layout manager — declarative configs for predefined tab/pane layouts.
 //!
-//! Session files live in `~/.config/boo/sessions/<name>.boo` using key=value format.
+//! Layout files live in `~/.config/boo/layouts/<name>.boo` using key=value format.
 //!
 //! Supports named layouts (even-horizontal, main-vertical, etc.) that auto-arrange
 //! N panes, or explicit split directives with optional ratios.
@@ -8,16 +8,16 @@
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
-pub struct SessionLayout {
+pub struct Layout {
     pub name: String,
-    pub tabs: Vec<SessionTab>,
+    pub tabs: Vec<LayoutTab>,
 }
 
 #[derive(Debug, Clone)]
-pub struct SessionTab {
+pub struct LayoutTab {
     pub title: String,
     pub layout: TabLayout,
-    pub panes: Vec<SessionPane>,
+    pub panes: Vec<LayoutPane>,
 }
 
 /// How panes in a tab are arranged.
@@ -38,7 +38,7 @@ pub enum TabLayout {
 }
 
 #[derive(Debug, Clone)]
-pub struct SessionPane {
+pub struct LayoutPane {
     pub command: Option<String>,
     pub working_directory: Option<String>,
     /// For Manual layout: how this pane splits from the previous.
@@ -57,12 +57,12 @@ pub enum SplitDir {
     Down,
 }
 
-pub fn sessions_dir() -> PathBuf {
-    crate::config::config_dir().join("sessions")
+pub fn layouts_dir() -> PathBuf {
+    crate::config::config_dir().join("layouts")
 }
 
-pub fn list_sessions() -> Vec<String> {
-    let dir = sessions_dir();
+pub fn list_layouts() -> Vec<String> {
+    let dir = layouts_dir();
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return vec![];
     };
@@ -75,14 +75,14 @@ pub fn list_sessions() -> Vec<String> {
         .collect()
 }
 
-pub fn load_session(name: &str) -> Option<SessionLayout> {
-    let path = sessions_dir().join(format!("{name}.boo"));
+pub fn load_layout(name: &str) -> Option<Layout> {
+    let path = layouts_dir().join(format!("{name}.boo"));
     let content = std::fs::read_to_string(&path).ok()?;
-    Some(parse_session(name, &content))
+    Some(parse_layout(name, &content))
 }
 
-pub fn parse_session(name: &str, content: &str) -> SessionLayout {
-    let mut layout = SessionLayout {
+pub fn parse_layout(name: &str, content: &str) -> Layout {
+    let mut layout = Layout {
         name: name.to_string(),
         tabs: Vec::new(),
     };
@@ -116,7 +116,7 @@ pub fn parse_session(name: &str, content: &str) -> SessionLayout {
         let value = value.trim();
 
         match key {
-            "session-name" => layout.name = value.to_string(),
+            "layout-name" => layout.name = value.to_string(),
             "working-directory" => {
                 current_working_dir = Some(shellexpand_home(value));
             }
@@ -136,7 +136,7 @@ pub fn parse_session(name: &str, content: &str) -> SessionLayout {
             }
             "tab" => {
                 current_tab_layout = TabLayout::Manual;
-                layout.tabs.push(SessionTab {
+                layout.tabs.push(LayoutTab {
                     title: value.to_string(),
                     layout: TabLayout::Manual,
                     panes: Vec::new(),
@@ -160,7 +160,7 @@ pub fn parse_session(name: &str, content: &str) -> SessionLayout {
             }
             "pane" => {
                 if layout.tabs.is_empty() {
-                    layout.tabs.push(SessionTab {
+                    layout.tabs.push(LayoutTab {
                         title: String::new(),
                         layout: current_tab_layout.clone(),
                         panes: Vec::new(),
@@ -172,7 +172,7 @@ pub fn parse_session(name: &str, content: &str) -> SessionLayout {
                     Some(value.to_string())
                 };
                 let tab = layout.tabs.last_mut().unwrap();
-                tab.panes.push(SessionPane {
+                tab.panes.push(LayoutPane {
                     command,
                     working_directory: current_working_dir.clone(),
                     split: pending_split.take(),
@@ -185,7 +185,7 @@ pub fn parse_session(name: &str, content: &str) -> SessionLayout {
     // Ensure every tab has at least one pane
     for tab in &mut layout.tabs {
         if tab.panes.is_empty() {
-            tab.panes.push(SessionPane {
+            tab.panes.push(LayoutPane {
                 command: None,
                 working_directory: current_working_dir.clone(),
                 split: None,
@@ -295,12 +295,12 @@ pub fn layout_splits(layout: &TabLayout, n: usize) -> Vec<SplitSpec> {
     }
 }
 
-pub fn save_session(layout: &SessionLayout) -> std::io::Result<()> {
-    let dir = sessions_dir();
+pub fn save_layout(layout: &Layout) -> std::io::Result<()> {
+    let dir = layouts_dir();
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{}.boo", layout.name));
     let mut out = String::new();
-    out.push_str(&format!("session-name = {}\n\n", layout.name));
+    out.push_str(&format!("layout-name = {}\n\n", layout.name));
     for tab in &layout.tabs {
         out.push_str(&format!("tab = {}\n", tab.title));
         if tab.layout != TabLayout::Manual {
@@ -340,7 +340,7 @@ pub fn save_session(layout: &SessionLayout) -> std::io::Result<()> {
         out.push('\n');
     }
     std::fs::write(&path, out)?;
-    log::info!("saved session: {}", path.display());
+    log::info!("saved layout: {}", path.display());
     Ok(())
 }
 
@@ -358,9 +358,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_basic_session() {
+    fn test_parse_basic_layout() {
         let content = r#"
-session-name = dev
+layout-name = dev
 
 tab = editor
 pane = nvim .
@@ -370,7 +370,7 @@ pane = cargo watch
 split-right
 pane = tail -f log
 "#;
-        let layout = parse_session("dev", content);
+        let layout = parse_layout("dev", content);
         assert_eq!(layout.name, "dev");
         assert_eq!(layout.tabs.len(), 2);
         assert_eq!(layout.tabs[0].panes.len(), 1);
@@ -391,7 +391,7 @@ pane = nvim
 pane = cargo watch
 pane = htop
 "#;
-        let layout = parse_session("test", content);
+        let layout = parse_layout("test", content);
         assert_eq!(layout.tabs[0].layout, TabLayout::MainVertical);
         assert_eq!(layout.tabs[0].panes.len(), 3);
     }
@@ -407,7 +407,7 @@ pane = htop
     #[test]
     fn test_parse_split_with_ratio() {
         let content = "tab = dev\npane = vim\nsplit-right = 70%\npane = term\n";
-        let layout = parse_session("r", content);
+        let layout = parse_layout("r", content);
         let spec = layout.tabs[0].panes[1].split.as_ref().unwrap();
         assert_eq!(spec.direction, SplitDir::Right);
         assert!((spec.ratio - 0.7).abs() < 0.001);
@@ -469,7 +469,7 @@ pane = htop
     #[test]
     fn test_parse_working_directory() {
         let content = "working-directory = ~/dev\ntab = x\npane = nvim\n";
-        let layout = parse_session("wd", content);
+        let layout = parse_layout("wd", content);
         assert!(
             layout.tabs[0].panes[0]
                 .working_directory
@@ -482,31 +482,31 @@ pane = htop
     #[test]
     fn test_parse_empty_pane() {
         let content = "tab = shell\npane =\n";
-        let layout = parse_session("e", content);
+        let layout = parse_layout("e", content);
         assert!(layout.tabs[0].panes[0].command.is_none());
     }
 
     #[test]
     fn test_parse_implicit_tab() {
         let content = "pane = htop\n";
-        let layout = parse_session("bare", content);
+        let layout = parse_layout("bare", content);
         assert_eq!(layout.tabs.len(), 1);
     }
 
     #[test]
     fn test_save_roundtrip() {
-        let layout = SessionLayout {
+        let layout = Layout {
             name: "rt".to_string(),
-            tabs: vec![SessionTab {
+            tabs: vec![LayoutTab {
                 title: "main".to_string(),
                 layout: TabLayout::MainVertical,
                 panes: vec![
-                    SessionPane {
+                    LayoutPane {
                         command: Some("nvim".to_string()),
                         working_directory: None,
                         split: None,
                     },
-                    SessionPane {
+                    LayoutPane {
                         command: Some("cargo run".to_string()),
                         working_directory: None,
                         split: Some(SplitSpec {
@@ -523,7 +523,7 @@ pane = htop
 
         // Serialize
         let mut out = String::new();
-        out.push_str(&format!("session-name = {}\n\n", layout.name));
+        out.push_str(&format!("layout-name = {}\n\n", layout.name));
         for tab in &layout.tabs {
             out.push_str(&format!("tab = {}\n", tab.title));
             if tab.layout != TabLayout::Manual {
@@ -550,7 +550,7 @@ pane = htop
         std::fs::write(&path, &out).unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();
-        let parsed = parse_session("rt", &content);
+        let parsed = parse_layout("rt", &content);
         assert_eq!(parsed.tabs[0].layout, TabLayout::MainVertical);
         assert_eq!(parsed.tabs[0].panes.len(), 2);
         let spec = parsed.tabs[0].panes[1].split.as_ref().unwrap();

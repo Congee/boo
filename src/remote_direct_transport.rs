@@ -1,4 +1,4 @@
-//! Sync direct-client tab transport for the remote daemon.
+//! Sync direct-client runtime transport for the remote daemon.
 
 use std::io::{Read, Write};
 
@@ -13,7 +13,7 @@ use crate::remote_wire::{
 pub(crate) trait DirectReadWrite: Read + Write {}
 impl<T: Read + Write> DirectReadWrite for T {}
 
-pub(crate) struct DirectTransportSession<S: DirectReadWrite> {
+pub(crate) struct DirectTransportClient<S: DirectReadWrite> {
     pub(crate) stream: S,
     pub(crate) host: String,
     pub(crate) port: u16,
@@ -24,7 +24,7 @@ pub(crate) struct DirectTransportSession<S: DirectReadWrite> {
     pub(crate) server_identity_id: Option<String>,
 }
 
-impl<S: DirectReadWrite> DirectTransportSession<S> {
+impl<S: DirectReadWrite> DirectTransportClient<S> {
     pub(crate) fn connect_over_stream(
         mut stream: S,
         host: String,

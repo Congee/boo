@@ -36,7 +36,7 @@ pub enum Action {
     RotatePanesBackward,
     SwapPaneNext,
     SwapPanePrevious,
-    SelectLayout(crate::session::TabLayout),
+    SelectLayout(crate::layout::TabLayout),
     NextLayout,
     PreviousLayout,
     RebalanceLayout,
@@ -645,20 +645,20 @@ fn parse_action(s: &str) -> Option<Action> {
         "next_layout" => Some(Action::NextLayout),
         "previous_layout" => Some(Action::PreviousLayout),
         "rebalance_layout" => Some(Action::RebalanceLayout),
-        "select_layout:manual" => Some(Action::SelectLayout(crate::session::TabLayout::Manual)),
+        "select_layout:manual" => Some(Action::SelectLayout(crate::layout::TabLayout::Manual)),
         "select_layout:even-horizontal" => Some(Action::SelectLayout(
-            crate::session::TabLayout::EvenHorizontal,
+            crate::layout::TabLayout::EvenHorizontal,
         )),
         "select_layout:even-vertical" => Some(Action::SelectLayout(
-            crate::session::TabLayout::EvenVertical,
+            crate::layout::TabLayout::EvenVertical,
         )),
         "select_layout:main-horizontal" => Some(Action::SelectLayout(
-            crate::session::TabLayout::MainHorizontal,
+            crate::layout::TabLayout::MainHorizontal,
         )),
         "select_layout:main-vertical" => Some(Action::SelectLayout(
-            crate::session::TabLayout::MainVertical,
+            crate::layout::TabLayout::MainVertical,
         )),
-        "select_layout:tiled" => Some(Action::SelectLayout(crate::session::TabLayout::Tiled)),
+        "select_layout:tiled" => Some(Action::SelectLayout(crate::layout::TabLayout::Tiled)),
         "toggle_zoom" => Some(Action::ToggleZoom),
         "command_prompt" => Some(Action::OpenCommandPrompt),
         "next_pane" => Some(Action::NextPane),
@@ -1074,7 +1074,7 @@ keybind = super+/ = search
         ));
         assert!(matches!(
             parse_action("select_layout:tiled"),
-            Some(Action::SelectLayout(crate::session::TabLayout::Tiled))
+            Some(Action::SelectLayout(crate::layout::TabLayout::Tiled))
         ));
         assert!(matches!(
             parse_action("rebalance_layout"),

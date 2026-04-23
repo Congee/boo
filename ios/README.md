@@ -14,19 +14,19 @@ This directory contains the Boo iOS remote viewer app.
   - saved nodes
   - connection history
   - trusted daemon identity pinning per endpoint
-  - tab list / attach / create
+  - runtime-first bootstrap from the daemon's current runtime state
+  - runtime-state and tab metadata observation
   - terminal accessory keys for:
-    - escape
     - ctrl
     - alt/meta
+    - command
     - tab
-    - home/end
-    - page up/down
-    - arrows
-    - F1-F4
-  - terminal swipe gestures for:
-    - page up/down scrolling
-    - left/right navigation
+    - punctuation helpers used in terminal workflows
+    - left/right arrows
+    - press-and-hold repeat for repeatable keys
+  - terminal drag gestures for:
+    - terminal scroll-wheel style scrolling
+    - left/right swipe navigation
   - remote terminal cell-grid rendering
 
 ## Notes
@@ -50,12 +50,12 @@ The Swift app client and the validator now share the same wire-codec implementat
 It verifies:
 
 - Bonjour discovery on `_boo._udp`
-- tab listing
-- create + attach
+- runtime bootstrap and tab metadata observation
+- runtime-state refresh after server-owned tab changes
 - resize
 - terminal-state publishing with a real shell command round-trip
 - wire-codec decoding for full-state and delta updates with a standalone Swift self-test
-- client message-state transitions for auth, attach, detach, tab creation, and delta application
+- client message-state transitions for auth, runtime bootstrap, and delta application
 
 The automated validation lane currently covers Bonjour. Tailscale peer discovery
 is app-integrated, but it is not yet covered by an automated repo-side test
@@ -105,17 +105,20 @@ Notes:
 - `scripts/test-ios-ui.sh` now runs XCUITests against either the simulator or a
   real attached device; on a real device it starts a local Boo daemon, writes a
   temporary UI-test host config for the test bundle, and exercises the visible
-  connect/tab terminal flow end-to-end
+  connect/runtime-view terminal flow end-to-end
 - Bonjour discovery on a real device still depends on the iPad or iPhone granting
   Local Network access to `boo`; otherwise the app now surfaces a direct error
   and an `Open iPad Settings` action instead of silently showing an empty list
 
 ## Remaining Manual Validation
 
-Automated validation covers the remote protocol, runtime-first bootstrap flow, and state updates. Manual validation is still reserved for client UX that depends on the real iOS interaction model:
+Automated validation covers the remote protocol, runtime-first bootstrap flow,
+and state updates. Manual validation is still reserved for client UX that
+depends on the real iOS interaction model:
 
-- keyboard accessory ergonomics on-device, especially modifier toggles and function-key reachability
-- swipe gesture feel for page navigation and left/right terminal movement
+- keyboard accessory ergonomics on-device, especially held modifiers,
+  command/control combos, and press-and-hold repeat behavior
+- drag-scroll feel and left/right terminal movement
 - background / foreground reconnect behavior as seen by the user
 - iOS local-network permission prompts and discovery behavior in a real app install
 
@@ -123,4 +126,5 @@ Transport-state transitions that still need manual judgment in a real client:
 
 - when degraded heartbeat state should feel visible but not alarming
 - when reconnecting state should block input vs leave the last terminal visible
-- how long a disconnected tab should keep the last screen visible before the UI feels misleading
+- how long an inactive runtime view should keep the last screen visible before
+  the UI feels misleading

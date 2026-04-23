@@ -10,7 +10,7 @@ for the feature surface and current backlog themes.
 - multiple tabs with independent split trees
 - directional pane navigation and resize
 - per-tab layout modes
-- session persistence through the long-lived server model
+- runtime persistence through the long-lived server model
 
 ### Terminal UX
 
@@ -20,10 +20,10 @@ for the feature surface and current backlog themes.
 - search and status surfaces
 - command-state tracking via shell integration
 
-### Session Server
+### Runtime Server
 
-- `boo server` as the long-lived session owner
-- GUI attaches to the server instead of owning PTYs directly
+- `boo server` as the long-lived runtime owner
+- GUI views the server instead of owning PTYs directly
 - control socket and `.stream` socket IPC surfaces
 
 ### Remote
@@ -59,6 +59,6 @@ for the feature surface and current backlog themes.
 ## Related Docs
 
 - [../architecture/remote.md](../architecture/remote.md)
-- [../modules/session-server.md](../modules/session-server.md)
+- [../modules/runtime-server.md](../modules/runtime-server.md)
 - [../modules/vt-backend-core.md](../modules/vt-backend-core.md)
 - [../development/profiling.md](../development/profiling.md)

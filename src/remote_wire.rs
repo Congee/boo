@@ -156,7 +156,7 @@ pub fn decode_error_payload(payload: &[u8]) -> Result<(RemoteErrorCode, String),
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogicalChannel {
     Control,
-    SessionStream,
+    RuntimeStream,
     InputControl,
     Health,
 }
@@ -180,7 +180,7 @@ pub const fn logical_channel_for_message_type(message_type: MessageType) -> Logi
         | MessageType::UiRuntimeState
         | MessageType::UiAppearance
         | MessageType::UiPaneFullState
-        | MessageType::UiPaneDelta => LogicalChannel::SessionStream,
+        | MessageType::UiPaneDelta => LogicalChannel::RuntimeStream,
         MessageType::Input
         | MessageType::Resize
         | MessageType::Scroll
@@ -191,7 +191,7 @@ pub const fn logical_channel_for_message_type(message_type: MessageType) -> Logi
         | MessageType::AppMouseEvent
         | MessageType::FocusPane => LogicalChannel::InputControl,
         MessageType::Heartbeat | MessageType::HeartbeatAck => LogicalChannel::Health,
-        MessageType::Clipboard | MessageType::Image => LogicalChannel::SessionStream,
+        MessageType::Clipboard | MessageType::Image => LogicalChannel::RuntimeStream,
     }
 }
 
@@ -619,6 +619,7 @@ pub(crate) fn decode_tab_list_payload(payload: &[u8]) -> Result<Vec<RemoteDirect
             name,
             title,
             pwd,
+            active: (flags & 0x01) != 0,
             child_exited: (flags & 0x02) != 0,
         });
     }
@@ -749,6 +750,9 @@ pub fn encode_tab_list(tabs: &[RemoteTabInfo]) -> Vec<u8> {
         push_string(&mut payload, &tab.title);
         push_string(&mut payload, &tab.pwd);
         let mut flags = 0u8;
+        if tab.active {
+            flags |= 0x01;
+        }
         if tab.child_exited {
             flags |= 0x02;
         }
@@ -1102,13 +1106,14 @@ mod tests {
             name: "Tab 1".to_string(),
             title: "shell".to_string(),
             pwd: "/tmp".to_string(),
+            active: true,
             child_exited: false,
         }]);
         assert_eq!(u32::from_le_bytes(payload[0..4].try_into().unwrap()), 1);
         assert_eq!(u32::from_le_bytes(payload[4..8].try_into().unwrap()), 7);
         assert_eq!(u16::from_le_bytes(payload[8..10].try_into().unwrap()), 5);
         assert_eq!(&payload[10..15], b"Tab 1");
-        assert_eq!(*payload.last().unwrap(), 0x00);
+        assert_eq!(*payload.last().unwrap(), 0x01);
     }
 
     #[test]
@@ -1228,11 +1233,11 @@ mod tests {
         );
         assert_eq!(
             logical_channel_for_message_type(MessageType::Delta),
-            LogicalChannel::SessionStream
+            LogicalChannel::RuntimeStream
         );
         assert_eq!(
             logical_channel_for_message_type(MessageType::UiPaneDelta),
-            LogicalChannel::SessionStream
+            LogicalChannel::RuntimeStream
         );
         assert_eq!(
             logical_channel_for_message_type(MessageType::Input),
@@ -1320,6 +1325,7 @@ mod tests {
                 name: "Tab 1".to_string(),
                 title: "shell".to_string(),
                 pwd: "/tmp".to_string(),
+                active: true,
                 child_exited: false,
             },
             RemoteTabInfo {
@@ -1327,6 +1333,7 @@ mod tests {
                 name: String::new(),
                 title: "logs".to_string(),
                 pwd: "/var/log".to_string(),
+                active: false,
                 child_exited: true,
             },
         ]);
@@ -1340,6 +1347,7 @@ mod tests {
                     name: "Tab 1".to_string(),
                     title: "shell".to_string(),
                     pwd: "/tmp".to_string(),
+                    active: true,
                     child_exited: false,
                 },
                 RemoteDirectTabInfo {
@@ -1347,6 +1355,7 @@ mod tests {
                     name: String::new(),
                     title: "logs".to_string(),
                     pwd: "/var/log".to_string(),
+                    active: false,
                     child_exited: true,
                 },
             ]

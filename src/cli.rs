@@ -8,9 +8,9 @@ use serde::Serialize;
 #[command(
     name = "boo",
     version = env!("CARGO_PKG_VERSION"),
-    about = "Terminal multiplexer and GUI client for Boo sessions",
+    about = "Terminal multiplexer and GUI client for the Boo runtime",
     disable_help_flag = true,
-    long_about = "Terminal multiplexer and GUI client for Boo sessions.\n\nRunning `boo` with no subcommand opens the GUI client.",
+    long_about = "Terminal multiplexer and GUI client for the Boo runtime.\n\nRunning `boo` with no subcommand opens the GUI client.",
     after_long_help = "Remote flags apply both before and after subcommands, for example `boo --host macbook ls` and `boo ls --host macbook`."
 )]
 pub struct Cli {
@@ -120,14 +120,14 @@ pub struct GlobalArgs {
     )]
     pub remote_bind_address: Option<String>,
 
-    #[arg(long, global = true, help = "Session layout to load at startup")]
-    pub session: Option<String>,
+    #[arg(long, global = true, help = "Saved layout to load at startup")]
+    pub layout: Option<String>,
 }
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
-    /// Connect the GUI client to a Boo server
-    Attach,
+    /// Connect the GUI client to a Boo runtime server
+    Gui,
     /// Print shell completion scripts
     Completions {
         #[arg(value_enum, default_value_t = CompletionShell::Bash)]
@@ -175,12 +175,12 @@ pub enum Command {
     /// Show connected remote and local-stream client diagnostics
     RemoteClients,
     /// Create a new live tab
-    NewSession,
+    NewTab,
     #[command(hide = true)]
     Ping,
     /// Stop the Boo server
     QuitServer,
-    /// Run the Boo session server without a GUI
+    /// Run the Boo runtime server without a GUI
     Server,
 }
 
@@ -532,7 +532,7 @@ where
                 }
             }
         }
-        Command::NewSession => {
+        Command::NewTab => {
             if !require_server() {
                 return Outcome::Exit(1);
             }
@@ -543,7 +543,7 @@ where
             }
             Outcome::Exit(0)
         }
-        Command::Attach => Outcome::Continue,
+        Command::Gui => Outcome::Continue,
         Command::Server => Outcome::Continue,
     }
 }

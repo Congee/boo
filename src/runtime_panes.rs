@@ -206,8 +206,8 @@ impl BooApp {
         self.resize_pane_backend(pane, scale, w, h);
         log::info!("tab 0 created, size {w}x{h}");
 
-        if let Some(name) = launch::startup_session() {
-            self.load_session(name);
+        if let Some(name) = launch::startup_layout() {
+            self.load_layout(name);
         }
     }
 
@@ -383,13 +383,13 @@ impl BooApp {
         self.server.tabs.tab_id_for_index(idx)
     }
 
-    pub(crate) fn load_session(&mut self, name: &str) {
-        let Some(layout) = session::load_session(name) else {
-            log::warn!("session not found: {name}");
+    pub(crate) fn load_layout(&mut self, name: &str) {
+        let Some(layout) = layout::load_layout(name) else {
+            log::warn!("layout not found: {name}");
             return;
         };
         log::info!(
-            "loading session: {} ({} tabs)",
+            "loading layout: {} ({} tabs)",
             layout.name,
             layout.tabs.len()
         );
@@ -397,14 +397,14 @@ impl BooApp {
             return;
         };
 
-        for (tab_idx, session_tab) in layout.tabs.iter().enumerate() {
-            let auto_splits = if session_tab.layout != session::TabLayout::Manual {
-                session::layout_splits(&session_tab.layout, session_tab.panes.len())
+        for (tab_idx, layout_tab) in layout.tabs.iter().enumerate() {
+            let auto_splits = if layout_tab.layout != layout::TabLayout::Manual {
+                layout::layout_splits(&layout_tab.layout, layout_tab.panes.len())
             } else {
                 vec![]
             };
 
-            for (pane_idx, pane) in session_tab.panes.iter().enumerate() {
+            for (pane_idx, pane) in layout_tab.panes.iter().enumerate() {
                 let cmd_cstr = pane
                     .command
                     .as_ref()
@@ -435,14 +435,14 @@ impl BooApp {
                     let (split_dir, ratio) = if !auto_splits.is_empty() {
                         let spec = &auto_splits[pane_idx - 1];
                         let dir = match spec.direction {
-                            session::SplitDir::Right => splits::Direction::Horizontal,
-                            session::SplitDir::Down => splits::Direction::Vertical,
+                            layout::SplitDir::Right => splits::Direction::Horizontal,
+                            layout::SplitDir::Down => splits::Direction::Vertical,
                         };
                         (dir, spec.ratio)
                     } else if let Some(ref spec) = pane.split {
                         let dir = match spec.direction {
-                            session::SplitDir::Right => splits::Direction::Horizontal,
-                            session::SplitDir::Down => splits::Direction::Vertical,
+                            layout::SplitDir::Right => splits::Direction::Horizontal,
+                            layout::SplitDir::Down => splits::Direction::Vertical,
                         };
                         (dir, spec.ratio)
                     } else {
@@ -463,36 +463,36 @@ impl BooApp {
                     self.set_pane_focus(pane, true);
                 }
             }
-            if !session_tab.title.is_empty() {
+            if !layout_tab.title.is_empty() {
                 if let Some(tab) = self.server.tabs.tab_mut(tab_idx) {
-                    tab.title = session_tab.title.clone();
-                    tab.layout = session_tab.layout.clone();
+                    tab.title = layout_tab.title.clone();
+                    tab.layout = layout_tab.layout.clone();
                 }
             } else if let Some(tab) = self.server.tabs.tab_mut(tab_idx) {
-                tab.layout = session_tab.layout.clone();
+                tab.layout = layout_tab.layout.clone();
             }
         }
         self.relayout();
-        log::info!("session loaded: {}", layout.name);
+        log::info!("layout loaded: {}", layout.name);
     }
 
-    pub(crate) fn save_current_session(&self, name: &str) {
+    pub(crate) fn save_current_layout(&self, name: &str) {
         let tab_infos = self.server.tabs.tab_info();
-        let tabs: Vec<session::SessionTab> = tab_infos
+        let tabs: Vec<layout::LayoutTab> = tab_infos
             .iter()
             .map(|info| {
                 let panes = if let Some(tree) = self.server.tabs.tab_tree(info.index) {
                     tree.export_panes()
                         .into_iter()
                         .map(|ep| {
-                            let split = ep.split.map(|(dir, ratio)| session::SplitSpec {
+                            let split = ep.split.map(|(dir, ratio)| layout::SplitSpec {
                                 direction: match dir {
-                                    splits::Direction::Horizontal => session::SplitDir::Right,
-                                    splits::Direction::Vertical => session::SplitDir::Down,
+                                    splits::Direction::Horizontal => layout::SplitDir::Right,
+                                    splits::Direction::Vertical => layout::SplitDir::Down,
                                 },
                                 ratio,
                             });
-                            session::SessionPane {
+                            layout::LayoutPane {
                                 command: None,
                                 working_directory: None,
                                 split,
@@ -500,30 +500,30 @@ impl BooApp {
                         })
                         .collect()
                 } else {
-                    vec![session::SessionPane {
+                    vec![layout::LayoutPane {
                         command: None,
                         working_directory: None,
                         split: None,
                     }]
                 };
-                session::SessionTab {
+                layout::LayoutTab {
                     title: info.title.clone(),
                     layout: self
                         .server
                         .tabs
                         .tab_layout(info.index)
-                        .unwrap_or(session::TabLayout::Manual),
+                        .unwrap_or(layout::TabLayout::Manual),
                     panes,
                 }
             })
             .collect();
 
-        let layout = session::SessionLayout {
+        let layout = layout::Layout {
             name: name.to_string(),
             tabs,
         };
-        if let Err(e) = session::save_session(&layout) {
-            log::error!("failed to save session: {e}");
+        if let Err(e) = layout::save_layout(&layout) {
+            log::error!("failed to save layout: {e}");
         }
     }
 }

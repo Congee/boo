@@ -1,7 +1,7 @@
 //! Tab management — each tab contains its own split tree.
 
 use crate::pane::PaneHandle;
-use crate::session::TabLayout;
+use crate::layout::TabLayout;
 use crate::splits::SplitTree;
 
 pub struct TabManager {
@@ -198,12 +198,12 @@ impl TabManager {
             return false;
         }
         let focused_pane_id = tab.tree.focused_pane().id();
-        let specs = crate::session::layout_splits(&layout, panes.len())
+        let specs = crate::layout::layout_splits(&layout, panes.len())
             .into_iter()
             .map(|spec| {
                 let direction = match spec.direction {
-                    crate::session::SplitDir::Right => crate::splits::Direction::Horizontal,
-                    crate::session::SplitDir::Down => crate::splits::Direction::Vertical,
+                    crate::layout::SplitDir::Right => crate::splits::Direction::Horizontal,
+                    crate::layout::SplitDir::Down => crate::splits::Direction::Vertical,
                 };
                 (direction, spec.ratio)
             })
@@ -431,7 +431,7 @@ pub struct TabInfo {
 mod tests {
     use super::TabManager;
     use crate::pane::PaneHandle;
-    use crate::session::TabLayout;
+    use crate::layout::TabLayout;
 
     #[test]
     fn new_tab_switches_active_pane() {

@@ -44,7 +44,7 @@ mod runtime_panes;
 mod runtime_server;
 mod runtime_ui;
 mod server;
-mod session;
+mod layout;
 mod splits;
 mod status_components;
 mod tabs;
