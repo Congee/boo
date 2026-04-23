@@ -15,7 +15,7 @@ pub use crate::remote_types::{
     DirectTransportKind, RemoteAttachSummary, RemoteAttachedSummary, RemoteClientInfo,
     RemoteClientsSnapshot, RemoteCreateSummary, RemoteDirectTabInfo,
     RemoteProbeSummary, RemoteServerInfo,
-    RemoteTabInfo, RemoteTabListSummary, RemoteUpgradeProbeSummary, RevivableAttachmentInfo,
+    RemoteTabInfo, RemoteTabListSummary, RemoteUpgradeProbeSummary,
 };
 
 // Re-export the direct-client RPCs so existing callers of
@@ -29,12 +29,12 @@ pub use crate::remote_client::{
 pub use crate::remote_full_state::{full_state_from_terminal, full_state_from_ui};
 
 
-use crate::remote_wire::{encode_error_payload, random_instance_id, random_u64_nonzero};
+use crate::remote_wire::{encode_error_payload, random_instance_id};
 // Re-export wire-level items so external callers that reach through
 // `crate::remote::` keep working.
 #[allow(unused_imports)]
 pub use crate::remote_wire::{
-    MessageType, REMOTE_CAPABILITIES, REMOTE_CAPABILITY_ATTACHMENT_RESUME,
+    MessageType, REMOTE_CAPABILITIES,
     REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT, REMOTE_PROTOCOL_VERSION, RemoteCell,
     RemoteErrorCode,
     RemoteFullState,
@@ -73,11 +73,6 @@ pub enum RemoteCmd {
     Attach {
         client_id: u64,
         tab_id: u32,
-        attachment_id: Option<u64>,
-        resume_token: Option<u64>,
-    },
-    Detach {
-        client_id: u64,
     },
     Create {
         client_id: u64,
@@ -129,7 +124,6 @@ use crate::remote_auth::read_loop;
 use crate::remote_listener::NEXT_CLIENT_ID;
 use crate::remote_quic::{QuicServerHandle, start_quic_listener};
 use crate::remote_server_advertise::ServiceAdvertiser;
-use crate::remote_server_attach::prepare_attachment as prepare_remote_attachment;
 use crate::remote_server_control::{
     reply_tab_list as send_reply_tab_list,
     send_tab_list as send_cached_tab_list,
@@ -149,9 +143,7 @@ use crate::remote_server_targets::{
     retain_local_attached_pane_states as retain_local_attached_pane_states_inner,
     retarget_local_attached_client_ids_for_tab,
 };
-use crate::remote_state::{
-    ClientAttachmentLease, ClientRuntimeSubscription, ClientState, State,
-};
+use crate::remote_state::{ClientRuntimeSubscription, ClientState, State};
 
 pub struct RemoteServer {
     state: Arc<Mutex<State>>,
@@ -168,7 +160,6 @@ impl RemoteServer {
         let bind_address = config.effective_bind_address().to_string();
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::new(),
-            revivable_runtime_subscriptions: HashMap::new(),
             server_identity_id: random_instance_id(),
             server_instance_id: random_instance_id(),
         }));
@@ -216,7 +207,6 @@ impl RemoteServer {
         let listener = UnixListener::bind(&socket_path)?;
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::new(),
-            revivable_runtime_subscriptions: HashMap::new(),
             server_identity_id: random_instance_id(),
             server_instance_id: random_instance_id(),
         }));
@@ -242,7 +232,6 @@ impl RemoteServer {
                             authenticated_at: Some(Instant::now()),
                             last_heartbeat_at: None,
                             runtime_subscription: ClientRuntimeSubscription::detached(),
-                            attachment_lease: None,
                             is_local: true,
                         },
                     );
@@ -396,65 +385,22 @@ impl RemoteServer {
         send_cached_tab_list_to_local_clients(&self.state, tabs);
     }
 
-    pub fn send_tab_attached(&self, client_id: u64, tab_id: u32, attachment_id: Option<u64>) {
-        let mut payload = tab_id.to_le_bytes().to_vec();
-        let mut attached_resume_token = None;
-        if let Some(attachment_id) = attachment_id {
-            payload.extend_from_slice(&attachment_id.to_le_bytes());
-        }
+    pub fn send_tab_attached(&self, client_id: u64, tab_id: u32) {
+        let payload = tab_id.to_le_bytes().to_vec();
         self.update_client(client_id, |client| {
             let same_tab = client.runtime_subscription.tab_id == Some(tab_id);
             client.runtime_subscription.tab_id = Some(tab_id);
-            client.attachment_lease = attachment_id.map(|attachment_id| {
-                let token = client
-                    .attachment_lease
-                    .as_ref()
-                    .and_then(|lease| lease.resume_token)
-                    .unwrap_or_else(random_u64_nonzero);
-                attached_resume_token = Some(token);
-                ClientAttachmentLease {
-                    attachment_id,
-                    resume_token: Some(token),
-                }
-            });
             if !same_tab {
                 client.runtime_subscription.clear_stream_state();
             }
         });
-        log::info!(
-            "remote attach sent: client_id={client_id} tab_id={tab_id} attachment_id={attachment_id:?} resume_token_present={}",
-            attached_resume_token.is_some()
-        );
-        if let Some(resume_token) = attached_resume_token {
-            payload.extend_from_slice(&resume_token.to_le_bytes());
-        }
+        log::info!("remote attach sent: client_id={client_id} tab_id={tab_id}");
         self.send_to_client(client_id, MessageType::Attached, payload);
     }
 
     #[allow(dead_code)]
-    pub fn send_attached(&self, client_id: u64, tab_id: u32, attachment_id: Option<u64>) {
-        self.send_tab_attached(client_id, tab_id, attachment_id);
-    }
-
-    pub fn prepare_attachment(
-        &self,
-        client_id: u64,
-        tab_id: u32,
-        attachment_id: Option<u64>,
-        resume_token: Option<u64>,
-    ) -> Result<(), RemoteErrorCode> {
-        let mut state = self.state.lock().expect("remote server state poisoned");
-        prepare_remote_attachment(&mut state, client_id, tab_id, attachment_id, resume_token)
-    }
-
-    pub fn send_detached(&self, client_id: u64) {
-        self.update_client(client_id, |client| {
-            client.runtime_subscription.tab_id = None;
-            client.attachment_lease = None;
-            client.runtime_subscription.clear_stream_state();
-        });
-        log::info!("remote detached: client_id={client_id}");
-        self.send_to_client(client_id, MessageType::Detached, Vec::new());
+    pub fn send_attached(&self, client_id: u64, tab_id: u32) {
+        self.send_tab_attached(client_id, tab_id);
     }
 
     pub fn send_error(&self, client_id: u64, code: RemoteErrorCode, message: &str) {
@@ -490,7 +436,7 @@ impl RemoteServer {
             return false;
         }
         for client_id in client_ids {
-            self.send_tab_attached(client_id, tab_id, None);
+            self.send_tab_attached(client_id, tab_id);
         }
         true
     }

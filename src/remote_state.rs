@@ -17,10 +17,6 @@ use std::time::{Duration, Instant};
 use crate::remote_batcher::OutboundMessage;
 use crate::remote_wire::{MessageType, RemoteErrorCode, RemoteFullState, encode_error_payload, encode_message};
 
-/// How long a revived attachment stays in the state graph before it is pruned
-/// (remote client must reconnect + resume within this window).
-pub(crate) const REVIVABLE_ATTACHMENT_WINDOW: Duration = Duration::from_secs(30);
-
 /// Absolute deadline from `connected_at` for an unauthenticated client to
 /// finish the initial auth acknowledgement. Protects against clients pinning
 /// the socket with empty `Auth` frames.
@@ -29,16 +25,6 @@ pub(crate) const AUTH_CHALLENGE_WINDOW: Duration = Duration::from_secs(30);
 /// Max silence from a direct (non-local) authenticated client before the daemon
 /// treats it as stale and tears the connection down.
 pub(crate) const DIRECT_CLIENT_HEARTBEAT_WINDOW: Duration = Duration::from_secs(20);
-
-/// Transport-only resume/attachment identity for a live client stream.
-///
-/// This is the part of the old remote attachment model that is still real: a direct
-/// client may hold a resumable attachment lease. It is intentionally separate
-/// from runtime identity and terminal state caches.
-pub(crate) struct ClientAttachmentLease {
-    pub(crate) attachment_id: u64,
-    pub(crate) resume_token: Option<u64>,
-}
 
 /// Runtime-view subscription state cached per connected client.
 ///
@@ -89,7 +75,6 @@ impl ClientState {
             authenticated_at: authenticated.then(Instant::now),
             last_heartbeat_at: None,
             runtime_subscription: ClientRuntimeSubscription::detached(),
-            attachment_lease: None,
             is_local,
         }
     }
@@ -102,25 +87,11 @@ pub(crate) struct ClientState {
     pub(crate) authenticated_at: Option<Instant>,
     pub(crate) last_heartbeat_at: Option<Instant>,
     pub(crate) runtime_subscription: ClientRuntimeSubscription,
-    pub(crate) attachment_lease: Option<ClientAttachmentLease>,
     pub(crate) is_local: bool,
-}
-
-#[derive(Clone)]
-/// Cached runtime-view state parked while a resumable direct attachment is
-/// briefly disconnected.
-pub(crate) struct RevivableRuntimeSubscription {
-    pub(crate) tab_id: u32,
-    pub(crate) resume_token: u64,
-    pub(crate) last_state: Option<Arc<RemoteFullState>>,
-    pub(crate) pane_states: HashMap<u64, Arc<RemoteFullState>>,
-    pub(crate) latest_input_seq: Option<u64>,
-    pub(crate) expires_at: Instant,
 }
 
 pub(crate) struct State {
     pub(crate) clients: HashMap<u64, ClientState>,
-    pub(crate) revivable_runtime_subscriptions: HashMap<u64, RevivableRuntimeSubscription>,
     pub(crate) server_identity_id: String,
     pub(crate) server_instance_id: String,
 }
@@ -130,18 +101,10 @@ impl State {
     pub(crate) fn test_empty() -> Self {
         Self {
             clients: HashMap::new(),
-            revivable_runtime_subscriptions: HashMap::new(),
             server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
         }
     }
-}
-
-pub(crate) fn prune_revivable_attachments(state: &mut State) {
-    let now = Instant::now();
-    state
-        .revivable_runtime_subscriptions
-        .retain(|_, attachment| attachment.expires_at > now);
 }
 
 pub(crate) fn should_disconnect_idle_client(

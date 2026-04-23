@@ -29,8 +29,6 @@ pub struct RemoteClientInfo {
     pub server_socket_path: Option<String>,
     pub challenge_pending: bool,
     pub attached_tab: Option<u32>,
-    pub attachment_id: Option<u64>,
-    pub resume_token_present: bool,
     pub has_cached_state: bool,
     pub pane_state_count: usize,
     pub latest_input_seq: Option<u64>,
@@ -40,17 +38,6 @@ pub struct RemoteClientInfo {
     pub heartbeat_expires_in_ms: Option<u64>,
     pub heartbeat_overdue: bool,
     pub challenge_expires_in_ms: Option<u64>,
-}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct RevivableAttachmentInfo {
-    pub attachment_id: u64,
-    pub tab_id: u32,
-    pub resume_token_present: bool,
-    pub has_cached_state: bool,
-    pub pane_state_count: usize,
-    pub latest_input_seq: Option<u64>,
-    pub revive_expires_in_ms: u64,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -65,18 +52,15 @@ pub struct RemoteServerInfo {
     pub server_identity_id: String,
     pub auth_challenge_window_ms: u64,
     pub heartbeat_window_ms: u64,
-    pub revive_window_ms: u64,
     pub connected_clients: usize,
     pub attached_clients: usize,
     pub pending_auth_clients: usize,
-    pub revivable_attachments: usize,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct RemoteClientsSnapshot {
     pub servers: Vec<RemoteServerInfo>,
     pub clients: Vec<RemoteClientInfo>,
-    pub revivable_attachments: Vec<RevivableAttachmentInfo>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -117,8 +101,6 @@ pub struct RemoteTabListSummary {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct RemoteAttachedSummary {
     pub tab_id: u32,
-    pub attachment_id: Option<u64>,
-    pub resume_token: Option<u64>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -174,8 +156,6 @@ mod tests {
             server_socket_path: None,
             challenge_pending: false,
             attached_tab: Some(42),
-            attachment_id: Some(9),
-            resume_token_present: true,
             has_cached_state: true,
             pane_state_count: 2,
             latest_input_seq: Some(11),
@@ -190,6 +170,8 @@ mod tests {
 
         assert_eq!(value.get("attached_tab").and_then(|v| v.as_u64()), Some(42));
         assert!(value.get("attached_session").is_none());
+        assert!(value.get("attachment_id").is_none());
+        assert!(value.get("resume_token_present").is_none());
     }
 
     #[test]

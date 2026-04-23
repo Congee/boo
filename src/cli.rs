@@ -182,10 +182,6 @@ pub enum Command {
         tab_id: u32,
         #[arg(long = "expect-server-identity")]
         expect_server_identity: Option<String>,
-        #[arg(long = "attachment-id")]
-        attachment_id: Option<u64>,
-        #[arg(long = "resume-token")]
-        resume_token: Option<u64>,
     },
     /// Show connected remote and local-stream client diagnostics
     RemoteClients,
@@ -249,17 +245,8 @@ fn attach_remote_daemon_tab_dispatch(
     port: u16,
     expected_identity: Option<&str>,
     tab_id: u32,
-    attachment_id: Option<u64>,
-    resume_token: Option<u64>,
 ) -> Result<crate::remote::RemoteAttachSummary, String> {
-    crate::remote::attach_remote_daemon_tab(
-        host,
-        port,
-        expected_identity,
-        tab_id,
-        attachment_id,
-        resume_token,
-    )
+    crate::remote::attach_remote_daemon_tab(host, port, expected_identity, tab_id)
 }
 
 fn print_completions<G: Generator>(generator: G) -> Result<(), String> {
@@ -537,15 +524,11 @@ where
             port,
             tab_id,
             expect_server_identity,
-            attachment_id,
-            resume_token,
         } => match attach_remote_daemon_tab_dispatch(
             host,
             *port,
             expect_server_identity.as_deref(),
             *tab_id,
-            *attachment_id,
-            *resume_token,
         ) {
             Ok(summary) => {
                 let mut stdout = std::io::stdout().lock();
@@ -808,26 +791,18 @@ mod tests {
             "42",
             "--expect-server-identity",
             "daemon-01",
-            "--attachment-id",
-            "99",
-            "--resume-token",
-            "1234",
         ]);
         match cli.command {
             Some(super::Command::RemoteDaemonAttach {
                 host,
                 port,
                 tab_id,
-                    expect_server_identity,
-                attachment_id,
-                resume_token,
+                expect_server_identity,
             }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, crate::config::DEFAULT_REMOTE_PORT);
                 assert_eq!(tab_id, 42);
                 assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
-                assert_eq!(attachment_id, Some(99));
-                assert_eq!(resume_token, Some(1234));
             }
             other => panic!("unexpected command: {other:?}"),
         }

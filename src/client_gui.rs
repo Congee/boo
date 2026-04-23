@@ -773,13 +773,12 @@ impl ClientApp {
                     .filter(|client| client.heartbeat_overdue)
                     .count();
                 Some(format!(
-                    "diag s={} c={} a={} p={} h={} r={}",
+                    "diag s={} c={} a={} p={} h={}",
                     snapshot.servers.len(),
                     snapshot.clients.len(),
                     attached,
                     pending,
-                    stale_heartbeats,
-                    snapshot.revivable_attachments.len()
+                    stale_heartbeats
                 ))
             }
             Err(error) => Some(format!("diag error: {error}")),

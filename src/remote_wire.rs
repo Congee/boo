@@ -22,14 +22,12 @@ pub const REMOTE_CAPABILITY_SCREEN_DELTAS: u32 = 1 << 1;
 pub const REMOTE_CAPABILITY_UI_STATE: u32 = 1 << 2;
 pub const REMOTE_CAPABILITY_IMAGES: u32 = 1 << 3;
 pub const REMOTE_CAPABILITY_HEARTBEAT: u32 = 1 << 4;
-pub const REMOTE_CAPABILITY_ATTACHMENT_RESUME: u32 = 1 << 5;
 pub const REMOTE_CAPABILITY_DAEMON_IDENTITY: u32 = 1 << 6;
 pub const REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT: u32 = 1 << 7;
 pub const REMOTE_CAPABILITIES: u32 = REMOTE_CAPABILITY_SCREEN_DELTAS
     | REMOTE_CAPABILITY_UI_STATE
     | REMOTE_CAPABILITY_IMAGES
     | REMOTE_CAPABILITY_HEARTBEAT
-    | REMOTE_CAPABILITY_ATTACHMENT_RESUME
     | REMOTE_CAPABILITY_DAEMON_IDENTITY
     | REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT;
 
@@ -464,9 +462,6 @@ pub fn validate_auth_ok_payload(payload: &[u8]) -> Result<(), String> {
     if (capabilities & REMOTE_CAPABILITY_HEARTBEAT) == 0 {
         return Err("Remote server does not advertise heartbeat support".to_string());
     }
-    if (capabilities & REMOTE_CAPABILITY_ATTACHMENT_RESUME) == 0 {
-        return Err("Remote server does not advertise attachment resume support".to_string());
-    }
     if (capabilities & REMOTE_CAPABILITY_DAEMON_IDENTITY) == 0 {
         return Err("Remote server does not advertise daemon identity support".to_string());
     }
@@ -747,31 +742,11 @@ pub(crate) fn decode_attached_payload(payload: &[u8]) -> Result<RemoteAttachedSu
             .try_into()
             .map_err(|_| "invalid tab id".to_string())?,
     );
-    let attachment_id = if payload.len() >= 12 {
-        Some(u64::from_le_bytes(
-            payload[4..12]
-                .try_into()
-                .map_err(|_| "invalid attachment id".to_string())?,
-        ))
-    } else {
-        None
-    };
-    let resume_token = if payload.len() >= 20 {
-        Some(u64::from_le_bytes(
-            payload[12..20]
-                .try_into()
-                .map_err(|_| "invalid resume token".to_string())?,
-        ))
-    } else {
-        None
-    };
-    if payload.len() != 4 && payload.len() != 12 && payload.len() != 20 {
+    if payload.len() != 4 {
         return Err("payload has unexpected length".to_string());
     }
     Ok(RemoteAttachedSummary {
         tab_id,
-        attachment_id,
-        resume_token,
     })
 }
 
@@ -853,27 +828,8 @@ pub(crate) fn parse_created_tab_id(payload: &[u8]) -> Option<u32> {
     parse_tab_id(payload)
 }
 
-pub(crate) fn parse_attach_request(payload: &[u8]) -> Option<(u32, Option<u64>, Option<u64>)> {
-    let tab_id = parse_tab_id(payload)?;
-    let attachment_id = (payload.len() >= 12).then(|| {
-        u64::from_le_bytes([
-            payload[4], payload[5], payload[6], payload[7], payload[8], payload[9], payload[10],
-            payload[11],
-        ])
-    });
-    let resume_token = (payload.len() >= 20).then(|| {
-        u64::from_le_bytes([
-            payload[12],
-            payload[13],
-            payload[14],
-            payload[15],
-            payload[16],
-            payload[17],
-            payload[18],
-            payload[19],
-        ])
-    });
-    Some((tab_id, attachment_id, resume_token))
+pub(crate) fn parse_attach_request(payload: &[u8]) -> Option<u32> {
+    (payload.len() == 4).then(|| parse_tab_id(payload)).flatten()
 }
 
 pub(crate) fn parse_pane_id(payload: &[u8]) -> Option<u64> {
@@ -1252,14 +1208,6 @@ pub(crate) fn random_instance_id() -> String {
         let _ = write!(&mut output, "{byte:02x}");
     }
     output
-}
-
-pub(crate) fn random_u64_nonzero() -> u64 {
-    let challenge = random_challenge();
-    let mut bytes = [0u8; 8];
-    bytes.copy_from_slice(&challenge[..8]);
-    let value = u64::from_le_bytes(bytes);
-    if value == 0 { 1 } else { value }
 }
 
 pub(crate) fn elapsed_ms(now: Instant, earlier: Instant) -> u64 {

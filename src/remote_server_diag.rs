@@ -4,12 +4,9 @@
 //! public diagnostic RPC types used by CLI and debugging workflows.
 
 use crate::remote_state::{
-    AUTH_CHALLENGE_WINDOW, ClientState, DIRECT_CLIENT_HEARTBEAT_WINDOW,
-    REVIVABLE_ATTACHMENT_WINDOW, State,
+    AUTH_CHALLENGE_WINDOW, ClientState, DIRECT_CLIENT_HEARTBEAT_WINDOW, State,
 };
-use crate::remote_types::{
-    RemoteClientInfo, RemoteClientsSnapshot, RemoteServerInfo, RevivableAttachmentInfo,
-};
+use crate::remote_types::{RemoteClientInfo, RemoteClientsSnapshot, RemoteServerInfo};
 use crate::remote_wire::{REMOTE_CAPABILITIES, REMOTE_PROTOCOL_VERSION, elapsed_ms, remaining_ms};
 use std::path::Path;
 use std::time::Instant;
@@ -32,7 +29,6 @@ pub(crate) fn clients_snapshot(
         .values()
         .filter(|client| !client.authenticated)
         .count();
-    let revivable_attachments = state.revivable_runtime_subscriptions.len();
     let servers = vec![RemoteServerInfo {
         local_socket_path: local_socket_path.map(|path| path.display().to_string()),
         bind_address: bind_address.map(str::to_string),
@@ -44,11 +40,9 @@ pub(crate) fn clients_snapshot(
         server_identity_id: state.server_identity_id.clone(),
         auth_challenge_window_ms: AUTH_CHALLENGE_WINDOW.as_millis() as u64,
         heartbeat_window_ms: DIRECT_CLIENT_HEARTBEAT_WINDOW.as_millis() as u64,
-        revive_window_ms: REVIVABLE_ATTACHMENT_WINDOW.as_millis() as u64,
         connected_clients,
         attached_clients,
         pending_auth_clients,
-        revivable_attachments,
     }];
     let mut clients = state
         .clients
@@ -57,25 +51,9 @@ pub(crate) fn clients_snapshot(
         .collect::<Vec<_>>();
     clients.sort_by_key(|client| client.client_id);
 
-    let mut revivable_attachments = state
-        .revivable_runtime_subscriptions
-        .iter()
-        .map(|(attachment_id, attachment)| RevivableAttachmentInfo {
-            attachment_id: *attachment_id,
-            tab_id: attachment.tab_id,
-            resume_token_present: true,
-            has_cached_state: attachment.last_state.is_some(),
-            pane_state_count: attachment.pane_states.len(),
-            latest_input_seq: attachment.latest_input_seq,
-            revive_expires_in_ms: remaining_ms(now, attachment.expires_at),
-        })
-        .collect::<Vec<_>>();
-    revivable_attachments.sort_by_key(|attachment| attachment.attachment_id);
-
     RemoteClientsSnapshot {
         servers,
         clients,
-        revivable_attachments,
     }
 }
 
@@ -106,15 +84,6 @@ fn client_info_for_client(
         server_socket_path: local_socket_path.map(|path| path.display().to_string()),
         challenge_pending: false,
         attached_tab: client.runtime_subscription.tab_id,
-        attachment_id: client
-            .attachment_lease
-            .as_ref()
-            .map(|lease| lease.attachment_id),
-        resume_token_present: client
-            .attachment_lease
-            .as_ref()
-            .and_then(|lease| lease.resume_token)
-            .is_some(),
         has_cached_state: client.runtime_subscription.last_state.is_some(),
         pane_state_count: client.runtime_subscription.pane_states.len(),
         latest_input_seq: client.runtime_subscription.latest_input_seq,

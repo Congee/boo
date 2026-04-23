@@ -107,7 +107,7 @@ impl BooApp {
     }
 
     fn bootstrap_local_stream_client(&self, server: &remote::RemoteServer, client_id: u64, tab_id: u32) {
-        server.send_tab_attached(client_id, tab_id, None);
+        server.send_tab_attached(client_id, tab_id);
         server.send_ui_appearance(client_id, &self.ui_appearance_snapshot());
         server.send_ui_runtime_state(client_id, &self.ui_runtime_state());
     }
@@ -135,15 +135,11 @@ impl BooApp {
                 let mut snapshot = crate::remote::RemoteClientsSnapshot {
                     servers: Vec::new(),
                     clients: Vec::new(),
-                    revivable_attachments: Vec::new(),
                 };
                 for server in self.remote_servers() {
                     let server_snapshot = server.clients_snapshot();
                     snapshot.servers.extend(server_snapshot.servers);
                     snapshot.clients.extend(server_snapshot.clients);
-                    snapshot
-                        .revivable_attachments
-                        .extend(server_snapshot.revivable_attachments);
                 }
                 snapshot.servers.sort_by(|a, b| {
                     a.local_socket_path
@@ -151,9 +147,6 @@ impl BooApp {
                         .then_with(|| a.server_instance_id.cmp(&b.server_instance_id))
                 });
                 snapshot.clients.sort_by_key(|client| client.client_id);
-                snapshot
-                    .revivable_attachments
-                    .sort_by_key(|attachment| attachment.attachment_id);
                 let _ = reply.send(control::Response::RemoteClients { snapshot });
             }
             server::Command::Quit => self.terminate(0),
@@ -381,12 +374,7 @@ impl BooApp {
                     server.send_ui_appearance(client_id, &self.ui_appearance_snapshot());
                 }
             }
-            server::Command::RemoteAttach {
-                client_id,
-                tab_id,
-                attachment_id,
-                resume_token,
-            } => {
+            server::Command::RemoteAttach { client_id, tab_id } => {
                 if self.pane_for_tab(tab_id).is_some() {
                     self.invalidate_remote_tabs_cache();
                     let bootstrap_local = self
@@ -399,21 +387,10 @@ impl BooApp {
                         .or(self.server.local_gui_server.as_ref())
                         .or(self.server.remote_server.as_ref())
                     {
-                        if let Err(message) =
-                            server.prepare_attachment(
-                                client_id,
-                                tab_id,
-                                attachment_id,
-                                resume_token,
-                            )
-                        {
-                            server.send_error(client_id, message, message.default_message());
-                            return;
-                        }
                         if bootstrap_local {
                             self.bootstrap_local_stream_client(server, client_id, tab_id);
                         } else {
-                            server.send_tab_attached(client_id, tab_id, attachment_id);
+                            server.send_tab_attached(client_id, tab_id);
                         }
                     }
                     self.publish_remote_tab(tab_id);
@@ -423,16 +400,6 @@ impl BooApp {
                     .or(self.server.remote_server.as_ref())
                 {
                     server.send_error(client_id, RemoteErrorCode::UnknownTab, "unknown tab");
-                }
-            }
-            server::Command::RemoteDetach { client_id } => {
-                self.invalidate_remote_tabs_cache();
-                if let Some(server) = self
-                    .remote_server_for_client(client_id)
-                    .or(self.server.local_gui_server.as_ref())
-                    .or(self.server.remote_server.as_ref())
-                {
-                    server.send_detached(client_id);
                 }
             }
             server::Command::RemoteCreate {
@@ -478,7 +445,7 @@ impl BooApp {
                     .or(self.server.remote_server.as_ref())
                 {
                     server.send_tab_created(client_id, tab_id);
-                    server.send_tab_attached(client_id, tab_id, None);
+                    server.send_tab_attached(client_id, tab_id);
                     self.publish_remote_tab(tab_id);
                 }
             }
@@ -611,7 +578,7 @@ impl BooApp {
                     server.send_ui_runtime_state(client_id, &ui_state);
                     server.send_tab_list(client_id, tabs.as_ref());
                     if let Some(tab_id) = focused_tab_id {
-                        server.send_tab_attached(client_id, tab_id, None);
+                        server.send_tab_attached(client_id, tab_id);
                         self.publish_remote_tab(tab_id);
                     }
                 }
@@ -663,7 +630,7 @@ impl BooApp {
                         server.send_ui_runtime_state(client_id, &ui_state);
                         server.send_tab_list(client_id, tabs.as_ref());
                         if let Some(tab_id) = focused_tab_id {
-                            server.send_tab_attached(client_id, tab_id, None);
+                            server.send_tab_attached(client_id, tab_id);
                             self.publish_remote_tab(tab_id);
                         }
                     }
@@ -718,7 +685,7 @@ impl BooApp {
                         server.send_tab_list(client_id, tabs.as_ref());
                     }
                     if changed_ui || should_republish_tab {
-                        server.send_tab_attached(client_id, tab_id, None);
+                        server.send_tab_attached(client_id, tab_id);
                         self.publish_remote_tab(tab_id);
                     }
                 }
@@ -736,7 +703,7 @@ impl BooApp {
                     server.send_ui_runtime_state(client_id, &ui_state);
                     server.send_tab_list(client_id, tabs.as_ref());
                     if let Some(tab_id) = focused_tab_id {
-                        server.send_tab_attached(client_id, tab_id, None);
+                        server.send_tab_attached(client_id, tab_id);
                         self.publish_remote_tab(tab_id);
                     }
                 }
@@ -783,7 +750,7 @@ impl BooApp {
                     {
                     server.send_ui_runtime_state(client_id, &ui_state);
                     server.send_tab_list(client_id, tabs.as_ref());
-                    server.send_tab_attached(client_id, tab_id, None);
+                    server.send_tab_attached(client_id, tab_id);
                     self.publish_remote_tab(tab_id);
                     }
                 }
@@ -845,10 +812,8 @@ impl BooApp {
                     server.send_ui_runtime_state(client_id, &ui_state);
                     server.send_tab_list(client_id, tabs.as_ref());
                     if let Some(tab_id) = focused_tab_id {
-                        server.send_tab_attached(client_id, tab_id, None);
+                        server.send_tab_attached(client_id, tab_id);
                         self.publish_remote_tab(tab_id);
-                    } else {
-                        server.send_detached(client_id);
                     }
                 }
             }

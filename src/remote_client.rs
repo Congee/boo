@@ -90,11 +90,9 @@ fn attach_summary_from_transport(
     client: &mut DirectTransportSession<crate::remote_quic::QuicDirectStream>,
     port: u16,
     tab_id: u32,
-    attachment_id: Option<u64>,
-    resume_token: Option<u64>,
 ) -> Result<RemoteAttachSummary, String> {
     let heartbeat_rtt_ms = client.heartbeat_round_trip(b"boo-remote-attach")?;
-    let (attached, full_state) = client.attach(tab_id, attachment_id, resume_token)?;
+    let (attached, full_state) = client.attach(tab_id)?;
     Ok(RemoteAttachSummary {
         host: client.host.clone(),
         port,
@@ -120,11 +118,9 @@ pub fn attach_remote_daemon_tab(
     port: u16,
     expected_server_identity: Option<&str>,
     tab_id: u32,
-    attachment_id: Option<u64>,
-    resume_token: Option<u64>,
 ) -> Result<RemoteAttachSummary, String> {
     let mut client = crate::remote_quic::connect_direct(host, port, expected_server_identity)?;
-    attach_summary_from_transport(&mut client, port, tab_id, attachment_id, resume_token)
+    attach_summary_from_transport(&mut client, port, tab_id)
 }
 
 fn create_summary_from_transport(

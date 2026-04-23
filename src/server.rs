@@ -103,11 +103,6 @@ pub enum Command {
     RemoteAttach {
         client_id: u64,
         tab_id: u32,
-        attachment_id: Option<u64>,
-        resume_token: Option<u64>,
-    },
-    RemoteDetach {
-        client_id: u64,
     },
     RemoteCreate {
         client_id: u64,
@@ -284,15 +279,10 @@ impl From<remote::RemoteCmd> for Command {
             remote::RemoteCmd::Attach {
                 client_id,
                 tab_id,
-                attachment_id,
-                resume_token,
             } => Self::RemoteAttach {
                 client_id,
-                tab_id: tab_id,
-                attachment_id,
-                resume_token,
+                tab_id,
             },
-            remote::RemoteCmd::Detach { client_id } => Self::RemoteDetach { client_id },
             remote::RemoteCmd::Create {
                 client_id,
                 cols,
@@ -385,19 +375,10 @@ mod tests {
         match Command::from(remote::RemoteCmd::Attach {
             client_id: 7,
             tab_id: 11,
-            attachment_id: Some(42),
-            resume_token: Some(99),
         }) {
-            Command::RemoteAttach {
-                client_id,
-                tab_id,
-                attachment_id,
-                resume_token,
-            } => {
+            Command::RemoteAttach { client_id, tab_id } => {
                 assert_eq!(client_id, 7);
                 assert_eq!(tab_id, 11);
-                assert_eq!(attachment_id, Some(42));
-                assert_eq!(resume_token, Some(99));
             }
             other => panic!("expected remote attach mapping, got {other:?}"),
         }

@@ -116,19 +116,8 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
     pub(crate) fn attach(
         &mut self,
         tab_id: u32,
-        attachment_id: Option<u64>,
-        resume_token: Option<u64>,
     ) -> Result<(RemoteAttachedSummary, RemoteFullState), String> {
-        let mut attach_payload = tab_id.to_le_bytes().to_vec();
-        if let Some(attachment_id) = attachment_id {
-            attach_payload.extend_from_slice(&attachment_id.to_le_bytes());
-        }
-        if let Some(resume_token) = resume_token {
-            if attachment_id.is_none() {
-                return Err("resume token requires attachment id".to_string());
-            }
-            attach_payload.extend_from_slice(&resume_token.to_le_bytes());
-        }
+        let attach_payload = tab_id.to_le_bytes().to_vec();
         self.stream
             .write_all(&encode_message(MessageType::Attach, &attach_payload))
             .map_err(|error| {

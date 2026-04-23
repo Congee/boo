@@ -4,9 +4,8 @@
 //! * [`handle_auth_message`] — accepts the protocol `Auth` message, flips
 //!   `ClientState::authenticated`, and emits `AuthOk` with handshake metadata.
 //! * [`read_loop`] — runs on the per-client reader thread. Pulls frames off the
-//!   socket, routes `Auth` / `Heartbeat` inline, translates every other message
-//!   into a `RemoteCmd`, and on exit parks the client's pane state into
-//!   `State::revivable_runtime_subscriptions` so a reconnect can resume.
+//!   socket, routes `Auth` / `Heartbeat` inline, and translates every other
+//!   message into a `RemoteCmd`.
 //!
 //! Policy lives in `remote_state` (the window constants); wire encoding lives
 //! in `remote_wire`. This module is the glue between them.
@@ -18,9 +17,7 @@ use std::time::Instant;
 use crate::remote::RemoteCmd;
 use crate::remote_batcher::OutboundMessage;
 use crate::remote_state::{
-    AUTH_CHALLENGE_WINDOW, DIRECT_CLIENT_HEARTBEAT_WINDOW, REVIVABLE_ATTACHMENT_WINDOW,
-    RevivableRuntimeSubscription, State, prune_revivable_attachments, send_direct_error,
-    send_direct_frame,
+    AUTH_CHALLENGE_WINDOW, DIRECT_CLIENT_HEARTBEAT_WINDOW, State, send_direct_error, send_direct_frame,
     should_disconnect_idle_client,
 };
 use crate::remote_wire::{
@@ -120,15 +117,10 @@ pub(crate) fn read_loop(
 
         let command = match ty {
             crate::remote_wire::MESSAGE_TYPE_LIST_TABS => Some(RemoteCmd::ListTabs { client_id }),
-            MessageType::Attach => {
-                parse_attach_request(&payload).map(|(tab_id, attachment_id, resume_token)| RemoteCmd::Attach {
-                    client_id,
-                    tab_id,
-                    attachment_id,
-                    resume_token,
-                })
-            }
-            MessageType::Detach => Some(RemoteCmd::Detach { client_id }),
+            MessageType::Attach => parse_attach_request(&payload).map(|tab_id| RemoteCmd::Attach {
+                client_id,
+                tab_id,
+            }),
             MessageType::Create => parse_resize(&payload).map(|(cols, rows)| RemoteCmd::Create {
                 client_id,
                 cols,
@@ -196,29 +188,8 @@ pub(crate) fn read_loop(
 
     let mut state = state.lock().expect("remote server state poisoned");
     if let Some(client) = state.clients.remove(&client_id) {
-        prune_revivable_attachments(&mut state);
-        if !client.is_local
-            && let Some(tab_id) = client.runtime_subscription.tab_id
-            && let Some(lease) = client.attachment_lease
-        {
-            state.revivable_runtime_subscriptions.insert(
-                lease.attachment_id,
-                RevivableRuntimeSubscription {
-                    tab_id,
-                    resume_token: lease.resume_token.unwrap_or_default(),
-                    last_state: client.runtime_subscription.last_state,
-                    pane_states: client.runtime_subscription.pane_states,
-                    latest_input_seq: client.runtime_subscription.latest_input_seq,
-                    expires_at: Instant::now() + REVIVABLE_ATTACHMENT_WINDOW,
-                },
-            );
-            log::info!(
-                "remote client disconnected with revivable attachment: client_id={client_id} tab_id={tab_id} attachment_id={}",
-                lease.attachment_id
-            );
-        } else {
-            log::info!("remote client disconnected: client_id={client_id}");
-        }
+        let _ = client;
+        log::info!("remote client disconnected: client_id={client_id}");
     }
 }
 

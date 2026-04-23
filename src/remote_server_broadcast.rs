@@ -30,7 +30,6 @@ mod tests {
                 tab_id: attached_tab,
                 ..ClientRuntimeSubscription::detached()
             },
-            attachment_lease: None,
             is_local,
         }
     }
