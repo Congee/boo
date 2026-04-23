@@ -2,6 +2,41 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+usage() {
+  cat <<'EOF'
+Usage: bash scripts/test-ios-ui.sh [options]
+
+Options:
+  --socket PATH
+  --port PORT
+  --destination DESTINATION
+  --derived-data PATH
+  --host HOST
+  --team-id TEAM_ID
+  --only-testing TEST_IDENTIFIER
+  --skip-daemon
+  -h, --help
+
+Environment variable fallbacks remain supported:
+  BOO_IOS_UI_TEST_SOCKET
+  BOO_IOS_UI_TEST_PORT
+  BOO_IOS_UI_TEST_DESTINATION
+  BOO_IOS_UI_TEST_DERIVED_DATA
+  BOO_IOS_UI_TEST_HOST
+  BOO_IOS_TEAM_ID
+  BOO_IOS_UI_TEST_ONLY
+  BOO_IOS_UI_TEST_SKIP_DAEMON
+EOF
+}
+
+require_arg() {
+  if [[ $# -lt 2 ]]; then
+    echo "Missing value for $1" >&2
+    usage >&2
+    exit 2
+  fi
+}
+
 SOCKET_PATH="${BOO_IOS_UI_TEST_SOCKET:-/tmp/boo-ios-ui-tests.sock}"
 PORT="${BOO_IOS_UI_TEST_PORT:-}"
 DESTINATION="${BOO_IOS_UI_TEST_DESTINATION:-platform=iOS Simulator,name=iPad mini (A17 Pro),OS=26.3.1}"
@@ -12,6 +47,63 @@ ONLY_TEST="${BOO_IOS_UI_TEST_ONLY:-}"
 HOST_PORT_FILE="/tmp/boo-ios-ui-tests.env"
 SKIP_DAEMON="${BOO_IOS_UI_TEST_SKIP_DAEMON:-0}"
 XCODEBUILD_LOG="/tmp/boo-ios-ui-tests.xcodebuild.log"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --socket)
+      require_arg "$@"
+      SOCKET_PATH="$2"
+      shift 2
+      ;;
+    --port)
+      require_arg "$@"
+      PORT="$2"
+      shift 2
+      ;;
+    --destination)
+      require_arg "$@"
+      DESTINATION="$2"
+      shift 2
+      ;;
+    --derived-data)
+      require_arg "$@"
+      DERIVED_DATA="$2"
+      shift 2
+      ;;
+    --host)
+      require_arg "$@"
+      HOST="$2"
+      shift 2
+      ;;
+    --team-id)
+      require_arg "$@"
+      TEAM_ID="$2"
+      shift 2
+      ;;
+    --only-testing)
+      require_arg "$@"
+      ONLY_TEST="$2"
+      shift 2
+      ;;
+    --skip-daemon)
+      SKIP_DAEMON=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
 
 if [[ -z "$HOST" ]]; then
   if [[ "$DESTINATION" == *"platform=iOS Simulator"* ]]; then
@@ -36,11 +128,9 @@ fi
 
 cleanup() {
   pkill -f "target/debug/boo server --socket ${SOCKET_PATH}" >/dev/null 2>&1 || true
-  if [[ -n "${PORT:-}" ]]; then
-    pgrep -f "dns-sd -R boo on .* (${PORT}) _boo._udp local ${PORT}" | while read -r pid; do
-      kill "$pid" >/dev/null 2>&1 || true
-    done
-  fi
+  pgrep -f "dns-sd -R boo on .* _boo._udp local" | while read -r pid; do
+    kill "$pid" >/dev/null 2>&1 || true
+  done || true
   if [[ -n "${SERVER_PID:-}" ]]; then
     kill "$SERVER_PID" >/dev/null 2>&1 || true
     wait "$SERVER_PID" >/dev/null 2>&1 || true
@@ -53,6 +143,9 @@ trap cleanup EXIT
 
 cd "$ROOT"
 pkill -f "target/debug/boo server --socket ${SOCKET_PATH}" >/dev/null 2>&1 || true
+pgrep -f "dns-sd -R boo on .* _boo._udp local" | while read -r pid; do
+  kill "$pid" >/dev/null 2>&1 || true
+done || true
 if [[ "$SKIP_DAEMON" != "1" ]]; then
   cat > "$HOST_PORT_FILE" <<EOF
 BOO_UI_TEST_HOST=$HOST

@@ -942,19 +942,11 @@ struct TerminalTabScreen: View {
                 .toolbar(.hidden, for: .navigationBar)
 
             GeometryReader { geo in
-                Color.clear
+                EdgeBackSwipeCapture {
+                    goBack()
+                }
                     .frame(width: min(max(geo.size.width * 0.14, 56), 104))
-                    .contentShape(Rectangle())
                     .accessibilityIdentifier("terminal-back-swipe-zone")
-                    .highPriorityGesture(
-                        DragGesture(minimumDistance: 20)
-                            .onEnded { drag in
-                                let dx = drag.translation.width
-                                let dy = drag.translation.height
-                                guard dx >= 64, abs(dx) > abs(dy) else { return }
-                                goBack()
-                            }
-                    )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
 
@@ -1636,6 +1628,53 @@ struct TerminalTabScreen: View {
             return 0x1b
         default:
             return nil
+        }
+    }
+}
+
+private struct EdgeBackSwipeCapture: UIViewRepresentable {
+    let onBack: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onBack: onBack)
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(frame: .zero)
+        view.backgroundColor = .clear
+        let recognizer = UIScreenEdgePanGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handlePan(_:))
+        )
+        recognizer.edges = .left
+        view.addGestureRecognizer(recognizer)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onBack = onBack
+    }
+
+    final class Coordinator: NSObject {
+        var onBack: () -> Void
+        private var hasTriggered = false
+
+        init(onBack: @escaping () -> Void) {
+            self.onBack = onBack
+        }
+
+        @objc func handlePan(_ recognizer: UIScreenEdgePanGestureRecognizer) {
+            let translation = recognizer.translation(in: recognizer.view)
+            switch recognizer.state {
+            case .changed:
+                guard !hasTriggered, translation.x >= 64, abs(translation.x) > abs(translation.y) else { return }
+                hasTriggered = true
+                onBack()
+            case .ended, .cancelled, .failed:
+                hasTriggered = false
+            default:
+                break
+            }
         }
     }
 }

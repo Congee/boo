@@ -193,7 +193,7 @@ final class BooAppLaunchTests: BooUITestCase {
         scrollUntilExists(tailscaleSection, in: app)
 
         let macMini = app.buttons["tailscale-peer-Mac mini"]
-        let offlineBox = app.buttons["tailscale-peer-Offline box"]
+        let offlineBox = app.descendants(matching: .any).matching(identifier: "tailscale-peer-Offline box").firstMatch
         scrollUntilExists(macMini, in: app)
         scrollUntilExists(offlineBox, in: app)
     }

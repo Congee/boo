@@ -52,7 +52,7 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		D1E2F3041526374859A6B7C8 /* root */ = {
+		D1E2F3041526374859A6B7C8 = {
 			isa = PBXGroup;
 			children = (
 				B1C2D3E4F5061728394A5B6C /* Sources */,
@@ -142,7 +142,7 @@
 				en,
 				Base,
 			);
-			mainGroup = D1E2F3041526374859A6B7C8 /* root */;
+			mainGroup = D1E2F3041526374859A6B7C8;
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E1F203142536475869A7B8C9 /* Products */;
@@ -404,20 +404,20 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		F768798A9BACBDCEDFE0F102 /* Build configuration list for PBXProject "Boo" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				ABCDEF0123456789ABCDEF01 /* Debug */,
-				BCDEF0123456789ABCDEF012 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 		A2132435465768798A9BACBD /* Build configuration list for PBXNativeTarget "Boo" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				CDEF0123456789ABCDEF0123 /* Debug */,
 				DEF0123456789ABCDEF01234 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F768798A9BACBDCEDFE0F102 /* Build configuration list for PBXProject "Boo" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				ABCDEF0123456789ABCDEF01 /* Debug */,
+				BCDEF0123456789ABCDEF012 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

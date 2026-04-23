@@ -106,7 +106,7 @@ The current implemented verification baseline for this redesign is:
 
 Additional 2026-04-23 real-device verification result:
 
-- `BOO_IOS_UI_TEST_DESTINATION='id=<device-id>' BOO_IOS_UI_TEST_ONLY='BooUITests/BooUITests/testOpenLiveTabAndType' bash scripts/test-ios-ui.sh`
+- `BOO_IOS_UI_TEST_DESTINATION='id=<your device id>' BOO_IOS_UI_TEST_ONLY='BooUITests/BooUITests/testOpenLiveTabAndType' bash scripts/test-ios-ui.sh`
   now completes build, link, signing, install, and test-runner launch on the
   physical iPad after `xcodebuild` environment sanitization in the script
 - the corrected focused test invocation

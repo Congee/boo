@@ -26,8 +26,8 @@ deferred section at the bottom of this file.
 
 ## Post-completion verification notes
 
-- 2026-04-23 real-device verification on `Connected iPad`
-  (`<device-id>`) now gets through:
+- 2026-04-23 real-device verification on a connected physical iPad now gets
+  through:
   - Swift compile
   - link
   - signing

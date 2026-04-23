@@ -65,9 +65,9 @@ private enum OutboundRuntimeAction: Encodable {
 
     private enum CodingKeys: String, CodingKey {
         case kind
-        case viewId
-        case tabId
-        case paneId
+        case viewId = "view_id"
+        case tabId = "tab_id"
+        case paneId = "pane_id"
         case cols
         case rows
         case direction
