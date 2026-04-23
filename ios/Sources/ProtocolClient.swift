@@ -24,7 +24,6 @@ enum GSPMessageType: UInt8 {
     case attached = 0x85
     case detached = 0x86
     case errorMsg = 0x87
-    case tabCreated = 0x88
     case tabExited = 0x89
     case scrollData = 0x8a
     case clipboard = 0x8b
@@ -1301,8 +1300,6 @@ final class GSPClient: ObservableObject {
                 self.attachRequestedAt = nil
             }
             applyReducedMessage(.attached, payload: payload)
-        case .tabCreated:
-            applyReducedMessage(.tabCreated, payload: payload)
         case .fullState:
             applyReducedMessage(.fullState, payload: payload)
         case .delta:
