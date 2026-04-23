@@ -107,7 +107,7 @@ impl BooApp {
     }
 
     fn bootstrap_local_stream_client(&self, server: &remote::RemoteServer, client_id: u64, tab_id: u32) {
-        server.send_tab_attached(client_id, tab_id);
+        server.subscribe_client_to_tab(client_id, tab_id);
         server.send_ui_appearance(client_id, &self.ui_appearance_snapshot());
         server.send_ui_runtime_state(client_id, &self.ui_runtime_state());
     }
@@ -326,7 +326,7 @@ impl BooApp {
                     if server.client_is_local(client_id) {
                         self.bootstrap_local_stream_client(server, client_id, tab_id);
                     } else {
-                        server.send_tab_attached(client_id, tab_id);
+                        server.subscribe_client_to_tab(client_id, tab_id);
                     }
                     self.publish_remote_tab(tab_id);
                 }
@@ -359,7 +359,7 @@ impl BooApp {
                     if server.client_is_local(client_id) {
                         self.bootstrap_local_stream_client(server, client_id, tab_id);
                     } else {
-                        server.send_tab_attached(client_id, tab_id);
+                        server.subscribe_client_to_tab(client_id, tab_id);
                     }
                     self.publish_remote_tab(tab_id);
                 }
@@ -372,34 +372,6 @@ impl BooApp {
                     server.reply_tab_list(client_id, tabs.as_ref());
                     server.send_ui_runtime_state(client_id, &self.ui_runtime_state());
                     server.send_ui_appearance(client_id, &self.ui_appearance_snapshot());
-                }
-            }
-            server::Command::RemoteAttach { client_id, tab_id } => {
-                if self.pane_for_tab(tab_id).is_some() {
-                    self.invalidate_remote_tabs_cache();
-                    let bootstrap_local = self
-                        .remote_server_for_client(client_id)
-                        .or(self.server.local_gui_server.as_ref())
-                        .or(self.server.remote_server.as_ref())
-                        .is_some_and(|server| server.client_is_local(client_id));
-                    if let Some(server) = self
-                        .remote_server_for_client(client_id)
-                        .or(self.server.local_gui_server.as_ref())
-                        .or(self.server.remote_server.as_ref())
-                    {
-                        if bootstrap_local {
-                            self.bootstrap_local_stream_client(server, client_id, tab_id);
-                        } else {
-                            server.send_tab_attached(client_id, tab_id);
-                        }
-                    }
-                    self.publish_remote_tab(tab_id);
-                } else if let Some(server) = self
-                    .remote_server_for_client(client_id)
-                    .or(self.server.local_gui_server.as_ref())
-                    .or(self.server.remote_server.as_ref())
-                {
-                    server.send_error(client_id, RemoteErrorCode::UnknownTab, "unknown tab");
                 }
             }
             server::Command::RemoteCreate {
@@ -445,7 +417,7 @@ impl BooApp {
                     .or(self.server.remote_server.as_ref())
                 {
                     server.send_tab_created(client_id, tab_id);
-                    server.send_tab_attached(client_id, tab_id);
+                    server.subscribe_client_to_tab(client_id, tab_id);
                     self.publish_remote_tab(tab_id);
                 }
             }
@@ -578,7 +550,7 @@ impl BooApp {
                     server.send_ui_runtime_state(client_id, &ui_state);
                     server.send_tab_list(client_id, tabs.as_ref());
                     if let Some(tab_id) = focused_tab_id {
-                        server.send_tab_attached(client_id, tab_id);
+                        server.subscribe_client_to_tab(client_id, tab_id);
                         self.publish_remote_tab(tab_id);
                     }
                 }
@@ -630,7 +602,7 @@ impl BooApp {
                         server.send_ui_runtime_state(client_id, &ui_state);
                         server.send_tab_list(client_id, tabs.as_ref());
                         if let Some(tab_id) = focused_tab_id {
-                            server.send_tab_attached(client_id, tab_id);
+                            server.subscribe_client_to_tab(client_id, tab_id);
                             self.publish_remote_tab(tab_id);
                         }
                     }
@@ -685,7 +657,7 @@ impl BooApp {
                         server.send_tab_list(client_id, tabs.as_ref());
                     }
                     if changed_ui || should_republish_tab {
-                        server.send_tab_attached(client_id, tab_id);
+                        server.subscribe_client_to_tab(client_id, tab_id);
                         self.publish_remote_tab(tab_id);
                     }
                 }
@@ -703,7 +675,7 @@ impl BooApp {
                     server.send_ui_runtime_state(client_id, &ui_state);
                     server.send_tab_list(client_id, tabs.as_ref());
                     if let Some(tab_id) = focused_tab_id {
-                        server.send_tab_attached(client_id, tab_id);
+                        server.subscribe_client_to_tab(client_id, tab_id);
                         self.publish_remote_tab(tab_id);
                     }
                 }
@@ -750,7 +722,7 @@ impl BooApp {
                     {
                     server.send_ui_runtime_state(client_id, &ui_state);
                     server.send_tab_list(client_id, tabs.as_ref());
-                    server.send_tab_attached(client_id, tab_id);
+                    server.subscribe_client_to_tab(client_id, tab_id);
                     self.publish_remote_tab(tab_id);
                     }
                 }
@@ -812,7 +784,7 @@ impl BooApp {
                     server.send_ui_runtime_state(client_id, &ui_state);
                     server.send_tab_list(client_id, tabs.as_ref());
                     if let Some(tab_id) = focused_tab_id {
-                        server.send_tab_attached(client_id, tab_id);
+                        server.subscribe_client_to_tab(client_id, tab_id);
                         self.publish_remote_tab(tab_id);
                     }
                 }

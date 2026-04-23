@@ -235,10 +235,7 @@ impl ClientApp {
 
     fn apply_ui_runtime_state(&mut self, state: control::UiRuntimeState) {
         let ui_state = ClientUiState::from_runtime_state(&state);
-        if self.active_remote_tab_id.is_none()
-            && !matches!(self.mode, ClientMode::Attached)
-            && let Some(active_tab_id) = ui_state.tabs.get(ui_state.active_tab).and_then(|tab| tab.tab_id)
-        {
+        if let Some(active_tab_id) = ui_state.tabs.get(ui_state.active_tab).and_then(|tab| tab.tab_id) {
             self.active_remote_tab_id = Some(active_tab_id);
             self.should_exit = false;
         }
@@ -1005,10 +1002,6 @@ impl ClientApp {
                     self.should_exit = live_tabs.is_empty();
                 }
             }
-            LocalStreamEvent::TabAttached(tab_id) => {
-                self.active_remote_tab_id = Some(tab_id);
-                self.ui_state.mark_active_tab(Some(tab_id));
-            }
             LocalStreamEvent::UiRuntimeState(state) => {
                 self.apply_ui_runtime_state(state);
             }
@@ -1037,12 +1030,6 @@ impl ClientApp {
                     apply_remote_delta_snapshot(Arc::make_mut(snapshot), &delta);
                 }
                 self.observe_focused_cursor_position();
-            }
-            LocalStreamEvent::Detached => {
-                self.mode = ClientMode::Recovering;
-                self.active_remote_tab_id = None;
-                self.pending_input_latencies.clear();
-                self.send_stream_command(StreamCommand::ListTabs);
             }
             LocalStreamEvent::TabExited(tab_id) => {
                 if self.active_remote_tab_id == Some(tab_id) {
@@ -1137,14 +1124,12 @@ impl ClientApp {
         let track_stream = matches!(
             &event,
             LocalStreamEvent::TabList(_)
-                | LocalStreamEvent::TabAttached(_)
                 | LocalStreamEvent::UiRuntimeState(_)
                 | LocalStreamEvent::UiAppearance(_)
                 | LocalStreamEvent::FullState { .. }
                 | LocalStreamEvent::Delta { .. }
                 | LocalStreamEvent::UiPaneFullState { .. }
                 | LocalStreamEvent::UiPaneDelta { .. }
-                | LocalStreamEvent::Detached
                 | LocalStreamEvent::TabExited(_)
         ) || matches!(
             &event,
@@ -1482,7 +1467,6 @@ impl ClientUiState {
         let remote_tabs = tabs;
         let active_index = active_remote_tab_id
             .and_then(|tab_id| remote_tabs.iter().position(|tab| tab.id == tab_id))
-            .or_else(|| remote_tabs.iter().position(|tab| tab.attached))
             .unwrap_or(0);
         let tabs = remote_tabs
             .iter()
@@ -1534,21 +1518,6 @@ impl ClientUiState {
         }
     }
 
-    fn mark_active_tab(&mut self, tab_id: Option<u32>) {
-        let Some(tab_id) = tab_id else {
-            return;
-        };
-        if let Some(index) = self
-            .tabs
-            .iter()
-            .position(|tab| tab.tab_id == Some(tab_id))
-        {
-            self.active_tab = index;
-        }
-        for (index, tab) in self.tabs.iter_mut().enumerate() {
-            tab.active = index == self.active_tab;
-        }
-    }
 }
 
 fn latency_debug_enabled() -> bool {
@@ -1953,7 +1922,6 @@ impl Widget<Message, Theme, iced::Renderer> for TerminalInputMethodLayer {
 #[derive(Clone, Debug)]
 pub(crate) enum LocalStreamEvent {
     TabList(Vec<remote::RemoteTabInfo>),
-    TabAttached(u32),
     UiRuntimeState(control::UiRuntimeState),
     UiAppearance(control::UiAppearanceSnapshot),
     UiPaneFullState {
@@ -1964,7 +1932,6 @@ pub(crate) enum LocalStreamEvent {
         pane_id: u64,
         delta: RemoteDelta,
     },
-    Detached,
     TabExited(u32),
     Disconnected,
     FullState {
@@ -2529,7 +2496,6 @@ fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStream
             remote::MESSAGE_TYPE_TAB_LIST => {
                 decode_remote_tab_list(&payload).map(LocalStreamEvent::TabList)
             }
-            remote::MessageType::Attached => decode_u32(&payload).map(LocalStreamEvent::TabAttached),
             remote::MessageType::UiRuntimeState => serde_json::from_slice(&payload)
                 .ok()
                 .map(LocalStreamEvent::UiRuntimeState),
@@ -2546,7 +2512,6 @@ fn read_local_stream_loop(mut read: UnixStream, mut emit: impl FnMut(LocalStream
                     LocalStreamEvent::UiPaneDelta { pane_id, delta }
                 })
             }
-            remote::MessageType::Detached => Some(LocalStreamEvent::Detached),
             remote::MESSAGE_TYPE_TAB_EXITED => {
                 decode_u32(&payload).map(LocalStreamEvent::TabExited)
             }
@@ -3306,11 +3271,16 @@ mod tests {
     fn full_state_bootstraps_without_ui_pane_terminals() {
         let (mut app, _) = ClientApp::new("/tmp/boo-test.sock".to_string());
 
-        app.handle_stream_event(LocalStreamEvent::TabAttached(7));
         app.handle_stream_event(LocalStreamEvent::UiRuntimeState(control::UiRuntimeState {
             active_tab: 0,
             focused_pane: 7,
-            tabs: vec![],
+            tabs: vec![control::UiTabSnapshot {
+                tab_id: 7,
+                index: 0,
+                active: true,
+                title: "shell".to_string(),
+                pane_count: 1,
+            }],
             visible_panes: vec![test_pane_with_id(7, 0.0, 0.0, 80.0, 25.0)],
             mouse_selection: control::UiMouseSelectionSnapshot::default(),
             status_bar: crate::status_components::UiStatusBarSnapshot::default(),
@@ -3531,7 +3501,7 @@ mod tests {
                 changed_rows: Vec::new(),
             },
         };
-        let barrier = LocalStreamEvent::TabAttached(7);
+        let barrier = LocalStreamEvent::TabExited(7);
 
         let mut batch = Vec::new();
         let mut pending = PendingCoalescedStreamEvents::with_passive_screen_coalescing(true);
@@ -3556,7 +3526,7 @@ mod tests {
                 ..
             }
         ));
-        assert!(matches!(batch[2], LocalStreamEvent::TabAttached(7)));
+        assert!(matches!(batch[2], LocalStreamEvent::TabExited(7)));
     }
 
     #[test]
@@ -3659,7 +3629,7 @@ mod tests {
         });
         let appearance_a = LocalStreamEvent::UiAppearance(appearance("A"));
         let appearance_b = LocalStreamEvent::UiAppearance(appearance("B"));
-        let barrier = LocalStreamEvent::TabAttached(7);
+        let barrier = LocalStreamEvent::TabExited(7);
 
         let mut batch = Vec::new();
         let mut pending = PendingCoalescedStreamEvents::with_passive_screen_coalescing(true);
@@ -3684,7 +3654,7 @@ mod tests {
             }
             other => panic!("expected coalesced appearance, got {other:?}"),
         }
-        assert!(matches!(batch[2], LocalStreamEvent::TabAttached(7)));
+        assert!(matches!(batch[2], LocalStreamEvent::TabExited(7)));
     }
 
     #[test]
@@ -3903,10 +3873,7 @@ mod tests {
         }));
 
         assert_eq!(app.active_remote_tab_id, Some(7));
-        match stream_rx.recv().expect("attach command") {
-            StreamCommand::AttachTab(tab_id) => assert_eq!(tab_id, 7),
-            other => panic!("expected attach command, got {other:?}"),
-        }
+        assert!(stream_rx.try_recv().is_err());
     }
 
     #[test]

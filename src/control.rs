@@ -1070,11 +1070,9 @@ mod tests {
                                 server_identity_id: "test-daemon".to_string(),
                                 auth_challenge_window_ms: 10_000,
                                 heartbeat_window_ms: 20_000,
-                                revive_window_ms: 30_000,
                                 connected_clients: 1,
                                 attached_clients: 1,
                                 pending_auth_clients: 0,
-                                revivable_attachments: 0,
                             }],
                             clients: vec![crate::remote::RemoteClientInfo {
                                 client_id: 7,
@@ -1084,8 +1082,6 @@ mod tests {
                                 server_socket_path: Some("/tmp/boo.sock".to_string()),
                                 challenge_pending: false,
                                 attached_tab: Some(11),
-                                attachment_id: Some(0xabc),
-                                resume_token_present: true,
                                 has_cached_state: true,
                                 pane_state_count: 1,
                                 latest_input_seq: Some(9),
@@ -1096,7 +1092,6 @@ mod tests {
                                 heartbeat_overdue: false,
                                 challenge_expires_in_ms: None,
                             }],
-                            revivable_attachments: Vec::new(),
                         },
                     })
                     .unwrap();
@@ -1112,8 +1107,6 @@ mod tests {
                 assert_eq!(snapshot.clients.len(), 1);
                 assert_eq!(snapshot.clients[0].client_id, 7);
                 assert_eq!(snapshot.clients[0].attached_tab, Some(11));
-                assert!(snapshot.clients[0].resume_token_present);
-                assert!(snapshot.revivable_attachments.is_empty());
             }
             other => panic!("unexpected response: {other:?}"),
         }

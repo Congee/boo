@@ -172,17 +172,6 @@ pub enum Command {
     RemoteUpgradeTarget,
     /// Bootstrap a remote Boo host over SSH, resolve its canonical native endpoint, and probe the direct transport
     RemoteUpgradeProbe,
-    /// Attach to a tab on a Boo-native QUIC remote daemon directly
-    RemoteDaemonAttach {
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
-        #[arg(long)]
-        port: u16,
-        #[arg(long = "tab-id")]
-        tab_id: u32,
-        #[arg(long = "expect-server-identity")]
-        expect_server_identity: Option<String>,
-    },
     /// Show connected remote and local-stream client diagnostics
     RemoteClients,
     /// Create a new live tab
@@ -238,15 +227,6 @@ fn create_remote_daemon_tab_dispatch(
     rows: u16,
 ) -> Result<crate::remote::RemoteCreateSummary, String> {
     crate::remote::create_remote_daemon_tab(host, port, expected_identity, cols, rows)
-}
-
-fn attach_remote_daemon_tab_dispatch(
-    host: &str,
-    port: u16,
-    expected_identity: Option<&str>,
-    tab_id: u32,
-) -> Result<crate::remote::RemoteAttachSummary, String> {
-    crate::remote::attach_remote_daemon_tab(host, port, expected_identity, tab_id)
 }
 
 fn print_completions<G: Generator>(generator: G) -> Result<(), String> {
@@ -519,33 +499,6 @@ where
                 }
             }
         }
-        Command::RemoteDaemonAttach {
-            host,
-            port,
-            tab_id,
-            expect_server_identity,
-        } => match attach_remote_daemon_tab_dispatch(
-            host,
-            *port,
-            expect_server_identity.as_deref(),
-            *tab_id,
-        ) {
-            Ok(summary) => {
-                let mut stdout = std::io::stdout().lock();
-                use std::io::Write;
-                if serde_json::to_writer_pretty(&mut stdout, &summary).is_err() {
-                    eprintln!("failed to serialize remote daemon attach summary");
-                    return Outcome::Exit(1);
-                }
-                let _ = writeln!(stdout);
-                let _ = stdout.flush();
-                Outcome::Exit(0)
-            }
-            Err(error) => {
-                eprintln!("{error}");
-                Outcome::Exit(1)
-            }
-        },
         Command::Completions { shell } => {
             let result = match shell {
                 CompletionShell::Bash => print_completions(Shell::Bash),
@@ -779,36 +732,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_remote_daemon_attach_subcommand() {
-        let cli = Cli::parse_from([
-            "boo",
-            "remote-daemon-attach",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            DEFAULT_REMOTE_PORT_STR,
-            "--tab-id",
-            "42",
-            "--expect-server-identity",
-            "daemon-01",
-        ]);
-        match cli.command {
-            Some(super::Command::RemoteDaemonAttach {
-                host,
-                port,
-                tab_id,
-                expect_server_identity,
-            }) => {
-                assert_eq!(host, "127.0.0.1");
-                assert_eq!(port, crate::config::DEFAULT_REMOTE_PORT);
-                assert_eq!(tab_id, 42);
-                assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
     fn parse_remote_upgrade_target_subcommand() {
         let cli = Cli::parse_from(["boo", "remote-upgrade-target"]);
         assert!(matches!(
@@ -933,14 +856,11 @@ mod tests {
                     server_identity_id: "test-daemon".to_string(),
                     auth_challenge_window_ms: 10_000,
                     heartbeat_window_ms: 20_000,
-                    revive_window_ms: 30_000,
                     connected_clients: 0,
                     attached_clients: 0,
                     pending_auth_clients: 0,
-                    revivable_attachments: 0,
                 }],
                 clients: Vec::new(),
-                revivable_attachments: Vec::new(),
             },
         );
         assert!(summary.upgrade_ready);
@@ -966,16 +886,13 @@ mod tests {
                     build_id: env!("CARGO_PKG_VERSION").to_string(),
                     server_instance_id: "test-instance".to_string(),
                     server_identity_id: "test-daemon".to_string(),
-                            auth_challenge_window_ms: 10_000,
+                    auth_challenge_window_ms: 10_000,
                     heartbeat_window_ms: 20_000,
-                    revive_window_ms: 30_000,
                     connected_clients: 0,
                     attached_clients: 0,
                     pending_auth_clients: 0,
-                    revivable_attachments: 0,
                 }],
                 clients: Vec::new(),
-                revivable_attachments: Vec::new(),
             },
         );
         assert!(!summary.upgrade_ready);

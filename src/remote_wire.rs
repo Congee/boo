@@ -12,7 +12,7 @@
 use std::io::{self, Read};
 use std::time::{Duration, Instant};
 
-use crate::remote_types::{RemoteAttachedSummary, RemoteDirectTabInfo, RemoteTabInfo};
+use crate::remote_types::{RemoteDirectTabInfo, RemoteTabInfo};
 
 pub(crate) const MAGIC: [u8; 2] = [0x47, 0x53];
 pub(crate) const HEADER_LEN: usize = 7;
@@ -538,79 +538,6 @@ pub(crate) fn read_probe_reply(
     ))
 }
 
-pub(crate) fn read_attach_bootstrap(
-    stream: &mut impl Read,
-    host: &str,
-    port: u16,
-) -> Result<(RemoteAttachedSummary, RemoteFullState), String> {
-    let mut attached = None;
-    let mut full_state = None;
-    for _ in 0..12 {
-        let (ty, payload) = match read_message_retrying(stream, 2) {
-            Ok(message) => message,
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-                ) =>
-            {
-                continue;
-            }
-            Err(error) => {
-                return Err(format!(
-                    "failed to read attach reply from {host}:{port}: {error}"
-                ));
-            }
-        };
-        match ty {
-            MessageType::TabList
-            | MessageType::UiRuntimeState
-            | MessageType::UiAppearance
-            | MessageType::UiPaneFullState
-            | MessageType::UiPaneDelta => continue,
-            MessageType::Attached => {
-                attached = Some(
-                    decode_attached_payload(&payload)
-                        .map_err(|error| format!("invalid attached payload from {host}:{port}: {error}"))?,
-                );
-            }
-            MessageType::FullState => {
-                full_state = Some(
-                    decode_remote_full_state_payload(&payload)
-                        .map_err(|error| format!("invalid full state payload from {host}:{port}: {error}"))?,
-                );
-            }
-            MessageType::Delta => continue,
-            MessageType::AuthFail => {
-                return Err(format!("authentication failed for remote endpoint {host}:{port}"));
-            }
-            MessageType::ErrorMsg => {
-                let (_, message) = decode_error_payload(&payload)
-                    .unwrap_or((RemoteErrorCode::Unknown, "remote error".to_string()));
-                return Err(format!(
-                    "remote endpoint {host}:{port} reported attach error: {message}"
-                ));
-            }
-            MessageType::Detached => {
-                return Err(format!(
-                    "remote endpoint {host}:{port} detached immediately after attach"
-                ));
-            }
-            other => {
-                return Err(format!(
-                    "unexpected attach reply from {host}:{port}: {other:?}"
-                ));
-            }
-        }
-        if let (Some(attached), Some(full_state)) = (attached.clone(), full_state.clone()) {
-            return Ok((attached, full_state));
-        }
-    }
-    Err(format!(
-        "timed out waiting for attach bootstrap from remote endpoint {host}:{port}"
-    ))
-}
-
 pub(crate) fn read_probe_auth_reply(
     stream: &mut impl Read,
     host: &str,
@@ -733,23 +660,6 @@ pub(crate) fn decode_tab_list_payload(payload: &[u8]) -> Result<Vec<RemoteDirect
     Ok(tabs)
 }
 
-pub(crate) fn decode_attached_payload(payload: &[u8]) -> Result<RemoteAttachedSummary, String> {
-    if payload.len() < 4 {
-        return Err("payload too short".to_string());
-    }
-    let tab_id = u32::from_le_bytes(
-        payload[..4]
-            .try_into()
-            .map_err(|_| "invalid tab id".to_string())?,
-    );
-    if payload.len() != 4 {
-        return Err("payload has unexpected length".to_string());
-    }
-    Ok(RemoteAttachedSummary {
-        tab_id,
-    })
-}
-
 pub(crate) fn decode_remote_full_state_payload(payload: &[u8]) -> Result<RemoteFullState, String> {
     if payload.len() < REMOTE_FULL_STATE_HEADER_LEN {
         return Err("payload too short".to_string());
@@ -826,10 +736,6 @@ pub(crate) fn parse_tab_id(payload: &[u8]) -> Option<u32> {
 
 pub(crate) fn parse_created_tab_id(payload: &[u8]) -> Option<u32> {
     parse_tab_id(payload)
-}
-
-pub(crate) fn parse_attach_request(payload: &[u8]) -> Option<u32> {
-    (payload.len() == 4).then(|| parse_tab_id(payload)).flatten()
 }
 
 pub(crate) fn parse_pane_id(payload: &[u8]) -> Option<u64> {
@@ -1396,12 +1302,12 @@ mod tests {
     }
 
     #[test]
-    fn validate_auth_ok_payload_rejects_missing_resume_capability() {
+    fn validate_auth_ok_payload_rejects_missing_heartbeat_capability() {
         let mut payload = encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe");
-        payload[2..6].copy_from_slice(&(REMOTE_CAPABILITIES & !REMOTE_CAPABILITY_ATTACHMENT_RESUME).to_le_bytes());
+        payload[2..6].copy_from_slice(&(REMOTE_CAPABILITIES & !REMOTE_CAPABILITY_HEARTBEAT).to_le_bytes());
         assert_eq!(
             validate_auth_ok_payload(&payload),
-            Err("Remote server does not advertise attachment resume support".to_string())
+            Err("Remote server does not advertise heartbeat support".to_string())
         );
     }
 
@@ -1491,22 +1397,6 @@ mod tests {
     }
 
     #[test]
-    fn decode_attached_payload_accepts_legacy_and_resume_forms() {
-        let legacy = decode_attached_payload(&7_u32.to_le_bytes()).expect("legacy attached");
-        assert_eq!(legacy.tab_id, 7);
-        assert_eq!(legacy.attachment_id, None);
-        assert_eq!(legacy.resume_token, None);
-
-        let mut resumed = 7_u32.to_le_bytes().to_vec();
-        resumed.extend_from_slice(&99_u64.to_le_bytes());
-        resumed.extend_from_slice(&1234_u64.to_le_bytes());
-        let resumed = decode_attached_payload(&resumed).expect("resumed attached");
-        assert_eq!(resumed.tab_id, 7);
-        assert_eq!(resumed.attachment_id, Some(99));
-        assert_eq!(resumed.resume_token, Some(1234));
-    }
-
-    #[test]
     fn decode_remote_full_state_payload_round_trips_encoded_state() {
         let state = RemoteFullState {
             rows: 1,
@@ -1536,26 +1426,6 @@ mod tests {
         let payload = encode_full_state(&state, None, false);
         let decoded = decode_remote_full_state_payload(&payload).expect("decode full state");
         assert_eq!(decoded, state);
-    }
-
-    #[test]
-    fn parse_attach_request_supports_tab_only_attachment_and_resume_token_forms() {
-        let tab_only = 11_u32.to_le_bytes().to_vec();
-        assert_eq!(parse_attach_request(&tab_only), Some((11, None, None)));
-
-        let mut with_attachment = tab_only.clone();
-        with_attachment.extend_from_slice(&0xabc_u64.to_le_bytes());
-        assert_eq!(
-            parse_attach_request(&with_attachment),
-            Some((11, Some(0xabc), None))
-        );
-
-        let mut with_resume = with_attachment.clone();
-        with_resume.extend_from_slice(&0xdef_u64.to_le_bytes());
-        assert_eq!(
-            parse_attach_request(&with_resume),
-            Some((11, Some(0xabc), Some(0xdef)))
-        );
     }
 
 #[test]

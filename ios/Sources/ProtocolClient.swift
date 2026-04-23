@@ -784,6 +784,14 @@ final class GSPClient: ObservableObject {
     private nonisolated static let magic: [UInt8] = [0x47, 0x53]
     private nonisolated static let headerLen = 7
 
+    private var runtimeActiveTabId: UInt32? {
+        guard let runtimeState,
+              runtimeState.tabs.indices.contains(runtimeState.activeTab) else {
+            return nil
+        }
+        return runtimeState.tabs[runtimeState.activeTab].tabId
+    }
+
     var handshakeSummary: String? {
         guard let protocolVersion,
               let serverBuildId, !serverBuildId.isEmpty,
@@ -812,9 +820,6 @@ final class GSPClient: ObservableObject {
 
     var uiTestTabDebugSummary: String {
         let tabIds = tabs.map(\.id).map(String.init).joined(separator: ",")
-        let runtimeActiveTabId = runtimeState.flatMap { state in
-            state.tabs.indices.contains(state.activeTab) ? state.tabs[state.activeTab].tabId : nil
-        }
         return [
             "connected=\(connected)",
             "authenticated=\(authenticated)",
@@ -1244,6 +1249,11 @@ final class GSPClient: ObservableObject {
         case .uiRuntimeState:
             guard let decodedRuntimeState = decodeRemoteRuntimeState(payload) else { return }
             runtimeState = decodedRuntimeState
+            attachedTabId = runtimeActiveTabId
+            if attachedTabId != nil {
+                pendingHostTabCreation = false
+                pendingAttachedTabId = nil
+            }
             if authenticated {
                 bootstrapCanonicalHostTab(trigger: "runtimeState")
             }
@@ -1297,13 +1307,14 @@ final class GSPClient: ObservableObject {
     }
 
     private func applyDecodedTabs(_ decodedTabs: [DecodedWireTabInfo]) {
+        let runtimeActiveTabId = runtimeActiveTabId
         tabs = decodedTabs.map {
             RemoteTabInfo(
                 id: $0.id,
                 name: $0.name,
                 title: $0.title,
                 pwd: $0.pwd,
-                attached: $0.attached,
+                attached: runtimeActiveTabId == $0.id,
                 childExited: $0.childExited
             )
         }
@@ -1412,11 +1423,9 @@ final class GSPClient: ObservableObject {
         }
         lastErrorKind = state.lastErrorKind
         lastError = state.lastError
-        attachedTabId = state.attachedTabId
-        if attachedTabId != nil {
-            pendingHostTabCreation = false
-            pendingAttachedTabId = nil
-        } else {
+        let fallbackAttachedTabId = state.attachedTabId
+        let nextAttachedTabId = runtimeActiveTabId ?? fallbackAttachedTabId
+        if nextAttachedTabId == nil {
             switch message {
             case .detached, .tabExited:
                 pendingHostTabCreation = false
@@ -1429,6 +1438,11 @@ final class GSPClient: ObservableObject {
             }
         }
         applyDecodedTabs(state.tabs)
+        attachedTabId = nextAttachedTabId
+        if attachedTabId != nil {
+            pendingHostTabCreation = false
+            pendingAttachedTabId = nil
+        }
         if let decodedScreen = state.screen {
             applyDecodedScreen(decodedScreen)
             screen.objectWillChange.send()

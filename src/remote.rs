@@ -12,7 +12,7 @@ pub(crate) use crate::remote_direct_transport::DirectTransportSession;
 // `crate::remote::RemoteProbeSummary` etc. keep working unchanged.
 #[allow(unused_imports)]
 pub use crate::remote_types::{
-    DirectTransportKind, RemoteAttachSummary, RemoteAttachedSummary, RemoteClientInfo,
+    DirectTransportKind, RemoteClientInfo,
     RemoteClientsSnapshot, RemoteCreateSummary, RemoteDirectTabInfo,
     RemoteProbeSummary, RemoteServerInfo,
     RemoteTabInfo, RemoteTabListSummary, RemoteUpgradeProbeSummary,
@@ -22,7 +22,7 @@ pub use crate::remote_types::{
 // `crate::remote::probe_remote_endpoint` etc. keep working unchanged.
 #[allow(unused_imports)]
 pub use crate::remote_client::{
-    attach_remote_daemon_tab, create_remote_daemon_tab, list_remote_daemon_tabs,
+    create_remote_daemon_tab, list_remote_daemon_tabs,
     probe_remote_endpoint, probe_selected_direct_transport, select_direct_transport,
 };
 
@@ -69,10 +69,6 @@ pub enum RemoteCmd {
     },
     ListTabs {
         client_id: u64,
-    },
-    Attach {
-        client_id: u64,
-        tab_id: u32,
     },
     Create {
         client_id: u64,
@@ -385,8 +381,7 @@ impl RemoteServer {
         send_cached_tab_list_to_local_clients(&self.state, tabs);
     }
 
-    pub fn send_tab_attached(&self, client_id: u64, tab_id: u32) {
-        let payload = tab_id.to_le_bytes().to_vec();
+    pub fn subscribe_client_to_tab(&self, client_id: u64, tab_id: u32) {
         self.update_client(client_id, |client| {
             let same_tab = client.runtime_subscription.tab_id == Some(tab_id);
             client.runtime_subscription.tab_id = Some(tab_id);
@@ -394,13 +389,7 @@ impl RemoteServer {
                 client.runtime_subscription.clear_stream_state();
             }
         });
-        log::info!("remote attach sent: client_id={client_id} tab_id={tab_id}");
-        self.send_to_client(client_id, MessageType::Attached, payload);
-    }
-
-    #[allow(dead_code)]
-    pub fn send_attached(&self, client_id: u64, tab_id: u32) {
-        self.send_tab_attached(client_id, tab_id);
+        log::info!("remote runtime subscription retargeted: client_id={client_id} tab_id={tab_id}");
     }
 
     pub fn send_error(&self, client_id: u64, code: RemoteErrorCode, message: &str) {
@@ -436,7 +425,7 @@ impl RemoteServer {
             return false;
         }
         for client_id in client_ids {
-            self.send_tab_attached(client_id, tab_id);
+            self.subscribe_client_to_tab(client_id, tab_id);
         }
         true
     }

@@ -100,10 +100,6 @@ pub enum Command {
     RemoteListTabs {
         client_id: u64,
     },
-    RemoteAttach {
-        client_id: u64,
-        tab_id: u32,
-    },
     RemoteCreate {
         client_id: u64,
         cols: u16,
@@ -276,13 +272,6 @@ impl From<remote::RemoteCmd> for Command {
         match value {
             remote::RemoteCmd::Connected { client_id } => Self::RemoteConnected { client_id },
             remote::RemoteCmd::ListTabs { client_id } => Self::RemoteListTabs { client_id },
-            remote::RemoteCmd::Attach {
-                client_id,
-                tab_id,
-            } => Self::RemoteAttach {
-                client_id,
-                tab_id,
-            },
             remote::RemoteCmd::Create {
                 client_id,
                 cols,
@@ -372,17 +361,6 @@ mod tests {
 
     #[test]
     fn remote_commands_map_to_server_surface() {
-        match Command::from(remote::RemoteCmd::Attach {
-            client_id: 7,
-            tab_id: 11,
-        }) {
-            Command::RemoteAttach { client_id, tab_id } => {
-                assert_eq!(client_id, 7);
-                assert_eq!(tab_id, 11);
-            }
-            other => panic!("expected remote attach mapping, got {other:?}"),
-        }
-
         match Command::from(remote::RemoteCmd::AppMouseEvent {
             client_id: 8,
             event: crate::AppMouseEvent::CursorMoved {

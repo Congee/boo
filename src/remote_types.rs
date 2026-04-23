@@ -99,31 +99,6 @@ pub struct RemoteTabListSummary {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct RemoteAttachedSummary {
-    pub tab_id: u32,
-}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct RemoteAttachSummary {
-    pub host: String,
-    pub port: u16,
-    pub protocol_version: u16,
-    pub capabilities: u32,
-    pub build_id: Option<String>,
-    pub server_instance_id: Option<String>,
-    pub server_identity_id: Option<String>,
-    pub heartbeat_rtt_ms: u64,
-    pub attached: RemoteAttachedSummary,
-    pub rows: u16,
-    pub cols: u16,
-    pub cursor_x: u16,
-    pub cursor_y: u16,
-    pub cursor_visible: bool,
-    pub cursor_blinking: bool,
-    pub cursor_style: i32,
-}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct RemoteCreateSummary {
     pub host: String,
     pub port: u16,

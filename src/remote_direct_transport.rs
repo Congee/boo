@@ -2,11 +2,11 @@
 
 use std::io::{Read, Write};
 
-use crate::remote_types::{RemoteAttachedSummary, RemoteDirectTabInfo};
+use crate::remote_types::RemoteDirectTabInfo;
 use crate::remote_wire::{
     MESSAGE_TYPE_LIST_TABS, MESSAGE_TYPE_TAB_CREATED, MESSAGE_TYPE_TAB_LIST, MessageType,
-    RemoteFullState, decode_auth_ok_payload, decode_tab_list_payload, encode_message,
-    parse_created_tab_id, read_attach_bootstrap, read_probe_auth_reply, read_probe_reply,
+    decode_auth_ok_payload, decode_tab_list_payload, encode_message,
+    parse_created_tab_id, read_probe_auth_reply, read_probe_reply,
     validate_auth_ok_payload,
 };
 
@@ -111,23 +111,6 @@ impl<S: DirectReadWrite> DirectTransportSession<S> {
                 self.host, self.port
             )
         })
-    }
-
-    pub(crate) fn attach(
-        &mut self,
-        tab_id: u32,
-    ) -> Result<(RemoteAttachedSummary, RemoteFullState), String> {
-        let attach_payload = tab_id.to_le_bytes().to_vec();
-        self.stream
-            .write_all(&encode_message(MessageType::Attach, &attach_payload))
-            .map_err(|error| {
-                format!(
-                    "failed to send attach request to {}:{}: {error}",
-                    self.host, self.port
-                )
-            })?;
-
-        read_attach_bootstrap(&mut self.stream, &self.host, self.port)
     }
 
     pub(crate) fn create_tab(&mut self, cols: u16, rows: u16) -> Result<u32, String> {

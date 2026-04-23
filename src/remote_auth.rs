@@ -21,7 +21,7 @@ use crate::remote_state::{
     should_disconnect_idle_client,
 };
 use crate::remote_wire::{
-    MessageType, RemoteErrorCode, encode_auth_ok_payload, encode_message, parse_attach_request,
+    MessageType, RemoteErrorCode, encode_auth_ok_payload, encode_message,
     parse_input_payload, parse_key_payload, parse_pane_id, parse_resize, parse_tab_id,
     read_message_retrying,
 };
@@ -117,10 +117,6 @@ pub(crate) fn read_loop(
 
         let command = match ty {
             crate::remote_wire::MESSAGE_TYPE_LIST_TABS => Some(RemoteCmd::ListTabs { client_id }),
-            MessageType::Attach => parse_attach_request(&payload).map(|tab_id| RemoteCmd::Attach {
-                client_id,
-                tab_id,
-            }),
             MessageType::Create => parse_resize(&payload).map(|(cols, rows)| RemoteCmd::Create {
                 client_id,
                 cols,

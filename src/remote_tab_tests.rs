@@ -4,8 +4,7 @@ mod tests {
     use crate::remote_auth::read_loop;
     use crate::remote_batcher::OutboundMessage;
     use crate::remote_state::{
-        ClientAttachmentLease, ClientRuntimeSubscription, ClientState,
-        DIRECT_CLIENT_HEARTBEAT_WINDOW, State,
+        ClientRuntimeSubscription, ClientState, DIRECT_CLIENT_HEARTBEAT_WINDOW, State,
     };
     use crate::remote_wire::{
         MESSAGE_TYPE_LIST_TABS, MESSAGE_TYPE_TAB_LIST, MessageType, RemoteCell, RemoteErrorCode,
@@ -187,10 +186,6 @@ mod tests {
                         latest_input_seq: Some(9),
                         ..ClientRuntimeSubscription::detached()
                     },
-                    attachment_lease: Some(ClientAttachmentLease {
-                        attachment_id: 0xabc,
-                        resume_token: Some(0xdef),
-                    }),
                     ..remote_client(outbound_tx)
                 },
             )]),
@@ -215,13 +210,5 @@ mod tests {
         assert!(cmd_rx.try_recv().is_err());
         let guard = state.lock().expect("remote server state poisoned");
         assert!(!guard.clients.contains_key(&1));
-        let attachment = guard
-            .revivable_runtime_subscriptions
-            .get(&0xabc)
-            .expect("revivable attachment preserved");
-        assert_eq!(attachment.tab_id, 11);
-        assert_eq!(attachment.resume_token, 0xdef);
-        assert_eq!(attachment.latest_input_seq, Some(9));
-        assert_eq!(attachment.last_state.as_ref(), Some(&cached_state));
     }
 }

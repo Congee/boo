@@ -104,8 +104,7 @@ fn client_info_for_client(
 mod tests {
     use super::clients_snapshot;
     use crate::remote_state::{
-        ClientAttachmentLease, ClientRuntimeSubscription, ClientState, DIRECT_CLIENT_HEARTBEAT_WINDOW,
-        REVIVABLE_ATTACHMENT_WINDOW, RevivableRuntimeSubscription, State,
+        ClientRuntimeSubscription, ClientState, DIRECT_CLIENT_HEARTBEAT_WINDOW, State,
     };
     use crate::remote_wire::{REMOTE_CAPABILITIES, REMOTE_PROTOCOL_VERSION, RemoteCell, RemoteFullState};
     use std::collections::HashMap;
@@ -162,10 +161,6 @@ mod tests {
                     latest_input_seq: Some(9),
                     ..ClientRuntimeSubscription::detached()
                 },
-                attachment_lease: Some(ClientAttachmentLease {
-                    attachment_id: 0xabc,
-                    resume_token: Some(0xdef),
-                }),
                 ..remote_client(tx)
             },
         );
@@ -185,8 +180,6 @@ mod tests {
         assert_eq!(server_info.connected_clients, 1);
         assert_eq!(server_info.attached_clients, 1);
         assert_eq!(server_info.pending_auth_clients, 0);
-        assert_eq!(server_info.revivable_attachments, 0);
-        assert!(snapshot.revivable_attachments.is_empty());
         assert_eq!(snapshot.clients.len(), 1);
         let client = &snapshot.clients[0];
         assert_eq!(client.client_id, 7);
@@ -196,8 +189,6 @@ mod tests {
         assert_eq!(client.server_socket_path, None);
         assert!(!client.challenge_pending);
         assert_eq!(client.attached_tab, Some(11));
-        assert_eq!(client.attachment_id, Some(0xabc));
-        assert!(client.resume_token_present);
         assert!(client.has_cached_state);
         assert_eq!(client.pane_state_count, 1);
         assert_eq!(client.latest_input_seq, Some(9));
@@ -209,61 +200,6 @@ mod tests {
         ));
         assert!(!client.heartbeat_overdue);
         assert_eq!(client.challenge_expires_in_ms, None);
-    }
-
-    #[test]
-    fn clients_snapshot_includes_revivable_attachments() {
-        let mut state = empty_state();
-        state.revivable_runtime_subscriptions.insert(
-            0xabc,
-            RevivableRuntimeSubscription {
-                tab_id: 11,
-                resume_token: 0xdef,
-                last_state: Some(Arc::new(RemoteFullState {
-                    rows: 1,
-                    cols: 1,
-                    cursor_x: 0,
-                    cursor_y: 0,
-                    cursor_visible: true,
-                    cursor_blinking: false,
-                    cursor_style: 1,
-                    cells: vec![],
-                })),
-                pane_states: HashMap::from([(
-                    22,
-                    Arc::new(RemoteFullState {
-                        rows: 1,
-                        cols: 1,
-                        cursor_x: 0,
-                        cursor_y: 0,
-                        cursor_visible: true,
-                        cursor_blinking: false,
-                        cursor_style: 1,
-                        cells: vec![],
-                    }),
-                )]),
-                latest_input_seq: Some(9),
-                expires_at: Instant::now() + REVIVABLE_ATTACHMENT_WINDOW,
-            },
-        );
-
-        let snapshot = clients_snapshot(&state, None, None, None);
-        assert_eq!(snapshot.servers.len(), 1);
-        assert_eq!(snapshot.servers[0].connected_clients, 0);
-        assert_eq!(snapshot.servers[0].attached_clients, 0);
-        assert_eq!(snapshot.servers[0].pending_auth_clients, 0);
-        assert_eq!(snapshot.servers[0].revivable_attachments, 1);
-        assert!(snapshot.clients.is_empty());
-        assert_eq!(snapshot.revivable_attachments.len(), 1);
-        let attachment = &snapshot.revivable_attachments[0];
-        assert_eq!(attachment.attachment_id, 0xabc);
-        assert_eq!(attachment.tab_id, 11);
-        assert!(attachment.resume_token_present);
-        assert!(attachment.has_cached_state);
-        assert_eq!(attachment.pane_state_count, 1);
-        assert_eq!(attachment.latest_input_seq, Some(9));
-        assert!(attachment.revive_expires_in_ms <= REVIVABLE_ATTACHMENT_WINDOW.as_millis() as u64);
-        assert!(attachment.revive_expires_in_ms > 0);
     }
 
     #[test]
@@ -289,7 +225,6 @@ mod tests {
         assert_eq!(snapshot.servers[0].connected_clients, 1);
         assert_eq!(snapshot.servers[0].attached_clients, 0);
         assert_eq!(snapshot.servers[0].pending_auth_clients, 0);
-        assert_eq!(snapshot.servers[0].revivable_attachments, 0);
         assert_eq!(snapshot.clients.len(), 1);
         let client = &snapshot.clients[0];
         assert_eq!(client.transport_kind, "tcp");

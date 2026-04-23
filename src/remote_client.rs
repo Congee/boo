@@ -3,7 +3,7 @@
 
 use crate::remote::DirectTransportSession;
 use crate::remote_types::{
-    DirectTransportKind, RemoteAttachSummary, RemoteCreateSummary, RemoteProbeSummary,
+    DirectTransportKind, RemoteCreateSummary, RemoteProbeSummary,
     RemoteTabListSummary, RemoteUpgradeProbeSummary,
 };
 
@@ -86,43 +86,6 @@ pub fn list_remote_daemon_tabs(
     list_summary_from_transport(&mut client, port)
 }
 
-fn attach_summary_from_transport(
-    client: &mut DirectTransportSession<crate::remote_quic::QuicDirectStream>,
-    port: u16,
-    tab_id: u32,
-) -> Result<RemoteAttachSummary, String> {
-    let heartbeat_rtt_ms = client.heartbeat_round_trip(b"boo-remote-attach")?;
-    let (attached, full_state) = client.attach(tab_id)?;
-    Ok(RemoteAttachSummary {
-        host: client.host.clone(),
-        port,
-        protocol_version: client.protocol_version,
-        capabilities: client.capabilities,
-        build_id: client.build_id.clone(),
-        server_instance_id: client.server_instance_id.clone(),
-        server_identity_id: client.server_identity_id.clone(),
-        heartbeat_rtt_ms,
-        attached,
-        rows: full_state.rows,
-        cols: full_state.cols,
-        cursor_x: full_state.cursor_x,
-        cursor_y: full_state.cursor_y,
-        cursor_visible: full_state.cursor_visible,
-        cursor_blinking: full_state.cursor_blinking,
-        cursor_style: full_state.cursor_style,
-    })
-}
-
-pub fn attach_remote_daemon_tab(
-    host: &str,
-    port: u16,
-    expected_server_identity: Option<&str>,
-    tab_id: u32,
-) -> Result<RemoteAttachSummary, String> {
-    let mut client = crate::remote_quic::connect_direct(host, port, expected_server_identity)?;
-    attach_summary_from_transport(&mut client, port, tab_id)
-}
-
 fn create_summary_from_transport(
     client: &mut DirectTransportSession<crate::remote_quic::QuicDirectStream>,
     port: u16,
@@ -161,8 +124,8 @@ mod tests {
     use crate::remote_types::RemoteTabInfo;
     use crate::remote_wire::{
         MESSAGE_TYPE_LIST_TABS, MESSAGE_TYPE_TAB_CREATED, MESSAGE_TYPE_TAB_LIST, MessageType,
-        REMOTE_PROTOCOL_VERSION, RemoteCell, RemoteFullState, encode_auth_ok_payload,
-        encode_full_state, encode_message, encode_tab_list, parse_attach_request, read_message,
+        REMOTE_PROTOCOL_VERSION, encode_auth_ok_payload, encode_message, encode_tab_list,
+        read_message,
     };
     use std::io::Write;
 
@@ -284,92 +247,6 @@ mod tests {
         );
 
         server.join().expect("list server thread");
-    }
-
-    #[test]
-    fn attach_remote_daemon_tab_reads_attached_and_initial_state_over_socket() {
-        use std::net::TcpListener;
-
-        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
-        let port = listener.local_addr().expect("listener addr").port();
-        let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept attach client");
-            let (ty, payload) = read_message(&mut stream).expect("read auth request");
-            assert_eq!(ty, MessageType::Auth);
-            assert!(payload.is_empty());
-
-            stream
-                .write_all(&encode_message(
-                    MessageType::AuthOk,
-                    &encode_auth_ok_payload("test-daemon", "test-instance"),
-                ))
-                .expect("write auth ok");
-
-            let (ty, payload) = read_message(&mut stream).expect("read heartbeat");
-            assert_eq!(ty, MessageType::Heartbeat);
-            stream
-                .write_all(&encode_message(MessageType::HeartbeatAck, &payload))
-                .expect("write heartbeat ack");
-
-            let (ty, payload) = read_message(&mut stream).expect("read attach");
-            assert_eq!(ty, MessageType::Attach);
-            let (tab_id, attachment_id, resume_token) =
-                parse_attach_request(&payload).expect("decoded attach");
-            assert_eq!(tab_id, 7);
-            assert_eq!(attachment_id, Some(99));
-            assert_eq!(resume_token, Some(1234));
-
-            let mut attached = 7_u32.to_le_bytes().to_vec();
-            attached.extend_from_slice(&99_u64.to_le_bytes());
-            attached.extend_from_slice(&1234_u64.to_le_bytes());
-            stream
-                .write_all(&encode_message(MessageType::Attached, &attached))
-                .expect("write attached");
-
-            let state = RemoteFullState {
-                rows: 1,
-                cols: 1,
-                cursor_x: 0,
-                cursor_y: 0,
-                cursor_visible: true,
-                cursor_blinking: true,
-                cursor_style: 1,
-                cells: vec![RemoteCell {
-                    codepoint: u32::from('Z'),
-                    fg: [1, 2, 3],
-                    bg: [4, 5, 6],
-                    style_flags: 0,
-                    wide: false,
-                }],
-            };
-            stream
-                .write_all(&encode_message(
-                    MessageType::FullState,
-                    &encode_full_state(&state, None, false),
-                ))
-                .expect("write full state");
-        });
-
-        let summary = attach_remote_daemon_tab(
-            "127.0.0.1",
-            port,
-            Some("test-daemon"),
-            7,
-            Some(99),
-            Some(1234),
-        )
-        .expect("attach summary");
-        assert_eq!(summary.protocol_version, REMOTE_PROTOCOL_VERSION);
-        assert_eq!(summary.server_identity_id.as_deref(), Some("test-daemon"));
-        assert_eq!(summary.server_instance_id.as_deref(), Some("test-instance"));
-        assert_eq!(summary.attached.tab_id, 7);
-        assert_eq!(summary.attached.attachment_id, Some(99));
-        assert_eq!(summary.attached.resume_token, Some(1234));
-        assert_eq!(summary.rows, 1);
-        assert_eq!(summary.cols, 1);
-        assert_eq!(summary.cursor_style, 1);
-
-        server.join().expect("attach server thread");
     }
 
     #[test]
