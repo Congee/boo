@@ -13,6 +13,12 @@ enum ClientWireMessageType {
     case errorMsg
 }
 
+extension ClientWireMessageType {
+    static var tabList: Self { .sessionList }
+    static var tabCreated: Self { .sessionCreated }
+    static var tabExited: Self { .sessionExited }
+}
+
 enum ClientWireErrorCode: UInt16, Equatable {
     case unknown = 0
     case authenticationFailed = 1
@@ -28,14 +34,23 @@ enum ClientWireErrorCode: UInt16, Equatable {
     case heartbeatTimeout = 11
 }
 
+extension ClientWireErrorCode {
+    static var unknownTab: Self { .unknownSession }
+    static var failedCreateTab: Self { .failedCreateSession }
+    static var cannotDestroyLastTab: Self { .cannotDestroyLastSession }
+    static var attachmentBelongsToDifferentTab: Self { .attachmentBelongsToDifferentSession }
+}
+
 enum ClientWireEffect: Equatable {
     case none
-    case listSessions
     case attach(UInt32)
 }
 
 enum ClientWireErrorKind: Equatable {
     case authenticationFailed
+    case unknownSession
+    case failedCreateSession
+    case notAttached
     case attachmentResumeUnsupported
     case attachmentResumeWindowExpired
     case attachmentResumeTokenMismatch
@@ -46,6 +61,12 @@ enum ClientWireErrorKind: Equatable {
         switch self {
         case .authenticationFailed:
             return "Authentication failed"
+        case .unknownSession:
+            return "unknown session"
+        case .failedCreateSession:
+            return "failed to create session"
+        case .notAttached:
+            return "not attached"
         case .attachmentResumeUnsupported:
             return "Remote server does not advertise attachment resume support"
         case .attachmentResumeWindowExpired:
@@ -66,7 +87,7 @@ enum ClientWireErrorKind: Equatable {
                 .attachmentResumeTokenMismatch,
                 .invalidResumeToken:
             return true
-        case .authenticationFailed, .remote:
+        case .authenticationFailed, .unknownSession, .failedCreateSession, .notAttached, .remote:
             return false
         }
     }
@@ -89,6 +110,11 @@ enum ClientWireErrorKind: Equatable {
     }
 }
 
+extension ClientWireErrorKind {
+    static var unknownTab: Self { .unknownSession }
+    static var failedCreateTab: Self { .failedCreateSession }
+}
+
 struct AuthOkMetadata: Equatable {
     let protocolVersion: UInt16
     let transportCapabilities: UInt32
@@ -109,13 +135,55 @@ struct ClientWireState: Equatable {
     var serverBuildId: String?
     var serverInstanceId: String?
     var serverIdentityId: String?
-    var sessions: [DecodedWireSessionInfo] = []
+    var tabs: [DecodedWireTabInfo] = []
     var screen: DecodedWireScreenState?
-    var attachedSessionId: UInt32?
+    var attachedTabId: UInt32?
     var attachmentId: UInt64?
     var resumeToken: UInt64?
     var lastErrorKind: ClientWireErrorKind?
     var lastError: String?
+
+    init(
+        authenticated: Bool = false,
+        protocolVersion: UInt16? = nil,
+        transportCapabilities: UInt32 = 0,
+        serverBuildId: String? = nil,
+        serverInstanceId: String? = nil,
+        serverIdentityId: String? = nil,
+        tabs: [DecodedWireTabInfo] = [],
+        sessions: [DecodedWireSessionInfo]? = nil,
+        screen: DecodedWireScreenState? = nil,
+        attachedTabId: UInt32? = nil,
+        attachedSessionId: UInt32? = nil,
+        attachmentId: UInt64? = nil,
+        resumeToken: UInt64? = nil,
+        lastErrorKind: ClientWireErrorKind? = nil,
+        lastError: String? = nil
+    ) {
+        self.authenticated = authenticated
+        self.protocolVersion = protocolVersion
+        self.transportCapabilities = transportCapabilities
+        self.serverBuildId = serverBuildId
+        self.serverInstanceId = serverInstanceId
+        self.serverIdentityId = serverIdentityId
+        self.tabs = sessions ?? tabs
+        self.screen = screen
+        self.attachedTabId = attachedSessionId ?? attachedTabId
+        self.attachmentId = attachmentId
+        self.resumeToken = resumeToken
+        self.lastErrorKind = lastErrorKind
+        self.lastError = lastError
+    }
+
+    var sessions: [DecodedWireSessionInfo] {
+        get { tabs }
+        set { tabs = newValue }
+    }
+
+    var attachedSessionId: UInt32? {
+        get { attachedTabId }
+        set { attachedTabId = newValue }
+    }
 }
 
 func decodeClientWireError(_ payload: Data) -> ClientWireErrorKind {
@@ -132,7 +200,13 @@ func decodeClientWireError(_ payload: Data) -> ClientWireErrorKind {
         return .remote(message)
     case .authenticationFailed:
         return .authenticationFailed
-    case .unknownSession, .failedCreateSession, .notAttached, .cannotDestroyLastSession:
+    case .unknownSession:
+        return .unknownSession
+    case .failedCreateSession:
+        return .failedCreateSession
+    case .notAttached:
+        return .notAttached
+    case .cannotDestroyLastSession:
         return .remote(message)
     case .attachmentAlreadyActive, .attachmentBelongsToDifferentSession:
         return .remote(message)
@@ -263,17 +337,17 @@ enum ClientWireReducer {
             }
             state.lastErrorKind = nil
             state.lastError = nil
-            return .listSessions
+            return .none
         case .authFail:
             state.lastErrorKind = .authenticationFailed
             state.lastError = ClientWireErrorKind.authenticationFailed.message
             return .none
         case .sessionList:
-            state.sessions = WireCodec.decodeSessionList(payload)
+            state.tabs = WireCodec.decodeTabList(payload)
             return .none
         case .attached:
             guard payload.count >= 4 else { return .none }
-            state.attachedSessionId = payload.withUnsafeBytes {
+            state.attachedTabId = payload.withUnsafeBytes {
                 UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
             }
             state.attachmentId = payload.count >= 12 ? payload.withUnsafeBytes {
@@ -284,7 +358,7 @@ enum ClientWireReducer {
             } : nil
             return .none
         case .detached:
-            state.attachedSessionId = nil
+            state.attachedTabId = nil
             state.attachmentId = nil
             state.resumeToken = nil
             return .none
@@ -293,23 +367,20 @@ enum ClientWireReducer {
                 let exitedSessionId = payload.withUnsafeBytes {
                     UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
                 }
-                if state.attachedSessionId == exitedSessionId {
-                    state.attachedSessionId = nil
+                if state.attachedTabId == exitedSessionId {
+                    state.attachedTabId = nil
                     state.attachmentId = nil
                     state.resumeToken = nil
                 }
             } else {
-                state.attachedSessionId = nil
+                state.attachedTabId = nil
                 state.attachmentId = nil
                 state.resumeToken = nil
             }
-            return .listSessions
+            return .none
         case .sessionCreated:
             guard payload.count >= 4 else { return .none }
-            let sessionId = payload.withUnsafeBytes {
-                UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
-            }
-            return .attach(sessionId)
+            return .none
         case .fullState:
             state.screen = WireCodec.decodeFullState(payload)
             return .none
