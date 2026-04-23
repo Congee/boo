@@ -10,6 +10,26 @@ nix develop
 cargo build
 ```
 
+## iOS Build Artifacts
+
+- For Boo iOS, always use repo-external DerivedData:
+  - `/tmp/boo-ios-derived`
+- Do not use:
+  - `~/Library/Developer/Xcode/DerivedData`
+  - repo-local `ios/.derived*`
+- Treat `/tmp/boo-ios-derived` as disposable and clean it when needed.
+- Preferred `xcodebuild` command:
+
+```bash
+xcodebuild \
+  -project ios/Boo.xcodeproj \
+  -scheme Boo \
+  -destination 'generic/platform=iOS' \
+  -derivedDataPath /tmp/boo-ios-derived \
+  DEVELOPMENT_TEAM=<your team id> \
+  build
+```
+
 ## Architecture Snapshot
 
 - `libghostty-vt` is the shared terminal runtime on macOS and Linux
