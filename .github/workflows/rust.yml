@@ -1,0 +1,42 @@
+name: Rust
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  cargo:
+    name: cargo fmt/check/clippy/deny
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # `cargo check` and `cargo clippy` run build scripts, and Boo's
+      # libghostty-vt-sys build script needs the native toolchain/deps from
+      # flake.nix (Zig, pkg-config, clang/font deps, and libghostty-vt setup).
+      # Keep all Rust gates in `nix develop` so fmt/check/clippy use the same
+      # pinned Rust toolchain and native environment as local development.
+      - name: Check formatting
+        run: nix develop --command cargo fmt --all -- --check
+
+      - name: Check Rust
+        run: nix develop --command cargo check --locked
+
+      - name: Check Clippy
+        run: nix develop --command cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Check dependency policy
+        run: nix develop --command cargo deny check

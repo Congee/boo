@@ -559,6 +559,7 @@ pub mod main_tests {
     use super::*;
     use crate::command_prompt::COMMANDS;
 
+    #[allow(clippy::too_many_arguments)]
     pub fn compute_rects(
         selection: SelectionMode,
         cursor_row: i64,

@@ -1497,8 +1497,10 @@ mod tests {
 
     #[test]
     fn startup_overrides_cli_host_beats_config_host() {
-        let mut config = crate::config::Config::default();
-        config.remote_host = Some("config-host.local".to_string());
+        let config = crate::config::Config {
+            remote_host: Some("config-host.local".to_string()),
+            ..crate::config::Config::default()
+        };
 
         let config = apply_startup_overrides(
             config,
@@ -1517,8 +1519,10 @@ mod tests {
 
     #[test]
     fn startup_overrides_explicit_socket_beats_generated_remote_socket() {
-        let mut config = crate::config::Config::default();
-        config.remote_host = Some("config-host.local".to_string());
+        let config = crate::config::Config {
+            remote_host: Some("config-host.local".to_string()),
+            ..crate::config::Config::default()
+        };
 
         let config = apply_startup_overrides(
             config,
@@ -1538,16 +1542,20 @@ mod tests {
 
     #[test]
     fn select_remote_binary_candidate_prefers_explicit_binary() {
-        let mut config = crate::config::Config::default();
-        config.remote_binary = Some("/opt/boo/bin/boo".to_string());
-        config.remote_prefer_nix_profile_binary = true;
+        let config = crate::config::Config {
+            remote_binary: Some("/opt/boo/bin/boo".to_string()),
+            remote_prefer_nix_profile_binary: true,
+            ..crate::config::Config::default()
+        };
         assert_eq!(select_remote_binary_candidate(&config), "/opt/boo/bin/boo");
     }
 
     #[test]
     fn select_remote_binary_candidate_uses_nix_profile_when_enabled() {
-        let mut config = crate::config::Config::default();
-        config.remote_prefer_nix_profile_binary = true;
+        let config = crate::config::Config {
+            remote_prefer_nix_profile_binary: true,
+            ..crate::config::Config::default()
+        };
         assert_eq!(
             select_remote_binary_candidate(&config),
             "~/.nix-profile/bin/boo"

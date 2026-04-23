@@ -2983,6 +2983,23 @@ fn render_status_zone<'a>(
     segments_row.into()
 }
 
+fn named_key_from_iced_key(key: &keyboard::Key) -> Option<bindings::NamedKey> {
+    use keyboard::key::Named;
+
+    match key {
+        keyboard::Key::Named(Named::ArrowUp) => Some(bindings::NamedKey::ArrowUp),
+        keyboard::Key::Named(Named::ArrowDown) => Some(bindings::NamedKey::ArrowDown),
+        keyboard::Key::Named(Named::ArrowLeft) => Some(bindings::NamedKey::ArrowLeft),
+        keyboard::Key::Named(Named::ArrowRight) => Some(bindings::NamedKey::ArrowRight),
+        keyboard::Key::Named(Named::PageUp) => Some(bindings::NamedKey::PageUp),
+        keyboard::Key::Named(Named::PageDown) => Some(bindings::NamedKey::PageDown),
+        keyboard::Key::Named(Named::Home) => Some(bindings::NamedKey::Home),
+        keyboard::Key::Named(Named::End) => Some(bindings::NamedKey::End),
+        keyboard::Key::Named(Named::Escape) => Some(bindings::NamedKey::Escape),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4028,22 +4045,5 @@ mod tests {
             ),
             "remote:example-mbp.local: connected  /repo  diag s=1 c=2 v=1 p=1 h=0 r=1"
         );
-    }
-}
-
-fn named_key_from_iced_key(key: &keyboard::Key) -> Option<bindings::NamedKey> {
-    use keyboard::key::Named;
-
-    match key {
-        keyboard::Key::Named(Named::ArrowUp) => Some(bindings::NamedKey::ArrowUp),
-        keyboard::Key::Named(Named::ArrowDown) => Some(bindings::NamedKey::ArrowDown),
-        keyboard::Key::Named(Named::ArrowLeft) => Some(bindings::NamedKey::ArrowLeft),
-        keyboard::Key::Named(Named::ArrowRight) => Some(bindings::NamedKey::ArrowRight),
-        keyboard::Key::Named(Named::PageUp) => Some(bindings::NamedKey::PageUp),
-        keyboard::Key::Named(Named::PageDown) => Some(bindings::NamedKey::PageDown),
-        keyboard::Key::Named(Named::Home) => Some(bindings::NamedKey::Home),
-        keyboard::Key::Named(Named::End) => Some(bindings::NamedKey::End),
-        keyboard::Key::Named(Named::Escape) => Some(bindings::NamedKey::Escape),
-        _ => None,
     }
 }

@@ -18,20 +18,6 @@ pub(crate) fn cursor_blink_visible(epoch: Instant, interval: Duration) -> bool {
     epoch.elapsed().as_nanos() % cycle_ns < interval.as_nanos()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cursor_blink_visibility_cycles_between_visible_and_hidden() {
-        let interval = Duration::from_millis(100);
-        let visible_epoch = Instant::now() - Duration::from_millis(50);
-        let hidden_epoch = Instant::now() - Duration::from_millis(150);
-        assert!(cursor_blink_visible(visible_epoch, interval));
-        assert!(!cursor_blink_visible(hidden_epoch, interval));
-    }
-}
-
 pub(crate) fn shifted_codepoint(keycode: u32, mods: i32) -> u32 {
     #[cfg(target_os = "linux")]
     {
@@ -853,5 +839,19 @@ pub(crate) fn text_input_command_key(command: platform::TextInputCommand) -> (u3
         platform::TextInputCommand::DeleteForward => (68, 0x7f),
         platform::TextInputCommand::InsertNewline => (58, '\r' as u32),
         platform::TextInputCommand::InsertTab => (64, '\t' as u32),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cursor_blink_visibility_cycles_between_visible_and_hidden() {
+        let interval = Duration::from_millis(100);
+        let visible_epoch = Instant::now() - Duration::from_millis(50);
+        let hidden_epoch = Instant::now() - Duration::from_millis(150);
+        assert!(cursor_blink_visible(visible_epoch, interval));
+        assert!(!cursor_blink_visible(hidden_epoch, interval));
     }
 }

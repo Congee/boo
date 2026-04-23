@@ -530,15 +530,15 @@ pane = htop
                 out.push_str("layout = main-vertical\n");
             }
             for (i, pane) in tab.panes.iter().enumerate() {
-                if i > 0 {
-                    if let Some(ref spec) = pane.split {
-                        let d = if spec.direction == SplitDir::Right {
-                            "split-right"
-                        } else {
-                            "split-down"
-                        };
-                        out.push_str(&format!("{d} = {:.0}%\n", spec.ratio * 100.0));
-                    }
+                if i > 0
+                    && let Some(ref spec) = pane.split
+                {
+                    let d = if spec.direction == SplitDir::Right {
+                        "split-right"
+                    } else {
+                        "split-down"
+                    };
+                    out.push_str(&format!("{d} = {:.0}%\n", spec.ratio * 100.0));
                 }
                 out.push_str(&format!(
                     "pane = {}\n",

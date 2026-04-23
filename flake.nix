@@ -32,6 +32,7 @@
         fontconfig
       ];
       devNativeBuildInputs = booNativeBuildInputs ++ (with pkgs; [
+        cargo-deny
         zig.packages.${system}."0.15.2"
         git
       ]);
