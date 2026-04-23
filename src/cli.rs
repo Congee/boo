@@ -147,6 +147,7 @@ pub enum Command {
         expect_server_identity: Option<String>,
     },
     /// List tabs from a Boo-native QUIC remote daemon directly
+    // Legacy alias kept so older scripts keep working during the tab migration.
     #[command(alias = "remote-daemon-sessions")]
     RemoteDaemonTabs {
         #[arg(long, default_value = "127.0.0.1")]
@@ -179,6 +180,7 @@ pub enum Command {
         host: String,
         #[arg(long)]
         port: u16,
+        // Legacy flag alias kept so older scripts keep working during the tab migration.
         #[arg(long = "tab-id", alias = "session-id")]
         tab_id: u32,
         #[arg(long = "expect-server-identity")]
