@@ -21,7 +21,7 @@ It powers:
 - direct remote daemon access
 - iOS client connectivity
 - daemon diagnostics
-- session attach/detach, create, resize, input, and state publishing
+- tab attach/detach, create, resize, input, and state publishing
 
 ## Current Shape
 
@@ -33,7 +33,7 @@ files own narrower responsibilities such as:
 - listener and transport setup
 - wire encode/decode
 - daemon state
-- session/full-state handling
+- tab/full-state handling
 - diagnostics, broadcast, and attachment behavior
 
 ## Important Properties

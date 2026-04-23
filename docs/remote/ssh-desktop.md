@@ -34,7 +34,7 @@ Prefer direct socket-level checks:
 
 - forwarded control socket health
 - `get-ui-snapshot` over the tunnel
-- session creation through the forwarded path
+- tab creation through the forwarded path
 - `.stream` attach/update behavior
 
 ## Related Docs

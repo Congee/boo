@@ -29,7 +29,7 @@ See [../remote/ssh-desktop.md](../remote/ssh-desktop.md).
 
 The native daemon supports:
 
-- session listing
+- tab listing
 - attach/detach
 - create/resize/input/destroy
 - full state and deltas

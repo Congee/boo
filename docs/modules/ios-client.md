@@ -20,7 +20,7 @@ It handles:
 - Bonjour discovery
 - optional Tailscale device discovery through the Tailscale API
 - auth
-- session listing and attach
+- tab listing and attach
 - reconnect/resume metadata
 - terminal state decoding and presentation
 
@@ -28,7 +28,7 @@ It handles:
 
 - browses `_boo._udp`
 - can list tailnet devices when a Tailscale API access token is configured in Settings
-- does not reuse the installed Tailscale app's authenticated session
+- does not reuse the installed Tailscale app's authenticated connection state
 - stores the Tailscale API access token in the iOS Keychain rather than plain app settings
 - cannot call true `tailscale ping` through the installed Tailscale iOS app
 - using `libtailscale` / `TailscaleKit` would mean running a second embedded Tailscale node inside Boo, which is a different architecture from reusing the official Tailscale app

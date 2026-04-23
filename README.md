@@ -21,7 +21,7 @@ desktop remote mode, and a Boo-native remote daemon for iOS.
 - Declarative session layouts and session persistence
 - Local control socket and stream socket for GUI/session coordination
 - Headless mode and control-socket automation
-- iOS client with Bonjour discovery and remote session attach
+- iOS client with Bonjour discovery and remote tab attach
 
 ## Quick Start
 
