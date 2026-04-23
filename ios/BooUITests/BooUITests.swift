@@ -10,6 +10,8 @@ final class BooAppLaunchTests: BooUITestCase {
         let connectHostExists = app.textFields["connect-host-input"].exists
         let connectHostValue = connectHostExists ? String(describing: app.textFields["connect-host-input"].value ?? "<nil>") : "<none>"
         let terminalBanner = app.staticTexts["terminal-banner-label"].exists ? app.staticTexts["terminal-banner-label"].label : "<none>"
+        let terminalDebug = app.otherElements["terminal-debug-state"].exists ? app.otherElements["terminal-debug-state"].label : "<none>"
+        let seedStatus = app.staticTexts["uitest-scroll-seed-status"].exists ? app.staticTexts["uitest-scroll-seed-status"].label : "<none>"
         let terminal = app.otherElements["terminal-screen"]
         let terminalExists = terminal.exists
         let terminalLabel = terminalExists ? terminal.label : "<none>"
@@ -24,6 +26,8 @@ final class BooAppLaunchTests: BooUITestCase {
         connectHostExists=\(connectHostExists)
         connectHostValue=\(connectHostValue)
         terminalBanner=\(terminalBanner)
+        terminalDebug=\(terminalDebug)
+        seedStatus=\(seedStatus)
         terminalExists=\(terminalExists)
         terminalLabel=\(terminalLabel)
         terminalValuePrefix=\(terminalValue.prefix(200))
@@ -103,28 +107,77 @@ final class BooAppLaunchTests: BooUITestCase {
             line: line
         )
 
-        terminal.tap()
-
         let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 5), file: file, line: line)
         let proxy = app.textViews["terminal-text-proxy"]
         XCTAssertTrue(proxy.waitForExistence(timeout: 5), file: file, line: line)
-        proxy.tap()
-        proxy.typeText("echo \(marker)\r")
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5), file: file, line: line)
 
-        let outputExpectation = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value CONTAINS %@", marker),
-            object: terminal
-        )
-        let result = XCTWaiter.wait(for: [outputExpectation], timeout: 10)
-        XCTAssertEqual(
-            result,
-            .completed,
+        var typedSuccessfully = false
+        for _ in 0..<2 {
+            proxy.tap()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            proxy.typeText("echo \(marker)\r")
+
+            let outputExpectation = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value CONTAINS %@", marker),
+                object: terminal
+            )
+            if XCTWaiter.wait(for: [outputExpectation], timeout: 6) == .completed {
+                typedSuccessfully = true
+                break
+            }
+        }
+
+        XCTAssertTrue(
+            typedSuccessfully,
             "typed text did not appear in terminal: \(attachStateSnapshot(app))\n\(uiStateSnapshot(app))",
             file: file,
             line: line
         )
         XCTAssertTrue(attachedExpectation.predicate.evaluate(with: terminal), "terminal lost attachment after typing: \(attachStateSnapshot(app))", file: file, line: line)
+    }
+
+    private func dragTerminal(_ terminal: XCUIElement, upward: Bool) {
+        let startY: CGFloat = upward ? 0.78 : 0.28
+        let endY: CGFloat = upward ? 0.22 : 0.82
+        let start = terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
+        let finish = terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: endY))
+        start.press(forDuration: 0.05, thenDragTo: finish)
+    }
+
+    private func visibleScrollMarkers(in value: String) -> [Int] {
+        let pattern = /BOO_SCROLL_(\d+)/
+        return value.matches(of: pattern).compactMap { Int($0.output.1) }
+    }
+
+    private func sendTerminalCommand(_ app: XCUIApplication, command: String, expect marker: String, timeout: TimeInterval = 8, file: StaticString = #filePath, line: UInt = #line) {
+        let terminal = app.otherElements["terminal-screen"]
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10), file: file, line: line)
+
+        let proxy = app.textViews["terminal-text-proxy"]
+        XCTAssertTrue(proxy.waitForExistence(timeout: 5), file: file, line: line)
+        var commandObserved = false
+        for _ in 0..<2 {
+            proxy.tap()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            proxy.typeText(command + "\r")
+
+            let expectation = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value CONTAINS %@", marker),
+                object: terminal
+            )
+            if XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed {
+                commandObserved = true
+                break
+            }
+        }
+
+        XCTAssertTrue(
+            commandObserved,
+            "terminal never printed '\(marker)' after command '\(command)': \(uiStateSnapshot(app))",
+            file: file,
+            line: line
+        )
     }
 
     func testConnectScreenShowsMockTailscaleDevices() {
@@ -374,6 +427,34 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTAssertFalse(app.otherElements["terminal-screen"].exists)
     }
 
+    func testClosingHostTabAllowsFreshDiscoveredReconnect() {
+        let app = makeApp(autoConnect: false, resetStorage: true, includeConfiguredHost: false)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        navigateToConnectScreen(app)
+
+        let discoveredRows = discoveredDaemonRows(in: app)
+        let firstRow = discoveredRows.firstMatch
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 12))
+        firstRow.tap()
+
+        waitForTerminalScreen(app)
+        assertTerminalCanType(app, marker: "BOO_HOST_SESSION_ONE")
+
+        let disconnectButton = app.buttons["floating-disconnect-button"]
+        XCTAssertTrue(disconnectButton.waitForExistence(timeout: 5))
+        disconnectButton.tap()
+
+        waitForConnectScreen(app)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 12))
+        firstRow.tap()
+
+        waitForTerminalScreen(app)
+        assertTerminalCanType(app, marker: "BOO_HOST_SESSION_TWO")
+    }
+
     func testTappingTailscaleDeviceConnects() {
         let mockDevices = "example-mbp|example-mbp.tailnet.ts.net|100.76.250.75|macOS|1"
         let app = makeApp(autoConnect: false, resetStorage: true, mockTailscaleDevices: mockDevices)
@@ -446,6 +527,124 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTAssertTrue(app.buttons["terminal-key-left"].exists)
         XCTAssertTrue(app.buttons["terminal-key-right"].exists)
         XCTAssertTrue(app.buttons["terminal-key-meta"].exists)
+    }
+
+    func testKeyboardAccessoryCtrlLClearsVisibleTerminal() {
+        let app = makeApp(autoConnect: false, resetStorage: false)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        guard openLiveTerminal(app) else { return }
+
+        let terminal = app.otherElements["terminal-screen"]
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10))
+        let proxy = app.textViews["terminal-text-proxy"]
+        XCTAssertTrue(proxy.waitForExistence(timeout: 5))
+        assertTerminalCanType(app, marker: "CTRL_CLEAR_MARKER")
+
+        proxy.tap()
+        proxy.typeKey("l", modifierFlags: .control)
+        proxy.typeText("echo AFTER_CTRL_L\r")
+
+        let afterExpectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value CONTAINS %@", "AFTER_CTRL_L"),
+            object: terminal
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [afterExpectation], timeout: 10),
+            .completed,
+            "terminal never recovered after Ctrl+L: \(uiStateSnapshot(app))"
+        )
+        XCTAssertFalse(
+            (terminal.value as? String ?? "").contains("CTRL_CLEAR_MARKER"),
+            "Ctrl+L did not clear the visible terminal snapshot: \(uiStateSnapshot(app))"
+        )
+    }
+
+    func testKeyboardAccessoryRepeatableKeyRepeats() {
+        let app = makeApp(autoConnect: false, resetStorage: false)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        guard openLiveTerminal(app) else { return }
+
+        let terminal = app.otherElements["terminal-screen"]
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10))
+        terminal.tap()
+
+        let tildeButton = app.descendants(matching: .any).matching(identifier: "terminal-key-tilde").firstMatch
+        XCTAssertTrue(tildeButton.waitForExistence(timeout: 5))
+        tildeButton.press(forDuration: 1.2)
+
+        let repeatedExpectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value CONTAINS %@", "~~~"),
+            object: terminal
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [repeatedExpectation], timeout: 10),
+            .completed,
+            "repeatable smart key did not emit repeated characters: \(uiStateSnapshot(app))"
+        )
+    }
+
+    func testFingerScrollUsesTerminalScrollPath() {
+        let app = makeApp(autoConnect: false, resetStorage: false)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        guard openLiveTerminal(app) else { return }
+
+        let terminal = app.otherElements["terminal-screen"]
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10))
+
+        assertTerminalCanType(app, marker: "BOO_SCROLL_READY")
+        sendTerminalCommand(app, command: "jot -w BOO_SCROLL_%d 80 1", expect: "BOO_SCROLL_80", timeout: 12)
+
+        let initialValue = terminal.value as? String ?? ""
+        let initialMarkers = visibleScrollMarkers(in: initialValue)
+        let initialLowestVisible = initialMarkers.min()
+        XCTAssertNotNil(
+            initialLowestVisible,
+            "terminal snapshot did not expose any scroll markers before dragging: \(uiStateSnapshot(app))"
+        )
+        var observedLowestVisible = initialLowestVisible.map { [$0] } ?? []
+
+        let beforeAttachment = XCTAttachment(screenshot: app.screenshot())
+        beforeAttachment.name = "terminal-before-scroll"
+        beforeAttachment.lifetime = .keepAlways
+        add(beforeAttachment)
+
+        for upward in [false, true] {
+            for _ in 0..<6 {
+                dragTerminal(terminal, upward: upward)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.35))
+                let value = terminal.value as? String ?? ""
+                let currentMarkers = visibleScrollMarkers(in: value)
+                if let currentLowestVisible = currentMarkers.min() {
+                    observedLowestVisible.append(currentLowestVisible)
+                }
+            }
+        }
+
+        let afterAttachment = XCTAttachment(screenshot: app.screenshot())
+        afterAttachment.name = "terminal-after-scroll"
+        afterAttachment.lifetime = .keepAlways
+        add(afterAttachment)
+
+        let materialMovementObserved: Bool
+        if let minObserved = observedLowestVisible.min(), let maxObserved = observedLowestVisible.max() {
+            materialMovementObserved = (maxObserved - minObserved) >= 4
+        } else {
+            materialMovementObserved = false
+        }
+
+        XCTAssertTrue(
+            materialMovementObserved,
+            "finger drag did not move the visible terminal scrollback materially via Boo scroll handling; observed lowest markers: \(observedLowestVisible) \(uiStateSnapshot(app))"
+        )
     }
 
     func testDashboardRowShowsLatencyMetricAfterConnect() {

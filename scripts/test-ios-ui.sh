@@ -34,6 +34,7 @@ if [[ -z "$PORT" ]]; then
 fi
 
 cleanup() {
+  pkill -f "target/debug/boo server --socket ${SOCKET_PATH}" >/dev/null 2>&1 || true
   if [[ -n "${PORT:-}" ]]; then
     pgrep -f "dns-sd -R boo on .* (${PORT}) _boo._udp local ${PORT}" | while read -r pid; do
       kill "$pid" >/dev/null 2>&1 || true
@@ -49,6 +50,7 @@ cleanup() {
 trap cleanup EXIT
 
 cd "$ROOT"
+pkill -f "target/debug/boo server --socket ${SOCKET_PATH}" >/dev/null 2>&1 || true
 if [[ "$SKIP_DAEMON" != "1" ]]; then
   cat > "$HOST_PORT_FILE" <<EOF
 BOO_UI_TEST_HOST=$HOST
@@ -58,7 +60,7 @@ fi
 cargo build >/dev/null
 if [[ "$SKIP_DAEMON" != "1" ]]; then
   rm -f "$SOCKET_PATH"
-  target/debug/boo server --socket "$SOCKET_PATH" --remote-port "$PORT" --remote-bind-address "$BIND_ADDRESS" >/tmp/boo-ios-ui-tests.log 2>&1 &
+  RUST_LOG=info target/debug/boo server --socket "$SOCKET_PATH" --remote-port "$PORT" --remote-bind-address "$BIND_ADDRESS" >/tmp/boo-ios-ui-tests.log 2>&1 &
   SERVER_PID=$!
   sleep 1
   if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then

@@ -101,7 +101,6 @@ struct UITestLaunchConfiguration {
             ?? env["BOO_UI_TEST_SHOW_FLOATING_BACK_BUTTON"].flatMap { ["1", "true", "yes"].contains($0.lowercased()) ? true : ["0", "false", "no"].contains($0.lowercased()) ? false : nil }
         let forcedTerminalErrorKind = argumentValue(prefix: "--boo-ui-test-terminal-error=", arguments: arguments)
             ?? env["BOO_UI_TEST_TERMINAL_ERROR"]
-
         return UITestLaunchConfiguration(
             resetStorage: resetStorage,
             nodeName: nodeName,

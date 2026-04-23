@@ -306,6 +306,8 @@ struct RemoteTerminalView: View {
     private let cellWidth: CGFloat = 8.4
     private let cellHeight: CGFloat = 17
     private let gestureThreshold: CGFloat = 28
+    @State private var accumulatedScrollDrag: CGFloat = 0
+    @State private var lastDragTranslation: CGSize = .zero
 
     var body: some View {
         GeometryReader { geo in
@@ -358,18 +360,34 @@ struct RemoteTerminalView: View {
             }
             .contentShape(Rectangle())
             .gesture(
-                DragGesture(minimumDistance: gestureThreshold)
-                    .onEnded { drag in
+                DragGesture(minimumDistance: 4)
+                    .onChanged { drag in
                         guard let onGestureAction else { return }
                         let dx = drag.translation.width
                         let dy = drag.translation.height
-                        if abs(dy) >= abs(dx) {
-                            if dy <= -gestureThreshold {
-                                onGestureAction(.pageUp)
-                            } else if dy >= gestureThreshold {
-                                onGestureAction(.pageDown)
+                        if abs(dy) > abs(dx) {
+                            let step = dy - lastDragTranslation.height
+                            accumulatedScrollDrag += step
+                            let lines = Int(accumulatedScrollDrag / cellHeight)
+                            if lines != 0 {
+                                onGestureAction(.scrollLines(lines))
+                                accumulatedScrollDrag -= CGFloat(lines) * cellHeight
                             }
                         }
+                        lastDragTranslation = drag.translation
+                    }
+                    .onEnded { drag in
+                        guard let onGestureAction else { return }
+                        let dx = drag.translation.width
+                        if abs(dx) >= abs(drag.translation.height) {
+                            if dx <= -gestureThreshold {
+                                onGestureAction(.arrowRight)
+                            } else if dx >= gestureThreshold {
+                                onGestureAction(.arrowLeft)
+                            }
+                        }
+                        accumulatedScrollDrag = 0
+                        lastDragTranslation = .zero
                     }
             )
         }
@@ -481,6 +499,7 @@ final class TerminalProxyTextView: UITextView {
     var onKeyCommand: ((String, UIKeyModifierFlags) -> Bool)?
     private var desiredFocus = false
     private var accessoryState: TerminalKeyboardAccessoryState?
+    private var assistantControls: [String: TerminalAssistantKeyControl] = [:]
 
     override var canBecomeFirstResponder: Bool { true }
 
@@ -498,6 +517,7 @@ final class TerminalProxyTextView: UITextView {
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         inputAssistantItem.allowsHidingShortcuts = false
+        configureAssistantBar()
     }
 
     func updateAccessory(state: TerminalKeyboardAccessoryState) {
@@ -594,56 +614,23 @@ final class TerminalProxyTextView: UITextView {
         []
     }
     
-    private func applyAssistantBarItems() {
-        guard let state = accessoryState else {
-            inputAssistantItem.leadingBarButtonGroups = []
-            inputAssistantItem.trailingBarButtonGroups = []
-            return
-        }
-
-        let leftItems: [UIBarButtonItem] = [
-            assistantItem(title: "⌃", identifier: "terminal-key-ctrl", active: state.ctrlActive) {
-                state.onCtrlModifierEvent(.pressEnded(wasTap: true))
-            },
-            assistantItem(title: "⌥", identifier: "terminal-key-alt", active: state.altActive) {
-                state.onAltModifierEvent(.pressEnded(wasTap: true))
-            },
-            assistantItem(title: "⇥", identifier: "terminal-key-tab", active: false) {
-                state.onTab()
-            },
-            assistantItem(title: "~", identifier: "terminal-key-tilde", active: false) {
-                state.onInsertText("~")
-            },
-            assistantItem(title: "$", identifier: "terminal-key-dollar", active: false) {
-                state.onInsertText("$")
-            },
-            assistantItem(title: "\\", identifier: "terminal-key-backslash", active: false) {
-                state.onInsertText("\\")
-            }
+    private func configureAssistantBar() {
+        let leftItems = [
+            assistantItem(title: "⌃", identifier: "terminal-key-ctrl", repeatable: false, role: .modifier),
+            assistantItem(title: "⌥", identifier: "terminal-key-alt", repeatable: false, role: .modifier),
+            assistantItem(title: "⇥", identifier: "terminal-key-tab", repeatable: true, role: .regular),
+            assistantItem(title: "~", identifier: "terminal-key-tilde", repeatable: true, role: .regular),
+            assistantItem(title: "$", identifier: "terminal-key-dollar", repeatable: true, role: .regular),
+            assistantItem(title: "\\", identifier: "terminal-key-backslash", repeatable: true, role: .regular)
         ]
-
-        let rightItems: [UIBarButtonItem] = [
-            assistantItem(title: "[", identifier: "terminal-key-left-bracket", active: false) {
-                state.onInsertText("[")
-            },
-            assistantItem(title: "]", identifier: "terminal-key-right-bracket", active: false) {
-                state.onInsertText("]")
-            },
-            assistantItem(title: "<", identifier: "terminal-key-less-than", active: false) {
-                state.onInsertText("<")
-            },
-            assistantItem(title: ">", identifier: "terminal-key-greater-than", active: false) {
-                state.onInsertText(">")
-            },
-            assistantItem(title: "←", identifier: "terminal-key-left", active: false) {
-                state.onArrowLeft()
-            },
-            assistantItem(title: "→", identifier: "terminal-key-right", active: false) {
-                state.onArrowRight()
-            },
-            assistantItem(title: "⌘", identifier: "terminal-key-meta", active: state.metaActive) {
-                state.onMetaModifierEvent(.pressEnded(wasTap: true))
-            }
+        let rightItems = [
+            assistantItem(title: "[", identifier: "terminal-key-left-bracket", repeatable: true, role: .regular),
+            assistantItem(title: "]", identifier: "terminal-key-right-bracket", repeatable: true, role: .regular),
+            assistantItem(title: "<", identifier: "terminal-key-less-than", repeatable: true, role: .regular),
+            assistantItem(title: ">", identifier: "terminal-key-greater-than", repeatable: true, role: .regular),
+            assistantItem(title: "←", identifier: "terminal-key-left", repeatable: true, role: .regular),
+            assistantItem(title: "→", identifier: "terminal-key-right", repeatable: true, role: .regular),
+            assistantItem(title: "⌘", identifier: "terminal-key-meta", repeatable: false, role: .modifier)
         ]
 
         inputAssistantItem.leadingBarButtonGroups = [
@@ -654,16 +641,168 @@ final class TerminalProxyTextView: UITextView {
         ]
     }
 
+    private func applyAssistantBarItems() {
+        guard let state = accessoryState else {
+            assistantControls.values.forEach { $0.update(action: nil, modifierHandler: nil, isActive: false) }
+            return
+        }
+
+        assistantControls["terminal-key-ctrl"]?.update(
+            action: nil,
+            modifierHandler: { state.onCtrlModifierEvent($0) },
+            isActive: state.ctrlActive
+        )
+        assistantControls["terminal-key-alt"]?.update(
+            action: nil,
+            modifierHandler: { state.onAltModifierEvent($0) },
+            isActive: state.altActive
+        )
+        assistantControls["terminal-key-tab"]?.update(action: state.onTab, modifierHandler: nil, isActive: false)
+        assistantControls["terminal-key-tilde"]?.update(action: { state.onInsertText("~") }, modifierHandler: nil, isActive: false)
+        assistantControls["terminal-key-dollar"]?.update(action: { state.onInsertText("$") }, modifierHandler: nil, isActive: false)
+        assistantControls["terminal-key-backslash"]?.update(action: { state.onInsertText("\\") }, modifierHandler: nil, isActive: false)
+        assistantControls["terminal-key-left-bracket"]?.update(action: { state.onInsertText("[") }, modifierHandler: nil, isActive: false)
+        assistantControls["terminal-key-right-bracket"]?.update(action: { state.onInsertText("]") }, modifierHandler: nil, isActive: false)
+        assistantControls["terminal-key-less-than"]?.update(action: { state.onInsertText("<") }, modifierHandler: nil, isActive: false)
+        assistantControls["terminal-key-greater-than"]?.update(action: { state.onInsertText(">") }, modifierHandler: nil, isActive: false)
+        assistantControls["terminal-key-left"]?.update(action: state.onArrowLeft, modifierHandler: nil, isActive: false)
+        assistantControls["terminal-key-right"]?.update(action: state.onArrowRight, modifierHandler: nil, isActive: false)
+        assistantControls["terminal-key-meta"]?.update(
+            action: nil,
+            modifierHandler: { state.onMetaModifierEvent($0) },
+            isActive: state.metaActive
+        )
+    }
+
+    private enum AssistantKeyRole {
+        case regular
+        case modifier
+    }
+
     private func assistantItem(
         title: String,
         identifier: String,
-        active: Bool,
-        action: @escaping () -> Void
+        repeatable: Bool,
+        role: AssistantKeyRole
     ) -> UIBarButtonItem {
-        let item = UIBarButtonItem(title: title, style: .plain, target: nil, action: nil)
-        item.primaryAction = UIAction { _ in action() }
-        item.accessibilityIdentifier = identifier
-        item.tintColor = active ? UIColor.label : UIColor.secondaryLabel
-        return item
+        let control = TerminalAssistantKeyControl(
+            title: title,
+            identifier: identifier,
+            repeatable: repeatable,
+            role: role == .modifier ? .modifier : .regular
+        )
+        assistantControls[identifier] = control
+        return UIBarButtonItem(customView: control)
+    }
+}
+
+final class TerminalAssistantKeyControl: UIControl {
+    enum Role {
+        case regular
+        case modifier
+    }
+
+    private let label = UILabel()
+    private let repeatable: Bool
+    private let role: Role
+    private var action: (() -> Void)?
+    private var modifierHandler: ((TerminalAssistantModifierEvent) -> Void)?
+    private var repeatTimer: Timer?
+    private var touchBeganAt: Date?
+    private var isActive = false
+
+    private static let initialRepeatDelay: TimeInterval = 0.42
+    private static let repeatInterval: TimeInterval = 0.08
+    private static let tapThreshold: TimeInterval = 0.20
+
+    init(title: String, identifier: String, repeatable: Bool, role: Role) {
+        self.repeatable = repeatable
+        self.role = role
+        super.init(frame: CGRect(x: 0, y: 0, width: 30, height: 32))
+        accessibilityIdentifier = identifier
+        isExclusiveTouch = false
+        label.text = title
+        label.font = UIFont.systemFont(ofSize: 17, weight: .semibold)
+        label.textAlignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor),
+            label.topAnchor.constraint(equalTo: topAnchor),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor),
+            widthAnchor.constraint(greaterThanOrEqualToConstant: 28),
+            heightAnchor.constraint(equalToConstant: 32)
+        ])
+        updateColors()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func update(
+        action: (() -> Void)?,
+        modifierHandler: ((TerminalAssistantModifierEvent) -> Void)?,
+        isActive: Bool
+    ) {
+        self.action = action
+        self.modifierHandler = modifierHandler
+        self.isActive = isActive
+        updateColors()
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesBegan(touches, with: event)
+        touchBeganAt = Date()
+        switch role {
+        case .modifier:
+            modifierHandler?(.pressBegan)
+        case .regular:
+            action?()
+            startRepeatIfNeeded()
+        }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        endInteraction(cancelled: false)
+        super.touchesEnded(touches, with: event)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        endInteraction(cancelled: true)
+        super.touchesCancelled(touches, with: event)
+    }
+
+    private func endInteraction(cancelled: Bool) {
+        stopRepeat()
+        let duration = Date().timeIntervalSince(touchBeganAt ?? Date())
+        touchBeganAt = nil
+        if role == .modifier {
+            modifierHandler?(.pressEnded(wasTap: !cancelled && duration <= Self.tapThreshold))
+        }
+    }
+
+    private func startRepeatIfNeeded() {
+        guard repeatable else { return }
+        repeatTimer = Timer.scheduledTimer(withTimeInterval: Self.initialRepeatDelay, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.repeatTimer = Timer.scheduledTimer(withTimeInterval: Self.repeatInterval, repeats: true) { [weak self] _ in
+                self?.action?()
+            }
+            RunLoop.main.add(self.repeatTimer!, forMode: .common)
+        }
+        if let repeatTimer {
+            RunLoop.main.add(repeatTimer, forMode: .common)
+        }
+    }
+
+    private func stopRepeat() {
+        repeatTimer?.invalidate()
+        repeatTimer = nil
+    }
+
+    private func updateColors() {
+        label.textColor = isActive ? .label : .secondaryLabel
     }
 }

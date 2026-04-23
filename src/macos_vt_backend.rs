@@ -158,7 +158,21 @@ impl crate::backend::TerminalBackend for MacVtBackend {
     ) {
     }
 
-    fn surface_mouse_scroll(&mut self, _focused_pane: PaneHandle, _dx: f64, _dy: f64, _mods: i32) {}
+    fn surface_mouse_scroll(&mut self, focused_pane: PaneHandle, _dx: f64, dy: f64, _mods: i32) {
+        let Some(pane) = self.pane(focused_pane) else {
+            return;
+        };
+        let delta = if dy.abs() >= 1.0 {
+            -dy.round() as isize
+        } else if dy > 0.0 {
+            -1
+        } else if dy < 0.0 {
+            1
+        } else {
+            0
+        };
+        let _ = pane.scroll_viewport_delta(delta);
+    }
 
     fn ime_point(&self, focused_pane: PaneHandle) -> Option<(f64, f64, f64, f64)> {
         let snapshot = self.snapshots.get(&focused_pane.id())?;
