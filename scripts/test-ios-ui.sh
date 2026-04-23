@@ -74,9 +74,31 @@ if [[ -n "$ONLY_TEST" ]]; then
   TEST_ARGS+=("-only-testing:$ONLY_TEST")
 fi
 
+xcodebuild_clean_env() {
+  env \
+    -u DEVELOPER_DIR \
+    -u SDKROOT \
+    -u MACOSX_DEPLOYMENT_TARGET \
+    -u IPHONEOS_DEPLOYMENT_TARGET \
+    -u NIX_LDFLAGS \
+    -u NIX_CFLAGS_COMPILE \
+    -u NIX_CXXSTDLIB_COMPILE \
+    -u CC \
+    -u CXX \
+    -u LD \
+    -u AR \
+    -u NM \
+    -u RANLIB \
+    -u LIBTOOL \
+    -u LDPLUSPLUS \
+    -u OTHER_LDFLAGS \
+    -u OTHER_SWIFT_FLAGS \
+    "$@"
+}
+
 if [[ "$DESTINATION" == *"platform=iOS Simulator"* ]]; then
   BOO_UI_TEST_HOST="$HOST" BOO_UI_TEST_PORT="$PORT" \
-    xcodebuild \
+    xcodebuild_clean_env xcodebuild \
     -project ios/Boo.xcodeproj \
     -scheme Boo \
     -destination "$DESTINATION" \
@@ -92,7 +114,7 @@ else
     exit 2
   fi
   BOO_UI_TEST_HOST="$HOST" BOO_UI_TEST_PORT="$PORT" \
-    xcodebuild \
+    xcodebuild_clean_env xcodebuild \
     -project ios/Boo.xcodeproj \
     -scheme Boo \
     -destination "$DESTINATION" \

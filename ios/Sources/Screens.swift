@@ -1031,45 +1031,61 @@ struct TerminalTabScreen: View {
     private var runtimeTabBar: some View {
         if let runtimeState = client.runtimeState, !runtimeState.tabs.isEmpty {
             VStack(spacing: KineticSpacing.xs) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: KineticSpacing.sm) {
-                        ForEach(runtimeState.tabs, id: \.tabId) { tab in
-                            Button {
-                                client.setViewedTab(tab.tabId)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(tab.title.isEmpty ? "Tab \(tab.index + 1)" : tab.title)
-                                        .font(KineticFont.caption)
-                                        .lineLimit(1)
-                                    Text("\(tab.paneCount) pane\(tab.paneCount == 1 ? "" : "s")")
-                                        .font(.system(size: 11, weight: .medium))
-                                        .foregroundStyle(KineticColor.onSurfaceVariant)
-                                }
-                                .padding(.horizontal, KineticSpacing.sm)
-                                .padding(.vertical, 6)
-                                .background(tab.tabId == runtimeState.viewedTabId ? KineticColor.primary.opacity(0.18) : KineticColor.surfaceVariant)
-                                .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("runtime-tab-\(tab.tabId)")
-                        }
-                    }
-                    .padding(.horizontal, KineticSpacing.md)
-                }
-
-                HStack(spacing: KineticSpacing.sm) {
-                    Button("Prev") { client.prevTab() }
-                    Button("Next") { client.nextTab() }
-                    Button("New") { client.newTab() }
-                    Button("Close") { client.closeViewedTab() }
-                }
-                .buttonStyle(KineticSecondaryButtonStyle())
-                .padding(.horizontal, KineticSpacing.md)
-                .padding(.bottom, KineticSpacing.xs)
+                runtimeTabScroller(runtimeState)
+                runtimeTabActions
             }
             .padding(.top, KineticSpacing.xs)
             .background(KineticColor.surface)
         }
+    }
+
+    private func runtimeTabScroller(_ runtimeState: RemoteRuntimeStateSnapshot) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: KineticSpacing.sm) {
+                ForEach(runtimeState.tabs, id: \.tabId) { tab in
+                    runtimeTabButton(tab, viewedTabId: runtimeState.viewedTabId)
+                }
+            }
+            .padding(.horizontal, KineticSpacing.md)
+        }
+    }
+
+    private func runtimeTabButton(_ tab: RemoteRuntimeTabSnapshot, viewedTabId: UInt32?) -> some View {
+        let title = tab.title.isEmpty ? "Tab \(tab.index + 1)" : tab.title
+        let paneLabel = "\(tab.paneCount) pane\(tab.paneCount == 1 ? "" : "s")"
+        let backgroundColor =
+            tab.tabId == viewedTabId ? KineticColor.primary.opacity(0.18) : KineticColor.surfaceContainer
+
+        return Button {
+            client.setViewedTab(tab.tabId)
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(KineticFont.caption)
+                    .lineLimit(1)
+                Text(paneLabel)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(KineticColor.onSurfaceVariant)
+            }
+            .padding(.horizontal, KineticSpacing.sm)
+            .padding(.vertical, 6)
+            .background(backgroundColor)
+            .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("runtime-tab-\(tab.tabId)")
+    }
+
+    private var runtimeTabActions: some View {
+        HStack(spacing: KineticSpacing.sm) {
+            Button("Prev") { client.prevTab() }
+            Button("Next") { client.nextTab() }
+            Button("New") { client.newTab() }
+            Button("Close") { client.closeViewedTab() }
+        }
+        .buttonStyle(KineticSecondaryButtonStyle())
+        .padding(.horizontal, KineticSpacing.md)
+        .padding(.bottom, KineticSpacing.xs)
     }
 
     @ViewBuilder
@@ -1197,7 +1213,7 @@ struct TerminalTabScreen: View {
         }
     }
 
-    private func runtimePaneDividers(_ panes: [DecodedRuntimePane]) -> [RuntimePaneDivider] {
+    private func runtimePaneDividers(_ panes: [RemoteRuntimePaneSnapshot]) -> [RuntimePaneDivider] {
         var dividers: [RuntimePaneDivider] = []
         for (index, first) in panes.enumerated() {
             for second in panes.dropFirst(index + 1) {
