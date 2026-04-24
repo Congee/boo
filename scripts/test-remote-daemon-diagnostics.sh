@@ -2,9 +2,76 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BOO_REPO_ROOT="$ROOT"
 SOCKET_PATH="${BOO_REMOTE_DIAG_SOCKET:-/tmp/boo-remote-daemon-diagnostics.sock}"
 PORT="${BOO_REMOTE_DIAG_PORT:-7359}"
 LOG_PATH="${BOO_REMOTE_DIAG_LOG:-/tmp/boo-remote-daemon-diagnostics.log}"
+VT_LIB_DIR="${BOO_VT_LIB_DIR:-${VT_LIB_DIR:-}}"
+
+source "$ROOT/scripts/lib/vt-dylib-env.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: bash scripts/test-remote-daemon-diagnostics.sh [options]
+
+Options:
+  --socket PATH
+  --port PORT
+  --log PATH
+  --vt-lib-dir PATH
+  -h, --help
+EOF
+}
+
+require_arg() {
+  if [[ $# -lt 2 ]]; then
+    echo "Missing value for $1" >&2
+    usage >&2
+    exit 2
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --socket)
+      require_arg "$@"
+      SOCKET_PATH="$2"
+      shift 2
+      ;;
+    --port)
+      require_arg "$@"
+      PORT="$2"
+      shift 2
+      ;;
+    --log)
+      require_arg "$@"
+      LOG_PATH="$2"
+      shift 2
+      ;;
+    --vt-lib-dir)
+      require_arg "$@"
+      VT_LIB_DIR="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ -n "$VT_LIB_DIR" && -z "${BOO_VT_LIB_DIR:-}" ]]; then
+  BOO_VT_LIB_DIR="$VT_LIB_DIR"
+fi
 
 cleanup() {
   local pid="${SERVER_PID:-}"
@@ -20,7 +87,7 @@ cd "$ROOT"
 
 cargo build >/dev/null
 rm -f "$SOCKET_PATH"
-target/debug/boo server --socket "$SOCKET_PATH" --remote-port "$PORT" >"$LOG_PATH" 2>&1 &
+boo_with_vt_lib_env target/debug/boo server --socket "$SOCKET_PATH" --remote-port "$PORT" >"$LOG_PATH" 2>&1 &
 SERVER_PID=$!
 
 wait_for_probe() {

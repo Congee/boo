@@ -23,8 +23,10 @@ Options:
   --bundle-id BUNDLE_ID
   --output-dir PATH
   --time-limit DURATION        xctrace duration such as 18s, 1m
+  --scenario NAME             named defaults: default, runtime-view-e2e
   --trace-actions ACTIONS      comma-separated: focus-pane,set-viewed-tab,input
   --trace-input-command TEXT   command sent after the terminal connects
+  --vt-lib-dir PATH
   --skip-build                 use an existing app build in DerivedData
   --skip-install               use the app already installed on the device
   --skip-device-check          do not run the unlocked/developer-mode preflight
@@ -49,12 +51,14 @@ require_arg() {
 DEVICE_ID="${BOO_IOS_DEVICE_ID:-}"
 TEAM_ID="${BOO_IOS_TEAM_ID:-}"
 DERIVED_DATA="${BOO_IOS_DERIVED_DATA_PATH:-/tmp/boo-ios-derived}"
+VT_LIB_DIR="${BOO_VT_LIB_DIR:-${VT_LIB_DIR:-}}"
 HOST=""
 PORT=""
 SOCKET_PATH="/tmp/boo-ios-signpost-verify.sock"
 BUNDLE_ID="me.congee.boo"
 OUTPUT_DIR=""
 TIME_LIMIT="18s"
+SCENARIO="default"
 TRACE_ACTIONS="focus-pane,set-viewed-tab,input"
 TRACE_INPUT_COMMAND="echo BOO_SIGNPOST_VERIFY"
 SKIP_BUILD=0
@@ -108,6 +112,11 @@ while [[ $# -gt 0 ]]; do
       TIME_LIMIT="$2"
       shift 2
       ;;
+    --scenario)
+      require_arg "$@"
+      SCENARIO="$2"
+      shift 2
+      ;;
     --trace-actions)
       require_arg "$@"
       TRACE_ACTIONS="$2"
@@ -116,6 +125,11 @@ while [[ $# -gt 0 ]]; do
     --trace-input-command)
       require_arg "$@"
       TRACE_INPUT_COMMAND="$2"
+      shift 2
+      ;;
+    --vt-lib-dir)
+      require_arg "$@"
+      VT_LIB_DIR="$2"
       shift 2
       ;;
     --skip-build)
@@ -151,6 +165,22 @@ if [[ -z "$DEVICE_ID" ]]; then
   echo "tip: use bash scripts/list-ios-devices.sh to find a device UDID" >&2
   exit 2
 fi
+case "$SCENARIO" in
+  default)
+    ;;
+  runtime-view-e2e)
+    TRACE_ACTIONS="${TRACE_ACTIONS:-focus-pane,set-viewed-tab,input}"
+    if [[ "$TRACE_INPUT_COMMAND" == "echo BOO_SIGNPOST_VERIFY" ]]; then
+      TRACE_INPUT_COMMAND="printf \'BOO_RV_E2E_IOS 🙂 測試 é\\n\'"
+    fi
+    ;;
+  *)
+    echo "Unknown --scenario: $SCENARIO" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+
 TRACE_ACTIONS="${TRACE_ACTIONS//[[:space:]]/}"
 
 trace_action_enabled() {
@@ -199,6 +229,9 @@ cleanup() {
 trap cleanup EXIT
 
 cd "$ROOT"
+if [[ -n "$VT_LIB_DIR" ]]; then
+  BOO_VT_LIB_DIR="$VT_LIB_DIR"
+fi
 
 if [[ "$SKIP_DEVICE_CHECK" != "1" ]]; then
   bash scripts/check-ios-device-state.sh "$DEVICE_ID"

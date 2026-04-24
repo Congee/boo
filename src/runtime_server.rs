@@ -522,6 +522,16 @@ impl BooApp {
                     snapshot: self.ui_snapshot(),
                 });
             }
+            server::Command::GetUiRuntimeState { reply } => {
+                let _ = reply.send(control::Response::UiRuntimeState {
+                    state: self.ui_runtime_state(),
+                });
+            }
+            server::Command::GetUiTextSnapshot { reply } => {
+                let _ = reply.send(control::Response::UiTextSnapshot {
+                    snapshot: self.ui_text_snapshot(),
+                });
+            }
             server::Command::SetStatusComponents {
                 zone,
                 source,

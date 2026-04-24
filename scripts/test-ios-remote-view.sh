@@ -6,13 +6,62 @@ BOO_REPO_ROOT="$ROOT"
 PORT="${BOO_IOS_REMOTE_PORT:-}"
 SOCKET_PATH="${BOO_IOS_REMOTE_SOCKET:-/tmp/boo-ios-remote-validation.sock}"
 DERIVED_DIR="${BOO_IOS_VALIDATE_DERIVED:-/tmp/boo-ios-validate-derived}"
-XCODE_LOG="$DERIVED_DIR/xcodebuild.log"
 SWIFT_MODULE_CACHE="${BOO_IOS_SWIFT_MODULE_CACHE:-/tmp/boo-ios-swift-module-cache}"
+VT_LIB_DIR="${BOO_VT_LIB_DIR:-${VT_LIB_DIR:-}}"
+DEVELOPER_DIR_ARG="${BOO_IOS_DEVELOPER_DIR:-}"
+
+usage() {
+  cat <<'EOF'
+Usage: bash scripts/test-ios-remote-view.sh [options]
+
+Options:
+  --port PORT
+  --socket PATH
+  --derived-dir PATH
+  --swift-module-cache PATH
+  --developer-dir PATH
+  --vt-lib-dir PATH
+  -h, --help
+EOF
+}
+
+require_arg() {
+  if [[ $# -lt 2 ]]; then
+    echo "Missing value for $1" >&2
+    usage >&2
+    exit 2
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --port)
+      require_arg "$@"; PORT="$2"; shift 2 ;;
+    --socket)
+      require_arg "$@"; SOCKET_PATH="$2"; shift 2 ;;
+    --derived-dir)
+      require_arg "$@"; DERIVED_DIR="$2"; shift 2 ;;
+    --swift-module-cache)
+      require_arg "$@"; SWIFT_MODULE_CACHE="$2"; shift 2 ;;
+    --developer-dir)
+      require_arg "$@"; DEVELOPER_DIR_ARG="$2"; shift 2 ;;
+    --vt-lib-dir)
+      require_arg "$@"; VT_LIB_DIR="$2"; shift 2 ;;
+    -h|--help)
+      usage; exit 0 ;;
+    --)
+      shift; break ;;
+    *)
+      echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+XCODE_LOG="$DERIVED_DIR/xcodebuild.log"
 VALIDATOR_BIN="$DERIVED_DIR/remote-validator"
 SELFTEST_BIN="$DERIVED_DIR/protocol-codec-selftest"
 TRACE_SELFTEST_BIN="$DERIVED_DIR/trace-render-apply-selftest"
-if [[ -n "${BOO_IOS_DEVELOPER_DIR:-}" ]]; then
-  XCODE_DEVELOPER_DIR="$BOO_IOS_DEVELOPER_DIR"
+if [[ -n "$DEVELOPER_DIR_ARG" ]]; then
+  XCODE_DEVELOPER_DIR="$DEVELOPER_DIR_ARG"
 elif [[ -d /Applications/Xcode.app/Contents/Developer ]]; then
   XCODE_DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 else
@@ -20,6 +69,9 @@ else
 fi
 
 source "$ROOT/scripts/lib/vt-dylib-env.sh"
+if [[ -n "$VT_LIB_DIR" ]]; then
+  BOO_VT_LIB_DIR="$VT_LIB_DIR"
+fi
 
 run_swiftc() {
   env -u SDKROOT DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" xcrun swiftc "$@"

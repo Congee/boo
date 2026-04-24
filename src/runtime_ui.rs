@@ -220,6 +220,52 @@ impl BooApp {
             .unwrap_or_default()
     }
 
+    pub(crate) fn ui_text_snapshot(&self) -> control::UiTextSnapshot {
+        let visible_panes = self.visible_pane_snapshots();
+        let pane_texts = visible_panes
+            .iter()
+            .filter_map(|pane| {
+                self.backend
+                    .ui_terminal_snapshot(pane.pane_id)
+                    .map(|terminal| control::UiPaneTextSnapshot {
+                        pane_id: pane.pane_id,
+                        text: Self::terminal_text(&terminal),
+                    })
+            })
+            .collect();
+
+        control::UiTextSnapshot {
+            active_tab: self.server.tabs.active_index(),
+            focused_pane: self.server.tabs.focused_pane().id(),
+            tabs: self.runtime_tab_snapshots_for(self.server.tabs.active_tab_id()),
+            visible_panes,
+            status_bar: self.status_components.snapshot(),
+            pane_texts,
+        }
+    }
+
+    fn terminal_text(terminal: &control::UiTerminalSnapshot) -> String {
+        terminal
+            .rows_data
+            .iter()
+            .map(|row| {
+                row.cells
+                    .iter()
+                    .map(|cell| {
+                        if cell.text.is_empty() {
+                            " "
+                        } else {
+                            cell.text.as_str()
+                        }
+                    })
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[allow(dead_code)]
     pub(crate) fn ui_font(&self) -> Font {
         configured_font(self.terminal_font_families.first().copied())

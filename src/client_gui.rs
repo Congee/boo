@@ -422,26 +422,16 @@ impl ClientApp {
     pub fn view(&self) -> Element<'_, Message> {
         let mut main_col = column![].width(Length::Fill).height(Length::Fill);
 
-        if self.bootstrapped {
-            if !self.visible_panes.is_empty() && !self.pane_snapshots.is_empty() {
-                main_col = main_col.push(self.render_terminal_scene());
-            } else {
-                main_col = main_col.push(
-                    iced::widget::Space::new()
-                        .width(Length::Fill)
-                        .height(Length::Fill),
-                );
-            }
+        if self.bootstrapped && !self.visible_panes.is_empty() && !self.pane_snapshots.is_empty() {
+            main_col = main_col.push(self.render_terminal_scene());
+        } else if self.bootstrapped {
+            main_col = main_col.push(self.render_terminal_placeholder(None));
         } else {
             let message = self
                 .last_error
                 .clone()
                 .unwrap_or_else(|| "waiting for boo server".to_string());
-            main_col = main_col.push(
-                container(text(message).font(Font::MONOSPACE).size(14))
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            );
+            main_col = main_col.push(self.render_terminal_placeholder(Some(message)));
         }
 
         let right = if self.ui_state.status_bar.right.is_empty() {
@@ -527,6 +517,33 @@ impl ClientApp {
 
     pub fn theme(&self) -> Theme {
         Theme::Dark
+    }
+
+    fn terminal_background_color(&self) -> Color {
+        Self::theme_color(self.terminal_background, self.background_opacity)
+    }
+
+    fn render_terminal_placeholder(&self, message: Option<String>) -> Element<'_, Message> {
+        let background = self.terminal_background_color();
+        let content: Element<'_, Message> = match message {
+            Some(message) => text(message)
+                .font(Font::MONOSPACE)
+                .size(14)
+                .color(Self::theme_color(self.terminal_foreground, 1.0))
+                .into(),
+            None => iced::widget::Space::new()
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+        };
+        container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(move |_: &Theme| container::Style {
+                background: Some(iced::Background::Color(background)),
+                ..Default::default()
+            })
+            .into()
     }
 
     fn render_terminal_scene<'a>(&'a self) -> Element<'a, Message> {
@@ -695,9 +712,14 @@ impl ClientApp {
                 "client.view.render_terminal_scene.stack",
                 crate::profiling::Kind::Cpu,
             );
-            stack(layers)
+            let background = self.terminal_background_color();
+            container(stack(layers).width(Length::Fill).height(Length::Fill))
                 .width(Length::Fill)
                 .height(Length::Fill)
+                .style(move |_: &Theme| container::Style {
+                    background: Some(iced::Background::Color(background)),
+                    ..Default::default()
+                })
                 .into()
         }
     }

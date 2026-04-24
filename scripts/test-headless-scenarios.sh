@@ -2,28 +2,61 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BOO_REPO_ROOT="$ROOT_DIR"
+source "$ROOT_DIR/scripts/lib/vt-dylib-env.sh"
 CONFIG_ROOT="${BOO_TEST_CONFIG_ROOT:-/tmp/boo-headless-scenarios}"
-CONFIG_DIR="$CONFIG_ROOT/boo"
 SOCKET_PATH="${BOO_TEST_SOCKET:-/tmp/boo-headless-scenarios.sock}"
 LOG_PATH="${BOO_TEST_LOG:-/tmp/boo-headless-scenarios.log}"
 VT_LIB_DIR="${VT_LIB_DIR:-}"
+TERMINAL_BODY_IMPL="${BOO_TERMINAL_BODY_IMPL:-}"
 
-find_vt_lib_dir() {
-  local target="${TARGET:-$(rustc -vV | awk '/host:/ {print $2}')}"
-  local candidates=(
-    "$ROOT_DIR/target/libghostty-vt/$target/debug/lib"
-    "$ROOT_DIR/target/libghostty-vt/$target/profiling/lib"
-    "$ROOT_DIR/target/libghostty-vt/$target/release/lib"
-  )
-  local path
-  for path in "${candidates[@]}"; do
-    if [[ -e "$path/libghostty-vt.so.0" || -e "$path/libghostty-vt.so" ]]; then
-      printf '%s\n' "$path"
-      return 0
-    fi
-  done
-  return 1
+usage() {
+  cat <<'EOF'
+Usage: bash scripts/test-headless-scenarios.sh [options]
+
+Options:
+  --config-root PATH
+  --socket PATH
+  --log PATH
+  --vt-lib-dir PATH
+  --terminal-body-impl NAME
+  -h, --help
+EOF
 }
+
+require_arg() {
+  if [[ $# -lt 2 ]]; then
+    echo "Missing value for $1" >&2
+    usage >&2
+    exit 2
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --config-root)
+      require_arg "$@"; CONFIG_ROOT="$2"; shift 2 ;;
+    --socket)
+      require_arg "$@"; SOCKET_PATH="$2"; shift 2 ;;
+    --log)
+      require_arg "$@"; LOG_PATH="$2"; shift 2 ;;
+    --vt-lib-dir)
+      require_arg "$@"; VT_LIB_DIR="$2"; shift 2 ;;
+    --terminal-body-impl)
+      require_arg "$@"; TERMINAL_BODY_IMPL="$2"; shift 2 ;;
+    -h|--help)
+      usage; exit 0 ;;
+    --)
+      shift; break ;;
+    *)
+      echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+CONFIG_DIR="$CONFIG_ROOT/boo"
+if [[ -n "$VT_LIB_DIR" && -z "${BOO_VT_LIB_DIR:-}" ]]; then
+  BOO_VT_LIB_DIR="$VT_LIB_DIR"
+fi
 
 mkdir -p "$CONFIG_DIR"
 cat > "$CONFIG_DIR/config.boo" <<EOF
@@ -47,15 +80,11 @@ trap cleanup EXIT
 
 (
   cd "$ROOT_DIR"
-  if [[ -z "$VT_LIB_DIR" ]]; then
-    VT_LIB_DIR="$(find_vt_lib_dir || true)"
+  export XDG_CONFIG_HOME="$CONFIG_ROOT"
+  if [[ -n "$TERMINAL_BODY_IMPL" ]]; then
+    export BOO_TERMINAL_BODY_IMPL="$TERMINAL_BODY_IMPL"
   fi
-  if [[ -n "$VT_LIB_DIR" ]]; then
-    LD_LIBRARY_PATH="$VT_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-      XDG_CONFIG_HOME="$CONFIG_ROOT" target/debug/boo --headless >"$LOG_PATH" 2>&1
-  else
-    XDG_CONFIG_HOME="$CONFIG_ROOT" target/debug/boo --headless >"$LOG_PATH" 2>&1
-  fi
+  boo_with_vt_lib_env target/debug/boo --headless >"$LOG_PATH" 2>&1
 ) &
 BOO_PID=$!
 

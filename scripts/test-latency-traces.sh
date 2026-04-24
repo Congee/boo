@@ -5,8 +5,66 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BOO_REPO_ROOT="$ROOT"
 SOCKET_PATH="${BOO_LATENCY_TRACE_SOCKET:-/tmp/boo-latency-trace.sock}"
 LOG_PATH="${BOO_LATENCY_TRACE_LOG:-/tmp/boo-latency-trace.log}"
+VT_LIB_DIR="${BOO_VT_LIB_DIR:-${VT_LIB_DIR:-}}"
 
 source "$ROOT/scripts/lib/vt-dylib-env.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: bash scripts/test-latency-traces.sh [options]
+
+Options:
+  --socket PATH
+  --log PATH
+  --vt-lib-dir PATH
+  -h, --help
+EOF
+}
+
+require_arg() {
+  if [[ $# -lt 2 ]]; then
+    echo "Missing value for $1" >&2
+    usage >&2
+    exit 2
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --socket)
+      require_arg "$@"
+      SOCKET_PATH="$2"
+      shift 2
+      ;;
+    --log)
+      require_arg "$@"
+      LOG_PATH="$2"
+      shift 2
+      ;;
+    --vt-lib-dir)
+      require_arg "$@"
+      VT_LIB_DIR="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ -n "$VT_LIB_DIR" && -z "${BOO_VT_LIB_DIR:-}" ]]; then
+  BOO_VT_LIB_DIR="$VT_LIB_DIR"
+fi
 
 cleanup() {
   local pid="${BOO_PID:-}"

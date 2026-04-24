@@ -29,6 +29,8 @@ boo_with_vt_lib_env() {
     return
   fi
 
+  export BOO_VT_LIB_DIR="$vt_lib_dir"
+
   case "$(uname -s)" in
     Darwin)
       DYLD_LIBRARY_PATH="$vt_lib_dir${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" "$@"

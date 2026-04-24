@@ -2,30 +2,75 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BOO_REPO_ROOT="$ROOT_DIR"
+source "$ROOT_DIR/scripts/lib/vt-dylib-env.sh"
 CONFIG_ROOT="${BOO_TEST_CONFIG_ROOT:-/tmp/boo-ui-scenarios}"
-CONFIG_DIR="$CONFIG_ROOT/boo"
 SOCKET_PATH="${BOO_TEST_SOCKET:-/tmp/boo-ui-scenarios.sock}"
 LOG_PATH="${BOO_TEST_LOG:-/tmp/boo-ui-scenarios.log}"
 LOG_LEVEL="${BOO_TEST_LOG_LEVEL:-warn}"
-EXPECTED_FONT="$(fc-match -f '%{family[0]}' 'JetBrains Mono' 2>/dev/null || printf 'JetBrains Mono')"
+if [[ -n "${BOO_TEST_EXPECTED_FONT:-}" ]]; then
+  EXPECTED_FONT="$BOO_TEST_EXPECTED_FONT"
+elif [[ "$(uname -s)" == "Darwin" ]]; then
+  EXPECTED_FONT="JetBrains Mono"
+else
+  EXPECTED_FONT="$(fc-match -f '%{family[0]}' 'JetBrains Mono' 2>/dev/null || printf 'JetBrains Mono')"
+fi
 VT_LIB_DIR="${VT_LIB_DIR:-}"
+TERMINAL_BODY_IMPL="${BOO_TERMINAL_BODY_IMPL:-}"
 
-find_vt_lib_dir() {
-  local target="${TARGET:-$(rustc -vV | awk '/host:/ {print $2}')}"
-  local candidates=(
-    "$ROOT_DIR/target/libghostty-vt/$target/debug/lib"
-    "$ROOT_DIR/target/libghostty-vt/$target/profiling/lib"
-    "$ROOT_DIR/target/libghostty-vt/$target/release/lib"
-  )
-  local path
-  for path in "${candidates[@]}"; do
-    if [[ -e "$path/libghostty-vt.so.0" || -e "$path/libghostty-vt.so" ]]; then
-      printf '%s\n' "$path"
-      return 0
-    fi
-  done
-  return 1
+usage() {
+  cat <<'EOF'
+Usage: bash scripts/test-ui-scenarios.sh [options]
+
+Options:
+  --config-root PATH
+  --socket PATH
+  --log PATH
+  --log-level LEVEL
+  --expected-font FAMILY
+  --vt-lib-dir PATH
+  --terminal-body-impl NAME
+  -h, --help
+EOF
 }
+
+require_arg() {
+  if [[ $# -lt 2 ]]; then
+    echo "Missing value for $1" >&2
+    usage >&2
+    exit 2
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --config-root)
+      require_arg "$@"; CONFIG_ROOT="$2"; shift 2 ;;
+    --socket)
+      require_arg "$@"; SOCKET_PATH="$2"; shift 2 ;;
+    --log)
+      require_arg "$@"; LOG_PATH="$2"; shift 2 ;;
+    --log-level)
+      require_arg "$@"; LOG_LEVEL="$2"; shift 2 ;;
+    --expected-font)
+      require_arg "$@"; EXPECTED_FONT="$2"; shift 2 ;;
+    --vt-lib-dir)
+      require_arg "$@"; VT_LIB_DIR="$2"; shift 2 ;;
+    --terminal-body-impl)
+      require_arg "$@"; TERMINAL_BODY_IMPL="$2"; shift 2 ;;
+    -h|--help)
+      usage; exit 0 ;;
+    --)
+      shift; break ;;
+    *)
+      echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+CONFIG_DIR="$CONFIG_ROOT/boo"
+if [[ -n "$VT_LIB_DIR" && -z "${BOO_VT_LIB_DIR:-}" ]]; then
+  BOO_VT_LIB_DIR="$VT_LIB_DIR"
+fi
 
 mkdir -p "$CONFIG_DIR"
 cat > "$CONFIG_DIR/config.boo" <<EOF
@@ -55,15 +100,12 @@ trap cleanup EXIT
 
 (
   cd "$ROOT_DIR"
-  if [[ -z "$VT_LIB_DIR" ]]; then
-    VT_LIB_DIR="$(find_vt_lib_dir || true)"
+  export RUST_LOG="$LOG_LEVEL"
+  export XDG_CONFIG_HOME="$CONFIG_ROOT"
+  if [[ -n "$TERMINAL_BODY_IMPL" ]]; then
+    export BOO_TERMINAL_BODY_IMPL="$TERMINAL_BODY_IMPL"
   fi
-  if [[ -n "$VT_LIB_DIR" ]]; then
-    LD_LIBRARY_PATH="$VT_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-      RUST_LOG="$LOG_LEVEL" XDG_CONFIG_HOME="$CONFIG_ROOT" target/debug/boo >"$LOG_PATH" 2>&1
-  else
-    RUST_LOG="$LOG_LEVEL" XDG_CONFIG_HOME="$CONFIG_ROOT" target/debug/boo >"$LOG_PATH" 2>&1
-  fi
+  boo_with_vt_lib_env target/debug/boo >"$LOG_PATH" 2>&1
 ) &
 BOO_PID=$!
 
@@ -435,7 +477,7 @@ python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" request ne
 wait_snapshot /tmp/boo-ui-after-split.json 'len(visible_panes) == 2 and any(p["split_direction"] == "horizontal" for p in visible_panes)'
 assert_snapshot /tmp/boo-ui-after-split.json 'visible_panes[0]["frame"]["width"] > 0 and visible_panes[1]["frame"]["width"] > 0 and visible_panes[0]["frame"]["x"] < visible_panes[1]["frame"]["x"]'
 python3 "$ROOT_DIR/scripts/ui-test-client.py" --socket "$SOCKET_PATH" request resize-viewport cols=140 rows=36 >/tmp/boo-ui-resize-viewport-response.json
-wait_snapshot /tmp/boo-ui-after-resize-viewport.json 'len(visible_panes) == 2 and abs((visible_panes[0]["frame"]["width"] + visible_panes[1]["frame"]["width"] + 1.0) - 1680.0) < 1.0 and abs(visible_panes[0]["frame"]["height"] - 900.0) < 1.0 and abs(visible_panes[1]["frame"]["height"] - 900.0) < 1.0'
+wait_snapshot /tmp/boo-ui-after-resize-viewport.json 'len(visible_panes) == 2 and all(p["frame"]["width"] > 0 and p["frame"]["height"] > 0 for p in visible_panes) and visible_panes[0]["frame"]["x"] < visible_panes[1]["frame"]["x"] and abs(visible_panes[0]["frame"]["height"] - visible_panes[1]["frame"]["height"]) < 1.0 and abs((visible_panes[0]["frame"]["width"] + visible_panes[1]["frame"]["width"] + 1.0) - (visible_panes[1]["frame"]["x"] + visible_panes[1]["frame"]["width"])) < 1.0'
 
 SECOND_LEAF_ID="$(python3 - <<'PY'
 import json

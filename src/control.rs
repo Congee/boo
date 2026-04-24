@@ -49,6 +49,8 @@ pub enum Request {
     ListTabs,
     GetClipboard,
     GetUiSnapshot,
+    GetUiRuntimeState,
+    GetUiTextSnapshot,
     SubscribeStatusClicks {
         source: String,
     },
@@ -141,6 +143,12 @@ pub enum Response {
     UiSnapshot {
         snapshot: UiSnapshot,
     },
+    UiRuntimeState {
+        state: UiRuntimeState,
+    },
+    UiTextSnapshot {
+        snapshot: UiTextSnapshot,
+    },
     Ok {
         ok: bool,
     },
@@ -198,6 +206,22 @@ pub struct UiRuntimeState {
     pub viewport_cols: Option<u16>,
     pub viewport_rows: Option<u16>,
     pub visible_pane_ids: Vec<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UiTextSnapshot {
+    pub active_tab: usize,
+    pub focused_pane: u64,
+    pub tabs: Vec<UiTabSnapshot>,
+    pub visible_panes: Vec<UiPaneSnapshot>,
+    pub status_bar: crate::status_components::UiStatusBarSnapshot,
+    pub pane_texts: Vec<UiPaneTextSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UiPaneTextSnapshot {
+    pub pane_id: u64,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -362,6 +386,12 @@ pub enum ControlCmd {
         reply: mpsc::Sender<Response>,
     },
     GetUiSnapshot {
+        reply: mpsc::Sender<Response>,
+    },
+    GetUiRuntimeState {
+        reply: mpsc::Sender<Response>,
+    },
+    GetUiTextSnapshot {
         reply: mpsc::Sender<Response>,
     },
     SetStatusComponents {
@@ -758,6 +788,28 @@ fn dispatch_request(req: Request, tx: &mpsc::Sender<ControlCmd>) -> Response {
         Request::GetUiSnapshot => {
             let (reply_tx, reply_rx) = mpsc::channel();
             let _ = tx.send(ControlCmd::GetUiSnapshot { reply: reply_tx });
+            notify();
+            match reply_rx.recv_timeout(CONTROL_REPLY_TIMEOUT) {
+                Ok(resp) => resp,
+                Err(_) => Response::Error {
+                    error: "timeout".into(),
+                },
+            }
+        }
+        Request::GetUiRuntimeState => {
+            let (reply_tx, reply_rx) = mpsc::channel();
+            let _ = tx.send(ControlCmd::GetUiRuntimeState { reply: reply_tx });
+            notify();
+            match reply_rx.recv_timeout(CONTROL_REPLY_TIMEOUT) {
+                Ok(resp) => resp,
+                Err(_) => Response::Error {
+                    error: "timeout".into(),
+                },
+            }
+        }
+        Request::GetUiTextSnapshot => {
+            let (reply_tx, reply_rx) = mpsc::channel();
+            let _ = tx.send(ControlCmd::GetUiTextSnapshot { reply: reply_tx });
             notify();
             match reply_rx.recv_timeout(CONTROL_REPLY_TIMEOUT) {
                 Ok(resp) => resp,

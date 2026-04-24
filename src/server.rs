@@ -34,6 +34,12 @@ pub enum Command {
     GetUiSnapshot {
         reply: mpsc::Sender<control::Response>,
     },
+    GetUiRuntimeState {
+        reply: mpsc::Sender<control::Response>,
+    },
+    GetUiTextSnapshot {
+        reply: mpsc::Sender<control::Response>,
+    },
     SetStatusComponents {
         zone: crate::status_components::StatusBarZone,
         source: String,
@@ -231,6 +237,10 @@ impl From<control::ControlCmd> for Command {
             control::ControlCmd::ListTabs { reply } => Self::ListTabs { reply },
             control::ControlCmd::GetClipboard { reply } => Self::GetClipboard { reply },
             control::ControlCmd::GetUiSnapshot { reply } => Self::GetUiSnapshot { reply },
+            control::ControlCmd::GetUiRuntimeState { reply } => {
+                Self::GetUiRuntimeState { reply }
+            }
+            control::ControlCmd::GetUiTextSnapshot { reply } => Self::GetUiTextSnapshot { reply },
             control::ControlCmd::SetStatusComponents {
                 zone,
                 source,

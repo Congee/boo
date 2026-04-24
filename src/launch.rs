@@ -451,6 +451,7 @@ pub fn ensure_server_running(socket_path: &str, boo_config: &config::Config) -> 
         return false;
     };
     let mut command = std::process::Command::new(exe);
+    apply_autostart_library_env(&mut command);
     command.arg("server").arg("--socket").arg(socket_path);
     if crate::profiling::enabled() {
         command.arg("--profiling");
@@ -478,6 +479,35 @@ pub fn ensure_server_running(socket_path: &str, boo_config: &config::Config) -> 
     }
     log::warn!("boo server did not become ready at {socket_path}");
     false
+}
+
+fn apply_autostart_library_env(command: &mut std::process::Command) {
+    let Ok(vt_lib_dir) = std::env::var("BOO_VT_LIB_DIR") else {
+        return;
+    };
+    if vt_lib_dir.is_empty() {
+        return;
+    }
+
+    #[cfg(target_os = "macos")]
+    prepend_command_env_path(command, "DYLD_LIBRARY_PATH", &vt_lib_dir);
+    #[cfg(not(target_os = "macos"))]
+    prepend_command_env_path(command, "LD_LIBRARY_PATH", &vt_lib_dir);
+}
+
+fn prepend_command_env_path(command: &mut std::process::Command, key: &str, value: &str) {
+    let mut paths = vec![std::path::PathBuf::from(value)];
+    if let Some(existing) = std::env::var_os(key) {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    match std::env::join_paths(paths) {
+        Ok(joined) => {
+            command.env(key, joined);
+        }
+        Err(error) => {
+            log::warn!("failed to set {key} for boo server autostart: {error}");
+        }
+    }
 }
 
 fn ensure_remote_server_running(

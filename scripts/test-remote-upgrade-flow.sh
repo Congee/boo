@@ -2,11 +2,80 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BOO_REPO_ROOT="$ROOT"
 SOCKET_PATH="${BOO_REMOTE_UPGRADE_SOCKET:-/tmp/boo-remote-upgrade.sock}"
 LOG_PATH="${BOO_REMOTE_UPGRADE_LOG:-/tmp/boo-remote-upgrade.log}"
+VT_LIB_DIR="${BOO_VT_LIB_DIR:-${VT_LIB_DIR:-}}"
+PORT="${BOO_REMOTE_UPGRADE_PORT:-}"
 
-PORT="$(
-  python3 - <<'PY'
+source "$ROOT/scripts/lib/vt-dylib-env.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: bash scripts/test-remote-upgrade-flow.sh [options]
+
+Options:
+  --socket PATH
+  --port PORT
+  --log PATH
+  --vt-lib-dir PATH
+  -h, --help
+EOF
+}
+
+require_arg() {
+  if [[ $# -lt 2 ]]; then
+    echo "Missing value for $1" >&2
+    usage >&2
+    exit 2
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --socket)
+      require_arg "$@"
+      SOCKET_PATH="$2"
+      shift 2
+      ;;
+    --port)
+      require_arg "$@"
+      PORT="$2"
+      shift 2
+      ;;
+    --log)
+      require_arg "$@"
+      LOG_PATH="$2"
+      shift 2
+      ;;
+    --vt-lib-dir)
+      require_arg "$@"
+      VT_LIB_DIR="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ -n "$VT_LIB_DIR" && -z "${BOO_VT_LIB_DIR:-}" ]]; then
+  BOO_VT_LIB_DIR="$VT_LIB_DIR"
+fi
+
+if [[ -z "$PORT" ]]; then
+  PORT="$(
+    python3 - <<'PY'
 import socket
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -14,7 +83,8 @@ sock.bind(("127.0.0.1", 0))
 print(sock.getsockname()[1])
 sock.close()
 PY
-)"
+  )"
+fi
 
 cleanup() {
   local pid="${SERVER_PID:-}"
@@ -30,7 +100,7 @@ cd "$ROOT"
 
 cargo build >/dev/null
 rm -f "$SOCKET_PATH"
-target/debug/boo server \
+boo_with_vt_lib_env target/debug/boo server \
   --socket "$SOCKET_PATH" \
   --remote-port "$PORT" \
   >"$LOG_PATH" 2>&1 &

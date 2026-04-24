@@ -6,6 +6,40 @@ cd "$(dirname "$0")/.."
 SOCKET="${BOO_TEST_SOCKET:-/tmp/boo-gui-test.sock}"
 GUI_TEST_SOCKET="${BOO_GUI_TEST_SOCKET:-/tmp/boo-gui-input.sock}"
 
+usage() {
+  cat <<'EOF'
+Usage: bash scripts/test-gui-client.sh [options]
+
+Options:
+  --socket PATH
+  --gui-test-socket PATH
+  -h, --help
+EOF
+}
+
+require_arg() {
+  if [[ $# -lt 2 ]]; then
+    echo "Missing value for $1" >&2
+    usage >&2
+    exit 2
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --socket)
+      require_arg "$@"; SOCKET="$2"; shift 2 ;;
+    --gui-test-socket)
+      require_arg "$@"; GUI_TEST_SOCKET="$2"; shift 2 ;;
+    -h|--help)
+      usage; exit 0 ;;
+    --)
+      shift; break ;;
+    *)
+      echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
 cleanup() {
   target/debug/boo quit-server >/dev/null 2>&1 || true
   pkill -f 'target/debug/boo|cargo run' >/dev/null 2>&1 || true
