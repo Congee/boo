@@ -24,6 +24,31 @@ Implemented outcomes:
 Remaining follow-up work is intentionally post-v1 and is documented in the
 deferred section at the bottom of this file.
 
+## Current TODO (updated 2026-04-24)
+
+- [ ] Define scroll/search/copy-mode semantics across per-screen runtime views.
+- [ ] Harden transport QoS beyond focused-pane-first publishing:
+      focused-pane priority, non-focused visible-pane coalescing, and starvation
+      guards.
+- [ ] Collect runtime-view E2E baseline measurements for user-perceived
+      focus/tab/pane/input interactions, producing parseable metrics artifacts
+      before changing behavior.
+      - the metrics script now has a two-client lane for one macOS GUI client
+        and one real iPad client connected to the same macOS server; final
+        artifact collection still requires an unlocked physical iPad
+- [ ] Decide whether local prediction is needed after reviewing the baseline
+      measurements and QoS options.
+- [ ] Refine canonical host/runtime reconnect UX and view timeout affordances.
+- [ ] Keep real-device iOS UI smoke tests current for both iPad and iPhone.
+
+Recently closed:
+
+- [x] Fixed macOS terminal UI regressions: invisible/transparent content,
+      inconsistent glyph width, fully-dark background regression, desktop
+      input routing, statusbar tab clicks, and normal-click hyperlink crashes.
+- [x] Moved remaining macOS/iOS toolchain cleanup into `flake.nix` so scripts no
+      longer need ad hoc Xcode/SDK unsetting or local VT library discovery.
+
 ## Post-completion verification notes
 
 - 2026-04-23 real-device verification on connected physical iPad and iPhone

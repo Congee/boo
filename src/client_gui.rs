@@ -77,6 +77,7 @@ pub enum GuiTestCommand {
     AppKey { keyspec: String, repeat: bool },
     Keyboard { keyspec: String, repeat: bool },
     Command(String),
+    ActivateTab(u32),
     Click { x: f64, y: f64 },
     Drag { x1: f64, y1: f64, x2: f64, y2: f64 },
     Resize { cols: u16, rows: u16 },
@@ -1260,6 +1261,7 @@ impl ClientApp {
                 },
                 control::Request::ExecuteCommand { input },
             ),
+            GuiTestCommand::ActivateTab(tab_id) => self.activate_tab(tab_id),
             GuiTestCommand::Click { x, y } => {
                 self.last_mouse_pos = Point::new(x as f32, y as f32);
                 self.send_mouse_event(AppMouseEvent::ButtonPressed {
@@ -2383,6 +2385,10 @@ fn parse_gui_test_command(line: &str) -> Option<GuiTestCommand> {
     if let Some(rest) = trimmed.strip_prefix("command ") {
         return Some(GuiTestCommand::Command(rest.to_string()));
     }
+    if let Some(rest) = trimmed.strip_prefix("activate-tab ") {
+        let tab_id = rest.parse().ok()?;
+        return Some(GuiTestCommand::ActivateTab(tab_id));
+    }
     if let Some(rest) = trimmed.strip_prefix("click ") {
         let mut parts = rest.split_whitespace();
         let x = parts.next()?.parse().ok()?;
@@ -3391,6 +3397,14 @@ mod tests {
         assert_eq!(
             parse_gui_test_command("command new-tab"),
             Some(GuiTestCommand::Command("new-tab".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_gui_test_activate_tab_command() {
+        assert_eq!(
+            parse_gui_test_command("activate-tab 42"),
+            Some(GuiTestCommand::ActivateTab(42))
         );
     }
 

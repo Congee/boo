@@ -26,7 +26,10 @@ Options:
   --scenario NAME             named defaults: default, runtime-view-e2e
   --trace-actions ACTIONS      comma-separated: focus-pane,set-viewed-tab,input
   --trace-input-command TEXT   command sent after the terminal connects
+  --target-viewed-tab-index N  zero-based runtime tab index to view after connect
+  --target-viewed-tab-id ID    runtime tab id to view after connect
   --vt-lib-dir PATH
+  --use-existing-server        do not start/stop a server; use --host/--port
   --skip-build                 use an existing app build in DerivedData
   --skip-install               use the app already installed on the device
   --skip-device-check          do not run the unlocked/developer-mode preflight
@@ -61,6 +64,9 @@ TIME_LIMIT="18s"
 SCENARIO="default"
 TRACE_ACTIONS="focus-pane,set-viewed-tab,input"
 TRACE_INPUT_COMMAND="echo BOO_SIGNPOST_VERIFY"
+TARGET_VIEWED_TAB_INDEX=""
+TARGET_VIEWED_TAB_ID=""
+USE_EXISTING_SERVER=0
 SKIP_BUILD=0
 SKIP_INSTALL=0
 SKIP_DEVICE_CHECK=0
@@ -127,10 +133,24 @@ while [[ $# -gt 0 ]]; do
       TRACE_INPUT_COMMAND="$2"
       shift 2
       ;;
+    --target-viewed-tab-index)
+      require_arg "$@"
+      TARGET_VIEWED_TAB_INDEX="$2"
+      shift 2
+      ;;
+    --target-viewed-tab-id)
+      require_arg "$@"
+      TARGET_VIEWED_TAB_ID="$2"
+      shift 2
+      ;;
     --vt-lib-dir)
       require_arg "$@"
       VT_LIB_DIR="$2"
       shift 2
+      ;;
+    --use-existing-server)
+      USE_EXISTING_SERVER=1
+      shift
       ;;
     --skip-build)
       SKIP_BUILD=1
@@ -197,6 +217,10 @@ if [[ -z "$HOST" ]]; then
 fi
 
 if [[ -z "$PORT" ]]; then
+  if [[ "$USE_EXISTING_SERVER" == "1" ]]; then
+    echo "Missing --port with --use-existing-server" >&2
+    exit 2
+  fi
   PORT="$(
     python3 -c 'import socket; s = socket.socket(); s.bind(("0.0.0.0", 0)); print(s.getsockname()[1]); s.close()'
   )"
@@ -217,14 +241,16 @@ OS_SIGNPOST_XML="$OUTPUT_DIR/os-signpost.xml"
 OS_SIGNPOST_INTERVAL_XML="$OUTPUT_DIR/os-signpost-interval.xml"
 
 cleanup() {
-  if [[ -n "${SERVER_PID:-}" ]]; then
+  if [[ "$USE_EXISTING_SERVER" != "1" && -n "${SERVER_PID:-}" ]]; then
     kill "$SERVER_PID" >/dev/null 2>&1 || true
     wait "$SERVER_PID" >/dev/null 2>&1 || true
   fi
   xcrun devicectl device process terminate \
     --device "$DEVICE_ID" \
     "$BUNDLE_ID" >/dev/null 2>&1 || true
-  rm -f "$SOCKET_PATH" "${SOCKET_PATH}.stream"
+  if [[ "$USE_EXISTING_SERVER" != "1" ]]; then
+    rm -f "$SOCKET_PATH" "${SOCKET_PATH}.stream"
+  fi
 }
 trap cleanup EXIT
 
@@ -250,25 +276,46 @@ if [[ "$SKIP_INSTALL" != "1" ]]; then
   bash scripts/install-ios-device.sh "$DEVICE_ID"
 fi
 
-cargo build >"$CARGO_BUILD_LOG" 2>&1
+if [[ "$USE_EXISTING_SERVER" != "1" ]]; then
+  cargo build >"$CARGO_BUILD_LOG" 2>&1
 
-rm -f "$SOCKET_PATH" "${SOCKET_PATH}.stream"
-boo_with_vt_lib_env target/debug/boo \
-  --trace-filter info \
-  server \
-  --socket "$SOCKET_PATH" \
-  --remote-port "$PORT" \
-  --remote-bind-address 0.0.0.0 \
-  >"$SERVER_LOG" 2>&1 &
-SERVER_PID=$!
+  rm -f "$SOCKET_PATH" "${SOCKET_PATH}.stream"
+  boo_with_vt_lib_env target/debug/boo \
+    --trace-filter info \
+    server \
+    --socket "$SOCKET_PATH" \
+    --remote-port "$PORT" \
+    --remote-bind-address 0.0.0.0 \
+    >"$SERVER_LOG" 2>&1 &
+  SERVER_PID=$!
 
-sleep 1
-if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
-  cat "$SERVER_LOG" >&2
-  exit 1
+  sleep 1
+  if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
+    cat "$SERVER_LOG" >&2
+    exit 1
+  fi
+else
+  printf 'Using existing Boo server at %s:%s with control socket %s\n' "$HOST" "$PORT" "$SOCKET_PATH" >"$SERVER_LOG"
 fi
 
 rm -rf "$TRACE_PATH"
+IOS_LAUNCH_ARGS=(
+  -ApplePersistenceIgnoreState YES
+  --boo-ui-test-mode
+  --boo-ui-test-reset-storage
+  --boo-ui-test-node-name="Local Boo"
+  --boo-ui-test-host="$HOST"
+  --boo-ui-test-port="$PORT"
+  --boo-ui-test-auto-connect
+  --boo-ui-test-trace-actions="$TRACE_ACTIONS"
+  --boo-ui-test-trace-input-command="$TRACE_INPUT_COMMAND"
+)
+if [[ -n "$TARGET_VIEWED_TAB_INDEX" ]]; then
+  IOS_LAUNCH_ARGS+=(--boo-ui-test-target-viewed-tab-index="$TARGET_VIEWED_TAB_INDEX")
+fi
+if [[ -n "$TARGET_VIEWED_TAB_ID" ]]; then
+  IOS_LAUNCH_ARGS+=(--boo-ui-test-target-viewed-tab-id="$TARGET_VIEWED_TAB_ID")
+fi
 xcrun xctrace record \
   --template "Logging" \
   --device "$DEVICE_ID" \
@@ -276,15 +323,7 @@ xcrun xctrace record \
   --output "$TRACE_PATH" \
   --no-prompt \
   --launch -- "$BUNDLE_ID" \
-    -ApplePersistenceIgnoreState YES \
-    --boo-ui-test-mode \
-    --boo-ui-test-reset-storage \
-    --boo-ui-test-node-name="Local Boo" \
-    --boo-ui-test-host="$HOST" \
-    --boo-ui-test-port="$PORT" \
-    --boo-ui-test-auto-connect \
-    --boo-ui-test-trace-actions="$TRACE_ACTIONS" \
-    --boo-ui-test-trace-input-command="$TRACE_INPUT_COMMAND" \
+    "${IOS_LAUNCH_ARGS[@]}" \
   2>&1 | tee "$XCTRACE_RECORD_LOG"
 
 xcrun xctrace export \

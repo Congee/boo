@@ -20,6 +20,8 @@ struct UITestLaunchConfiguration {
     let forcedTerminalErrorKind: String?
     let traceActions: Set<String>
     let traceInputCommand: String?
+    let targetViewedTabIndex: Int?
+    let targetViewedTabId: UInt32?
     let mockTailscaleDevices: [MockTailscaleDevice]
 
     private static func fileConfiguredHostAndPort() -> (host: String, port: UInt16)? {
@@ -113,6 +115,12 @@ struct UITestLaunchConfiguration {
         )
         let traceInputCommand = argumentValue(prefix: "--boo-ui-test-trace-input-command=", arguments: arguments)
             ?? env["BOO_UI_TEST_TRACE_INPUT_COMMAND"]
+        let targetViewedTabIndex = argumentValue(prefix: "--boo-ui-test-target-viewed-tab-index=", arguments: arguments)
+            .flatMap(Int.init)
+            ?? env["BOO_UI_TEST_TARGET_VIEWED_TAB_INDEX"].flatMap(Int.init)
+        let targetViewedTabId = argumentValue(prefix: "--boo-ui-test-target-viewed-tab-id=", arguments: arguments)
+            .flatMap(UInt32.init)
+            ?? env["BOO_UI_TEST_TARGET_VIEWED_TAB_ID"].flatMap(UInt32.init)
         return UITestLaunchConfiguration(
             resetStorage: resetStorage,
             nodeName: nodeName,
@@ -125,6 +133,8 @@ struct UITestLaunchConfiguration {
             forcedTerminalErrorKind: forcedTerminalErrorKind,
             traceActions: traceActions,
             traceInputCommand: traceInputCommand,
+            targetViewedTabIndex: targetViewedTabIndex,
+            targetViewedTabId: targetViewedTabId,
             mockTailscaleDevices: parseMockTailscaleDevices(arguments: arguments, env: env)
         )
     }

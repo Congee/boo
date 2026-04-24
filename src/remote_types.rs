@@ -29,6 +29,10 @@ pub struct RemoteClientInfo {
     pub server_socket_path: Option<String>,
     pub challenge_pending: bool,
     pub subscribed_to_runtime: bool,
+    pub view_id: u64,
+    pub viewed_tab_id: Option<u32>,
+    pub focused_pane_id: Option<u64>,
+    pub visible_pane_count: usize,
     pub has_cached_state: bool,
     pub pane_state_count: usize,
     pub latest_input_seq: Option<u64>,
@@ -131,6 +135,10 @@ mod tests {
             server_socket_path: None,
             challenge_pending: false,
             subscribed_to_runtime: true,
+            view_id: 3,
+            viewed_tab_id: Some(42),
+            focused_pane_id: Some(99),
+            visible_pane_count: 2,
             has_cached_state: true,
             pane_state_count: 2,
             latest_input_seq: Some(11),
@@ -146,6 +154,19 @@ mod tests {
         assert_eq!(
             value.get("subscribed_to_runtime").and_then(|v| v.as_bool()),
             Some(true)
+        );
+        assert_eq!(value.get("view_id").and_then(|v| v.as_u64()), Some(3));
+        assert_eq!(
+            value.get("viewed_tab_id").and_then(|v| v.as_u64()),
+            Some(42)
+        );
+        assert_eq!(
+            value.get("focused_pane_id").and_then(|v| v.as_u64()),
+            Some(99)
+        );
+        assert_eq!(
+            value.get("visible_pane_count").and_then(|v| v.as_u64()),
+            Some(2)
         );
         assert!(value.get("current_tab").is_none());
         assert!(value.get("attached_tab").is_none());

@@ -911,6 +911,7 @@ private enum TerminalModifierState {
 
 private enum UITestTraceAutomationStep {
     case idle
+    case requestedInitialSetViewedTab(tabId: UInt32)
     case requestedSplit
     case requestedFocus(paneId: UInt64)
     case focusDone
@@ -1388,6 +1389,13 @@ struct TerminalTabScreen: View {
 
         switch uiTestTraceAutomationStep {
         case .idle:
+            if let targetTabId = uiTestTargetViewedTabId(config, runtimeState),
+               runtimeState.viewedTabId != targetTabId
+            {
+                uiTestTraceAutomationStep = .requestedInitialSetViewedTab(tabId: targetTabId)
+                client.setViewedTab(targetTabId)
+                return
+            }
             if actions.contains("focus-pane") {
                 if runtimeState.visiblePanes.count >= 2 {
                     requestUITestFocusPane(runtimeState)
@@ -1409,8 +1417,18 @@ struct TerminalTabScreen: View {
             uiTestTraceAutomationStep = .focusDone
             advanceUITestTraceAutomationIfNeeded()
 
+        case .requestedInitialSetViewedTab(let tabId):
+            guard runtimeState.viewedTabId == tabId else { return }
+            uiTestTraceAutomationStep = .idle
+            advanceUITestTraceAutomationIfNeeded()
+
         case .focusDone:
             if actions.contains("set-viewed-tab") {
+                if config.targetViewedTabIndex != nil || config.targetViewedTabId != nil {
+                    uiTestTraceAutomationStep = .setViewedTabDone
+                    advanceUITestTraceAutomationIfNeeded()
+                    return
+                }
                 uiTestTraceAutomationStep = .requestedNewTab(originalTabId: runtimeState.viewedTabId)
                 client.newTab()
                 return
@@ -1450,6 +1468,21 @@ struct TerminalTabScreen: View {
         case .done:
             return
         }
+    }
+
+    private func uiTestTargetViewedTabId(
+        _ config: UITestLaunchConfiguration,
+        _ runtimeState: RemoteRuntimeStateSnapshot
+    ) -> UInt32? {
+        if let targetViewedTabId = config.targetViewedTabId {
+            return targetViewedTabId
+        }
+        if let index = config.targetViewedTabIndex,
+           runtimeState.tabs.indices.contains(index)
+        {
+            return runtimeState.tabs[index].tabId
+        }
+        return nil
     }
 
     private func requestUITestFocusPane(_ runtimeState: RemoteRuntimeStateSnapshot) {

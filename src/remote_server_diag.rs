@@ -83,6 +83,10 @@ fn client_info_for_client(
         server_socket_path: local_socket_path.map(|path| path.display().to_string()),
         challenge_pending: false,
         subscribed_to_runtime: client.runtime_view.subscribed_to_runtime,
+        view_id: client.runtime_view.view_id,
+        viewed_tab_id: client.runtime_view.viewed_tab_id,
+        focused_pane_id: client.runtime_view.focused_pane_id,
+        visible_pane_count: client.runtime_view.visible_pane_ids.len(),
         has_cached_state: client.runtime_view.last_state.is_some(),
         pane_state_count: client.runtime_view.pane_states.len(),
         latest_input_seq: client.runtime_view.latest_input_seq,
@@ -131,7 +135,11 @@ mod tests {
             ClientState {
                 last_heartbeat_at: Some(Instant::now()),
                 runtime_view: ClientRuntimeView {
+                    view_id: 17,
                     subscribed_to_runtime: true,
+                    viewed_tab_id: Some(2),
+                    focused_pane_id: Some(22),
+                    visible_pane_ids: vec![22, 23],
                     last_state: Some(Arc::new(RemoteFullState {
                         rows: 1,
                         cols: 1,
@@ -192,6 +200,10 @@ mod tests {
         assert_eq!(client.server_socket_path, None);
         assert!(!client.challenge_pending);
         assert!(client.subscribed_to_runtime);
+        assert_eq!(client.view_id, 17);
+        assert_eq!(client.viewed_tab_id, Some(2));
+        assert_eq!(client.focused_pane_id, Some(22));
+        assert_eq!(client.visible_pane_count, 2);
         assert!(client.has_cached_state);
         assert_eq!(client.pane_state_count, 1);
         assert_eq!(client.latest_input_seq, Some(9));
