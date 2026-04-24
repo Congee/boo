@@ -33,12 +33,12 @@ Remote:
 - `BOO_IOS_DEVICE_ID=<device-id> bash scripts/install-ios-device.sh`
 - `BOO_IOS_DEVICE_ID=<device-id> bash scripts/launch-ios-device.sh`
 - `BOO_IOS_DEVICE_ID=<device-id> bash scripts/deploy-ios-device.sh`
-- `bash scripts/test-ios-ui.sh --destination 'id=<device-id>'`
-- `bash scripts/test-ios-ui.sh --destination 'id=<device-id>' --only-testing 'BooUITests/BooAppLaunchTests/<testName>'`
+- `bash scripts/test-ios-ui.sh --destination 'id=<device-id>' --team-id '<your team id>'`
+- `bash scripts/test-ios-ui.sh --destination 'id=<device-id>' --team-id '<your team id>' --only-testing 'BooUITests/BooAppLaunchTests/<testName>'`
 
 Current real-device smoke baseline:
 
-- `bash scripts/test-ios-ui.sh --destination 'id=<device-id>' --only-testing 'BooUITests/BooAppLaunchTests/testTappingDiscoveredDaemonConnectsAndTypes'`
+- `bash scripts/test-ios-ui.sh --destination 'id=<device-id>' --team-id '<your team id>' --only-testing 'BooUITests/BooAppLaunchTests/testTappingDiscoveredDaemonConnectsAndTypes'`
 - this path has passed on physical iPad and iPhone hardware and verifies
   discovered daemon -> terminal screen -> type -> echoed marker
 
@@ -57,3 +57,6 @@ Current real-device smoke baseline:
 - if a real-device run fails before Boo launches, check signing/provisioning,
   locked-device state, Developer Mode / UI Automation, and developer-disk-image
   setup before debugging runtime protocol behavior
+- keep `DEVELOPMENT_TEAM` out of committed Xcode project settings; pass it at
+  build/test time with `--team-id '<your team id>'` or an equivalent local
+  `xcodebuild` setting

@@ -75,6 +75,7 @@ connect-and-type path on physical iPad and iPhone hardware with:
 ```bash
 bash scripts/test-ios-ui.sh \
   --destination 'id=<device-id>' \
+  --team-id '<your team id>' \
   --only-testing 'BooUITests/BooAppLaunchTests/testTappingDiscoveredDaemonConnectsAndTypes'
 ```
 
@@ -93,7 +94,7 @@ BOO_IOS_DEVICE_ID=<device-id> bash scripts/build-ios-device.sh
 BOO_IOS_DEVICE_ID=<device-id> bash scripts/install-ios-device.sh
 BOO_IOS_DEVICE_ID=<device-id> bash scripts/launch-ios-device.sh
 BOO_IOS_DEVICE_ID=<device-id> bash scripts/deploy-ios-device.sh
-bash scripts/test-ios-ui.sh --destination 'id=<device-id>'
+bash scripts/test-ios-ui.sh --destination 'id=<device-id>' --team-id '<your team id>'
 ```
 
 Notes:
@@ -102,6 +103,10 @@ Notes:
   Xcode's default `~/Library/Developer/Xcode/DerivedData` location
 - the build script auto-discovers the first provisioning team known to Xcode;
   override with `BOO_IOS_TEAM_ID` if needed
+- the Xcode project intentionally keeps `DEVELOPMENT_TEAM` blank in git; pass a
+  local team id at build/test time instead of committing one to the repository
+- `scripts/test-ios-ui.sh` accepts `--team-id '<your team id>'` for physical
+  devices and passes it through to `xcodebuild` as `DEVELOPMENT_TEAM`
 - `check-ios-device-state.sh` reports whether the device is actually ready for
   install and launch
 - if the attached device still reports Developer Mode disabled, installation
