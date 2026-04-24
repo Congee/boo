@@ -62,9 +62,9 @@ not yet a drop-in replacement for the whole Boo facade:
 | Mouse encoder / mouse event | Facade aligned; upstream feasible after terminal migration | Boo accepts typed mouse action/button/geometry/format/tracking adapters and offers fixed-buffer plus reusable-`Vec` encoding. `VtPane` reuses one mouse event and encode buffer per pane. Upstream mouse encoders have the same upstream-`Terminal` dependency for `set_options_from_terminal`. |
 | Formatter / hyperlink lookup | Partly aligned; blocked upstream today | Boo exposes both allocated and caller-provided formatter buffers, but still uses `GhosttyFormatterScreenExtra { hyperlink: true }` to recover OSC 8 links at a grid position. Upstream `FormatterOptions` does not expose the screen hyperlink option, so moving `Terminal` fully upstream would currently regress `hyperlink_at`. |
 | Focus, paste, build info, and errors | Facade aligned | Boo mirrors upstream's typed focus events, paste safety helper, build-info helpers, and `OutOfMemory`/`InvalidValue`/`OutOfSpace { required }` error mapping directly in `src/vt.rs`. |
-| Raw color/style/constants used by UI and remote state | Shrinking gradually | Internal VT snapshots and renderer code now use Boo-owned `RgbColor`, `RenderColors`, and `CursorStyle`. Remote wire payloads and UI snapshots still keep `[u8; 3]` colors and integer cursor style fields where that preserves current protocol/UI shapes. |
+| Raw color/style/constants used by UI and remote state | Done for current Boo internals | Internal VT snapshots and renderer code now use Boo-owned `RgbColor`, `RenderColors`, and `CursorStyle`. Remote wire payloads and UI snapshots still keep `[u8; 3]` colors and integer cursor style fields where that preserves current protocol/UI shapes. Raw ABI types are intentionally confined to the `src/vt.rs` facade. |
 
-Recommended migration order:
+Current boundary and future upstream-adoption notes:
 
 1. Keep `src/vt.rs` as the explicit Boo facade while we are not adopting the
    upstream wrapper immediately; it depends on `libghostty-vt-sys` directly and
@@ -76,9 +76,9 @@ Recommended migration order:
 3. Migrate terminal lifecycle plus `on_pty_write`, render snapshot refresh,
    and key/mouse encoders as one coordinated slice because their safe wrapper
    APIs share the upstream `Terminal` type.
-4. After snapshots are typed, shrink the raw aliases/constants exported from
-   `src/vt.rs` and convert renderer/remote state to Boo-owned types where it
-   improves clarity.
+4. The current no-`Terminal`-adoption checklist is complete: snapshot internals,
+   renderer code, and remote-state internals use Boo-owned render types, while
+   remote/UI boundaries preserve their existing primitive shapes.
 
 See also:
 
