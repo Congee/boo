@@ -5,14 +5,14 @@
   inputs.flake-utils.url  = "github:numtide/flake-utils";
   inputs.rust-overlay.url = "github:oxalica/rust-overlay";
   inputs.zig.url          = "github:mitchellh/zig-overlay";
+  inputs.ghostty.url      = "github:ghostty-org/ghostty/48ccec182a932c2ec04c344d45a5fc553861cb13";
 
-  outputs = { self, nixpkgs, flake-utils, rust-overlay, zig, ... }:
+  outputs = { self, nixpkgs, flake-utils, rust-overlay, zig, ghostty, ... }:
     flake-utils.lib.eachDefaultSystem (system:
     let
       overlays = [ (import rust-overlay) ];
       pkgs = import nixpkgs { inherit system overlays; };
       lib = pkgs.lib;
-      ghosttyCommit = "bebca84668947bfc92b9a30ed58712e1c34eee1d";
 
       toolchain = pkgs.rust-bin.stable.latest.default.override {
         extensions = [ "rust-src" "rust-std" "clippy" "rustfmt" "rust-analyzer" ];
@@ -36,6 +36,25 @@
         zig.packages.${system}."0.15.2"
         git
       ]);
+      # Darwin dependency split:
+      #
+      # * `apple-sdk` is needed for native package builds that compile/link
+      #   against macOS frameworks. In this repo that means:
+      #   - Ghostty's Nix `libghostty-vt-releasefast` package, which runs
+      #     Ghostty's Zig build with `-Demit-lib-vt`
+      #   - the Nix `booPackage`, whose Rust dependencies include macOS
+      #     framework users such as iced/winit/wgpu and whose
+      #     `libghostty-vt-sys` crate links against libghostty-vt
+      #   - non-Nix `cargo build`, where `libghostty-vt-sys` falls back to a
+      #     local `target/libghostty-vt/...` dylib via Zig
+      # * Inside `nix develop`, prefer a single libghostty-vt authority: the
+      #   dev shell exports LIBGHOSTTY_VT_SYS_* so Cargo uses the same
+      #   `libghosttyVtPackage` that `nix build` uses instead of making a
+      #   second target-local copy.
+      # * The dev shell must still not expose Nix's SDKROOT/DEVELOPER_DIR to
+      #   interactive Apple tools. Xcode's Swift compiler and the Nix SDK can
+      #   be from different toolchain generations, so the shellHook below
+      #   resets those variables after Nix setup hooks run.
       commonBuildInputs = with pkgs; [
         openssl
       ]
@@ -51,86 +70,65 @@
         fontconfig
         freetype
       ];
-      ghosttySrc = pkgs.fetchFromGitHub {
-        owner = "ghostty-org";
-        repo = "ghostty";
-        rev = ghosttyCommit;
-        hash = "sha256-7MPEjIAQD+Z/zdP4h/yslysuVnhCESOPvdvwoLoPVmI=";
-      };
-      ghosttyBuildInputs = import "${ghosttySrc}/nix/build-support/build-inputs.nix" {
-        inherit pkgs lib;
-        stdenv = pkgs.stdenv;
-        enableX11 = pkgs.stdenv.isLinux;
-        enableWayland = pkgs.stdenv.isLinux;
-      };
-      libghosttyVtPackage = pkgs.stdenv.mkDerivation (finalAttrs: {
-        pname = "libghostty-vt";
-        version = "0.1.1-ghostty-${builtins.substring 0 12 ghosttyCommit}";
-        src = ghosttySrc;
-        deps = pkgs.callPackage "${ghosttySrc}/build.zig.zon.nix" {
-          name = "ghostty-cache-libghostty-vt-${builtins.substring 0 12 ghosttyCommit}";
-        };
-        nativeBuildInputs = with pkgs; [
-          ncurses
-          zig_0_15
-          pkg-config
-        ] ++ lib.optionals pkgs.stdenv.isLinux [
-          wayland-scanner
-          wayland-protocols
-        ];
-        buildInputs = ghosttyBuildInputs ++ commonBuildInputs;
-        dontConfigure = true;
-        # We only patch libghostty-vt packaging/integration, not Ghostty VT
-        # runtime logic. Boo's own Rust/Nix checks are the relevant gate for
-        # this repo, so we leave the vendored library package's upstream Zig
-        # tests off unless we choose to own a scoped test-lib-vt check here.
-        doCheck = false;
-        dontSetZigDefaultFlags = true;
-        zigBuildFlags = [
-          "--system"
-          "${finalAttrs.deps}"
-          "-Demit-lib-vt"
-          "-Dcpu=baseline"
-          "-Doptimize=ReleaseFast"
-        ];
-        preBuild = lib.optionalString pkgs.stdenv.isLinux ''
-          export NIX_CFLAGS_COMPILE="$(echo "$NIX_CFLAGS_COMPILE" | sed 's/ *-fmacro-prefix-map=[^ ]*//g')"
-          export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-global-cache"
-          export ZIG_LOCAL_CACHE_DIR="$TMPDIR/zig-local-cache"
-          mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
-        '' + lib.optionalString pkgs.stdenv.isDarwin ''
+      darwinDevShellEnvReset = lib.optionalString pkgs.stdenv.isDarwin ''
+          # Keep interactive macOS/iOS tooling on the selected Xcode toolchain.
+          # Nix's Darwin setup hooks export SDKROOT/DEVELOPER_DIR plus compiler
+          # and linker flags for package builds; those leak badly into xcrun,
+          # swift, xcodebuild, and GUI capture scripts. The Nix package builds
+          # above set their own build env explicitly, so the dev shell should
+          # stay neutral and let Apple tools resolve Xcode themselves.
+          # Experimentally, pairing Xcode's Swift compiler with the Nix
+          # apple-sdk Swift interfaces failed with `no such module SwiftShims`;
+          # after this reset, xcrun resolves the selected Xcode SDK and the
+          # same Swift validation compile succeeds.
           export PATH="$PATH:/usr/bin"
-          export DEVELOPER_DIR="$(xcode-select -p)"
-          export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+          unset DEVELOPER_DIR DEVELOPER_DIR_FOR_BUILD DEVELOPER_DIR_FOR_TARGET
+          unset SDKROOT SDKROOT_FOR_BUILD SDKROOT_FOR_TARGET
+          unset MACOSX_DEPLOYMENT_TARGET IPHONEOS_DEPLOYMENT_TARGET
+          unset CC CXX LD AR NM RANLIB LIBTOOL LDPLUSPLUS
+          unset NIX_CFLAGS_COMPILE NIX_CFLAGS_COMPILE_FOR_BUILD
+          unset NIX_CXXSTDLIB_COMPILE NIX_CXXSTDLIB_COMPILE_FOR_BUILD
+          unset NIX_LDFLAGS NIX_LDFLAGS_FOR_BUILD
+          unset OTHER_LDFLAGS OTHER_SWIFT_FLAGS
+        '';
+      libghosttyVtDevEnv = ''
+          # Keep Cargo builds in the Nix dev shell on the same libghostty-vt
+          # package as `nix build .#default`. Without these variables,
+          # `vendor/libghostty-vt-sys/build.rs` uses its vendored Zig fallback
+          # and creates a second target/libghostty-vt copy.
+          export LIBGHOSTTY_VT_SYS_NO_VENDOR="1"
+          export LIBGHOSTTY_VT_SYS_LIBDIR="${libghosttyVtPackage}/lib"
+          export LIBGHOSTTY_VT_SYS_INCLUDEDIR="${libghosttyVtPackage.dev}/include"
+        '';
+      ghosttyLibghosttyVtPackage = ghostty.packages.${system}.libghostty-vt-releasefast;
+      libghosttyVtPackage = ghosttyLibghosttyVtPackage.overrideAttrs (old: {
+        # Upstream Ghostty now exports libghostty-vt on Darwin, but the package
+        # still lacks the Darwin SDK/build environment needed to be a drop-in
+        # Boo dependency. Keep this as a small packaging override until the fix
+        # lands upstream; do not reintroduce a Boo-local Ghostty build recipe.
+        buildInputs = (old.buildInputs or [ ])
+          ++ lib.optionals pkgs.stdenv.isDarwin [ pkgs.apple-sdk_26 ];
+        preBuild = (old.preBuild or "") + lib.optionalString pkgs.stdenv.isDarwin ''
+          export PATH="$PATH:/usr/bin"
+          export DEVELOPER_DIR="${pkgs.apple-sdk_26}"
+          export SDKROOT="${pkgs.apple-sdk_26}/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.0.sdk"
           export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-global-cache"
           export ZIG_LOCAL_CACHE_DIR="$TMPDIR/zig-local-cache"
           mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
         '';
-        postInstall = lib.optionalString pkgs.stdenv.isLinux ''
-          if [ -f "$out/lib/libghostty-vt.so.0.1.0" ]; then
-            ln -sf libghostty-vt.so.0.1.0 "$out/lib/libghostty-vt.so"
-            ln -sf libghostty-vt.so.0.1.0 "$out/lib/libghostty-vt.so.0"
-          fi
-        '' + lib.optionalString pkgs.stdenv.isDarwin ''
-          if [ -f "$out/lib/libghostty-vt.0.1.0.dylib" ]; then
-            ln -sf libghostty-vt.0.1.0.dylib "$out/lib/libghostty-vt.dylib"
-            # The dylib ships with install_name = @rpath/libghostty-vt.dylib. Any
-            # binary that links against it then needs an LC_RPATH entry pointing
-            # at this store path, which rustc does not emit by default. Rewriting
-            # install_name to the absolute store path makes dependents (boo
-            # itself) resolve the library at runtime without any rpath dance.
-            install_name_tool -id "$out/lib/libghostty-vt.0.1.0.dylib" \
-              "$out/lib/libghostty-vt.0.1.0.dylib"
-          fi
-        '' + ''
-          rm -rf "$out/share" "$out/Ghostty.app" "$out/boo.app"
+        postFixup = (old.postFixup or "") + lib.optionalString pkgs.stdenv.isDarwin ''
+          for dylib in "$out"/lib/libghostty-vt.*.*.*.dylib; do
+            [ -e "$dylib" ] || continue
+            install_name_tool -id "$dylib" "$dylib"
+          done
         '';
-        meta = with lib; {
-          description = "Ghostty terminal emulation library";
-          platforms = platforms.unix;
-        };
       });
-      booPackage = rustPlatform.buildRustPackage {
+      libghosttyVtSysEnv = {
+        LIBGHOSTTY_VT_SYS_NO_VENDOR = "1";
+        LIBGHOSTTY_VT_SYS_LIBDIR = "${libghosttyVtPackage}/lib";
+        LIBGHOSTTY_VT_SYS_INCLUDEDIR = "${libghosttyVtPackage.dev}/include";
+      };
+      booPackage = rustPlatform.buildRustPackage ({
         pname = "boo";
         version = "0.1.0";
         src = ./.;
@@ -140,14 +138,6 @@
         RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
         preBuild = lib.optionalString pkgs.stdenv.isLinux ''
           export NIX_CFLAGS_COMPILE="$(echo "$NIX_CFLAGS_COMPILE" | sed 's/ *-fmacro-prefix-map=[^ ]*//g')"
-          export LIBGHOSTTY_VT_SYS_LIBDIR="${libghosttyVtPackage}/lib"
-          export LIBGHOSTTY_VT_SYS_INCLUDEDIR="${libghosttyVtPackage}/include"
-        '' + lib.optionalString pkgs.stdenv.isDarwin ''
-          export PATH="$PATH:/usr/bin"
-          export DEVELOPER_DIR="$(xcode-select -p)"
-          export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
-          export LIBGHOSTTY_VT_SYS_LIBDIR="${libghosttyVtPackage}/lib"
-          export LIBGHOSTTY_VT_SYS_INCLUDEDIR="${libghosttyVtPackage}/include"
         '';
         # The test suite is local-only and sandbox-safe. The important Darwin
         # requirement is making the store-provided libghostty-vt dylib visible
@@ -162,7 +152,7 @@
           mainProgram = "boo";
           platforms = platforms.unix;
         };
-      };
+      } // libghosttyVtSysEnv);
     in {
       packages.libghostty-vt = libghosttyVtPackage;
       packages.default = booPackage;
@@ -182,7 +172,7 @@
           gdb
         ]) ++ lib.optional pkgs.stdenv.isLinux pkgs.valgrind;
 
-        buildInputs = commonBuildInputs;
+        buildInputs = commonBuildInputs ++ [ libghosttyVtPackage ];
 
         RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
 
@@ -199,11 +189,7 @@
           export __EGL_VENDOR_LIBRARY_DIRS="/run/opengl-driver/share/glvnd/egl_vendor.d"
           # Strip -fmacro-prefix-map flags that zig doesn't understand
           export NIX_CFLAGS_COMPILE="$(echo "$NIX_CFLAGS_COMPILE" | sed 's/ *-fmacro-prefix-map=[^ ]*//g')"
-        '' + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
-          export PATH="$PATH:/usr/bin"
-          export DEVELOPER_DIR="$(xcode-select -p)"
-          export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
-        '';
+        '' + darwinDevShellEnvReset + libghosttyVtDevEnv;
       };
     });
 }
