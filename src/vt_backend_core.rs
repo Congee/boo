@@ -6,7 +6,7 @@ use crate::vt;
 use base64::Engine;
 use crossbeam_channel as channel;
 use std::collections::{HashMap, VecDeque};
-use std::ffi::{CStr, c_void};
+use std::ffi::{c_void, CStr};
 use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -712,44 +712,24 @@ impl VtPane {
     }
 
     pub fn snapshot(&mut self) -> io::Result<TerminalSnapshot> {
-        self.render_state.update(&self.terminal).map_err(vt_to_io)?;
+        let render = self.render_state.update(&self.terminal).map_err(vt_to_io)?;
 
-        let cols = self
-            .render_state
-            .get_u16(vt::GHOSTTY_RENDER_STATE_DATA_COLS)
-            .map_err(vt_to_io)?;
-        let rows = self
-            .render_state
-            .get_u16(vt::GHOSTTY_RENDER_STATE_DATA_ROWS)
-            .map_err(vt_to_io)?;
-        let colors = self.render_state.colors().map_err(vt_to_io)?;
+        let cols = render.cols().map_err(vt_to_io)?;
+        let rows = render.rows().map_err(vt_to_io)?;
+        let colors = render.colors().map_err(vt_to_io)?;
         let title = self.terminal.title().map_err(vt_to_io)?;
         let pwd = self.terminal.pwd().map_err(vt_to_io)?;
         let scrollbar = self.terminal.scrollbar().map_err(vt_to_io)?;
+        let render_cursor = render.cursor().map_err(vt_to_io)?;
         let cursor = CursorSnapshot {
-            visible: self
-                .render_state
-                .get_bool(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VISIBLE)
-                .map_err(vt_to_io)?,
-            blinking: self
-                .render_state
-                .get_bool(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_BLINKING)
-                .unwrap_or(false),
-            x: self
-                .render_state
-                .get_u16(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X)
-                .unwrap_or(0),
-            y: self
-                .render_state
-                .get_u16(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y)
-                .unwrap_or(0),
-            style: self
-                .render_state
-                .get_i32(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE)
-                .unwrap_or(0),
+            visible: render_cursor.visible,
+            blinking: render_cursor.blinking,
+            x: render_cursor.x,
+            y: render_cursor.y,
+            style: render_cursor.style.raw(),
         };
 
-        let mut row_iter = self.render_state.row_iterator().map_err(vt_to_io)?;
+        let mut row_iter = render.row_iterator().map_err(vt_to_io)?;
         let mut rows_data = Vec::with_capacity(rows as usize);
         while row_iter.next() {
             let row = snapshot_row(&row_iter, cols, colors)?;
@@ -783,41 +763,21 @@ impl VtPane {
     }
 
     pub fn refresh_snapshot(&mut self, snapshot: &mut TerminalSnapshot) -> io::Result<()> {
-        self.render_state.update(&self.terminal).map_err(vt_to_io)?;
+        let render = self.render_state.update(&self.terminal).map_err(vt_to_io)?;
 
-        let cols = self
-            .render_state
-            .get_u16(vt::GHOSTTY_RENDER_STATE_DATA_COLS)
-            .map_err(vt_to_io)?;
-        let rows = self
-            .render_state
-            .get_u16(vt::GHOSTTY_RENDER_STATE_DATA_ROWS)
-            .map_err(vt_to_io)?;
-        let colors = self.render_state.colors().map_err(vt_to_io)?;
+        let cols = render.cols().map_err(vt_to_io)?;
+        let rows = render.rows().map_err(vt_to_io)?;
+        let colors = render.colors().map_err(vt_to_io)?;
         let title = self.terminal.title().map_err(vt_to_io)?;
         let pwd = self.terminal.pwd().map_err(vt_to_io)?;
         let scrollbar = self.terminal.scrollbar().map_err(vt_to_io)?;
+        let render_cursor = render.cursor().map_err(vt_to_io)?;
         let cursor = CursorSnapshot {
-            visible: self
-                .render_state
-                .get_bool(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VISIBLE)
-                .map_err(vt_to_io)?,
-            blinking: self
-                .render_state
-                .get_bool(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_BLINKING)
-                .unwrap_or(false),
-            x: self
-                .render_state
-                .get_u16(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X)
-                .unwrap_or(0),
-            y: self
-                .render_state
-                .get_u16(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y)
-                .unwrap_or(0),
-            style: self
-                .render_state
-                .get_i32(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE)
-                .unwrap_or(0),
+            visible: render_cursor.visible,
+            blinking: render_cursor.blinking,
+            x: render_cursor.x,
+            y: render_cursor.y,
+            style: render_cursor.style.raw(),
         };
 
         let size_changed = snapshot.cols != cols || snapshot.rows != rows;
@@ -827,7 +787,7 @@ impl VtPane {
             snapshot.row_revisions.resize(rows as usize, 1);
         }
 
-        let mut row_iter = self.render_state.row_iterator().map_err(vt_to_io)?;
+        let mut row_iter = render.row_iterator().map_err(vt_to_io)?;
         let mut row_index = 0usize;
         let mut rebuilt_rows = 0u64;
         let mut rebuilt_cells = 0u64;
@@ -1552,17 +1512,12 @@ fn sync_mouse_encoder_size(
     cell_width_px: u32,
     cell_height_px: u32,
 ) {
-    mouse_encoder.set_size(&vt::GhosttyMouseEncoderSize {
-        size: std::mem::size_of::<vt::GhosttyMouseEncoderSize>(),
-        screen_width: cols as u32 * cell_width_px,
-        screen_height: rows as u32 * cell_height_px,
-        cell_width: cell_width_px,
-        cell_height: cell_height_px,
-        padding_top: 0,
-        padding_bottom: 0,
-        padding_right: 0,
-        padding_left: 0,
-    });
+    mouse_encoder.set_geometry(vt::MouseGeometry::terminal_grid(
+        cols,
+        rows,
+        cell_width_px,
+        cell_height_px,
+    ));
 }
 
 fn osc_133_command(payload: &str) -> Option<String> {
@@ -1635,7 +1590,7 @@ fn text_width(text: &str) -> u8 {
 }
 
 fn snapshot_row(
-    row_iter: &vt::RowIterator,
+    row_iter: &vt::RowIterator<'_>,
     cols: u16,
     colors: vt::GhosttyRenderStateColors,
 ) -> io::Result<Vec<CellSnapshot>> {
@@ -1655,16 +1610,15 @@ fn snapshot_row(
         let style = cells.style().map_err(vt_to_io)?;
         let fg = cells.fg_color().unwrap_or(colors.foreground);
         let bg = cells.bg_color().unwrap_or(colors.background);
-        let bg_is_default = style.bg_color.tag == vt::GHOSTTY_STYLE_COLOR_NONE;
         row.push(CellSnapshot {
             display_width: text_width(&text),
             text,
             fg,
             bg,
-            bg_is_default,
-            bold: style.bold,
-            italic: style.italic,
-            underline: style.underline,
+            bg_is_default: style.background_is_default(),
+            bold: style.bold(),
+            italic: style.italic(),
+            underline: style.underline(),
             hyperlink: cells.has_hyperlink().unwrap_or(false),
         });
     }
@@ -1682,9 +1636,9 @@ mod tests {
         terminal.write(b"\x1b[1;3;4mSTYLE\x1b[0m");
 
         let mut render_state = vt::RenderState::new().expect("render state");
-        render_state.update(&terminal).expect("update");
+        let render = render_state.update(&terminal).expect("update");
 
-        let mut rows = render_state.row_iterator().expect("rows");
+        let mut rows = render.row_iterator().expect("rows");
         assert!(rows.next(), "expected first row");
         let mut cells = rows.cells().expect("cells");
 
@@ -1707,7 +1661,7 @@ mod tests {
             }
             let style = cells.style().expect("style");
             seen.push_str(&text);
-            matched.push((text, style.bold, style.italic, style.underline));
+            matched.push((text, style.bold(), style.italic(), style.underline()));
             if seen == "STYLE" {
                 break;
             }
@@ -1730,9 +1684,9 @@ mod tests {
         terminal.write("e\u{301}🙂".as_bytes());
 
         let mut render_state = vt::RenderState::new().expect("render state");
-        render_state.update(&terminal).expect("update");
+        let render = render_state.update(&terminal).expect("update");
 
-        let mut rows = render_state.row_iterator().expect("rows");
+        let mut rows = render.row_iterator().expect("rows");
         assert!(rows.next(), "expected first row");
         let mut cells = rows.cells().expect("cells");
 
@@ -1765,20 +1719,16 @@ mod tests {
         let mut render_state = vt::RenderState::new().expect("render state");
 
         terminal.write(b"\x1b[2 q");
-        render_state.update(&terminal).expect("update block");
+        let render = render_state.update(&terminal).expect("update block");
         assert_eq!(
-            render_state
-                .get_i32(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE)
-                .expect("block cursor style"),
+            render.cursor().expect("block cursor style").style.raw(),
             vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK
         );
 
         terminal.write(b"\x1b[4 q");
-        render_state.update(&terminal).expect("update underline");
+        let render = render_state.update(&terminal).expect("update underline");
         assert_eq!(
-            render_state
-                .get_i32(vt::GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE)
-                .expect("underline cursor style"),
+            render.cursor().expect("underline cursor style").style.raw(),
             vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE
         );
     }

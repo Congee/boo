@@ -39,6 +39,13 @@ current shared macOS/Linux runtime and now mainly protects the rest of the app
 from upstream crate layout churn while preserving Boo-specific snapshot,
 renderer, input, and PTY callback shapes.
 
+The facade intentionally mirrors the useful parts of upstream's safe wrapper
+style where that can be done without adopting the upstream `Terminal` type yet:
+owned native handles are kept non-null, `RenderState::update` returns a scoped
+`RenderSnapshot`, and common cursor, style, key, and mouse inputs have Boo-owned
+typed adapters. Raw ABI types are still exported where remote serialization,
+rendering, or platform glue currently require them.
+
 The upstream `libghostty-vt` crate does provide safer Rust wrappers, but it is
 not yet a drop-in replacement for the whole Boo facade:
 
@@ -46,16 +53,18 @@ not yet a drop-in replacement for the whole Boo facade:
 | --- | --- | --- |
 | Terminal lifecycle and VT writes | Feasible, but not isolated | Upstream `Terminal` supports `new`, `resize`, `vt_write`, title/pwd, scrollbar, and closure-based `on_pty_write`. Migrating it first would force render/key/mouse/formatter changes because upstream does not expose the raw terminal handle. |
 | PTY write callback | Feasible with terminal migration | Boo can replace `set_userdata` plus `set_write_pty` with `Terminal::on_pty_write` capturing the PTY fd, removing the current userdata pointer lifetime concern. |
-| Render state / rows / cells | Feasible with API rewrite | Upstream uses a borrowed `Snapshot` from `RenderState::update`, plus row/cell lending iterators and typed colors/styles. Boo's current refresh code reads by tag from `RenderState` after update, so this needs a focused rewrite of `VtPane::refresh_snapshot` and snapshot tests. |
-| Key encoder / key event | Feasible after terminal migration | Upstream encoders are safer, but `set_options_from_terminal` requires the upstream `Terminal`; it cannot be adopted cleanly while Boo's `Terminal` is still raw. |
-| Mouse encoder / mouse event | Feasible after terminal migration | Same dependency on upstream `Terminal` for `set_options_from_terminal`; Boo also needs adapters from existing raw runtime action values to upstream typed enums. |
+| Render state / rows / cells | Facade aligned; upstream replacement still needs API swap | Boo now consumes a scoped `RenderSnapshot` from `RenderState::update`, plus row/cell lifetimes and typed cursor/style adapters. The remaining upstream swap is mostly about replacing the facade internals, not every snapshot caller at once. |
+| Key encoder / key event | Facade adapters added; upstream feasible after terminal migration | Boo accepts typed key actions with raw compatibility, but upstream encoders still require the upstream `Terminal` for `set_options_from_terminal`; they cannot be adopted cleanly while Boo's `Terminal` is still raw. |
+| Mouse encoder / mouse event | Facade adapters added; upstream feasible after terminal migration | Boo accepts typed mouse action/button/geometry adapters with raw compatibility. Upstream mouse encoders have the same upstream-`Terminal` dependency for `set_options_from_terminal`. |
 | Formatter / hyperlink lookup | Blocked upstream today | Boo uses `GhosttyFormatterScreenExtra { hyperlink: true }` to recover OSC 8 links at a grid position. Upstream `FormatterOptions` does not expose the screen hyperlink option, so moving `Terminal` fully upstream would currently regress `hyperlink_at`. |
-| Raw color/style/constants used by UI and remote state | Keep for now | Remote serialization, tests, and renderer code still use raw `GhosttyColorRgb`, `GhosttyRenderStateColors`, cursor-style constants, and style fields. These should migrate only after the snapshot layer owns typed conversions. |
+| Raw color/style/constants used by UI and remote state | Shrinking gradually | `RenderCursor` and `CellStyle` now own common conversions, but remote serialization, tests, and renderer code still use raw `GhosttyColorRgb`, `GhosttyRenderStateColors`, and cursor-style constants where that preserves current wire/UI shapes. |
 
 Recommended migration order:
 
 1. Keep `src/vt.rs` as the explicit Boo facade while we are not adopting the
-   upstream wrapper immediately; it depends on `libghostty-vt-sys` directly.
+   upstream wrapper immediately; it depends on `libghostty-vt-sys` directly and
+   should keep concentrating handle ownership, render snapshot lifetimes, and
+   typed conversions there.
 2. Ask upstream or carry a very small wrapper improvement for formatter
    hyperlink options. Without this, full `Terminal` adoption loses
    `hyperlink_at`.
