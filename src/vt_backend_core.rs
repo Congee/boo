@@ -70,6 +70,8 @@ pub struct TerminalSnapshot {
 pub struct VtPane {
     terminal: vt::Terminal,
     render_state: vt::RenderState,
+    row_iterator: vt::RowIterator,
+    cell_iterator: vt::CellIterator,
     key_encoder: vt::KeyEncoder,
     mouse_encoder: vt::MouseEncoder,
     pty: PtyProcess,
@@ -421,6 +423,8 @@ impl VtPane {
             .map_err(vt_to_io)?;
 
         let render_state = vt::RenderState::new().map_err(vt_to_io)?;
+        let row_iterator = vt::RowIterator::new().map_err(vt_to_io)?;
+        let cell_iterator = vt::CellIterator::new().map_err(vt_to_io)?;
         let mut key_encoder = vt::KeyEncoder::new().map_err(vt_to_io)?;
         key_encoder.sync_from_terminal(&terminal);
         let mut mouse_encoder = vt::MouseEncoder::new().map_err(vt_to_io)?;
@@ -436,6 +440,8 @@ impl VtPane {
         Ok(Self {
             terminal,
             render_state,
+            row_iterator,
+            cell_iterator,
             key_encoder,
             mouse_encoder,
             pty,
@@ -729,10 +735,10 @@ impl VtPane {
             style: render_cursor.style.raw(),
         };
 
-        let mut row_iter = render.row_iterator().map_err(vt_to_io)?;
+        let mut row_iter = self.row_iterator.update(&render).map_err(vt_to_io)?;
         let mut rows_data = Vec::with_capacity(rows as usize);
-        while row_iter.next() {
-            let row = snapshot_row(&row_iter, cols, colors)?;
+        while let Some(row_iter) = row_iter.next() {
+            let row = snapshot_row(row_iter, &mut self.cell_iterator, cols, colors)?;
             rows_data.push(row);
             let _ = row_iter.clear_dirty();
         }
@@ -787,15 +793,16 @@ impl VtPane {
             snapshot.row_revisions.resize(rows as usize, 1);
         }
 
-        let mut row_iter = render.row_iterator().map_err(vt_to_io)?;
+        let mut row_iter = self.row_iterator.update(&render).map_err(vt_to_io)?;
         let mut row_index = 0usize;
         let mut rebuilt_rows = 0u64;
         let mut rebuilt_cells = 0u64;
-        while row_iter.next() {
+        while let Some(row_iter) = row_iter.next() {
             let row_dirty =
                 force_full_refresh || size_changed || row_iter.dirty().map_err(vt_to_io)?;
             if row_dirty {
-                snapshot.rows_data[row_index] = snapshot_row(&row_iter, cols, colors)?;
+                snapshot.rows_data[row_index] =
+                    snapshot_row(row_iter, &mut self.cell_iterator, cols, colors)?;
                 snapshot.row_revisions[row_index] =
                     snapshot.row_revisions[row_index].wrapping_add(1);
                 let _ = row_iter.clear_dirty();
@@ -1590,26 +1597,27 @@ fn text_width(text: &str) -> u8 {
 }
 
 fn snapshot_row(
-    row_iter: &vt::RowIterator<'_>,
+    row_iter: &vt::RowIteration<'_>,
+    cell_iter: &mut vt::CellIterator,
     cols: u16,
     colors: vt::GhosttyRenderStateColors,
 ) -> io::Result<Vec<CellSnapshot>> {
-    let mut cells = row_iter.cells().map_err(vt_to_io)?;
+    let mut cells = cell_iter.update(row_iter).map_err(vt_to_io)?;
     let mut row = Vec::with_capacity(cols as usize);
-    while cells.next() {
-        let len = cells.grapheme_len().map_err(vt_to_io)? as usize;
+    while let Some(cell) = cells.next() {
+        let len = cell.grapheme_len().map_err(vt_to_io)? as usize;
         let text = if len == 0 {
             String::new()
         } else {
-            let graphemes = cells.graphemes(len).map_err(vt_to_io)?;
+            let graphemes = cell.graphemes(len).map_err(vt_to_io)?;
             graphemes
                 .into_iter()
                 .filter_map(char::from_u32)
                 .collect::<String>()
         };
-        let style = cells.style().map_err(vt_to_io)?;
-        let fg = cells.fg_color().unwrap_or(colors.foreground);
-        let bg = cells.bg_color().unwrap_or(colors.background);
+        let style = cell.style().map_err(vt_to_io)?;
+        let fg = cell.fg_color().unwrap_or(colors.foreground);
+        let bg = cell.bg_color().unwrap_or(colors.background);
         row.push(CellSnapshot {
             display_width: text_width(&text),
             text,
@@ -1619,7 +1627,7 @@ fn snapshot_row(
             bold: style.bold(),
             italic: style.italic(),
             underline: style.underline(),
-            hyperlink: cells.has_hyperlink().unwrap_or(false),
+            hyperlink: cell.has_hyperlink().unwrap_or(false),
         });
     }
     Ok(row)
@@ -1638,19 +1646,20 @@ mod tests {
         let mut render_state = vt::RenderState::new().expect("render state");
         let render = render_state.update(&terminal).expect("update");
 
-        let mut rows = render.row_iterator().expect("rows");
-        assert!(rows.next(), "expected first row");
-        let mut cells = rows.cells().expect("cells");
+        let mut row_iterator = vt::RowIterator::new().expect("row iterator");
+        let mut cell_iterator = vt::CellIterator::new().expect("cell iterator");
+        let mut rows = row_iterator.update(&render).expect("rows");
+        let row = rows.next().expect("expected first row");
+        let mut cells = cell_iterator.update(row).expect("cells");
 
         let mut seen = String::new();
         let mut matched = Vec::new();
-        while cells.next() {
-            let len = cells.grapheme_len().expect("grapheme len") as usize;
+        while let Some(cell) = cells.next() {
+            let len = cell.grapheme_len().expect("grapheme len") as usize;
             let text = if len == 0 {
                 String::new()
             } else {
-                cells
-                    .graphemes(len)
+                cell.graphemes(len)
                     .expect("graphemes")
                     .into_iter()
                     .filter_map(char::from_u32)
@@ -1659,7 +1668,7 @@ mod tests {
             if text.is_empty() {
                 continue;
             }
-            let style = cells.style().expect("style");
+            let style = cell.style().expect("style");
             seen.push_str(&text);
             matched.push((text, style.bold(), style.italic(), style.underline()));
             if seen == "STYLE" {
@@ -1686,17 +1695,19 @@ mod tests {
         let mut render_state = vt::RenderState::new().expect("render state");
         let render = render_state.update(&terminal).expect("update");
 
-        let mut rows = render.row_iterator().expect("rows");
-        assert!(rows.next(), "expected first row");
-        let mut cells = rows.cells().expect("cells");
+        let mut row_iterator = vt::RowIterator::new().expect("row iterator");
+        let mut cell_iterator = vt::CellIterator::new().expect("cell iterator");
+        let mut rows = row_iterator.update(&render).expect("rows");
+        let row = rows.next().expect("expected first row");
+        let mut cells = cell_iterator.update(row).expect("cells");
 
         let mut seen = Vec::new();
-        while cells.next() {
-            let len = cells.grapheme_len().expect("grapheme len") as usize;
+        while let Some(cell) = cells.next() {
+            let len = cell.grapheme_len().expect("grapheme len") as usize;
             if len == 0 {
                 continue;
             }
-            let text = cells
+            let text = cell
                 .graphemes(len)
                 .expect("graphemes")
                 .into_iter()

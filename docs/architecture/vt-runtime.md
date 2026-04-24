@@ -42,9 +42,11 @@ renderer, input, and PTY callback shapes.
 The facade intentionally mirrors the useful parts of upstream's safe wrapper
 style where that can be done without adopting the upstream `Terminal` type yet:
 owned native handles are kept non-null, `RenderState::update` returns a scoped
-`RenderSnapshot`, and common cursor, style, key, and mouse inputs have Boo-owned
-typed adapters. Raw ABI types are still exported where remote serialization,
-rendering, or platform glue currently require them.
+`RenderSnapshot`, reusable `RowIterator`/`CellIterator` handles create borrowed
+`RowIteration`/`CellIteration` views from that snapshot, and common cursor,
+style, key, and mouse inputs have Boo-owned typed adapters. Raw ABI types are
+still exported where remote serialization, rendering, or platform glue
+currently require them.
 
 The upstream `libghostty-vt` crate does provide safer Rust wrappers, but it is
 not yet a drop-in replacement for the whole Boo facade:
@@ -53,7 +55,7 @@ not yet a drop-in replacement for the whole Boo facade:
 | --- | --- | --- |
 | Terminal lifecycle and VT writes | Feasible, but not isolated | Upstream `Terminal` supports `new`, `resize`, `vt_write`, title/pwd, scrollbar, and closure-based `on_pty_write`. Migrating it first would force render/key/mouse/formatter changes because upstream does not expose the raw terminal handle. |
 | PTY write callback | Feasible with terminal migration | Boo can replace `set_userdata` plus `set_write_pty` with `Terminal::on_pty_write` capturing the PTY fd, removing the current userdata pointer lifetime concern. |
-| Render state / rows / cells | Facade aligned; upstream replacement still needs API swap | Boo now consumes a scoped `RenderSnapshot` from `RenderState::update`, plus row/cell lifetimes and typed cursor/style adapters. The remaining upstream swap is mostly about replacing the facade internals, not every snapshot caller at once. |
+| Render state / rows / cells | Facade aligned; upstream replacement still needs API swap | Boo now consumes a scoped `RenderSnapshot` from `RenderState::update`, plus reusable row/cell iterator handles that lend `RowIteration`/`CellIteration` views tied to the snapshot, and typed cursor/style adapters. The remaining upstream swap is mostly about replacing the facade internals, not every snapshot caller at once. |
 | Key encoder / key event | Facade adapters added; upstream feasible after terminal migration | Boo accepts typed key actions with raw compatibility, but upstream encoders still require the upstream `Terminal` for `set_options_from_terminal`; they cannot be adopted cleanly while Boo's `Terminal` is still raw. |
 | Mouse encoder / mouse event | Facade adapters added; upstream feasible after terminal migration | Boo accepts typed mouse action/button/geometry adapters with raw compatibility. Upstream mouse encoders have the same upstream-`Terminal` dependency for `set_options_from_terminal`. |
 | Formatter / hyperlink lookup | Blocked upstream today | Boo uses `GhosttyFormatterScreenExtra { hyperlink: true }` to recover OSC 8 links at a grid position. Upstream `FormatterOptions` does not expose the screen hyperlink option, so moving `Terminal` fully upstream would currently regress `hyperlink_at`. |

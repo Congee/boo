@@ -704,41 +704,65 @@ impl RenderSnapshot<'_> {
         };
         Ok(out)
     }
+}
 
-    pub fn row_iterator(&self) -> Result<RowIterator<'_>, Error> {
+pub struct RowIterator {
+    raw: Handle<ffi::GhosttyRenderStateRowIterator>,
+}
+
+impl RowIterator {
+    pub fn new() -> Result<Self, Error> {
+        let raw = new_handle(|out| unsafe {
+            ffi::ghostty_render_state_row_iterator_new(std::ptr::null(), out)
+        })?;
+        Ok(Self { raw })
+    }
+
+    pub fn update<'snapshot>(
+        &'snapshot mut self,
+        snapshot: &'snapshot RenderSnapshot<'_>,
+    ) -> Result<RowIteration<'snapshot>, Error> {
+        let mut raw = self.raw.as_ptr();
         unsafe {
-            let iter = new_handle(|out| {
-                ffi::ghostty_render_state_row_iterator_new(std::ptr::null(), out)
-            })?;
-            let raw = iter.as_ptr();
             result(ffi::ghostty_render_state_get(
-                self.state.raw.as_ptr(),
+                snapshot.state.raw.as_ptr(),
                 ffi::GhosttyRenderStateData_GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
-                &raw as *const _ as *mut c_void,
+                &mut raw as *mut _ as *mut c_void,
             ))?;
-            Ok(RowIterator {
-                raw: iter,
-                _snapshot: PhantomData,
-            })
         }
+        self.raw = Handle::new(raw)?;
+        Ok(RowIteration {
+            iter: self,
+            _snapshot: PhantomData,
+        })
     }
 }
 
-pub struct RowIterator<'snapshot> {
-    raw: Handle<ffi::GhosttyRenderStateRowIterator>,
+impl Drop for RowIterator {
+    fn drop(&mut self) {
+        unsafe { ffi::ghostty_render_state_row_iterator_free(self.raw.as_ptr()) };
+    }
+}
+
+pub struct RowIteration<'snapshot> {
+    iter: &'snapshot mut RowIterator,
     _snapshot: PhantomData<&'snapshot RenderSnapshot<'snapshot>>,
 }
 
-impl RowIterator<'_> {
-    pub fn next(&mut self) -> bool {
-        unsafe { ffi::ghostty_render_state_row_iterator_next(self.raw.as_ptr()) }
+impl RowIteration<'_> {
+    pub fn next(&mut self) -> Option<&Self> {
+        if unsafe { ffi::ghostty_render_state_row_iterator_next(self.iter.raw.as_ptr()) } {
+            Some(self)
+        } else {
+            None
+        }
     }
 
     pub fn dirty(&self) -> Result<bool, Error> {
         let mut out = false;
         unsafe {
             result(ffi::ghostty_render_state_row_get(
-                self.raw.as_ptr(),
+                self.iter.raw.as_ptr(),
                 ffi::GhosttyRenderStateRowData_GHOSTTY_RENDER_STATE_ROW_DATA_DIRTY,
                 &mut out as *mut _ as *mut c_void,
             ))?
@@ -746,56 +770,75 @@ impl RowIterator<'_> {
         Ok(out)
     }
 
-    pub fn clear_dirty(&mut self) -> Result<(), Error> {
+    pub fn clear_dirty(&self) -> Result<(), Error> {
         let clean = false;
         unsafe {
             result(ffi::ghostty_render_state_row_set(
-                self.raw.as_ptr(),
+                self.iter.raw.as_ptr(),
                 ffi::GhosttyRenderStateRowOption_GHOSTTY_RENDER_STATE_ROW_OPTION_DIRTY,
                 &clean as *const _ as *const c_void,
             ))
         }
     }
-
-    pub fn cells(&self) -> Result<RowCells<'_>, Error> {
-        unsafe {
-            let cells =
-                new_handle(|out| ffi::ghostty_render_state_row_cells_new(std::ptr::null(), out))?;
-            let raw = cells.as_ptr();
-            result(ffi::ghostty_render_state_row_get(
-                self.raw.as_ptr(),
-                ffi::GhosttyRenderStateRowData_GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
-                &raw as *const _ as *mut c_void,
-            ))?;
-            Ok(RowCells {
-                raw: cells,
-                _row: PhantomData,
-            })
-        }
-    }
 }
 
-impl Drop for RowIterator<'_> {
-    fn drop(&mut self) {
-        unsafe { ffi::ghostty_render_state_row_iterator_free(self.raw.as_ptr()) };
-    }
-}
-
-pub struct RowCells<'row> {
+pub struct CellIterator {
     raw: Handle<ffi::GhosttyRenderStateRowCells>,
-    _row: PhantomData<&'row RowIterator<'row>>,
 }
 
-impl RowCells<'_> {
-    pub fn next(&mut self) -> bool {
-        unsafe { ffi::ghostty_render_state_row_cells_next(self.raw.as_ptr()) }
+impl CellIterator {
+    pub fn new() -> Result<Self, Error> {
+        let raw = new_handle(|out| unsafe {
+            ffi::ghostty_render_state_row_cells_new(std::ptr::null(), out)
+        })?;
+        Ok(Self { raw })
+    }
+
+    pub fn update<'row>(
+        &'row mut self,
+        row: &'row RowIteration<'_>,
+    ) -> Result<CellIteration<'row>, Error> {
+        let mut raw = self.raw.as_ptr();
+        unsafe {
+            result(ffi::ghostty_render_state_row_get(
+                row.iter.raw.as_ptr(),
+                ffi::GhosttyRenderStateRowData_GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
+                &mut raw as *mut _ as *mut c_void,
+            ))?;
+        }
+        self.raw = Handle::new(raw)?;
+        Ok(CellIteration {
+            iter: self,
+            _row: PhantomData,
+        })
+    }
+}
+
+impl Drop for CellIterator {
+    fn drop(&mut self) {
+        unsafe { ffi::ghostty_render_state_row_cells_free(self.raw.as_ptr()) };
+    }
+}
+
+pub struct CellIteration<'row> {
+    iter: &'row mut CellIterator,
+    _row: PhantomData<&'row RowIteration<'row>>,
+}
+
+impl CellIteration<'_> {
+    pub fn next(&mut self) -> Option<&Self> {
+        if unsafe { ffi::ghostty_render_state_row_cells_next(self.iter.raw.as_ptr()) } {
+            Some(self)
+        } else {
+            None
+        }
     }
 
     pub fn style(&self) -> Result<CellStyle, Error> {
         let mut style = ffi::sized!(GhosttyStyle);
         unsafe {
             result(ffi::ghostty_render_state_row_cells_get(
-                self.raw.as_ptr(),
+                self.iter.raw.as_ptr(),
                 ffi::GhosttyRenderStateRowCellsData_GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE,
                 &mut style as *mut _ as *mut c_void,
             ))?;
@@ -807,7 +850,7 @@ impl RowCells<'_> {
         let mut out = 0u32;
         unsafe {
             result(ffi::ghostty_render_state_row_cells_get(
-                self.raw.as_ptr(),
+                self.iter.raw.as_ptr(),
                 ffi::GhosttyRenderStateRowCellsData_GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN,
                 &mut out as *mut _ as *mut c_void,
             ))?;
@@ -819,7 +862,7 @@ impl RowCells<'_> {
         let mut out = vec![0u32; len];
         unsafe {
             result(ffi::ghostty_render_state_row_cells_get(
-                self.raw.as_ptr(),
+                self.iter.raw.as_ptr(),
                 ffi::GhosttyRenderStateRowCellsData_GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF,
                 out.as_mut_ptr() as *mut c_void,
             ))?;
@@ -831,7 +874,7 @@ impl RowCells<'_> {
         let mut out = GhosttyColorRgb::default();
         unsafe {
             result(ffi::ghostty_render_state_row_cells_get(
-                self.raw.as_ptr(),
+                self.iter.raw.as_ptr(),
                 ffi::GhosttyRenderStateRowCellsData_GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR,
                 &mut out as *mut _ as *mut c_void,
             ))?;
@@ -843,7 +886,7 @@ impl RowCells<'_> {
         let mut out = GhosttyColorRgb::default();
         unsafe {
             result(ffi::ghostty_render_state_row_cells_get(
-                self.raw.as_ptr(),
+                self.iter.raw.as_ptr(),
                 ffi::GhosttyRenderStateRowCellsData_GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR,
                 &mut out as *mut _ as *mut c_void,
             ))?;
@@ -855,7 +898,7 @@ impl RowCells<'_> {
         let mut cell = 0 as GhosttyCell;
         unsafe {
             result(ffi::ghostty_render_state_row_cells_get(
-                self.raw.as_ptr(),
+                self.iter.raw.as_ptr(),
                 ffi::GhosttyRenderStateRowCellsData_GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW,
                 &mut cell as *mut _ as *mut c_void,
             ))?;
@@ -869,12 +912,6 @@ impl RowCells<'_> {
             ))?;
         }
         Ok(out)
-    }
-}
-
-impl Drop for RowCells<'_> {
-    fn drop(&mut self) {
-        unsafe { ffi::ghostty_render_state_row_cells_free(self.raw.as_ptr()) };
     }
 }
 
