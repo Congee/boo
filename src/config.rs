@@ -69,12 +69,16 @@ impl WindowDecoration {
 }
 
 impl CursorStyle {
-    pub fn vt_visual_style(self) -> i32 {
+    pub fn vt_cursor_style(self) -> crate::vt::CursorStyle {
         match self {
-            CursorStyle::Bar => crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR,
-            CursorStyle::Block => crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK,
-            CursorStyle::Underline => crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE,
+            CursorStyle::Bar => crate::vt::CursorStyle::Bar,
+            CursorStyle::Block => crate::vt::CursorStyle::Block,
+            CursorStyle::Underline => crate::vt::CursorStyle::Underline,
         }
+    }
+
+    pub fn vt_visual_style(self) -> i32 {
+        self.vt_cursor_style().raw()
     }
 }
 
@@ -598,16 +602,16 @@ remote-prefer-nix-profile-binary = true
     #[test]
     fn test_cursor_style_maps_to_ghostty_visual_style() {
         assert_eq!(
-            CursorStyle::Block.vt_visual_style(),
-            crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK
+            CursorStyle::Block.vt_cursor_style(),
+            crate::vt::CursorStyle::Block
         );
         assert_eq!(
-            CursorStyle::Bar.vt_visual_style(),
-            crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR
+            CursorStyle::Bar.vt_cursor_style(),
+            crate::vt::CursorStyle::Bar
         );
         assert_eq!(
-            CursorStyle::Underline.vt_visual_style(),
-            crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE
+            CursorStyle::Underline.vt_cursor_style(),
+            crate::vt::CursorStyle::Underline
         );
     }
 

@@ -878,14 +878,14 @@ pub mod main_tests {
                 blinking: false,
                 x: 1,
                 y: 0,
-                style: 2,
+                style: vt::CursorStyle::Underline,
             },
             rows_data: vec![vec![
                 vt_backend_core::CellSnapshot {
                     text: "a".to_string(),
                     display_width: 1,
-                    fg: vt::GhosttyColorRgb { r: 1, g: 2, b: 3 },
-                    bg: vt::GhosttyColorRgb { r: 4, g: 5, b: 6 },
+                    fg: vt::RgbColor { r: 1, g: 2, b: 3 },
+                    bg: vt::RgbColor { r: 4, g: 5, b: 6 },
                     bg_is_default: false,
                     bold: true,
                     italic: false,
@@ -895,8 +895,8 @@ pub mod main_tests {
                 vt_backend_core::CellSnapshot {
                     text: "b".to_string(),
                     display_width: 1,
-                    fg: vt::GhosttyColorRgb { r: 7, g: 8, b: 9 },
-                    bg: vt::GhosttyColorRgb {
+                    fg: vt::RgbColor { r: 7, g: 8, b: 9 },
+                    bg: vt::RgbColor {
                         r: 10,
                         g: 11,
                         b: 12,
@@ -914,7 +914,7 @@ pub mod main_tests {
                 offset: 0,
                 len: 1,
             },
-            colors: vt::GhosttyRenderStateColors::default(),
+            colors: vt::RenderColors::default(),
         };
 
         let ui = vt_snapshot::ui_terminal_snapshot(&snapshot);
@@ -966,7 +966,7 @@ pub mod main_tests {
             ],
             row_revisions: vec![1, 1],
             scrollbar: vt::GhosttyTerminalScrollbar::default(),
-            colors: vt::GhosttyRenderStateColors::default(),
+            colors: vt::RenderColors::default(),
         };
 
         let text = vt_snapshot::selection_text(
@@ -1023,7 +1023,7 @@ pub mod main_tests {
             ],
             row_revisions: vec![1, 1],
             scrollbar: vt::GhosttyTerminalScrollbar::default(),
-            colors: vt::GhosttyRenderStateColors::default(),
+            colors: vt::RenderColors::default(),
         };
 
         let text = vt_snapshot::selection_text(

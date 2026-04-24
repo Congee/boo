@@ -73,7 +73,7 @@ pub fn ui_terminal_snapshot(snapshot: &TerminalSnapshot) -> control::UiTerminalS
             blinking: snapshot.cursor.blinking,
             x: snapshot.cursor.x,
             y: snapshot.cursor.y,
-            style: snapshot.cursor.style,
+            style: snapshot.cursor.style.raw(),
         },
         rows_data: snapshot
             .rows_data
@@ -84,8 +84,8 @@ pub fn ui_terminal_snapshot(snapshot: &TerminalSnapshot) -> control::UiTerminalS
                     .map(|cell| control::UiTerminalCellSnapshot {
                         text: cell.text.clone(),
                         display_width: cell.display_width,
-                        fg: [cell.fg.r, cell.fg.g, cell.fg.b],
-                        bg: [cell.bg.r, cell.bg.g, cell.bg.b],
+                        fg: cell.fg.to_array(),
+                        bg: cell.bg.to_array(),
                         bg_is_default: cell.bg_is_default,
                         bold: cell.bold,
                         italic: cell.italic,

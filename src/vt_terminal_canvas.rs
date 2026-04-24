@@ -273,18 +273,17 @@ impl TerminalCanvas {
             let x = origin.x + self.snapshot.cursor.x as f32 * self.cell_width;
             let y = origin.y + self.snapshot.cursor.y as f32 * self.cell_height;
             match self.snapshot.cursor.style {
-                crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR => frame.fill_rectangle(
+                crate::vt::CursorStyle::Bar => frame.fill_rectangle(
                     Point::new(x, y),
                     Size::new(2.0, self.cell_height),
                     cursor_bg,
                 ),
-                crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE => frame
-                    .fill_rectangle(
-                        Point::new(x, y + self.cell_height - 2.0),
-                        Size::new(self.cell_width, 2.0),
-                        cursor_bg,
-                    ),
-                crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW => {
+                crate::vt::CursorStyle::Underline => frame.fill_rectangle(
+                    Point::new(x, y + self.cell_height - 2.0),
+                    Size::new(self.cell_width, 2.0),
+                    cursor_bg,
+                ),
+                crate::vt::CursorStyle::BlockHollow => {
                     let path = canvas::Path::rectangle(
                         Point::new(x + 0.5, y + 0.5),
                         Size::new(
@@ -2472,11 +2471,12 @@ fn build_terminal_body_row_model(
                 && snapshot.cursor.visible
                 && snapshot.cursor.y as usize == row_index
                 && snapshot.cursor.x as usize == col_index
-                && snapshot.cursor.style != crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR
-                && snapshot.cursor.style
-                    != crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE
-                && snapshot.cursor.style
-                    != crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW
+                && !matches!(
+                    snapshot.cursor.style,
+                    crate::vt::CursorStyle::Bar
+                        | crate::vt::CursorStyle::Underline
+                        | crate::vt::CursorStyle::BlockHollow
+                )
             {
                 model.overlay_runs.push(TextRun {
                     start_col: col_index,
@@ -2545,7 +2545,7 @@ fn primary_terminal_font(font_families: &[&'static str]) -> Option<&'static str>
     font_families.first().copied()
 }
 
-fn color_from_rgb(color: crate::vt::GhosttyColorRgb, alpha: f32) -> Color {
+fn color_from_rgb(color: crate::vt::RgbColor, alpha: f32) -> Color {
     Color::from_rgba8(color.r, color.g, color.b, alpha.clamp(0.0, 1.0))
 }
 
@@ -2973,7 +2973,7 @@ mod tests {
         let before = sample_canvas(1).overlay_fingerprint();
         let mut after = sample_canvas(1);
         let mut snapshot = (*after.snapshot).clone();
-        snapshot.cursor.style = 3;
+        snapshot.cursor.style = crate::vt::CursorStyle::BlockHollow;
         after.snapshot = Arc::new(snapshot);
         assert_ne!(before, after.overlay_fingerprint());
     }
@@ -3113,18 +3113,18 @@ mod tests {
             vt_backend_core::CellSnapshot {
                 text: "a".to_string(),
                 underline: 1,
-                fg: crate::vt::GhosttyColorRgb { r: 1, g: 2, b: 3 },
+                fg: crate::vt::RgbColor { r: 1, g: 2, b: 3 },
                 ..Default::default()
             },
             vt_backend_core::CellSnapshot {
                 text: "b".to_string(),
                 underline: 1,
-                fg: crate::vt::GhosttyColorRgb { r: 1, g: 2, b: 3 },
+                fg: crate::vt::RgbColor { r: 1, g: 2, b: 3 },
                 ..Default::default()
             },
             vt_backend_core::CellSnapshot {
                 text: "c".to_string(),
-                fg: crate::vt::GhosttyColorRgb { r: 1, g: 2, b: 3 },
+                fg: crate::vt::RgbColor { r: 1, g: 2, b: 3 },
                 ..Default::default()
             },
         ];
@@ -3134,7 +3134,7 @@ mod tests {
         assert_eq!(spans[0].width_cols, 2);
         assert_eq!(
             spans[0].color,
-            color_from_rgb(crate::vt::GhosttyColorRgb { r: 1, g: 2, b: 3 }, 1.0)
+            color_from_rgb(crate::vt::RgbColor { r: 1, g: 2, b: 3 }, 1.0)
         );
     }
 
@@ -3359,7 +3359,7 @@ mod tests {
 
     #[test]
     fn background_spans_coalesce_adjacent_non_default_cells() {
-        let highlight = crate::vt::GhosttyColorRgb {
+        let highlight = crate::vt::RgbColor {
             r: 10,
             g: 20,
             b: 30,

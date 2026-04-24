@@ -231,8 +231,9 @@ fn new_handle<T>(init: impl FnOnce(*mut *mut T) -> i32) -> Result<Handle<T>, Err
     Handle::new(raw)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum CursorStyle {
+    #[default]
     Bar,
     Block,
     Underline,
@@ -675,6 +676,78 @@ impl From<RgbColor> for GhosttyColorRgb {
             r: color.r,
             g: color.g,
             b: color.b,
+        }
+    }
+}
+
+impl RgbColor {
+    pub fn from_array(color: [u8; 3]) -> Self {
+        Self {
+            r: color[0],
+            g: color[1],
+            b: color[2],
+        }
+    }
+
+    pub fn to_array(self) -> [u8; 3] {
+        [self.r, self.g, self.b]
+    }
+}
+
+impl From<[u8; 3]> for RgbColor {
+    fn from(color: [u8; 3]) -> Self {
+        Self::from_array(color)
+    }
+}
+
+impl From<RgbColor> for [u8; 3] {
+    fn from(color: RgbColor) -> Self {
+        color.to_array()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RenderColors {
+    pub background: RgbColor,
+    pub foreground: RgbColor,
+    pub cursor: RgbColor,
+    pub cursor_has_value: bool,
+    pub palette: [RgbColor; 256],
+}
+
+impl Default for RenderColors {
+    fn default() -> Self {
+        Self {
+            background: RgbColor::default(),
+            foreground: RgbColor::default(),
+            cursor: RgbColor::default(),
+            cursor_has_value: false,
+            palette: [RgbColor::default(); 256],
+        }
+    }
+}
+
+impl From<GhosttyRenderStateColors> for RenderColors {
+    fn from(colors: GhosttyRenderStateColors) -> Self {
+        Self {
+            background: colors.background.into(),
+            foreground: colors.foreground.into(),
+            cursor: colors.cursor.into(),
+            cursor_has_value: colors.cursor_has_value,
+            palette: colors.palette.map(Into::into),
+        }
+    }
+}
+
+impl From<RenderColors> for GhosttyRenderStateColors {
+    fn from(colors: RenderColors) -> Self {
+        Self {
+            size: std::mem::size_of::<Self>(),
+            background: colors.background.into(),
+            foreground: colors.foreground.into(),
+            cursor: colors.cursor.into(),
+            cursor_has_value: colors.cursor_has_value,
+            palette: colors.palette.map(Into::into),
         }
     }
 }
@@ -1283,7 +1356,7 @@ impl RenderSnapshot<'_> {
         })
     }
 
-    pub fn colors(&self) -> Result<GhosttyRenderStateColors, Error> {
+    pub fn colors(&self) -> Result<RenderColors, Error> {
         let mut colors = ffi::sized!(GhosttyRenderStateColors);
         unsafe {
             result(ffi::ghostty_render_state_colors_get(
@@ -1291,7 +1364,7 @@ impl RenderSnapshot<'_> {
                 &mut colors,
             ))?;
         }
-        Ok(colors)
+        Ok(colors.into())
     }
 
     fn get_u16(&self, data: ffi::GhosttyRenderStateData) -> Result<u16, Error> {
@@ -1495,7 +1568,7 @@ impl CellIteration<'_> {
         Ok(out)
     }
 
-    pub fn fg_color(&self) -> Result<GhosttyColorRgb, Error> {
+    pub fn fg_color(&self) -> Result<RgbColor, Error> {
         let mut out = GhosttyColorRgb::default();
         unsafe {
             result(ffi::ghostty_render_state_row_cells_get(
@@ -1504,10 +1577,10 @@ impl CellIteration<'_> {
                 &mut out as *mut _ as *mut c_void,
             ))?;
         }
-        Ok(out)
+        Ok(out.into())
     }
 
-    pub fn bg_color(&self) -> Result<GhosttyColorRgb, Error> {
+    pub fn bg_color(&self) -> Result<RgbColor, Error> {
         let mut out = GhosttyColorRgb::default();
         unsafe {
             result(ffi::ghostty_render_state_row_cells_get(
@@ -1516,7 +1589,7 @@ impl CellIteration<'_> {
                 &mut out as *mut _ as *mut c_void,
             ))?;
         }
-        Ok(out)
+        Ok(out.into())
     }
 
     pub fn has_hyperlink(&self) -> Result<bool, Error> {
@@ -1965,6 +2038,35 @@ mod tests {
             StyleColor::from(rgb),
             StyleColor::Rgb(RgbColor { r: 1, g: 2, b: 3 })
         );
+    }
+
+    #[test]
+    fn render_colors_convert_to_boo_owned_rgb() {
+        let mut raw = ffi::sized!(GhosttyRenderStateColors);
+        raw.foreground = GhosttyColorRgb { r: 1, g: 2, b: 3 };
+        raw.background = GhosttyColorRgb { r: 4, g: 5, b: 6 };
+        raw.cursor = GhosttyColorRgb { r: 7, g: 8, b: 9 };
+        raw.cursor_has_value = true;
+        raw.palette[42] = GhosttyColorRgb {
+            r: 10,
+            g: 11,
+            b: 12,
+        };
+
+        let colors = RenderColors::from(raw);
+        assert_eq!(colors.foreground, RgbColor { r: 1, g: 2, b: 3 });
+        assert_eq!(colors.background, RgbColor { r: 4, g: 5, b: 6 });
+        assert_eq!(colors.cursor, RgbColor { r: 7, g: 8, b: 9 });
+        assert!(colors.cursor_has_value);
+        assert_eq!(
+            colors.palette[42],
+            RgbColor {
+                r: 10,
+                g: 11,
+                b: 12
+            }
+        );
+        assert_eq!(colors.foreground.to_array(), [1, 2, 3]);
     }
 
     #[test]

@@ -50,15 +50,15 @@ impl BooApp {
         match self.cursor_style {
             Some(style) => {
                 let blink = self.cursor_blink;
-                let param = match style {
-                    crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR => {
+                let param = match crate::vt::CursorStyle::from(style) {
+                    crate::vt::CursorStyle::Bar => {
                         if blink {
                             5
                         } else {
                             6
                         }
                     }
-                    crate::vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE => {
+                    crate::vt::CursorStyle::Underline => {
                         if blink {
                             3
                         } else {
@@ -272,17 +272,9 @@ impl BooApp {
                 rows as usize
             ],
             row_revisions: vec![1; rows as usize],
-            colors: crate::vt::GhosttyRenderStateColors {
-                foreground: crate::vt::GhosttyColorRgb {
-                    r: self.terminal_foreground[0],
-                    g: self.terminal_foreground[1],
-                    b: self.terminal_foreground[2],
-                },
-                background: crate::vt::GhosttyColorRgb {
-                    r: self.terminal_background[0],
-                    g: self.terminal_background[1],
-                    b: self.terminal_background[2],
-                },
+            colors: crate::vt::RenderColors {
+                foreground: crate::vt::RgbColor::from_array(self.terminal_foreground),
+                background: crate::vt::RgbColor::from_array(self.terminal_background),
                 ..Default::default()
             },
             ..Default::default()

@@ -73,9 +73,7 @@ pub fn full_state_from_terminal(
             if cell.hyperlink {
                 style_flags |= STYLE_FLAG_HYPERLINK;
             }
-            let has_explicit_fg = cell.fg.r != snapshot.colors.foreground.r
-                || cell.fg.g != snapshot.colors.foreground.g
-                || cell.fg.b != snapshot.colors.foreground.b;
+            let has_explicit_fg = cell.fg != snapshot.colors.foreground;
             let has_explicit_bg = !cell.bg_is_default;
             if has_explicit_fg {
                 style_flags |= STYLE_FLAG_EXPLICIT_FG;
@@ -85,8 +83,8 @@ pub fn full_state_from_terminal(
             }
             RemoteCell {
                 codepoint: cell.text.chars().next().map(u32::from).unwrap_or(0),
-                fg: [cell.fg.r, cell.fg.g, cell.fg.b],
-                bg: [cell.bg.r, cell.bg.g, cell.bg.b],
+                fg: cell.fg.to_array(),
+                bg: cell.bg.to_array(),
                 style_flags,
                 wide: cell.display_width > 1,
             }
@@ -99,7 +97,7 @@ pub fn full_state_from_terminal(
         cursor_y: snapshot.cursor.y,
         cursor_visible: snapshot.cursor.visible,
         cursor_blinking: snapshot.cursor.blinking,
-        cursor_style: snapshot.cursor.style,
+        cursor_style: snapshot.cursor.style.raw(),
         cells,
     }
 }
@@ -169,14 +167,14 @@ mod tests {
                 blinking: true,
                 x: 1,
                 y: 0,
-                style: 0,
+                style: crate::vt::CursorStyle::Bar,
             },
             rows_data: vec![vec![
                 crate::vt_backend_core::CellSnapshot {
                     text: "a".to_string(),
                     display_width: 1,
-                    fg: crate::vt::GhosttyColorRgb { r: 1, g: 1, b: 1 },
-                    bg: crate::vt::GhosttyColorRgb { r: 0, g: 0, b: 0 },
+                    fg: crate::vt::RgbColor { r: 1, g: 1, b: 1 },
+                    bg: crate::vt::RgbColor { r: 0, g: 0, b: 0 },
                     bg_is_default: true,
                     bold: false,
                     italic: false,
@@ -186,8 +184,8 @@ mod tests {
                 crate::vt_backend_core::CellSnapshot {
                     text: "界".to_string(),
                     display_width: 2,
-                    fg: crate::vt::GhosttyColorRgb { r: 2, g: 2, b: 2 },
-                    bg: crate::vt::GhosttyColorRgb { r: 3, g: 3, b: 3 },
+                    fg: crate::vt::RgbColor { r: 2, g: 2, b: 2 },
+                    bg: crate::vt::RgbColor { r: 3, g: 3, b: 3 },
                     bg_is_default: false,
                     bold: true,
                     italic: true,
@@ -195,9 +193,9 @@ mod tests {
                     hyperlink: false,
                 },
             ]],
-            colors: crate::vt::GhosttyRenderStateColors {
-                foreground: crate::vt::GhosttyColorRgb { r: 1, g: 1, b: 1 },
-                background: crate::vt::GhosttyColorRgb { r: 0, g: 0, b: 0 },
+            colors: crate::vt::RenderColors {
+                foreground: crate::vt::RgbColor { r: 1, g: 1, b: 1 },
+                background: crate::vt::RgbColor { r: 0, g: 0, b: 0 },
                 ..Default::default()
             },
             ..Default::default()

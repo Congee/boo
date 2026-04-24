@@ -1629,27 +1629,15 @@ fn remote_full_state_to_vt_snapshot(
             blinking: state.cursor_blinking,
             x: state.cursor_x,
             y: state.cursor_y,
-            style: state.cursor_style,
+            style: vt::CursorStyle::from(state.cursor_style),
         },
         rows_data,
         row_revisions,
         scrollbar: Default::default(),
-        colors: vt::GhosttyRenderStateColors {
-            foreground: vt::GhosttyColorRgb {
-                r: terminal_foreground[0],
-                g: terminal_foreground[1],
-                b: terminal_foreground[2],
-            },
-            background: vt::GhosttyColorRgb {
-                r: terminal_background[0],
-                g: terminal_background[1],
-                b: terminal_background[2],
-            },
-            cursor: vt::GhosttyColorRgb {
-                r: cursor_color[0],
-                g: cursor_color[1],
-                b: cursor_color[2],
-            },
+        colors: vt::RenderColors {
+            foreground: vt::RgbColor::from_array(terminal_foreground),
+            background: vt::RgbColor::from_array(terminal_background),
+            cursor: vt::RgbColor::from_array(cursor_color),
             cursor_has_value: true,
             ..Default::default()
         },
@@ -1672,7 +1660,7 @@ fn ui_terminal_to_vt_snapshot(
             blinking: snapshot.cursor.blinking,
             x: snapshot.cursor.x,
             y: snapshot.cursor.y,
-            style: snapshot.cursor.style,
+            style: vt::CursorStyle::from(snapshot.cursor.style),
         },
         rows_data: snapshot
             .rows_data
@@ -1683,16 +1671,8 @@ fn ui_terminal_to_vt_snapshot(
                     .map(|cell| vt_backend_core::CellSnapshot {
                         text: cell.text.clone(),
                         display_width: cell.display_width,
-                        fg: vt::GhosttyColorRgb {
-                            r: cell.fg[0],
-                            g: cell.fg[1],
-                            b: cell.fg[2],
-                        },
-                        bg: vt::GhosttyColorRgb {
-                            r: cell.bg[0],
-                            g: cell.bg[1],
-                            b: cell.bg[2],
-                        },
+                        fg: vt::RgbColor::from_array(cell.fg),
+                        bg: vt::RgbColor::from_array(cell.bg),
                         bg_is_default: cell.bg_is_default,
                         bold: cell.bold,
                         italic: cell.italic,
@@ -1704,22 +1684,10 @@ fn ui_terminal_to_vt_snapshot(
             .collect(),
         row_revisions: vec![1; snapshot.rows_data.len()],
         scrollbar: Default::default(),
-        colors: vt::GhosttyRenderStateColors {
-            foreground: vt::GhosttyColorRgb {
-                r: terminal_foreground[0],
-                g: terminal_foreground[1],
-                b: terminal_foreground[2],
-            },
-            background: vt::GhosttyColorRgb {
-                r: terminal_background[0],
-                g: terminal_background[1],
-                b: terminal_background[2],
-            },
-            cursor: vt::GhosttyColorRgb {
-                r: cursor_color[0],
-                g: cursor_color[1],
-                b: cursor_color[2],
-            },
+        colors: vt::RenderColors {
+            foreground: vt::RgbColor::from_array(terminal_foreground),
+            background: vt::RgbColor::from_array(terminal_background),
+            cursor: vt::RgbColor::from_array(cursor_color),
             cursor_has_value: true,
             ..Default::default()
         },
@@ -2843,7 +2811,7 @@ fn apply_remote_delta_snapshot(
     snapshot.cursor.y = delta.cursor_y;
     snapshot.cursor.visible = delta.cursor_visible;
     snapshot.cursor.blinking = delta.cursor_blinking;
-    snapshot.cursor.style = delta.cursor_style;
+    snapshot.cursor.style = vt::CursorStyle::from(delta.cursor_style);
     let cols = snapshot.cols as usize;
     if snapshot.row_revisions.len() != snapshot.rows_data.len() {
         snapshot.row_revisions.resize(snapshot.rows_data.len(), 1);
@@ -2931,16 +2899,8 @@ fn remote_cell_to_snapshot(
     const REMOTE_STYLE_FLAG_HYPERLINK: u8 = 0x04;
     const REMOTE_STYLE_FLAG_EXPLICIT_FG: u8 = 0x20;
     const REMOTE_STYLE_FLAG_EXPLICIT_BG: u8 = 0x40;
-    let default_fg = vt::GhosttyColorRgb {
-        r: default_foreground[0],
-        g: default_foreground[1],
-        b: default_foreground[2],
-    };
-    let default_bg = vt::GhosttyColorRgb {
-        r: default_background[0],
-        g: default_background[1],
-        b: default_background[2],
-    };
+    let default_fg = vt::RgbColor::from_array(default_foreground);
+    let default_bg = vt::RgbColor::from_array(default_background);
     vt_backend_core::CellSnapshot {
         text: if cell.codepoint == 0 {
             String::new()
@@ -2951,20 +2911,12 @@ fn remote_cell_to_snapshot(
         },
         display_width: if cell.wide { 2 } else { 1 },
         fg: if (cell.style_flags & REMOTE_STYLE_FLAG_EXPLICIT_FG) != 0 {
-            vt::GhosttyColorRgb {
-                r: cell.fg[0],
-                g: cell.fg[1],
-                b: cell.fg[2],
-            }
+            vt::RgbColor::from_array(cell.fg)
         } else {
             default_fg
         },
         bg: if (cell.style_flags & REMOTE_STYLE_FLAG_EXPLICIT_BG) != 0 {
-            vt::GhosttyColorRgb {
-                r: cell.bg[0],
-                g: cell.bg[1],
-                b: cell.bg[2],
-            }
+            vt::RgbColor::from_array(cell.bg)
         } else {
             default_bg
         },
@@ -3514,7 +3466,7 @@ mod tests {
                 blinking,
                 x,
                 y,
-                style: vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK,
+                style: vt::CursorStyle::Block,
             },
             rows_data: vec![vec![vt_backend_core::CellSnapshot::default(); 2]],
             row_revisions: vec![0],
@@ -3792,7 +3744,7 @@ mod tests {
                 blinking: false,
                 x: 0,
                 y: 2,
-                style: 0,
+                style: vt::CursorStyle::Bar,
             },
             rows_data: vec![
                 vec![vt_backend_core::CellSnapshot {

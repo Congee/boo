@@ -20,8 +20,8 @@ use unicode_width::UnicodeWidthStr;
 pub struct CellSnapshot {
     pub text: String,
     pub display_width: u8,
-    pub fg: vt::GhosttyColorRgb,
-    pub bg: vt::GhosttyColorRgb,
+    pub fg: vt::RgbColor,
+    pub bg: vt::RgbColor,
     pub bg_is_default: bool,
     pub bold: bool,
     pub italic: bool,
@@ -34,8 +34,8 @@ impl Default for CellSnapshot {
         Self {
             text: String::new(),
             display_width: 0,
-            fg: vt::GhosttyColorRgb::default(),
-            bg: vt::GhosttyColorRgb::default(),
+            fg: vt::RgbColor::default(),
+            bg: vt::RgbColor::default(),
             bg_is_default: true,
             bold: false,
             italic: false,
@@ -51,7 +51,7 @@ pub struct CursorSnapshot {
     pub blinking: bool,
     pub x: u16,
     pub y: u16,
-    pub style: i32,
+    pub style: vt::CursorStyle,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -64,7 +64,7 @@ pub struct TerminalSnapshot {
     pub rows_data: Vec<Vec<CellSnapshot>>,
     pub row_revisions: Vec<u64>,
     pub scrollbar: vt::GhosttyTerminalScrollbar,
-    pub colors: vt::GhosttyRenderStateColors,
+    pub colors: vt::RenderColors,
 }
 
 pub struct VtPane {
@@ -742,7 +742,7 @@ impl VtPane {
             blinking: render_cursor.blinking,
             x: render_cursor.x,
             y: render_cursor.y,
-            style: render_cursor.style.raw(),
+            style: render_cursor.style,
         };
 
         let mut row_iter = self.row_iterator.update(&render).map_err(vt_to_io)?;
@@ -793,7 +793,7 @@ impl VtPane {
             blinking: render_cursor.blinking,
             x: render_cursor.x,
             y: render_cursor.y,
-            style: render_cursor.style.raw(),
+            style: render_cursor.style,
         };
 
         let size_changed = snapshot.cols != cols || snapshot.rows != rows;
@@ -1614,7 +1614,7 @@ fn snapshot_row(
     row_iter: &vt::RowIteration<'_>,
     cell_iter: &mut vt::CellIterator,
     cols: u16,
-    colors: vt::GhosttyRenderStateColors,
+    colors: vt::RenderColors,
 ) -> io::Result<Vec<CellSnapshot>> {
     let mut cells = cell_iter.update(row_iter).map_err(vt_to_io)?;
     let mut row = Vec::with_capacity(cols as usize);
@@ -1746,15 +1746,15 @@ mod tests {
         terminal.write(b"\x1b[2 q");
         let render = render_state.update(&terminal).expect("update block");
         assert_eq!(
-            render.cursor().expect("block cursor style").style.raw(),
-            vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK
+            render.cursor().expect("block cursor style").style,
+            vt::CursorStyle::Block
         );
 
         terminal.write(b"\x1b[4 q");
         let render = render_state.update(&terminal).expect("update underline");
         assert_eq!(
-            render.cursor().expect("underline cursor style").style.raw(),
-            vt::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE
+            render.cursor().expect("underline cursor style").style,
+            vt::CursorStyle::Underline
         );
     }
 
