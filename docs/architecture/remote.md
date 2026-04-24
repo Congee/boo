@@ -30,9 +30,10 @@ See [../remote/ssh-desktop.md](../remote/ssh-desktop.md).
 The native daemon supports:
 
 - runtime-state bootstrap
-- tab listing
-- create/resize/input/destroy
+- server-owned runtime-view state per connected screen
+- semantic runtime actions for tab, pane, split, resize, attach, and detach
 - full state and deltas
+- pane-scoped streaming keyed by `tab_id -> pane_id`
 - auth and heartbeat
 - iOS client consumption
 
@@ -41,11 +42,15 @@ The current live model is:
 - clients are runtime viewers
 - the server stays authoritative for runtime state, tabs, panes, and terminal
   content
-- clients keep only thin viewer-local bookkeeping such as current-tab display
-  and stream caches
+- clients keep only thin viewer-local bookkeeping such as viewed-tab display,
+  focused-pane display, viewport metadata, and stream caches
 
 Remote clients do not own terminal lifecycle objects; they view and control the
 server-owned runtime.
+
+Post-v1 work should focus on scroll/search semantics across screens, latency
+measurement before local prediction, focused-pane QoS under load, and
+host-scoped reconnect UX.
 
 Primary code:
 

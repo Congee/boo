@@ -38,6 +38,8 @@ It handles:
 - supports saved nodes and connection history
 - bootstraps from runtime state rather than selecting a client-owned target
 - if Bonjour browsing returns local-network authorization failure, the app now shows a direct error and an `Open iPad Settings` action instead of silently showing an empty discovery list
+- real-device smoke coverage has verified the discovered-daemon connect-and-type
+  path on both physical iPad and iPhone hardware
 
 ## Verification
 
@@ -66,3 +68,10 @@ Changes here can affect:
 - Bonjour discovery and endpoint handling
 - Tailscale peer discovery and token handling
 - XCUITest state setup for real-device validation
+
+## Post-v1 Follow-up
+
+- scroll/search/copy-mode semantics for multiple screens and viewport sizes
+- latency instrumentation before any local prediction for focus/tab changes
+- focused-pane transport QoS under load
+- host-scoped reconnect and detached-view timeout UX

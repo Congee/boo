@@ -112,6 +112,19 @@ These should not be confused with remote runtime-view architecture.
   its own geometry using its own viewport
 - detached views survive UI close and are cleaned up only after idle timeout
 
+## Post-v1 Follow-up
+
+- scroll, search, and copy-mode behavior still need a dedicated design pass for
+  multiple screens and different viewport sizes
+- local prediction is intentionally not part of v1; add user-perceived latency
+  measurement first, then decide whether to predict focus/tab/status changes
+- focused-pane-first publishing exists, but transport QoS should be hardened
+  under load with explicit coalescing and starvation checks for non-focused
+  visible panes
+- host-scoped reconnect UX needs continued refinement so a detached mobile view,
+  a disconnected transport, and a closed shared runtime tab are clearly
+  different user actions
+
 ## Acceptance Criteria
 
 The remote lifecycle migration is complete when:

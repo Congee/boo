@@ -106,15 +106,28 @@ The current implemented verification baseline for this redesign is:
 
 Additional 2026-04-23 real-device verification result:
 
-- `BOO_IOS_UI_TEST_DESTINATION='id=<your device id>' BOO_IOS_UI_TEST_ONLY='BooUITests/BooUITests/testOpenLiveTabAndType' bash scripts/test-ios-ui.sh`
-  now completes build, link, signing, install, and test-runner launch on the
-  physical iPad after `xcodebuild` environment sanitization in the script
-- the corrected focused test invocation
-  `BOO_IOS_UI_TEST_ONLY='BooUITests/BooAppLaunchTests/testOpenLiveTabAndType'`
-  now executes on-device and currently fails later in the connect flow with
-  `Connection refused`
-- that remaining issue is tracked as real-device workflow / transport follow-up
-  rather than a missing runtime-view protocol redesign item
+- after `xcodebuild` environment sanitization in `scripts/test-ios-ui.sh`, the
+  real-device lane completes build, link, signing, install, test-runner launch,
+  and focused XCUITest execution
+- the discovered-daemon connect-and-type smoke path passed on both physical iPad
+  and physical iPhone hardware:
+  `BOO_IOS_UI_TEST_DESTINATION='id=<your device id>' BOO_IOS_UI_TEST_ONLY='BooUITests/BooAppLaunchTests/testTappingDiscoveredDaemonConnectsAndTypes' bash scripts/test-ios-ui.sh`
+- setup failures encountered during real-device validation were outside the Boo
+  runtime path: missing provisioning for the device, locked device preflight,
+  disabled UI Automation, or developer-disk-image setup
+
+## Post-v1 Future Work
+
+- define how search, copy mode, and server-owned scrollback should behave when
+  multiple screens view the same runtime with different viewport sizes
+- add latency instrumentation before introducing any client-side prediction for
+  pane focus, tab changes, or status interactions
+- strengthen focused-pane QoS under load: prioritize focused panes, coalesce
+  non-focused visible pane updates, and verify visible panes do not starve
+- refine host-scoped reconnect UX so closing a mobile view, disconnecting, and
+  closing a shared runtime tab remain visually distinct
+- continue to keep Tailscale discovery clearly separated from Boo service
+  reachability and from Tailscale-native path telemetry
 
 ## Related Docs
 

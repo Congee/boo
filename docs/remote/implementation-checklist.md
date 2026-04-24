@@ -26,22 +26,24 @@ deferred section at the bottom of this file.
 
 ## Post-completion verification notes
 
-- 2026-04-23 real-device verification on a connected physical iPad now gets
-  through:
+- 2026-04-23 real-device verification on connected physical iPad and iPhone
+  hardware now gets through:
   - Swift compile
   - link
   - signing
   - install
   - UI test runner launch
-  - execution of a real focused XCUITest method
+  - execution of focused XCUITest methods
+  - discovered-daemon connection
+  - terminal screen entry
+  - typing into the remote terminal and observing the echoed marker
 - the previous device-build blocker was fixed by sanitizing `xcodebuild`
   environment leakage from the repo shell, especially `LD`, `CC`, `CXX`,
   `SDKROOT`, and `NIX_LDFLAGS` overrides in `scripts/test-ios-ui.sh`
-- the current remaining real-device blocker is now a live connect/runtime issue,
-  not a build or automation bootstrap issue:
-  - `BooUITests/BooAppLaunchTests/testOpenLiveTabAndType`
-  - reaches the discovered daemon row on-device
-  - then fails with `Connection refused`
+- real-device setup failures seen during verification were provisioning,
+  locked-device, developer-disk-image, or UI Automation readiness issues before
+  the app launched; once those were resolved, the discovered-daemon
+  connect-and-type path passed on real hardware
 
 ## Current Emphasis
 
@@ -122,8 +124,13 @@ deferred section at the bottom of this file.
 
 ### Deferred / TODO
 
-- [x] document scroll/search coupling as deferred beyond this redesign pass
-- [x] document prediction/latency-hiding work as post-v1 follow-up
+- [ ] define scroll/search/copy-mode semantics across per-screen views
+- [ ] add latency measurement for user-perceived focus/tab/pane interactions
+- [ ] decide whether to add local prediction after latency tooling exists
+- [ ] harden transport QoS beyond current focused-pane-first publish ordering:
+      focused pane priority, non-focused pane coalescing, and starvation checks
+- [ ] refine canonical host/runtime reconnect UX and view timeout affordances
+- [ ] keep real-device iOS UI smoke tests current for both iPad and iPhone
 
 ## Related Docs
 

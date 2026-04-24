@@ -69,6 +69,15 @@ bash scripts/test-ios-remote-view.sh
 
 The validation script currently completes the Rust daemon checks, the shared Swift protocol self-tests, and the iOS app build path in this repo environment.
 
+The 2026-04-23 real-device smoke baseline also verifies the discovered-daemon
+connect-and-type path on physical iPad and iPhone hardware with:
+
+```bash
+BOO_IOS_UI_TEST_DESTINATION='id=<device-id>' \
+BOO_IOS_UI_TEST_ONLY='BooUITests/BooAppLaunchTests/testTappingDiscoveredDaemonConnectsAndTypes' \
+bash scripts/test-ios-ui.sh
+```
+
 ## Real Device Workflow
 
 For a physical iPad or iPhone, the project needs a valid Apple development
@@ -119,12 +128,16 @@ Notes:
 - Bonjour discovery on a real device still depends on the iPad or iPhone granting
   Local Network access to `boo`; otherwise the app now surfaces a direct error
   and an `Open iPad Settings` action instead of silently showing an empty list
+- if a discovered-daemon UI test fails before a row appears, first check for
+  stale Bonjour publishers or local-network permission before treating it as a
+  runtime-view protocol failure
 
 ## Remaining Manual Validation
 
 Automated validation covers the remote protocol, runtime-first bootstrap flow,
-and state updates. Manual validation is still reserved for client UX that
-depends on the real iOS interaction model:
+state updates, and the real-device discovered-daemon connect-and-type smoke
+path. Manual validation is still reserved for client UX that depends on the real
+iOS interaction model:
 
 - keyboard accessory ergonomics on-device, especially held modifiers,
   command/control combos, and press-and-hold repeat behavior
@@ -138,3 +151,14 @@ Transport-state transitions that still need manual judgment in a real client:
 - when reconnecting state should block input vs leave the last terminal visible
 - how long an inactive runtime view should keep the last screen visible before
   the UI feels misleading
+
+## Post-v1 Follow-up
+
+- define how search, copy mode, and scrollback should behave for multiple
+  screens with different viewport sizes
+- add latency measurement before enabling client-side prediction for focus,
+  tab, or status interactions
+- harden transport scheduling so focused pane traffic remains low-latency while
+  non-focused visible panes are coalesced without starvation
+- refine reconnect UX around closing the mobile view, disconnecting the
+  transport, and closing a shared runtime tab

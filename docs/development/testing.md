@@ -36,6 +36,12 @@ Remote:
 - `BOO_IOS_UI_TEST_DESTINATION='id=<device-id>' bash scripts/test-ios-ui.sh`
 - `BOO_IOS_UI_TEST_DESTINATION='id=<device-id>' BOO_IOS_UI_TEST_ONLY='BooUITests/BooAppLaunchTests/<testName>' bash scripts/test-ios-ui.sh`
 
+Current real-device smoke baseline:
+
+- `BOO_IOS_UI_TEST_DESTINATION='id=<device-id>' BOO_IOS_UI_TEST_ONLY='BooUITests/BooAppLaunchTests/testTappingDiscoveredDaemonConnectsAndTypes' bash scripts/test-ios-ui.sh`
+- this path has passed on physical iPad and iPhone hardware and verifies
+  discovered daemon -> terminal screen -> type -> echoed marker
+
 ## Testing Principles
 
 - prefer deterministic socket/control checks when possible
@@ -48,3 +54,6 @@ Remote:
 - real-device Bonjour discovery also depends on the iOS Local Network
   permission; if the app reports local-network authorization failure, that is
   a device permission issue, not a QUIC daemon failure
+- if a real-device run fails before Boo launches, check signing/provisioning,
+  locked-device state, Developer Mode / UI Automation, and developer-disk-image
+  setup before debugging runtime protocol behavior

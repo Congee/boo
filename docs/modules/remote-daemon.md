@@ -41,8 +41,15 @@ files own narrower responsibilities such as:
 - supports full-state and delta publishing
 - supports heartbeat and reconnect-oriented metadata
 - supports daemon identity metadata
-- keeps only thin per-viewer current-tab and stream-cache bookkeeping in the transport layer
+- keeps only thin per-view runtime-view and stream-cache bookkeeping in the transport layer
 - exposed diagnostics through `boo remote-clients`
+
+## Post-v1 Follow-up
+
+- strengthen transport QoS for focused-pane-first delivery under load
+- keep non-focused visible pane streams coalesced without starvation
+- preserve pane-scoped `tab_id -> pane_id` revision linkage when adding new
+  remote messages
 
 ## Related Docs
 
