@@ -102,10 +102,11 @@ deferred section at the bottom of this file.
 - [x] preserve compatibility with the current single-screen bootstrap flow
 - [x] add iOS-side `RuntimeAction`-driven semantic interactions in the main UI
 - [x] render all visible panes for the viewed tab on iOS
-- [x] render server-owned status/tab UI from runtime metadata on iOS
+- [x] rely on the Boo core statusbar for tab-list UI instead of rendering
+      native iOS runtime tab chrome
 - [x] drive pane hit-testing/focus changes from server-provided pane frames
-- [x] drive tab/status-bar interactions semantically instead of by raw
-      coordinates
+- [x] preserve semantic runtime actions for statusbar/tab effects without
+      client-owned tab lifecycle state
 - [x] drive divider resize semantically using normalized split ratios
 - [x] keep focused pane interaction hottest without local prediction
 
@@ -127,6 +128,12 @@ deferred section at the bottom of this file.
 - [ ] define scroll/search/copy-mode semantics across per-screen views
 - [ ] harden transport QoS beyond current focused-pane-first publish ordering:
       focused pane priority, non-focused pane coalescing, and starvation checks
+- [ ] revisit terminal UI regressions found during macOS runtime-view testing:
+      invisible/transparent content, inconsistent glyph width, and the content
+      background changing from translucent to fully dark
+- [ ] move remaining macOS/iOS toolchain cleanup into `flake.nix` so scripts no
+      longer need ad hoc `env -u SDKROOT` wrappers or local library-path
+      discovery to work around dev-shell leakage
 - [ ] refine canonical host/runtime reconnect UX and view timeout affordances
 - [ ] keep real-device iOS UI smoke tests current for both iPad and iPhone
 
@@ -146,7 +153,7 @@ deferred section at the bottom of this file.
       the same event names
 - [x] add automated trace-output assertions for the remaining core latency flows:
   - [x] iOS tap pane -> `FocusPane` -> runtime state/pane update -> render
-  - [x] iOS tap tab/status action -> runtime action -> update -> render
+  - [x] iOS statusbar/tab runtime action -> update -> render
   - [x] iOS key/input -> terminal delta/full-state -> render
 - [ ] collect baseline measurements for user-perceived focus/tab/pane/input
       interactions before changing behavior
@@ -201,11 +208,11 @@ Trace verification notes:
   and the remote-view iOS build smoke both pass.
 - 2026-04-24 extended `scripts/verify-ios-signposts.sh` with automated
   trace-output assertions for the remaining core flows. The launched iOS app can
-  now drive a UI-test-only sequence of `new_split` -> `focus_pane`,
-  `new_tab` -> `set_viewed_tab`, and input, then the script asserts both the
-  begin events and `remote.render_apply` end records via `source_event` plus
-  Instruments interval rows for `remote.focus_pane`, `remote.set_viewed_tab`,
-  and `remote.input`.
+  drive a UI-test-only runtime-action sequence of `new_split` -> `focus_pane`,
+  `new_tab` -> `set_viewed_tab`, and input without rendering native tab chrome;
+  the script asserts both the begin events and `remote.render_apply` end records
+  via `source_event` plus Instruments interval rows for `remote.focus_pane`,
+  `remote.set_viewed_tab`, and `remote.input`.
 - 2026-04-24 post-change real-device verification passed after extending the
   verifier to set the local Boo server's `libghostty-vt` dynamic-library search
   path. The passing run used:

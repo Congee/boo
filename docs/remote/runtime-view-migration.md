@@ -25,6 +25,8 @@ client-owned lifecycle objects.
 - iOS bootstraps from runtime state / active tab metadata.
 - iOS and desktop mutate the same shared runtime with semantic actions.
 - iOS does not create or destroy tabs as recovery workaround.
+- iOS does not render separate native runtime tab chrome; the Boo core
+  statusbar remains the visible tab-list UI.
 - closing iOS UI detaches the view first; the shared runtime remains alive until
   idle timeout cleanup.
 - per-screen viewed tab, focused pane, visible panes, viewport, and attachment
@@ -111,13 +113,17 @@ These should not be confused with remote runtime-view architecture.
 - normalized split ratios are shared runtime truth; each screen maps them into
   its own geometry using its own viewport
 - detached views survive UI close and are cleaned up only after idle timeout
+- runtime-view latency tracing exists across Rust and iOS using the shared
+  remote event schema documented in
+  [implementation-checklist.md](./implementation-checklist.md)
 
 ## Post-v1 Follow-up
 
 - scroll, search, and copy-mode behavior still need a dedicated design pass for
   multiple screens and different viewport sizes
-- local prediction is intentionally not part of v1; add user-perceived latency
-  measurement first, then decide whether to predict focus/tab/status changes
+- local prediction is intentionally not part of v1; use the tracing foundation
+  to collect user-perceived latency baselines first, then decide whether to
+  predict focus/tab/status changes
 - focused-pane-first publishing exists, but transport QoS should be hardened
   under load with explicit coalescing and starvation checks for non-focused
   visible panes

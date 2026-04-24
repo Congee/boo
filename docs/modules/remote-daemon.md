@@ -43,6 +43,8 @@ files own narrower responsibilities such as:
 - supports daemon identity metadata
 - keeps only thin per-view runtime-view and stream-cache bookkeeping in the transport layer
 - exposed diagnostics through `boo remote-clients`
+- emits shared Rust latency trace events for connection, runtime actions, input,
+  focus, pane updates, and Apple OSLog correlation on Apple platforms
 
 ## Post-v1 Follow-up
 

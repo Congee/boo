@@ -44,13 +44,17 @@ The current live model is:
   content
 - clients keep only thin viewer-local bookkeeping such as viewed-tab display,
   focused-pane display, viewport metadata, and stream caches
+- iOS does not render its own runtime tab bar; the core statusbar remains the
+  tab-list UI
+- Rust and iOS emit shared runtime-view latency events so daemon handling,
+  native signposts, pane updates, and render apply timing can be correlated
 
 Remote clients do not own terminal lifecycle objects; they view and control the
 server-owned runtime.
 
-Post-v1 work should focus on scroll/search semantics across screens, latency
-measurement before local prediction, focused-pane QoS under load, and
-host-scoped reconnect UX.
+Post-v1 work should focus on scroll/search semantics across screens, baseline
+latency measurement before deciding whether local prediction is needed,
+focused-pane QoS under load, and host-scoped reconnect UX.
 
 Primary code:
 

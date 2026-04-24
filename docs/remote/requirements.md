@@ -13,6 +13,9 @@ time, even though rollout and UX differ today.
 - SSH-backed desktop remote bootstrap and forwarding
 - Boo-native TCP daemon
 - SwiftUI iOS client
+- runtime-view latency tracing foundation:
+  Rust `tracing` with `--trace-filter`, iOS `Logger`/`OSSignposter`, and shared
+  remote event names
 
 ## Core Requirements
 
@@ -40,6 +43,8 @@ The completed redesign now provides:
   - visible panes
   - viewport size
   - attach/detach + idle-timeout lifecycle
+- no separate native iOS runtime tab chrome; Boo core's statusbar remains the
+  visible tab list
 - pane-scoped terminal streaming keyed by `tab_id -> pane_id`
 - explicit runtime/view/pane revision linkage for stale-update rejection and
   refresh
@@ -103,6 +108,12 @@ The current implemented verification baseline for this redesign is:
 - `cargo check -q`
 - `cargo test -q runtime_server::tests::`
 - `cargo test -q client_gui::tests::`
+- `bash scripts/test-latency-traces.sh`
+- `bash scripts/test-ios-remote-view.sh`
+
+Native trace verification uses:
+
+- `bash scripts/verify-ios-signposts.sh --device-id '<device-id>' --team-id '<team-id>'`
 
 Additional 2026-04-23 real-device verification result:
 
@@ -122,8 +133,9 @@ Additional 2026-04-23 real-device verification result:
 
 - define how search, copy mode, and server-owned scrollback should behave when
   multiple screens view the same runtime with different viewport sizes
-- add latency instrumentation before introducing any client-side prediction for
-  pane focus, tab changes, or status interactions
+- collect baseline user-perceived latency measurements for pane focus, tab
+  changes, input, and status interactions using the tracing foundation before
+  deciding whether client-side prediction is warranted
 - strengthen focused-pane QoS under load: prioritize focused panes, coalesce
   non-focused visible pane updates, and verify visible panes do not starve
 - refine host-scoped reconnect UX so closing a mobile view, disconnecting, and

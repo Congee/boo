@@ -37,9 +37,14 @@ It handles:
 - connects through resolved Network framework endpoints
 - supports saved nodes and connection history
 - bootstraps from runtime state rather than selecting a client-owned target
+- does not render separate native runtime tab chrome; the Boo core statusbar is
+  the visible tab-list UI
 - if Bonjour browsing returns local-network authorization failure, the app now shows a direct error and an `Open iPad Settings` action instead of silently showing an empty discovery list
 - real-device smoke coverage has verified the discovered-daemon connect-and-type
   path on both physical iPad and iPhone hardware
+- emits native `Logger` rows and `OSSignposter` intervals for shared
+  runtime-view latency events, including `remote.input`, `remote.focus_pane`,
+  `remote.set_viewed_tab`, `remote.pane_update`, and `remote.render_apply`
 
 ## Verification
 
@@ -53,6 +58,7 @@ Primary automated lane:
 - [../../scripts/launch-ios-device.sh](../../scripts/launch-ios-device.sh)
 - [../../scripts/deploy-ios-device.sh](../../scripts/deploy-ios-device.sh)
 - [../../scripts/test-ios-ui.sh](../../scripts/test-ios-ui.sh)
+- [../../scripts/verify-ios-signposts.sh](../../scripts/verify-ios-signposts.sh)
 
 Primary high-level doc:
 
@@ -72,6 +78,7 @@ Changes here can affect:
 ## Post-v1 Follow-up
 
 - scroll/search/copy-mode semantics for multiple screens and viewport sizes
-- latency instrumentation before any local prediction for focus/tab changes
+- baseline latency measurements before deciding whether local prediction is
+  needed for focus/tab/status changes
 - focused-pane transport QoS under load
 - host-scoped reconnect and detached-view timeout UX
