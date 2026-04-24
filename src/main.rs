@@ -406,6 +406,11 @@ pub(crate) struct StatusBarMetrics {
 }
 
 pub(crate) fn terminal_metrics(font_size: f32, primary_family: Option<&str>) -> (f64, f64) {
+    #[cfg(target_os = "macos")]
+    if let Some(metrics) = crate::platform::terminal_font_metrics(primary_family, font_size) {
+        return metrics;
+    }
+
     #[cfg(target_os = "linux")]
     if let Some(metrics) = measured_linux_terminal_metrics(primary_family, font_size) {
         return metrics;
@@ -560,6 +565,7 @@ enum Message {
     Frame,
     #[cfg(target_os = "linux")]
     FontLoaded,
+    ActivateTab(usize),
     #[allow(dead_code)]
     IcedEvent(Event),
 }

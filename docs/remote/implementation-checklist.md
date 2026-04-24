@@ -37,9 +37,10 @@ deferred section at the bottom of this file.
   - discovered-daemon connection
   - terminal screen entry
   - typing into the remote terminal and observing the echoed marker
-- the previous device-build blocker was fixed by sanitizing `xcodebuild`
+- the previous device-build blocker was first isolated as `xcodebuild`
   environment leakage from the repo shell, especially `LD`, `CC`, `CXX`,
-  `SDKROOT`, and `NIX_LDFLAGS` overrides in `scripts/test-ios-ui.sh`
+  `SDKROOT`, and `NIX_LDFLAGS`; that cleanup now belongs in `flake.nix`, so
+  iOS scripts can call `xcodebuild` directly from `nix develop`
 - real-device setup failures seen during verification were provisioning,
   locked-device, developer-disk-image, or UI Automation readiness issues before
   the app launched; once those were resolved, the discovered-daemon
@@ -128,10 +129,25 @@ deferred section at the bottom of this file.
 - [ ] define scroll/search/copy-mode semantics across per-screen views
 - [ ] harden transport QoS beyond current focused-pane-first publish ordering:
       focused pane priority, non-focused pane coalescing, and starvation checks
-- [ ] revisit terminal UI regressions found during macOS runtime-view testing:
+- [x] revisit terminal UI regressions found during macOS runtime-view testing:
       invisible/transparent content, inconsistent glyph width, and the content
       background changing from translucent to fully dark
-- [ ] move remaining macOS/iOS toolchain cleanup into `flake.nix` so scripts no
+      - fixed the macOS font fallback/metrics path so Menlo is first and
+        measured through CoreText instead of using a square-cell fallback
+      - fixed the remote GUI terminal scene so translucent backgrounds are
+        painted once rather than compounded by the outer container
+      - fixed desktop remote input routing so typed text, app key events,
+        mouse actions, splits, and resize actions target the requesting
+        client's viewed tab/focused pane instead of the process-global active
+        tab
+      - made statusbar tab labels actionable in both the client GUI and
+        standalone/runtime UI, sending the same runtime viewed-tab action used
+        by other tab controls
+      - guarded hyperlink lookup so normal pane clicks do not call Ghostty's
+        formatter unless the snapshot cell is actually marked as a hyperlink
+      - verified with process-targeted `scripts/record-macos-window.swift` and
+        `scripts/capture-macos-window.sh` using a 0.55-opacity terminal body
+- [x] move remaining macOS/iOS toolchain cleanup into `flake.nix` so scripts no
       longer need ad hoc `env -u SDKROOT` wrappers or local library-path
       discovery to work around dev-shell leakage
 - [ ] refine canonical host/runtime reconnect UX and view timeout affordances

@@ -10,6 +10,7 @@ LOG_PATH="${BOO_TEST_LOG:-/tmp/boo-ui-test.log}"
 KEEP_RUNNING="${BOO_TEST_KEEP_RUNNING:-0}"
 VT_LIB_DIR="${VT_LIB_DIR:-}"
 TERMINAL_BODY_IMPL="${BOO_TERMINAL_BODY_IMPL:-}"
+CONFIG_LINES=()
 
 usage() {
   cat <<'EOF'
@@ -22,6 +23,7 @@ Options:
   --keep-running
   --vt-lib-dir PATH
   --terminal-body-impl NAME
+  --config-line LINE       append a config.boo line for this run
   -h, --help
 EOF
 }
@@ -48,6 +50,8 @@ while [[ $# -gt 0 ]]; do
       require_arg "$@"; VT_LIB_DIR="$2"; shift 2 ;;
     --terminal-body-impl)
       require_arg "$@"; TERMINAL_BODY_IMPL="$2"; shift 2 ;;
+    --config-line)
+      require_arg "$@"; CONFIG_LINES+=("$2"); shift 2 ;;
     -h|--help)
       usage; exit 0 ;;
     --)
@@ -66,6 +70,11 @@ mkdir -p "$CONFIG_DIR"
 cat > "$CONFIG_DIR/config.boo" <<EOF
 control-socket = $SOCKET_PATH
 EOF
+if ((${#CONFIG_LINES[@]})); then
+  for line in "${CONFIG_LINES[@]}"; do
+    printf '%s\n' "$line" >> "$CONFIG_DIR/config.boo"
+  done
+fi
 
 rm -f "$SOCKET_PATH" "$LOG_PATH"
 

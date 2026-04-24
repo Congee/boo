@@ -39,6 +39,12 @@ struct LocalGuiTransportState {
     pane_frames: Vec<(u64, u64, u64, u64, u64)>,
 }
 
+#[derive(Clone, Copy)]
+struct ClientRuntimeTarget {
+    tab_id: u32,
+    pane_id: Option<u64>,
+}
+
 impl BooApp {
     fn bump_runtime_revision(&mut self) -> u64 {
         self.runtime_revision = self.runtime_revision.wrapping_add(1).max(1);
@@ -243,6 +249,47 @@ impl BooApp {
             self.set_pane_focus(new, true);
         }
         true
+    }
+
+    fn client_runtime_target(&mut self, client_id: u64) -> Option<ClientRuntimeTarget> {
+        let view = self.ensure_remote_client_view_state(client_id)?;
+        let tab_id = view.viewed_tab_id?;
+        let valid_panes = self.pane_ids_for_tab(tab_id);
+        let pane_id = view
+            .focused_pane_id
+            .filter(|pane_id| valid_panes.contains(pane_id))
+            .or_else(|| self.default_focused_pane_for_tab(tab_id));
+        Some(ClientRuntimeTarget { tab_id, pane_id })
+    }
+
+    fn focus_client_runtime_target(&mut self, client_id: u64) -> Option<ClientRuntimeTarget> {
+        let target = self.client_runtime_target(client_id)?;
+        if !self.focus_runtime_tab(target.tab_id) {
+            self.recover_remote_client_runtime_view(client_id);
+            return None;
+        }
+        if let Some(pane_id) = target.pane_id {
+            self.focus_pane_by_id(pane_id);
+        }
+        Some(target)
+    }
+
+    fn sync_client_view_to_active_runtime(&mut self, client_id: u64) {
+        let Some(tab_id) = self.active_runtime_tab_id() else {
+            return;
+        };
+        let visible_pane_ids = self.pane_ids_for_tab(tab_id);
+        let focused_pane_id = Some(self.server.tabs.focused_pane().id())
+            .filter(|pane_id| visible_pane_ids.contains(pane_id))
+            .or_else(|| self.default_focused_pane_for_tab(tab_id));
+        if let Some(server) = self.remote_server_for_client(client_id) {
+            server.update_client_view(client_id, |view| {
+                view.viewed_tab_id = Some(tab_id);
+                view.focused_pane_id = focused_pane_id;
+                view.visible_pane_ids = visible_pane_ids.clone();
+                view.touch_view();
+            });
+        }
     }
 
     pub(crate) fn broadcast_runtime_view_to_all_viewers(&mut self) -> Option<u32> {
@@ -702,6 +749,11 @@ impl BooApp {
                     self.recover_remote_client_runtime_view(client_id);
                     return;
                 };
+                if !self.focus_runtime_tab(active_tab_id) {
+                    self.recover_remote_client_runtime_view(client_id);
+                    return;
+                }
+                self.focus_pane_by_id(pane_id);
                 tracing::info!(
                     target: "boo::latency",
                     interaction_id = input_seq.unwrap_or_default(),
@@ -725,6 +777,7 @@ impl BooApp {
                 } else {
                     let _ = self.backend.write_input(pane, &bytes);
                 }
+                self.sync_client_view_to_active_runtime(client_id);
                 self.mark_remote_tab_dirty(active_tab_id);
                 log_server_latency("remote_input_applied", started_at);
             }
@@ -734,7 +787,7 @@ impl BooApp {
                 input_seq,
             } => {
                 let started_at = Instant::now();
-                let Some(active_tab_id) = self.active_runtime_tab_id() else {
+                let Some(target) = self.focus_client_runtime_target(client_id) else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -744,15 +797,12 @@ impl BooApp {
                     }
                     return;
                 };
-                if !self.focus_runtime_tab(active_tab_id) {
-                    self.recover_remote_client_runtime_view(client_id);
-                    return;
-                }
                 if let Some(server) = self.remote_server_for_client(client_id) {
                     server.record_input_seq(client_id, input_seq);
                 }
                 self.inject_key(&keyspec);
-                self.mark_remote_tab_dirty(active_tab_id);
+                self.sync_client_view_to_active_runtime(client_id);
+                self.mark_remote_tab_dirty(target.tab_id);
                 log_server_latency("remote_key_applied", started_at);
             }
             server::Command::RemoteResize {
@@ -784,18 +834,23 @@ impl BooApp {
                     self.recover_remote_client_runtime_view(client_id);
                     return;
                 };
+                if !self.focus_runtime_tab(active_tab_id) {
+                    self.recover_remote_client_runtime_view(client_id);
+                    return;
+                }
                 if Some(active_tab_id) == self.active_runtime_tab_id() && self.resize_viewport_cells(cols, rows) {
                     self.publish_remote_tab(active_tab_id);
                 }
             }
             server::Command::RemoteExecuteCommand { client_id, input } => {
                 self.invalidate_remote_tabs_cache();
+                let _ = self.focus_client_runtime_target(client_id);
                 self.execute_command(&input);
-                let _ = client_id;
+                self.sync_client_view_to_active_runtime(client_id);
                 self.broadcast_runtime_view_to_all_viewers();
             }
             server::Command::RemoteAppKeyEvent { client_id, event } => {
-                let Some(active_tab_id) = self.active_runtime_tab_id() else {
+                let Some(target) = self.focus_client_runtime_target(client_id) else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -805,16 +860,15 @@ impl BooApp {
                     }
                     return;
                 };
-                if !self.focus_runtime_tab(active_tab_id) {
-                    self.recover_remote_client_runtime_view(client_id);
-                    return;
-                }
                 if let Some(server) = self.remote_server_for_client(client_id) {
                     server.record_input_seq(client_id, event.input_seq);
                 }
                 let consumed = self.handle_app_key_event(event);
+                self.sync_client_view_to_active_runtime(client_id);
                 if consumed {
                     self.broadcast_runtime_view_to_all_viewers();
+                } else {
+                    self.mark_remote_tab_dirty(target.tab_id);
                 }
             }
             server::Command::RemoteAppMouseEvent { client_id, event } => {
@@ -823,7 +877,7 @@ impl BooApp {
                     crate::app_input::AppMouseEvent::WheelScrolledLines { .. }
                         | crate::app_input::AppMouseEvent::WheelScrolledPixels { .. }
                 );
-                let Some(active_tab_id) = self.active_runtime_tab_id() else {
+                let Some(target) = self.focus_client_runtime_target(client_id) else {
                     if let Some(server) = self
                         .remote_server_for_client(client_id)
                         .or(self.server.local_gui_server.as_ref())
@@ -833,20 +887,18 @@ impl BooApp {
                     }
                     return;
                 };
-                if !self.focus_runtime_tab(active_tab_id) {
-                    self.recover_remote_client_runtime_view(client_id);
-                    return;
-                }
                 let changed_ui = self.handle_app_mouse_event(event);
+                self.sync_client_view_to_active_runtime(client_id);
                 if changed_ui || should_republish_tab {
                     let _ = self
                         .broadcast_runtime_view_to_all_viewers()
-                        .unwrap_or(active_tab_id);
+                        .unwrap_or(target.tab_id);
                 }
             }
             server::Command::RemoteAppAction { client_id, action } => {
+                let _ = self.focus_client_runtime_target(client_id);
                 self.dispatch_binding_action(action);
-                let _ = client_id;
+                self.sync_client_view_to_active_runtime(client_id);
                 self.broadcast_runtime_view_to_all_viewers();
             }
             server::Command::RemoteFocusPane { client_id, pane_id } => {
@@ -1041,7 +1093,9 @@ impl BooApp {
                 }
                 remote::RuntimeAction::NewSplit { direction, .. } => {
                     let before = self.local_gui_transport_state();
+                    let _ = self.focus_client_runtime_target(client_id);
                     self.create_split(Self::split_direction_from_str(direction.as_deref().unwrap_or("right")));
+                    self.sync_client_view_to_active_runtime(client_id);
                     self.publish_local_gui_after_ui_action(&before);
                     self.broadcast_runtime_view_to_all_viewers();
                 }
@@ -1076,6 +1130,7 @@ impl BooApp {
                         .focused_pane_id
                         .filter(|pane_id| self.pane_ids_for_tab(tab_id).contains(pane_id))
                         .or_else(|| self.default_focused_pane_for_tab(tab_id));
+                    let _ = self.focus_client_runtime_target(client_id);
                     let axis = match direction.as_str() {
                         "left" | "right" => crate::splits::Direction::Horizontal,
                         "up" | "down" => crate::splits::Direction::Vertical,
@@ -1109,6 +1164,7 @@ impl BooApp {
                             amount,
                         ));
                     }
+                    self.sync_client_view_to_active_runtime(client_id);
                     self.broadcast_runtime_view_to_all_viewers();
                 }
                 }

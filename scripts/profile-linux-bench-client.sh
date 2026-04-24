@@ -22,28 +22,11 @@ CLIENT_BIN="${CLIENT_BIN:-target/profiling/boo}"
 CLIENT_IMPL="${CLIENT_IMPL:-}"
 PROFILE_TARGET="${PROFILE_TARGET:-client}"
 PROFILER="${PROFILER:-auto}"
-VT_LIB_DIR="${VT_LIB_DIR:-}"
+VT_LIB_DIR="${BOO_VT_LIB_DIR:-${VT_LIB_DIR:-}}"
 BENCH_KEY="${BENCH_KEY:-}"
 BENCH_KEY_REPEAT="${BENCH_KEY_REPEAT:-0}"
 BENCH_KEY_DELAY="${BENCH_KEY_DELAY:-0.5}"
 BENCH_KEY_INTERVAL="${BENCH_KEY_INTERVAL:-0.1}"
-
-find_vt_lib_dir() {
-  local target="${TARGET:-$(rustc -vV | awk '/host:/ {print $2}')}"
-  local candidates=(
-    "$PWD/target/libghostty-vt/$target/profiling/lib"
-    "$PWD/target/libghostty-vt/$target/release/lib"
-    "$PWD/target/libghostty-vt/$target/debug/lib"
-  )
-  local path
-  for path in "${candidates[@]}"; do
-    if [[ -e "$path/libghostty-vt.so.0" || -e "$path/libghostty-vt.so" ]]; then
-      printf '%s\n' "$path"
-      return 0
-    fi
-  done
-  return 1
-}
 
 usage() {
   cat <<'EOF'
@@ -53,6 +36,7 @@ Usage:
                                         [--duration SEC] [--ready-timeout SEC] [--workload TEXT]
                                         [--server-bin PATH] [--client-bin PATH]
                                         [--profile-target client|server] [--profiler auto|perf|none]
+                                        [--vt-lib-dir PATH]
                                         [--bench-key KEYSPEC] [--bench-key-repeat N]
                                         [--bench-key-delay SEC] [--bench-key-interval SEC]
 
@@ -68,6 +52,9 @@ Notes:
   - Can optionally drive repeated control-socket key input after launching the workload.
   - On Linux, video recording is optional and not part of this profiling helper.
   - With --profiler perf, records a perf.data file for the selected process.
+  - When needed, pass --vt-lib-dir or run from nix develop so BOO_VT_LIB_DIR
+    points at the Nix-built libghostty-vt; this script does not scan
+    target/libghostty-vt for a second library copy.
 EOF
 }
 
@@ -119,6 +106,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --profiler)
       PROFILER="$2"
+      shift 2
+      ;;
+    --vt-lib-dir)
+      VT_LIB_DIR="$2"
       shift 2
       ;;
     --bench-key)
@@ -190,10 +181,6 @@ if [[ ! -x "$CLIENT_BIN" ]]; then
   exit 1
 fi
 
-if [[ -z "$VT_LIB_DIR" ]]; then
-  VT_LIB_DIR="$(find_vt_lib_dir || true)"
-fi
-
 SERVER_PID=""
 CLIENT_PID=""
 KEY_DRIVER_PID=""
@@ -224,6 +211,8 @@ CLIENT_ENV=(
   "BOO_GUI_TEST_STATUS_PATH=$GUI_TEST_STATUS"
 )
 if [[ -n "$VT_LIB_DIR" ]]; then
+  SERVER_ENV+=("BOO_VT_LIB_DIR=$VT_LIB_DIR")
+  CLIENT_ENV+=("BOO_VT_LIB_DIR=$VT_LIB_DIR")
   SERVER_ENV+=("LD_LIBRARY_PATH=$VT_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}")
   CLIENT_ENV+=("LD_LIBRARY_PATH=$VT_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}")
 fi

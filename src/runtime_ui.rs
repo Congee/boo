@@ -695,12 +695,14 @@ impl BooApp {
                     Self::theme_color(self.inactive_tab_background, 0.88)
                 };
                 tabs_row = tabs_row.push(
-                    container(text(label).font(ui_font).size(status_text_size).color(fg))
+                    iced::widget::button(text(label).font(ui_font).size(status_text_size).color(fg))
                         .padding(0)
-                        .style(move |_: &Theme| container::Style {
+                        .style(move |_: &Theme, _| iced::widget::button::Style {
                             background: Some(iced::Background::Color(bg)),
+                            text_color: fg,
                             ..Default::default()
-                        }),
+                        })
+                        .on_press(Message::ActivateTab(tab.index)),
                 );
             }
             main_col = main_col.push(

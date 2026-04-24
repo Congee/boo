@@ -172,31 +172,9 @@ if [[ -n "$ONLY_TEST" ]]; then
   TEST_ARGS+=("-only-testing:$ONLY_TEST")
 fi
 
-xcodebuild_clean_env() {
-  env \
-    -u DEVELOPER_DIR \
-    -u SDKROOT \
-    -u MACOSX_DEPLOYMENT_TARGET \
-    -u IPHONEOS_DEPLOYMENT_TARGET \
-    -u NIX_LDFLAGS \
-    -u NIX_CFLAGS_COMPILE \
-    -u NIX_CXXSTDLIB_COMPILE \
-    -u CC \
-    -u CXX \
-    -u LD \
-    -u AR \
-    -u NM \
-    -u RANLIB \
-    -u LIBTOOL \
-    -u LDPLUSPLUS \
-    -u OTHER_LDFLAGS \
-    -u OTHER_SWIFT_FLAGS \
-    "$@"
-}
-
 run_xcodebuild() {
   set +e
-  xcodebuild_clean_env "$@" 2>&1 | tee "$XCODEBUILD_LOG"
+  "$@" 2>&1 | tee "$XCODEBUILD_LOG"
   local status=${PIPESTATUS[0]}
   set -e
 

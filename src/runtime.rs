@@ -588,7 +588,11 @@ impl BooApp {
             remote_dirty = true;
         }
         if remote_dirty && self.has_runtime_stream_subscribers() {
-            self.mark_active_remote_tab_dirty();
+            if self.server.tabs.active_tab_id().is_some() {
+                self.mark_active_remote_tab_dirty();
+            } else {
+                let _ = self.broadcast_runtime_view_to_all_viewers();
+            }
         }
     }
 
@@ -796,6 +800,12 @@ impl BooApp {
             Message::FontLoaded => {
                 self.appearance_revision = self.appearance_revision.wrapping_add(1);
                 self.relayout();
+                return Task::none();
+            }
+            Message::ActivateTab(index) => {
+                if self.server.tabs.goto_tab(index) {
+                    self.sync_after_tab_change();
+                }
                 return Task::none();
             }
             Message::IcedEvent(event) => event,

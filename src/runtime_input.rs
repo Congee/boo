@@ -1639,6 +1639,20 @@ impl BooApp {
         let local_y = point.1 - pane_frame.origin.y;
         let col = (local_x / self.cell_width).floor().max(0.0) as u16;
         let row = (local_y / self.cell_height).floor().max(0.0) as u16;
+        let has_hyperlink_cell = self
+            .backend
+            .ui_terminal_snapshot(pane.pane.id())
+            .and_then(|snapshot| {
+                snapshot
+                    .rows_data
+                    .get(row as usize)
+                    .and_then(|row| row.cells.get(col as usize))
+                    .map(|cell| cell.hyperlink)
+            })
+            .unwrap_or(false);
+        if !has_hyperlink_cell {
+            return None;
+        }
         self.backend
             .hyperlink_at(self.server.tabs.focused_pane(), row, col)
     }

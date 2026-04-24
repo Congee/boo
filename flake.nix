@@ -50,11 +50,17 @@
       # * Inside `nix develop`, prefer a single libghostty-vt authority: the
       #   dev shell exports LIBGHOSTTY_VT_SYS_* so Cargo uses the same
       #   `libghosttyVtPackage` that `nix build` uses instead of making a
-      #   second target-local copy.
+      #   second target-local copy. It also exports BOO_VT_LIB_DIR as the
+      #   script/runtime contract so scripts do not have to discover
+      #   target-local libghostty-vt outputs. The platform dynamic-library
+      #   path is best-effort only on Darwin because SIP strips DYLD_* when
+      #   execution passes through protected system shells; scripts that need
+      #   it should apply BOO_VT_LIB_DIR directly at the final Boo exec.
       # * The dev shell must still not expose Nix's SDKROOT/DEVELOPER_DIR to
       #   interactive Apple tools. Xcode's Swift compiler and the Nix SDK can
       #   be from different toolchain generations, so the shellHook below
-      #   resets those variables after Nix setup hooks run.
+      #   resets those variables after Nix setup hooks run. iOS/macOS scripts
+      #   should then invoke `xcrun`, `swift`, and `xcodebuild` directly.
       commonBuildInputs = with pkgs; [
         openssl
       ]
@@ -103,6 +109,17 @@
           export LIBGHOSTTY_VT_SYS_NO_VENDOR="1"
           export LIBGHOSTTY_VT_SYS_LIBDIR="${libghosttyVtPackage}/lib"
           export LIBGHOSTTY_VT_SYS_INCLUDEDIR="${libghosttyVtPackage.dev}/include"
+          # Contract for scripts and locally-built binaries: this is the
+          # Nix-provided libghostty-vt. Do not scan target/libghostty-vt for a
+          # second copy when this is present.
+          export BOO_VT_LIB_DIR="${libghosttyVtPackage}/lib"
+        '' + lib.optionalString pkgs.stdenv.isDarwin ''
+          # Useful for direct child processes of the dev shell. Protected
+          # system-shell hops may strip DYLD_LIBRARY_PATH on macOS, so scripts
+          # should still wrap the final Boo exec with BOO_VT_LIB_DIR.
+          export DYLD_LIBRARY_PATH="$BOO_VT_LIB_DIR''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+        '' + lib.optionalString pkgs.stdenv.isLinux ''
+          export LD_LIBRARY_PATH="$BOO_VT_LIB_DIR''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         '';
       ghosttyLibghosttyVtPackage = ghostty.packages.${system}.libghostty-vt-releasefast;
       libghosttyVtPackage = ghosttyLibghosttyVtPackage.overrideAttrs (old: {

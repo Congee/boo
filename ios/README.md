@@ -120,10 +120,10 @@ Notes:
   real attached device; on a real device it starts a local Boo daemon, writes a
   temporary UI-test host config for the test bundle, and exercises the visible
   connect/runtime-view terminal flow end-to-end
-- `scripts/test-ios-ui.sh` also sanitizes inherited shell toolchain overrides
-  such as `LD`, `CC`, `CXX`, `SDKROOT`, and `NIX_LDFLAGS` before invoking
-  `xcodebuild`; this avoids host-shell linker leakage that can break real-device
-  builds
+- `nix develop` now keeps Xcode-facing variables and linker/compiler overrides
+  out of the interactive shell before iOS scripts invoke `xcrun`, `swiftc`, or
+  `xcodebuild`; run device workflows from that shell instead of adding
+  per-script SDK/toolchain cleanup wrappers
 - if a real-device UI test reaches the runner but fails with `Timed out while
   enabling automation mode`, verify `Settings > Developer > Enable UI Automation`
   on the device and keep the device unlocked during the run

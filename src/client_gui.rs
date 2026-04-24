@@ -67,6 +67,7 @@ pub enum Message {
     StreamReady(std::sync::mpsc::Sender<StreamCommand>),
     StreamEvent(LocalStreamEvent),
     GuiTest(GuiTestCommand),
+    ActivateTab(u32),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -393,6 +394,7 @@ impl ClientApp {
                 }
             }
             Message::GuiTest(command) => self.handle_gui_test(command),
+            Message::ActivateTab(tab_id) => self.activate_tab(tab_id),
             Message::IcedEvent(event) => match event {
                 Event::Window(window::Event::Resized(size)) => {
                     self.send_resize(size);
@@ -474,17 +476,19 @@ impl ClientApp {
                 Self::theme_color(self.inactive_tab_background, 0.88)
             };
             tabs_row = tabs_row.push(
-                container(
+                iced::widget::button(
                     text(label)
                         .font(Font::MONOSPACE)
                         .size(status_text_size)
                         .color(fg),
                 )
                 .padding(0)
-                .style(move |_: &Theme| container::Style {
+                .style(move |_: &Theme, _| iced::widget::button::Style {
                     background: Some(iced::Background::Color(bg)),
+                    text_color: fg,
                     ..Default::default()
-                }),
+                })
+                .on_press_maybe(tab.tab_id.map(Message::ActivateTab)),
             );
         }
         main_col = main_col.push(
@@ -712,14 +716,12 @@ impl ClientApp {
                 "client.view.render_terminal_scene.stack",
                 crate::profiling::Kind::Cpu,
             );
-            let background = self.terminal_background_color();
+            // The first stack layer owns the terminal background. Do not also
+            // paint the outer container or translucent backgrounds compound
+            // into an effectively opaque/dark terminal body.
             container(stack(layers).width(Length::Fill).height(Length::Fill))
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .style(move |_: &Theme| container::Style {
-                    background: Some(iced::Background::Color(background)),
-                    ..Default::default()
-                })
                 .into()
         }
     }
@@ -867,6 +869,25 @@ impl ClientApp {
                 self.preedit_text.clear();
             }
         }
+    }
+
+    fn activate_tab(&mut self, tab_id: u32) {
+        if let Some(index) = self
+            .ui_state
+            .tabs
+            .iter()
+            .position(|tab| tab.tab_id == Some(tab_id))
+        {
+            self.ui_state.active_tab = index;
+            for tab in &mut self.ui_state.tabs {
+                tab.active = tab.tab_id == Some(tab_id);
+            }
+        }
+        self.active_remote_tab_id = Some(tab_id);
+        self.send_runtime_action(remote::RuntimeAction::SetViewedTab {
+            view_id: self.runtime_view_id,
+            tab_id,
+        });
     }
 
     fn send_resize(&mut self, size: Size) {
@@ -4009,6 +4030,46 @@ mod tests {
 
         assert_eq!(app.active_remote_tab_id, Some(7));
         assert!(stream_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn activate_tab_updates_status_state_and_sends_runtime_action() {
+        let (mut app, _) = ClientApp::new("/tmp/test.sock".to_string());
+        let (stream_tx, stream_rx) = std::sync::mpsc::channel();
+        app.stream_tx = Some(stream_tx);
+        app.runtime_view_id = 44;
+        app.ui_state.tabs = vec![
+            ClientTabState {
+                index: 0,
+                tab_id: Some(7),
+                active: true,
+                title: String::new(),
+                pane_count: 1,
+            },
+            ClientTabState {
+                index: 1,
+                tab_id: Some(8),
+                active: false,
+                title: String::new(),
+                pane_count: 1,
+            },
+        ];
+
+        app.activate_tab(8);
+
+        assert_eq!(app.active_remote_tab_id, Some(8));
+        assert_eq!(app.ui_state.active_tab, 1);
+        assert!(!app.ui_state.tabs[0].active);
+        assert!(app.ui_state.tabs[1].active);
+        match stream_rx.recv().expect("runtime action") {
+            StreamCommand::RuntimeAction {
+                action: remote::RuntimeAction::SetViewedTab { view_id, tab_id },
+            } => {
+                assert_eq!(view_id, 44);
+                assert_eq!(tab_id, 8);
+            }
+            other => panic!("unexpected stream command: {other:?}"),
+        }
     }
 
     #[test]

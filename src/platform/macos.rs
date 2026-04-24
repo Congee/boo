@@ -45,6 +45,22 @@ unsafe extern "C" {
         font: *const c_void,
         language_pref_list: *const c_void,
     ) -> *const c_void;
+    fn CTFontGetGlyphsForCharacters(
+        font: *const c_void,
+        characters: *const u16,
+        glyphs: *mut u16,
+        count: isize,
+    ) -> bool;
+    fn CTFontGetAdvancesForGlyphs(
+        font: *const c_void,
+        orientation: u32,
+        glyphs: *const u16,
+        advances: *mut CoreTextSize,
+        count: isize,
+    ) -> f64;
+    fn CTFontGetAscent(font: *const c_void) -> f64;
+    fn CTFontGetDescent(font: *const c_void) -> f64;
+    fn CTFontGetLeading(font: *const c_void) -> f64;
     fn CTFontDescriptorCopyAttribute(
         descriptor: *const c_void,
         attribute: *const c_void,
@@ -61,6 +77,13 @@ unsafe extern "C" {
 }
 
 const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+const K_CT_FONT_HORIZONTAL_ORIENTATION: u32 = 0;
+
+#[repr(C)]
+struct CoreTextSize {
+    width: f64,
+    height: f64,
+}
 
 fn ime_debug_enabled() -> bool {
     std::env::var_os("BOO_IME_DEBUG").is_some()
@@ -80,6 +103,10 @@ macro_rules! ime_debug {
 
 pub fn default_font_fallbacks(primary_family: Option<&str>) -> Vec<String> {
     let primary_family = primary_family.unwrap_or("Menlo");
+    let mut seen = HashSet::new();
+    let mut families = vec![primary_family.to_string()];
+    seen.insert(primary_family.to_ascii_lowercase());
+
     let name = NSString::from_str(primary_family);
     let font = unsafe {
         CTFontCreateWithName(
@@ -89,18 +116,14 @@ pub fn default_font_fallbacks(primary_family: Option<&str>) -> Vec<String> {
         )
     };
     if font.is_null() {
-        return Vec::new();
+        return families;
     }
 
     let cascade = unsafe { CTFontCopyDefaultCascadeListForLanguages(font, std::ptr::null()) };
     unsafe { CFRelease(font) };
     if cascade.is_null() {
-        return Vec::new();
+        return families;
     }
-
-    let mut seen = HashSet::new();
-    let mut families = Vec::new();
-    seen.insert(primary_family.to_ascii_lowercase());
 
     let count = unsafe { CFArrayGetCount(cascade) };
     for index in 0..count {
@@ -126,6 +149,54 @@ pub fn default_font_fallbacks(primary_family: Option<&str>) -> Vec<String> {
 
     unsafe { CFRelease(cascade) };
     families
+}
+
+pub fn terminal_font_metrics(primary_family: Option<&str>, font_size: f32) -> Option<(f64, f64)> {
+    let family = primary_family.unwrap_or("Menlo");
+    let size = font_size.max(1.0) as f64;
+    let name = NSString::from_str(family);
+    let font = unsafe {
+        CTFontCreateWithName(
+            Retained::as_ptr(&name) as *const _ as *const c_void,
+            size,
+            std::ptr::null(),
+        )
+    };
+    if font.is_null() {
+        return None;
+    }
+
+    let mut width = None;
+    for ch in ['0', 'M', 'W'] {
+        let encoded = ch as u16;
+        let mut glyph = 0u16;
+        let found = unsafe { CTFontGetGlyphsForCharacters(font, &encoded, &mut glyph, 1) };
+        if !found || glyph == 0 {
+            continue;
+        }
+        let advance = unsafe {
+            CTFontGetAdvancesForGlyphs(
+                font,
+                K_CT_FONT_HORIZONTAL_ORIENTATION,
+                &glyph,
+                std::ptr::null_mut(),
+                1,
+            )
+        };
+        if advance.is_finite() && advance > 0.0 {
+            width = Some(advance);
+            break;
+        }
+    }
+
+    let ascent = unsafe { CTFontGetAscent(font) };
+    let descent = unsafe { CTFontGetDescent(font) };
+    let leading = unsafe { CTFontGetLeading(font) };
+    unsafe { CFRelease(font) };
+
+    let width = width?;
+    let height = ascent + descent + leading.max(0.0);
+    (height.is_finite() && height > 0.0).then_some((width.max(1.0), height.max(1.0)))
 }
 
 fn cf_string_to_string(string: *const c_void) -> Option<String> {
@@ -842,7 +913,7 @@ fn apple_script_literal(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{apple_script_literal, ns_text_len};
+    use super::{apple_script_literal, default_font_fallbacks, ns_text_len, terminal_font_metrics};
 
     #[test]
     fn apple_script_literal_escapes_quotes_and_newlines() {
@@ -854,5 +925,33 @@ mod tests {
         assert_eq!(ns_text_len("kana"), 4);
         assert_eq!(ns_text_len("かな"), 2);
         assert_eq!(ns_text_len("𐐷"), 2);
+    }
+
+    #[test]
+    fn default_font_fallbacks_include_primary_family_first() {
+        assert_eq!(
+            default_font_fallbacks(None).first().map(String::as_str),
+            Some("Menlo")
+        );
+        assert_eq!(
+            default_font_fallbacks(Some("Monaco"))
+                .first()
+                .map(String::as_str),
+            Some("Monaco")
+        );
+    }
+
+    #[test]
+    fn terminal_font_metrics_match_monospace_cell_shape() {
+        let (width, height) =
+            terminal_font_metrics(Some("Menlo"), 14.0).expect("Menlo metrics");
+        assert!(
+            (6.0..12.0).contains(&width),
+            "unexpected Menlo 14pt cell width: {width}"
+        );
+        assert!(
+            (14.0..22.0).contains(&height),
+            "unexpected Menlo 14pt cell height: {height}"
+        );
     }
 }
