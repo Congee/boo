@@ -81,7 +81,11 @@
           # apple-sdk Swift interfaces failed with `no such module SwiftShims`;
           # after this reset, xcrun resolves the selected Xcode SDK and the
           # same Swift validation compile succeeds.
-          export PATH="$PATH:/usr/bin"
+          # Put Apple's shims ahead of Nix wrappers for interactive commands
+          # and Cargo test binaries. Appending /usr/bin is not enough: Nix's
+          # xcbuild `xcrun` can otherwise be found first and fail to resolve the
+          # real Xcode SDK during link steps.
+          export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/Applications/Xcode.app/Contents/Developer/usr/bin:$PATH"
           unset DEVELOPER_DIR DEVELOPER_DIR_FOR_BUILD DEVELOPER_DIR_FOR_TARGET
           unset SDKROOT SDKROOT_FOR_BUILD SDKROOT_FOR_TARGET
           unset MACOSX_DEPLOYMENT_TARGET IPHONEOS_DEPLOYMENT_TARGET
