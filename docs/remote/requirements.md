@@ -111,7 +111,7 @@ Additional 2026-04-23 real-device verification result:
   and focused XCUITest execution
 - the discovered-daemon connect-and-type smoke path passed on both physical iPad
   and physical iPhone hardware:
-  `BOO_IOS_UI_TEST_DESTINATION='id=<your device id>' BOO_IOS_UI_TEST_ONLY='BooUITests/BooAppLaunchTests/testTappingDiscoveredDaemonConnectsAndTypes' bash scripts/test-ios-ui.sh`
+  `bash scripts/test-ios-ui.sh --destination 'id=<your device id>' --only-testing 'BooUITests/BooAppLaunchTests/testTappingDiscoveredDaemonConnectsAndTypes'`
 - setup failures encountered during real-device validation were outside the Boo
   runtime path: missing provisioning for the device, locked device preflight,
   disabled UI Automation, or developer-disk-image setup

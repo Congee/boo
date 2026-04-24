@@ -33,12 +33,12 @@ Remote:
 - `BOO_IOS_DEVICE_ID=<device-id> bash scripts/install-ios-device.sh`
 - `BOO_IOS_DEVICE_ID=<device-id> bash scripts/launch-ios-device.sh`
 - `BOO_IOS_DEVICE_ID=<device-id> bash scripts/deploy-ios-device.sh`
-- `BOO_IOS_UI_TEST_DESTINATION='id=<device-id>' bash scripts/test-ios-ui.sh`
-- `BOO_IOS_UI_TEST_DESTINATION='id=<device-id>' BOO_IOS_UI_TEST_ONLY='BooUITests/BooAppLaunchTests/<testName>' bash scripts/test-ios-ui.sh`
+- `bash scripts/test-ios-ui.sh --destination 'id=<device-id>'`
+- `bash scripts/test-ios-ui.sh --destination 'id=<device-id>' --only-testing 'BooUITests/BooAppLaunchTests/<testName>'`
 
 Current real-device smoke baseline:
 
-- `BOO_IOS_UI_TEST_DESTINATION='id=<device-id>' BOO_IOS_UI_TEST_ONLY='BooUITests/BooAppLaunchTests/testTappingDiscoveredDaemonConnectsAndTypes' bash scripts/test-ios-ui.sh`
+- `bash scripts/test-ios-ui.sh --destination 'id=<device-id>' --only-testing 'BooUITests/BooAppLaunchTests/testTappingDiscoveredDaemonConnectsAndTypes'`
 - this path has passed on physical iPad and iPhone hardware and verifies
   discovered daemon -> terminal screen -> type -> echoed marker
 

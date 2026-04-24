@@ -73,9 +73,9 @@ The 2026-04-23 real-device smoke baseline also verifies the discovered-daemon
 connect-and-type path on physical iPad and iPhone hardware with:
 
 ```bash
-BOO_IOS_UI_TEST_DESTINATION='id=<device-id>' \
-BOO_IOS_UI_TEST_ONLY='BooUITests/BooAppLaunchTests/testTappingDiscoveredDaemonConnectsAndTypes' \
-bash scripts/test-ios-ui.sh
+bash scripts/test-ios-ui.sh \
+  --destination 'id=<device-id>' \
+  --only-testing 'BooUITests/BooAppLaunchTests/testTappingDiscoveredDaemonConnectsAndTypes'
 ```
 
 ## Real Device Workflow
@@ -93,7 +93,7 @@ BOO_IOS_DEVICE_ID=<device-id> bash scripts/build-ios-device.sh
 BOO_IOS_DEVICE_ID=<device-id> bash scripts/install-ios-device.sh
 BOO_IOS_DEVICE_ID=<device-id> bash scripts/launch-ios-device.sh
 BOO_IOS_DEVICE_ID=<device-id> bash scripts/deploy-ios-device.sh
-BOO_IOS_UI_TEST_DESTINATION='id=<device-id>' bash scripts/test-ios-ui.sh
+bash scripts/test-ios-ui.sh --destination 'id=<device-id>'
 ```
 
 Notes:
