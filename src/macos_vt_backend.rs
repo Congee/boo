@@ -385,10 +385,10 @@ impl crate::backend::TerminalBackend for MacVtBackend {
     fn forward_vt_key(
         &mut self,
         focused_pane: PaneHandle,
-        action: i32,
+        action: crate::vt::KeyAction,
         keycode: u32,
-        mods: crate::vt::GhosttyMods,
-        consumed_mods: crate::vt::GhosttyMods,
+        mods: crate::vt::KeyMods,
+        consumed_mods: crate::vt::KeyMods,
         key_char: Option<char>,
         text: &str,
         composing: bool,
@@ -412,11 +412,11 @@ impl crate::backend::TerminalBackend for MacVtBackend {
     fn send_mouse_input(
         &mut self,
         focused_pane: PaneHandle,
-        action: crate::vt::GhosttyMouseAction,
-        button: Option<crate::vt::GhosttyMouseButton>,
+        action: crate::vt::MouseAction,
+        button: Option<crate::vt::MouseButton>,
         x: f32,
         y: f32,
-        mods: crate::vt::GhosttyMods,
+        mods: crate::vt::KeyMods,
     ) -> std::io::Result<()> {
         let Some(pane) = self.pane(focused_pane) else {
             return Ok(());

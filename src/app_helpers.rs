@@ -738,12 +738,12 @@ pub(crate) fn iced_button_to_ghostty(button: mouse::Button) -> ffi::ghostty_inpu
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) fn iced_button_to_vt(button: mouse::Button) -> vt::GhosttyMouseButton {
+pub(crate) fn iced_button_to_vt(button: mouse::Button) -> vt::MouseButton {
     match button {
-        mouse::Button::Left => vt::GHOSTTY_MOUSE_BUTTON_LEFT,
-        mouse::Button::Right => vt::GHOSTTY_MOUSE_BUTTON_RIGHT,
-        mouse::Button::Middle => vt::GHOSTTY_MOUSE_BUTTON_MIDDLE,
-        _ => vt::GHOSTTY_MOUSE_BUTTON_UNKNOWN,
+        mouse::Button::Left => vt::MouseButton::Left,
+        mouse::Button::Right => vt::MouseButton::Right,
+        mouse::Button::Middle => vt::MouseButton::Middle,
+        _ => vt::MouseButton::Unknown,
     }
 }
 

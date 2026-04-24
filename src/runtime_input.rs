@@ -310,10 +310,10 @@ impl BooApp {
             let (keycode, unshifted_codepoint) = text_input_command_key(command);
             let _ = self.backend.forward_vt_key(
                 self.server.tabs.focused_pane(),
-                vt::GHOSTTY_KEY_ACTION_PRESS,
+                vt::KeyAction::Press,
                 keycode,
-                ffi::GHOSTTY_MODS_NONE as vt::GhosttyMods,
-                ffi::GHOSTTY_MODS_NONE as vt::GhosttyMods,
+                vt::KeyMods::empty(),
+                vt::KeyMods::empty(),
                 None,
                 "",
                 false,
@@ -428,13 +428,13 @@ impl BooApp {
                 let _ = self.backend.forward_vt_key(
                     self.server.tabs.focused_pane(),
                     if event.repeat {
-                        vt::GHOSTTY_KEY_ACTION_REPEAT
+                        vt::KeyAction::Repeat
                     } else {
-                        vt::GHOSTTY_KEY_ACTION_PRESS
+                        vt::KeyAction::Press
                     },
                     vt_keycode,
-                    event.mods as vt::GhosttyMods,
-                    (event.mods & ffi::GHOSTTY_MODS_SHIFT) as vt::GhosttyMods,
+                    vt::KeyMods::from(event.mods as vt::GhosttyMods),
+                    vt::KeyMods::from((event.mods & ffi::GHOSTTY_MODS_SHIFT) as vt::GhosttyMods),
                     key_char,
                     event.text.as_deref().unwrap_or(""),
                     false,
@@ -700,10 +700,10 @@ impl BooApp {
                     }
                     let _ = self.backend.forward_vt_key(
                         self.server.tabs.focused_pane(),
-                        vt::GHOSTTY_KEY_ACTION_RELEASE,
+                        vt::KeyAction::Release,
                         vt_keycode,
-                        iced_mods_to_ghostty(&modifiers) as vt::GhosttyMods,
-                        0,
+                        vt::KeyMods::from(iced_mods_to_ghostty(&modifiers) as vt::GhosttyMods),
+                        vt::KeyMods::empty(),
                         None,
                         "",
                         false,
@@ -781,10 +781,10 @@ impl BooApp {
                 self.reset_scrolling_state_for_user_input();
                 let _ = self.backend.forward_vt_key(
                     self.server.tabs.focused_pane(),
-                    vt::GHOSTTY_KEY_ACTION_PRESS,
+                    vt::KeyAction::Press,
                     vt_keycode,
-                    mods as vt::GhosttyMods,
-                    consumed_mods as vt::GhosttyMods,
+                    vt::KeyMods::from(mods as vt::GhosttyMods),
+                    vt::KeyMods::from(consumed_mods as vt::GhosttyMods),
                     key_char,
                     text_str.as_deref().unwrap_or(""),
                     false,
@@ -1470,11 +1470,11 @@ impl BooApp {
                 if self.focused_surface().is_null() {
                     let _ = self.backend.send_mouse_input(
                         self.server.tabs.focused_pane(),
-                        vt::GHOSTTY_MOUSE_ACTION_MOTION,
+                        vt::MouseAction::Motion,
                         None,
                         position.x,
                         position.y,
-                        ffi::GHOSTTY_MODS_NONE as vt::GhosttyMods,
+                        vt::KeyMods::empty(),
                     );
                     return;
                 }
@@ -1529,11 +1529,11 @@ impl BooApp {
                     let (mx, my) = self.last_mouse_pos;
                     let _ = self.backend.send_mouse_input(
                         self.server.tabs.focused_pane(),
-                        vt::GHOSTTY_MOUSE_ACTION_PRESS,
+                        vt::MouseAction::Press,
                         Some(iced_button_to_vt(button)),
                         mx as f32,
                         my as f32,
-                        ffi::GHOSTTY_MODS_NONE as vt::GhosttyMods,
+                        vt::KeyMods::empty(),
                     );
                     return;
                 }
@@ -1573,11 +1573,11 @@ impl BooApp {
                     let (mx, my) = self.last_mouse_pos;
                     let _ = self.backend.send_mouse_input(
                         self.server.tabs.focused_pane(),
-                        vt::GHOSTTY_MOUSE_ACTION_RELEASE,
+                        vt::MouseAction::Release,
                         Some(iced_button_to_vt(button)),
                         mx as f32,
                         my as f32,
-                        ffi::GHOSTTY_MODS_NONE as vt::GhosttyMods,
+                        vt::KeyMods::empty(),
                     );
                     return;
                 }

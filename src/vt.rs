@@ -12,10 +12,12 @@ use libghostty_vt_sys as ffi;
 use std::ffi::c_void;
 use std::fmt;
 use std::marker::PhantomData;
+use std::mem::MaybeUninit;
 use std::os::raw::c_char;
 use std::ptr::NonNull;
 
 pub const GHOSTTY_SUCCESS: i32 = ffi::GhosttyResult_GHOSTTY_SUCCESS;
+pub const GHOSTTY_OUT_OF_MEMORY: i32 = ffi::GhosttyResult_GHOSTTY_OUT_OF_MEMORY;
 pub const GHOSTTY_OUT_OF_SPACE: i32 = ffi::GhosttyResult_GHOSTTY_OUT_OF_SPACE;
 pub const GHOSTTY_NO_VALUE: i32 = ffi::GhosttyResult_GHOSTTY_INVALID_VALUE;
 
@@ -56,6 +58,22 @@ pub const GHOSTTY_MOUSE_BUTTON_RIGHT: GhosttyMouseButton =
     ffi::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_RIGHT;
 pub const GHOSTTY_MOUSE_BUTTON_MIDDLE: GhosttyMouseButton =
     ffi::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_MIDDLE;
+pub const GHOSTTY_MOUSE_BUTTON_FOUR: GhosttyMouseButton =
+    ffi::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_FOUR;
+pub const GHOSTTY_MOUSE_BUTTON_FIVE: GhosttyMouseButton =
+    ffi::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_FIVE;
+pub const GHOSTTY_MOUSE_BUTTON_SIX: GhosttyMouseButton =
+    ffi::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_SIX;
+pub const GHOSTTY_MOUSE_BUTTON_SEVEN: GhosttyMouseButton =
+    ffi::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_SEVEN;
+pub const GHOSTTY_MOUSE_BUTTON_EIGHT: GhosttyMouseButton =
+    ffi::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_EIGHT;
+pub const GHOSTTY_MOUSE_BUTTON_NINE: GhosttyMouseButton =
+    ffi::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_NINE;
+pub const GHOSTTY_MOUSE_BUTTON_TEN: GhosttyMouseButton =
+    ffi::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_TEN;
+pub const GHOSTTY_MOUSE_BUTTON_ELEVEN: GhosttyMouseButton =
+    ffi::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_ELEVEN;
 
 pub const GHOSTTY_RENDER_STATE_DATA_COLS: i32 =
     ffi::GhosttyRenderStateData_GHOSTTY_RENDER_STATE_DATA_COLS as i32;
@@ -138,21 +156,56 @@ pub use ffi::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Error(pub i32);
+pub enum Error {
+    OutOfMemory,
+    InvalidValue,
+    OutOfSpace { required: usize },
+    Unknown(i32),
+}
+
+impl Error {
+    pub fn code(self) -> i32 {
+        match self {
+            Self::OutOfMemory => GHOSTTY_OUT_OF_MEMORY,
+            Self::InvalidValue => GHOSTTY_NO_VALUE,
+            Self::OutOfSpace { .. } => GHOSTTY_OUT_OF_SPACE,
+            Self::Unknown(code) => code,
+        }
+    }
+}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "libghostty-vt error {}", self.0)
+        match self {
+            Self::OutOfMemory => write!(f, "libghostty-vt out of memory"),
+            Self::InvalidValue => write!(f, "libghostty-vt invalid value"),
+            Self::OutOfSpace { required } => {
+                write!(f, "libghostty-vt out of space, {required} bytes required")
+            }
+            Self::Unknown(code) => write!(f, "libghostty-vt error {code}"),
+        }
     }
 }
 
 impl std::error::Error for Error {}
 
 fn result(code: i32) -> Result<(), Error> {
-    if code == GHOSTTY_SUCCESS {
-        Ok(())
-    } else {
-        Err(Error(code))
+    match code {
+        GHOSTTY_SUCCESS => Ok(()),
+        GHOSTTY_OUT_OF_MEMORY => Err(Error::OutOfMemory),
+        GHOSTTY_NO_VALUE => Err(Error::InvalidValue),
+        GHOSTTY_OUT_OF_SPACE => Err(Error::OutOfSpace { required: 0 }),
+        other => Err(Error::Unknown(other)),
+    }
+}
+
+fn result_with_len(code: i32, len: usize) -> Result<usize, Error> {
+    match code {
+        GHOSTTY_SUCCESS => Ok(len),
+        GHOSTTY_OUT_OF_MEMORY => Err(Error::OutOfMemory),
+        GHOSTTY_NO_VALUE => Err(Error::InvalidValue),
+        GHOSTTY_OUT_OF_SPACE => Err(Error::OutOfSpace { required: len }),
+        other => Err(Error::Unknown(other)),
     }
 }
 
@@ -163,7 +216,7 @@ struct Handle<T> {
 
 impl<T> Handle<T> {
     fn new(raw: *mut T) -> Result<Self, Error> {
-        let raw = NonNull::new(raw).ok_or(Error(GHOSTTY_OUT_OF_SPACE))?;
+        let raw = NonNull::new(raw).ok_or(Error::OutOfMemory)?;
         Ok(Self { raw })
     }
 
@@ -250,6 +303,141 @@ impl From<i32> for KeyAction {
     }
 }
 
+impl From<KeyAction> for i32 {
+    fn from(action: KeyAction) -> Self {
+        action.raw() as i32
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct KeyMods(GhosttyMods);
+
+impl KeyMods {
+    pub const NONE: Self = Self(0);
+    pub const SHIFT: Self = Self(ffi::GHOSTTY_MODS_SHIFT as GhosttyMods);
+    pub const CTRL: Self = Self(ffi::GHOSTTY_MODS_CTRL as GhosttyMods);
+    pub const ALT: Self = Self(ffi::GHOSTTY_MODS_ALT as GhosttyMods);
+    pub const SUPER: Self = Self(ffi::GHOSTTY_MODS_SUPER as GhosttyMods);
+    pub const CAPS_LOCK: Self = Self(ffi::GHOSTTY_MODS_CAPS_LOCK as GhosttyMods);
+    pub const NUM_LOCK: Self = Self(ffi::GHOSTTY_MODS_NUM_LOCK as GhosttyMods);
+    pub const SHIFT_SIDE: Self = Self(ffi::GHOSTTY_MODS_SHIFT_SIDE as GhosttyMods);
+    pub const CTRL_SIDE: Self = Self(ffi::GHOSTTY_MODS_CTRL_SIDE as GhosttyMods);
+    pub const ALT_SIDE: Self = Self(ffi::GHOSTTY_MODS_ALT_SIDE as GhosttyMods);
+    pub const SUPER_SIDE: Self = Self(ffi::GHOSTTY_MODS_SUPER_SIDE as GhosttyMods);
+
+    pub fn empty() -> Self {
+        Self::NONE
+    }
+
+    pub fn from_bits_retain(bits: GhosttyMods) -> Self {
+        Self(bits)
+    }
+
+    pub fn bits(self) -> GhosttyMods {
+        self.0
+    }
+
+    pub fn contains(self, other: Self) -> bool {
+        (self.0 & other.0) == other.0
+    }
+}
+
+impl From<GhosttyMods> for KeyMods {
+    fn from(bits: GhosttyMods) -> Self {
+        Self::from_bits_retain(bits)
+    }
+}
+
+impl From<KeyMods> for GhosttyMods {
+    fn from(mods: KeyMods) -> Self {
+        mods.bits()
+    }
+}
+
+impl std::ops::BitOr for KeyMods {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl std::ops::BitOrAssign for KeyMods {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct KittyKeyFlags(u8);
+
+impl KittyKeyFlags {
+    pub const DISABLED: Self = Self(ffi::GHOSTTY_KITTY_KEY_DISABLED as u8);
+    pub const DISAMBIGUATE: Self = Self(ffi::GHOSTTY_KITTY_KEY_DISAMBIGUATE as u8);
+    pub const REPORT_EVENTS: Self = Self(ffi::GHOSTTY_KITTY_KEY_REPORT_EVENTS as u8);
+    pub const REPORT_ALTERNATES: Self = Self(ffi::GHOSTTY_KITTY_KEY_REPORT_ALTERNATES as u8);
+    pub const REPORT_ALL: Self = Self(ffi::GHOSTTY_KITTY_KEY_REPORT_ALL as u8);
+    pub const REPORT_ASSOCIATED: Self = Self(ffi::GHOSTTY_KITTY_KEY_REPORT_ASSOCIATED as u8);
+    pub const ALL: Self = Self(ffi::GHOSTTY_KITTY_KEY_ALL as u8);
+
+    pub fn bits(self) -> u8 {
+        self.0
+    }
+}
+
+impl From<u8> for KittyKeyFlags {
+    fn from(bits: u8) -> Self {
+        Self(bits)
+    }
+}
+
+impl From<KittyKeyFlags> for u8 {
+    fn from(flags: KittyKeyFlags) -> Self {
+        flags.bits()
+    }
+}
+
+impl std::ops::BitOr for KittyKeyFlags {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OptionAsAlt {
+    False,
+    True,
+    Left,
+    Right,
+    Unknown(ffi::GhosttyOptionAsAlt),
+}
+
+impl OptionAsAlt {
+    fn raw(self) -> ffi::GhosttyOptionAsAlt {
+        match self {
+            Self::False => ffi::GhosttyOptionAsAlt_GHOSTTY_OPTION_AS_ALT_FALSE,
+            Self::True => ffi::GhosttyOptionAsAlt_GHOSTTY_OPTION_AS_ALT_TRUE,
+            Self::Left => ffi::GhosttyOptionAsAlt_GHOSTTY_OPTION_AS_ALT_LEFT,
+            Self::Right => ffi::GhosttyOptionAsAlt_GHOSTTY_OPTION_AS_ALT_RIGHT,
+            Self::Unknown(value) => value,
+        }
+    }
+}
+
+impl From<ffi::GhosttyOptionAsAlt> for OptionAsAlt {
+    fn from(value: ffi::GhosttyOptionAsAlt) -> Self {
+        match value {
+            ffi::GhosttyOptionAsAlt_GHOSTTY_OPTION_AS_ALT_FALSE => Self::False,
+            ffi::GhosttyOptionAsAlt_GHOSTTY_OPTION_AS_ALT_TRUE => Self::True,
+            ffi::GhosttyOptionAsAlt_GHOSTTY_OPTION_AS_ALT_LEFT => Self::Left,
+            ffi::GhosttyOptionAsAlt_GHOSTTY_OPTION_AS_ALT_RIGHT => Self::Right,
+            other => Self::Unknown(other),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MouseAction {
     Press,
@@ -280,12 +468,26 @@ impl From<GhosttyMouseAction> for MouseAction {
     }
 }
 
+impl From<MouseAction> for GhosttyMouseAction {
+    fn from(action: MouseAction) -> Self {
+        action.raw()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MouseButton {
     Unknown,
     Left,
     Right,
     Middle,
+    Four,
+    Five,
+    Six,
+    Seven,
+    Eight,
+    Nine,
+    Ten,
+    Eleven,
     Other(GhosttyMouseButton),
 }
 
@@ -296,6 +498,14 @@ impl MouseButton {
             Self::Left => GHOSTTY_MOUSE_BUTTON_LEFT,
             Self::Right => GHOSTTY_MOUSE_BUTTON_RIGHT,
             Self::Middle => GHOSTTY_MOUSE_BUTTON_MIDDLE,
+            Self::Four => GHOSTTY_MOUSE_BUTTON_FOUR,
+            Self::Five => GHOSTTY_MOUSE_BUTTON_FIVE,
+            Self::Six => GHOSTTY_MOUSE_BUTTON_SIX,
+            Self::Seven => GHOSTTY_MOUSE_BUTTON_SEVEN,
+            Self::Eight => GHOSTTY_MOUSE_BUTTON_EIGHT,
+            Self::Nine => GHOSTTY_MOUSE_BUTTON_NINE,
+            Self::Ten => GHOSTTY_MOUSE_BUTTON_TEN,
+            Self::Eleven => GHOSTTY_MOUSE_BUTTON_ELEVEN,
             Self::Other(button) => button,
         }
     }
@@ -308,7 +518,93 @@ impl From<GhosttyMouseButton> for MouseButton {
             GHOSTTY_MOUSE_BUTTON_LEFT => Self::Left,
             GHOSTTY_MOUSE_BUTTON_RIGHT => Self::Right,
             GHOSTTY_MOUSE_BUTTON_MIDDLE => Self::Middle,
+            GHOSTTY_MOUSE_BUTTON_FOUR => Self::Four,
+            GHOSTTY_MOUSE_BUTTON_FIVE => Self::Five,
+            GHOSTTY_MOUSE_BUTTON_SIX => Self::Six,
+            GHOSTTY_MOUSE_BUTTON_SEVEN => Self::Seven,
+            GHOSTTY_MOUSE_BUTTON_EIGHT => Self::Eight,
+            GHOSTTY_MOUSE_BUTTON_NINE => Self::Nine,
+            GHOSTTY_MOUSE_BUTTON_TEN => Self::Ten,
+            GHOSTTY_MOUSE_BUTTON_ELEVEN => Self::Eleven,
             other => Self::Other(other),
+        }
+    }
+}
+
+impl From<MouseButton> for GhosttyMouseButton {
+    fn from(button: MouseButton) -> Self {
+        button.raw()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseTrackingMode {
+    None,
+    X10,
+    Normal,
+    Button,
+    Any,
+    Unknown(GhosttyMouseTrackingMode),
+}
+
+impl MouseTrackingMode {
+    fn raw(self) -> GhosttyMouseTrackingMode {
+        match self {
+            Self::None => ffi::GhosttyMouseTrackingMode_GHOSTTY_MOUSE_TRACKING_NONE,
+            Self::X10 => ffi::GhosttyMouseTrackingMode_GHOSTTY_MOUSE_TRACKING_X10,
+            Self::Normal => ffi::GhosttyMouseTrackingMode_GHOSTTY_MOUSE_TRACKING_NORMAL,
+            Self::Button => ffi::GhosttyMouseTrackingMode_GHOSTTY_MOUSE_TRACKING_BUTTON,
+            Self::Any => ffi::GhosttyMouseTrackingMode_GHOSTTY_MOUSE_TRACKING_ANY,
+            Self::Unknown(mode) => mode,
+        }
+    }
+}
+
+impl From<GhosttyMouseTrackingMode> for MouseTrackingMode {
+    fn from(mode: GhosttyMouseTrackingMode) -> Self {
+        match mode {
+            ffi::GhosttyMouseTrackingMode_GHOSTTY_MOUSE_TRACKING_NONE => Self::None,
+            ffi::GhosttyMouseTrackingMode_GHOSTTY_MOUSE_TRACKING_X10 => Self::X10,
+            ffi::GhosttyMouseTrackingMode_GHOSTTY_MOUSE_TRACKING_NORMAL => Self::Normal,
+            ffi::GhosttyMouseTrackingMode_GHOSTTY_MOUSE_TRACKING_BUTTON => Self::Button,
+            ffi::GhosttyMouseTrackingMode_GHOSTTY_MOUSE_TRACKING_ANY => Self::Any,
+            other => Self::Unknown(other),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseFormat {
+    X10,
+    Utf8,
+    Sgr,
+    Urxvt,
+    SgrPixels,
+    Unknown(GhosttyMouseFormat),
+}
+
+impl MouseFormat {
+    fn raw(self) -> GhosttyMouseFormat {
+        match self {
+            Self::X10 => ffi::GhosttyMouseFormat_GHOSTTY_MOUSE_FORMAT_X10,
+            Self::Utf8 => ffi::GhosttyMouseFormat_GHOSTTY_MOUSE_FORMAT_UTF8,
+            Self::Sgr => ffi::GhosttyMouseFormat_GHOSTTY_MOUSE_FORMAT_SGR,
+            Self::Urxvt => ffi::GhosttyMouseFormat_GHOSTTY_MOUSE_FORMAT_URXVT,
+            Self::SgrPixels => ffi::GhosttyMouseFormat_GHOSTTY_MOUSE_FORMAT_SGR_PIXELS,
+            Self::Unknown(format) => format,
+        }
+    }
+}
+
+impl From<GhosttyMouseFormat> for MouseFormat {
+    fn from(format: GhosttyMouseFormat) -> Self {
+        match format {
+            ffi::GhosttyMouseFormat_GHOSTTY_MOUSE_FORMAT_X10 => Self::X10,
+            ffi::GhosttyMouseFormat_GHOSTTY_MOUSE_FORMAT_UTF8 => Self::Utf8,
+            ffi::GhosttyMouseFormat_GHOSTTY_MOUSE_FORMAT_SGR => Self::Sgr,
+            ffi::GhosttyMouseFormat_GHOSTTY_MOUSE_FORMAT_URXVT => Self::Urxvt,
+            ffi::GhosttyMouseFormat_GHOSTTY_MOUSE_FORMAT_SGR_PIXELS => Self::SgrPixels,
+            other => Self::Unknown(other),
         }
     }
 }
@@ -356,18 +652,173 @@ impl From<MouseGeometry> for GhosttyMouseEncoderSize {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct RgbColor {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+impl From<GhosttyColorRgb> for RgbColor {
+    fn from(color: GhosttyColorRgb) -> Self {
+        Self {
+            r: color.r,
+            g: color.g,
+            b: color.b,
+        }
+    }
+}
+
+impl From<RgbColor> for GhosttyColorRgb {
+    fn from(color: RgbColor) -> Self {
+        Self {
+            r: color.r,
+            g: color.g,
+            b: color.b,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PaletteIndex(pub u8);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StyleColor {
+    None,
+    Palette(PaletteIndex),
+    Rgb(RgbColor),
+    Unknown(ffi::GhosttyStyleColorTag),
+}
+
+impl From<ffi::GhosttyStyleColor> for StyleColor {
+    fn from(color: ffi::GhosttyStyleColor) -> Self {
+        match color.tag {
+            ffi::GhosttyStyleColorTag_GHOSTTY_STYLE_COLOR_NONE => Self::None,
+            ffi::GhosttyStyleColorTag_GHOSTTY_STYLE_COLOR_PALETTE => {
+                Self::Palette(PaletteIndex(unsafe { color.value.palette }))
+            }
+            ffi::GhosttyStyleColorTag_GHOSTTY_STYLE_COLOR_RGB => {
+                Self::Rgb(unsafe { color.value.rgb }.into())
+            }
+            other => Self::Unknown(other),
+        }
+    }
+}
+
+impl From<StyleColor> for ffi::GhosttyStyleColor {
+    fn from(color: StyleColor) -> Self {
+        match color {
+            StyleColor::None => Self {
+                tag: ffi::GhosttyStyleColorTag_GHOSTTY_STYLE_COLOR_NONE,
+                value: ffi::GhosttyStyleColorValue::default(),
+            },
+            StyleColor::Palette(PaletteIndex(palette)) => Self {
+                tag: ffi::GhosttyStyleColorTag_GHOSTTY_STYLE_COLOR_PALETTE,
+                value: ffi::GhosttyStyleColorValue { palette },
+            },
+            StyleColor::Rgb(rgb) => Self {
+                tag: ffi::GhosttyStyleColorTag_GHOSTTY_STYLE_COLOR_RGB,
+                value: ffi::GhosttyStyleColorValue { rgb: rgb.into() },
+            },
+            StyleColor::Unknown(tag) => Self {
+                tag,
+                value: ffi::GhosttyStyleColorValue::default(),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Underline {
+    None,
+    Single,
+    Double,
+    Curly,
+    Dotted,
+    Dashed,
+    Unknown(i32),
+}
+
+impl Underline {
+    pub fn raw(self) -> i32 {
+        match self {
+            Self::None => ffi::GhosttySgrUnderline_GHOSTTY_SGR_UNDERLINE_NONE as i32,
+            Self::Single => ffi::GhosttySgrUnderline_GHOSTTY_SGR_UNDERLINE_SINGLE as i32,
+            Self::Double => ffi::GhosttySgrUnderline_GHOSTTY_SGR_UNDERLINE_DOUBLE as i32,
+            Self::Curly => ffi::GhosttySgrUnderline_GHOSTTY_SGR_UNDERLINE_CURLY as i32,
+            Self::Dotted => ffi::GhosttySgrUnderline_GHOSTTY_SGR_UNDERLINE_DOTTED as i32,
+            Self::Dashed => ffi::GhosttySgrUnderline_GHOSTTY_SGR_UNDERLINE_DASHED as i32,
+            Self::Unknown(raw) => raw,
+        }
+    }
+}
+
+impl From<i32> for Underline {
+    fn from(value: i32) -> Self {
+        match value as ffi::GhosttySgrUnderline {
+            ffi::GhosttySgrUnderline_GHOSTTY_SGR_UNDERLINE_NONE => Self::None,
+            ffi::GhosttySgrUnderline_GHOSTTY_SGR_UNDERLINE_SINGLE => Self::Single,
+            ffi::GhosttySgrUnderline_GHOSTTY_SGR_UNDERLINE_DOUBLE => Self::Double,
+            ffi::GhosttySgrUnderline_GHOSTTY_SGR_UNDERLINE_CURLY => Self::Curly,
+            ffi::GhosttySgrUnderline_GHOSTTY_SGR_UNDERLINE_DOTTED => Self::Dotted,
+            ffi::GhosttySgrUnderline_GHOSTTY_SGR_UNDERLINE_DASHED => Self::Dashed,
+            _ => Self::Unknown(value),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct CellStyle {
     raw: GhosttyStyle,
 }
 
 impl CellStyle {
+    pub fn foreground_color(self) -> StyleColor {
+        self.raw.fg_color.into()
+    }
+
+    pub fn background_color(self) -> StyleColor {
+        self.raw.bg_color.into()
+    }
+
+    pub fn underline_color(self) -> StyleColor {
+        self.raw.underline_color.into()
+    }
+
     pub fn bold(self) -> bool {
         self.raw.bold
     }
 
     pub fn italic(self) -> bool {
         self.raw.italic
+    }
+
+    pub fn faint(self) -> bool {
+        self.raw.faint
+    }
+
+    pub fn blink(self) -> bool {
+        self.raw.blink
+    }
+
+    pub fn inverse(self) -> bool {
+        self.raw.inverse
+    }
+
+    pub fn invisible(self) -> bool {
+        self.raw.invisible
+    }
+
+    pub fn strikethrough(self) -> bool {
+        self.raw.strikethrough
+    }
+
+    pub fn overline(self) -> bool {
+        self.raw.overline
+    }
+
+    pub fn underline_style(self) -> Underline {
+        self.raw.underline.into()
     }
 
     pub fn underline(self) -> i32 {
@@ -378,8 +829,151 @@ impl CellStyle {
         self.raw.bg_color.tag == GHOSTTY_STYLE_COLOR_NONE
     }
 
+    pub fn is_default(self) -> bool {
+        unsafe { ffi::ghostty_style_is_default(&self.raw) }
+    }
+
     pub fn raw(self) -> GhosttyStyle {
         self.raw
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OptimizeMode {
+    Debug,
+    ReleaseSafe,
+    ReleaseSmall,
+    ReleaseFast,
+    Unknown(ffi::GhosttyOptimizeMode),
+}
+
+impl From<ffi::GhosttyOptimizeMode> for OptimizeMode {
+    fn from(mode: ffi::GhosttyOptimizeMode) -> Self {
+        match mode {
+            ffi::GhosttyOptimizeMode_GHOSTTY_OPTIMIZE_DEBUG => Self::Debug,
+            ffi::GhosttyOptimizeMode_GHOSTTY_OPTIMIZE_RELEASE_SAFE => Self::ReleaseSafe,
+            ffi::GhosttyOptimizeMode_GHOSTTY_OPTIMIZE_RELEASE_SMALL => Self::ReleaseSmall,
+            ffi::GhosttyOptimizeMode_GHOSTTY_OPTIMIZE_RELEASE_FAST => Self::ReleaseFast,
+            other => Self::Unknown(other),
+        }
+    }
+}
+
+pub fn supports_simd() -> Result<bool, Error> {
+    build_info(ffi::GhosttyBuildInfo_GHOSTTY_BUILD_INFO_SIMD)
+}
+
+pub fn supports_kitty_graphics() -> Result<bool, Error> {
+    build_info(ffi::GhosttyBuildInfo_GHOSTTY_BUILD_INFO_KITTY_GRAPHICS)
+}
+
+pub fn supports_tmux_control_mode() -> Result<bool, Error> {
+    build_info(ffi::GhosttyBuildInfo_GHOSTTY_BUILD_INFO_TMUX_CONTROL_MODE)
+}
+
+pub fn optimize_mode() -> Result<OptimizeMode, Error> {
+    build_info::<ffi::GhosttyOptimizeMode>(ffi::GhosttyBuildInfo_GHOSTTY_BUILD_INFO_OPTIMIZE)
+        .map(Into::into)
+}
+
+fn build_info<T>(data: ffi::GhosttyBuildInfo) -> Result<T, Error> {
+    let mut value = MaybeUninit::<T>::zeroed();
+    unsafe {
+        result(ffi::ghostty_build_info(
+            data,
+            value.as_mut_ptr().cast::<c_void>(),
+        ))?;
+        Ok(value.assume_init())
+    }
+}
+
+pub fn paste_is_safe(data: &str) -> bool {
+    unsafe { ffi::ghostty_paste_is_safe(data.as_ptr() as *const c_char, data.len()) }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FocusEvent {
+    Gained,
+    Lost,
+    Unknown(ffi::GhosttyFocusEvent),
+}
+
+impl FocusEvent {
+    fn raw(self) -> ffi::GhosttyFocusEvent {
+        match self {
+            Self::Gained => ffi::GhosttyFocusEvent_GHOSTTY_FOCUS_GAINED,
+            Self::Lost => ffi::GhosttyFocusEvent_GHOSTTY_FOCUS_LOST,
+            Self::Unknown(event) => event,
+        }
+    }
+
+    pub fn encode(self, buf: &mut [u8]) -> Result<usize, Error> {
+        encode_focus_event(self, buf)
+    }
+
+    pub fn encode_to_vec(self, vec: &mut Vec<u8>) -> Result<(), Error> {
+        encode_focus_event_to_vec(self, vec)
+    }
+}
+
+impl From<ffi::GhosttyFocusEvent> for FocusEvent {
+    fn from(event: ffi::GhosttyFocusEvent) -> Self {
+        match event {
+            ffi::GhosttyFocusEvent_GHOSTTY_FOCUS_GAINED => Self::Gained,
+            ffi::GhosttyFocusEvent_GHOSTTY_FOCUS_LOST => Self::Lost,
+            other => Self::Unknown(other),
+        }
+    }
+}
+
+pub fn encode_focus_event(event: FocusEvent, buf: &mut [u8]) -> Result<usize, Error> {
+    let mut written = 0usize;
+    unsafe {
+        result_with_len(
+            ffi::ghostty_focus_encode(
+                event.raw(),
+                buf.as_mut_ptr() as *mut c_char,
+                buf.len(),
+                &mut written,
+            ),
+            written,
+        )
+    }
+}
+
+pub fn encode_focus_event_to_vec(event: FocusEvent, vec: &mut Vec<u8>) -> Result<(), Error> {
+    let remaining = vec.capacity().saturating_sub(vec.len());
+    let mut written = match encode_focus_event_to_uninit_buf(event, vec.spare_capacity_mut()) {
+        Ok(written) => written,
+        Err(Error::OutOfSpace { required }) => {
+            vec.reserve(required.saturating_sub(remaining));
+            encode_focus_event_to_uninit_buf(event, vec.spare_capacity_mut())?
+        }
+        Err(err) => return Err(err),
+    };
+    let old_len = vec.len();
+    if written > vec.capacity().saturating_sub(old_len) {
+        written = vec.capacity().saturating_sub(old_len);
+    }
+    unsafe { vec.set_len(old_len + written) };
+    Ok(())
+}
+
+fn encode_focus_event_to_uninit_buf(
+    event: FocusEvent,
+    buf: &mut [MaybeUninit<u8>],
+) -> Result<usize, Error> {
+    let mut written = 0usize;
+    let out_ptr = if buf.is_empty() {
+        std::ptr::null_mut()
+    } else {
+        buf.as_mut_ptr().cast::<c_char>()
+    };
+    unsafe {
+        result_with_len(
+            ffi::ghostty_focus_encode(event.raw(), out_ptr, buf.len(), &mut written),
+            written,
+        )
     }
 }
 
@@ -569,6 +1163,37 @@ impl Formatter {
             let bytes = std::slice::from_raw_parts(ptr, len).to_vec();
             ffi::ghostty_free(std::ptr::null(), ptr, len);
             Ok(bytes)
+        }
+    }
+
+    pub fn format_len(&self) -> Result<usize, Error> {
+        let mut required = 0usize;
+        let rc = unsafe {
+            ffi::ghostty_formatter_format_buf(
+                self.raw.as_ptr(),
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+            )
+        };
+        match rc {
+            GHOSTTY_SUCCESS | GHOSTTY_OUT_OF_SPACE => Ok(required),
+            other => result_with_len(other, required),
+        }
+    }
+
+    pub fn format_buf(&self, buf: &mut [u8]) -> Result<usize, Error> {
+        let mut written = 0usize;
+        unsafe {
+            result_with_len(
+                ffi::ghostty_formatter_format_buf(
+                    self.raw.as_ptr(),
+                    buf.as_mut_ptr(),
+                    buf.len(),
+                    &mut written,
+                ),
+                written,
+            )
         }
     }
 }
@@ -929,38 +1554,119 @@ impl KeyEncoder {
         unsafe { ffi::ghostty_key_encoder_setopt_from_terminal(self.raw.as_ptr(), terminal.raw()) };
     }
 
+    pub fn set_cursor_key_application(&mut self, value: bool) -> &mut Self {
+        self.setopt_bool(
+            ffi::GhosttyKeyEncoderOption_GHOSTTY_KEY_ENCODER_OPT_CURSOR_KEY_APPLICATION,
+            value,
+        )
+    }
+
+    pub fn set_keypad_key_application(&mut self, value: bool) -> &mut Self {
+        self.setopt_bool(
+            ffi::GhosttyKeyEncoderOption_GHOSTTY_KEY_ENCODER_OPT_KEYPAD_KEY_APPLICATION,
+            value,
+        )
+    }
+
+    pub fn set_ignore_keypad_with_numlock(&mut self, value: bool) -> &mut Self {
+        self.setopt_bool(
+            ffi::GhosttyKeyEncoderOption_GHOSTTY_KEY_ENCODER_OPT_IGNORE_KEYPAD_WITH_NUMLOCK,
+            value,
+        )
+    }
+
+    pub fn set_alt_esc_prefix(&mut self, value: bool) -> &mut Self {
+        self.setopt_bool(
+            ffi::GhosttyKeyEncoderOption_GHOSTTY_KEY_ENCODER_OPT_ALT_ESC_PREFIX,
+            value,
+        )
+    }
+
+    pub fn set_modify_other_keys_state_2(&mut self, value: bool) -> &mut Self {
+        self.setopt_bool(
+            ffi::GhosttyKeyEncoderOption_GHOSTTY_KEY_ENCODER_OPT_MODIFY_OTHER_KEYS_STATE_2,
+            value,
+        )
+    }
+
+    pub fn set_kitty_flags(&mut self, value: KittyKeyFlags) -> &mut Self {
+        let value = value.bits();
+        self.setopt(
+            ffi::GhosttyKeyEncoderOption_GHOSTTY_KEY_ENCODER_OPT_KITTY_FLAGS,
+            &value as *const _ as *const c_void,
+        )
+    }
+
+    pub fn set_macos_option_as_alt(&mut self, value: OptionAsAlt) -> &mut Self {
+        let value = value.raw();
+        self.setopt(
+            ffi::GhosttyKeyEncoderOption_GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT,
+            &value as *const _ as *const c_void,
+        )
+    }
+
     pub fn encode(&mut self, event: &KeyEvent) -> Result<Vec<u8>, Error> {
-        let mut required = 0usize;
-        unsafe {
-            let rc = ffi::ghostty_key_encoder_encode(
-                self.raw.as_ptr(),
-                event.raw.as_ptr(),
-                std::ptr::null_mut(),
-                0,
-                &mut required,
-            );
-            if rc != GHOSTTY_OUT_OF_SPACE && rc != GHOSTTY_SUCCESS {
-                return Err(Error(rc));
-            }
-        }
-
-        if required == 0 {
-            return Ok(Vec::new());
-        }
-
-        let mut out = vec![0u8; required];
-        let mut written = 0usize;
-        unsafe {
-            result(ffi::ghostty_key_encoder_encode(
-                self.raw.as_ptr(),
-                event.raw.as_ptr(),
-                out.as_mut_ptr() as *mut c_char,
-                out.len(),
-                &mut written,
-            ))?;
-        }
-        out.truncate(written);
+        let mut out = Vec::with_capacity(64);
+        self.encode_to_vec(event, &mut out)?;
         Ok(out)
+    }
+
+    pub fn encode_buf(&mut self, event: &KeyEvent, buf: &mut [u8]) -> Result<usize, Error> {
+        let buf = unsafe { std::slice::from_raw_parts_mut(buf.as_mut_ptr().cast(), buf.len()) };
+        self.encode_to_uninit_buf(event, buf)
+    }
+
+    pub fn encode_to_vec(&mut self, event: &KeyEvent, vec: &mut Vec<u8>) -> Result<(), Error> {
+        let remaining = vec.capacity().saturating_sub(vec.len());
+        let mut written = match self.encode_to_uninit_buf(event, vec.spare_capacity_mut()) {
+            Ok(written) => written,
+            Err(Error::OutOfSpace { required }) => {
+                vec.reserve(required.saturating_sub(remaining));
+                self.encode_to_uninit_buf(event, vec.spare_capacity_mut())?
+            }
+            Err(err) => return Err(err),
+        };
+
+        let old_len = vec.len();
+        if written > vec.capacity().saturating_sub(old_len) {
+            written = vec.capacity().saturating_sub(old_len);
+        }
+        unsafe { vec.set_len(old_len + written) };
+        Ok(())
+    }
+
+    fn encode_to_uninit_buf(
+        &mut self,
+        event: &KeyEvent,
+        buf: &mut [MaybeUninit<u8>],
+    ) -> Result<usize, Error> {
+        let mut written = 0usize;
+        let out_ptr = if buf.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            buf.as_mut_ptr().cast::<c_char>()
+        };
+        unsafe {
+            result_with_len(
+                ffi::ghostty_key_encoder_encode(
+                    self.raw.as_ptr(),
+                    event.raw.as_ptr(),
+                    out_ptr,
+                    buf.len(),
+                    &mut written,
+                ),
+                written,
+            )
+        }
+    }
+
+    fn setopt_bool(&mut self, option: ffi::GhosttyKeyEncoderOption, value: bool) -> &mut Self {
+        self.setopt(option, &value as *const _ as *const c_void)
+    }
+
+    fn setopt(&mut self, option: ffi::GhosttyKeyEncoderOption, value: *const c_void) -> &mut Self {
+        unsafe { ffi::ghostty_key_encoder_setopt(self.raw.as_ptr(), option, value) };
+        self
     }
 }
 
@@ -972,12 +1678,13 @@ impl Drop for KeyEncoder {
 
 pub struct KeyEvent {
     raw: Handle<ffi::GhosttyKeyEvent>,
+    text: Option<String>,
 }
 
 impl KeyEvent {
     pub fn new() -> Result<Self, Error> {
         let raw = new_handle(|out| unsafe { ffi::ghostty_key_event_new(std::ptr::null(), out) })?;
-        Ok(Self { raw })
+        Ok(Self { raw, text: None })
     }
 
     pub fn set_action(&mut self, action: impl Into<KeyAction>) {
@@ -988,12 +1695,12 @@ impl KeyEvent {
         unsafe { ffi::ghostty_key_event_set_key(self.raw.as_ptr(), key) };
     }
 
-    pub fn set_mods(&mut self, mods: GhosttyMods) {
-        unsafe { ffi::ghostty_key_event_set_mods(self.raw.as_ptr(), mods) };
+    pub fn set_mods(&mut self, mods: impl Into<KeyMods>) {
+        unsafe { ffi::ghostty_key_event_set_mods(self.raw.as_ptr(), mods.into().bits()) };
     }
 
-    pub fn set_consumed_mods(&mut self, mods: GhosttyMods) {
-        unsafe { ffi::ghostty_key_event_set_consumed_mods(self.raw.as_ptr(), mods) };
+    pub fn set_consumed_mods(&mut self, mods: impl Into<KeyMods>) {
+        unsafe { ffi::ghostty_key_event_set_consumed_mods(self.raw.as_ptr(), mods.into().bits()) };
     }
 
     pub fn set_composing(&mut self, composing: bool) {
@@ -1001,6 +1708,8 @@ impl KeyEvent {
     }
 
     pub fn set_utf8(&mut self, utf8: &str) {
+        self.text = Some(utf8.to_string());
+        let utf8 = self.text.as_deref().unwrap_or_default();
         unsafe {
             ffi::ghostty_key_event_set_utf8(
                 self.raw.as_ptr(),
@@ -1008,6 +1717,15 @@ impl KeyEvent {
                 utf8.len(),
             )
         };
+    }
+
+    pub fn clear_utf8(&mut self) {
+        self.text = None;
+        unsafe { ffi::ghostty_key_event_set_utf8(self.raw.as_ptr(), std::ptr::null(), 0) };
+    }
+
+    pub fn utf8(&self) -> Option<&str> {
+        self.text.as_deref()
     }
 
     pub fn set_unshifted_codepoint(&mut self, codepoint: u32) {
@@ -1053,38 +1771,102 @@ impl MouseEncoder {
         self.set_size(&size);
     }
 
+    pub fn set_tracking_mode(&mut self, mode: MouseTrackingMode) -> &mut Self {
+        let mode = mode.raw();
+        self.setopt(
+            ffi::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_EVENT,
+            &mode as *const _ as *const c_void,
+        )
+    }
+
+    pub fn set_format(&mut self, format: MouseFormat) -> &mut Self {
+        let format = format.raw();
+        self.setopt(
+            ffi::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_FORMAT,
+            &format as *const _ as *const c_void,
+        )
+    }
+
+    pub fn set_any_button_pressed(&mut self, pressed: bool) -> &mut Self {
+        self.setopt(
+            ffi::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED,
+            &pressed as *const _ as *const c_void,
+        )
+    }
+
+    pub fn set_track_last_cell(&mut self, track: bool) -> &mut Self {
+        self.setopt(
+            ffi::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_TRACK_LAST_CELL,
+            &track as *const _ as *const c_void,
+        )
+    }
+
+    pub fn reset(&mut self) {
+        unsafe { ffi::ghostty_mouse_encoder_reset(self.raw.as_ptr()) };
+    }
+
     pub fn encode(&mut self, event: &MouseEvent) -> Result<Vec<u8>, Error> {
-        let mut required = 0usize;
-        unsafe {
-            let rc = ffi::ghostty_mouse_encoder_encode(
-                self.raw.as_ptr(),
-                event.raw.as_ptr(),
-                std::ptr::null_mut(),
-                0,
-                &mut required,
-            );
-            if rc != GHOSTTY_OUT_OF_SPACE && rc != GHOSTTY_SUCCESS {
-                return Err(Error(rc));
-            }
-        }
-
-        if required == 0 {
-            return Ok(Vec::new());
-        }
-
-        let mut out = vec![0u8; required];
-        let mut written = 0usize;
-        unsafe {
-            result(ffi::ghostty_mouse_encoder_encode(
-                self.raw.as_ptr(),
-                event.raw.as_ptr(),
-                out.as_mut_ptr() as *mut c_char,
-                out.len(),
-                &mut written,
-            ))?;
-        }
-        out.truncate(written);
+        let mut out = Vec::with_capacity(64);
+        self.encode_to_vec(event, &mut out)?;
         Ok(out)
+    }
+
+    pub fn encode_buf(&mut self, event: &MouseEvent, buf: &mut [u8]) -> Result<usize, Error> {
+        let buf = unsafe { std::slice::from_raw_parts_mut(buf.as_mut_ptr().cast(), buf.len()) };
+        self.encode_to_uninit_buf(event, buf)
+    }
+
+    pub fn encode_to_vec(&mut self, event: &MouseEvent, vec: &mut Vec<u8>) -> Result<(), Error> {
+        let remaining = vec.capacity().saturating_sub(vec.len());
+        let mut written = match self.encode_to_uninit_buf(event, vec.spare_capacity_mut()) {
+            Ok(written) => written,
+            Err(Error::OutOfSpace { required }) => {
+                vec.reserve(required.saturating_sub(remaining));
+                self.encode_to_uninit_buf(event, vec.spare_capacity_mut())?
+            }
+            Err(err) => return Err(err),
+        };
+
+        let old_len = vec.len();
+        if written > vec.capacity().saturating_sub(old_len) {
+            written = vec.capacity().saturating_sub(old_len);
+        }
+        unsafe { vec.set_len(old_len + written) };
+        Ok(())
+    }
+
+    fn encode_to_uninit_buf(
+        &mut self,
+        event: &MouseEvent,
+        buf: &mut [MaybeUninit<u8>],
+    ) -> Result<usize, Error> {
+        let mut written = 0usize;
+        let out_ptr = if buf.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            buf.as_mut_ptr().cast::<c_char>()
+        };
+        unsafe {
+            result_with_len(
+                ffi::ghostty_mouse_encoder_encode(
+                    self.raw.as_ptr(),
+                    event.raw.as_ptr(),
+                    out_ptr,
+                    buf.len(),
+                    &mut written,
+                ),
+                written,
+            )
+        }
+    }
+
+    fn setopt(
+        &mut self,
+        option: ffi::GhosttyMouseEncoderOption,
+        value: *const c_void,
+    ) -> &mut Self {
+        unsafe { ffi::ghostty_mouse_encoder_setopt(self.raw.as_ptr(), option, value) };
+        self
     }
 }
 
@@ -1118,8 +1900,8 @@ impl MouseEvent {
         unsafe { ffi::ghostty_mouse_event_clear_button(self.raw.as_ptr()) };
     }
 
-    pub fn set_mods(&mut self, mods: GhosttyMods) {
-        unsafe { ffi::ghostty_mouse_event_set_mods(self.raw.as_ptr(), mods) };
+    pub fn set_mods(&mut self, mods: impl Into<KeyMods>) {
+        unsafe { ffi::ghostty_mouse_event_set_mods(self.raw.as_ptr(), mods.into().bits()) };
     }
 
     pub fn set_position(&mut self, x: f32, y: f32) {
@@ -1131,5 +1913,158 @@ impl MouseEvent {
 impl Drop for MouseEvent {
     fn drop(&mut self) {
         unsafe { ffi::ghostty_mouse_event_free(self.raw.as_ptr()) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn result_mapping_preserves_typed_errors() {
+        assert_eq!(result(GHOSTTY_SUCCESS), Ok(()));
+        assert_eq!(result(GHOSTTY_OUT_OF_MEMORY), Err(Error::OutOfMemory));
+        assert_eq!(result(GHOSTTY_NO_VALUE), Err(Error::InvalidValue));
+        assert_eq!(
+            result_with_len(GHOSTTY_OUT_OF_SPACE, 7),
+            Err(Error::OutOfSpace { required: 7 })
+        );
+        assert_eq!(result(-99), Err(Error::Unknown(-99)));
+    }
+
+    #[test]
+    fn null_handle_maps_to_out_of_memory() {
+        let handle = Handle::<ffi::GhosttyTerminal>::new(std::ptr::null_mut());
+        assert!(matches!(handle, Err(Error::OutOfMemory)));
+    }
+
+    #[test]
+    fn style_color_converts_none_palette_and_rgb() {
+        let none = ffi::GhosttyStyleColor {
+            tag: ffi::GhosttyStyleColorTag_GHOSTTY_STYLE_COLOR_NONE,
+            value: ffi::GhosttyStyleColorValue::default(),
+        };
+        assert_eq!(StyleColor::from(none), StyleColor::None);
+
+        let palette = ffi::GhosttyStyleColor {
+            tag: ffi::GhosttyStyleColorTag_GHOSTTY_STYLE_COLOR_PALETTE,
+            value: ffi::GhosttyStyleColorValue { palette: 42 },
+        };
+        assert_eq!(
+            StyleColor::from(palette),
+            StyleColor::Palette(PaletteIndex(42))
+        );
+
+        let rgb = ffi::GhosttyStyleColor {
+            tag: ffi::GhosttyStyleColorTag_GHOSTTY_STYLE_COLOR_RGB,
+            value: ffi::GhosttyStyleColorValue {
+                rgb: GhosttyColorRgb { r: 1, g: 2, b: 3 },
+            },
+        };
+        assert_eq!(
+            StyleColor::from(rgb),
+            StyleColor::Rgb(RgbColor { r: 1, g: 2, b: 3 })
+        );
+    }
+
+    #[test]
+    fn cell_style_exposes_typed_flags_and_colors() {
+        let mut raw = ffi::sized!(GhosttyStyle);
+        raw.bold = true;
+        raw.italic = true;
+        raw.faint = true;
+        raw.blink = true;
+        raw.inverse = true;
+        raw.invisible = true;
+        raw.strikethrough = true;
+        raw.overline = true;
+        raw.underline = ffi::GhosttySgrUnderline_GHOSTTY_SGR_UNDERLINE_CURLY as i32;
+        raw.fg_color = StyleColor::Rgb(RgbColor {
+            r: 10,
+            g: 20,
+            b: 30,
+        })
+        .into();
+
+        let style = CellStyle { raw };
+        assert!(style.bold());
+        assert!(style.italic());
+        assert!(style.faint());
+        assert!(style.blink());
+        assert!(style.inverse());
+        assert!(style.invisible());
+        assert!(style.strikethrough());
+        assert!(style.overline());
+        assert_eq!(style.underline_style(), Underline::Curly);
+        assert_eq!(
+            style.foreground_color(),
+            StyleColor::Rgb(RgbColor {
+                r: 10,
+                g: 20,
+                b: 30
+            })
+        );
+    }
+
+    #[test]
+    fn mouse_button_maps_extended_buttons() {
+        assert_eq!(
+            MouseButton::from(ffi::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_FOUR),
+            MouseButton::Four
+        );
+        assert_eq!(
+            MouseButton::from(ffi::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_ELEVEN),
+            MouseButton::Eleven
+        );
+    }
+
+    #[test]
+    fn focus_event_encodes_with_typed_out_of_space() {
+        let mut empty = [];
+        assert_eq!(
+            FocusEvent::Gained.encode(&mut empty),
+            Err(Error::OutOfSpace { required: 3 })
+        );
+
+        let mut buf = [0u8; 8];
+        let written = FocusEvent::Gained.encode(&mut buf).unwrap();
+        assert_eq!(&buf[..written], b"\x1b[I");
+    }
+
+    #[test]
+    fn focus_event_appends_to_reused_vec() {
+        let mut buf = Vec::with_capacity(1);
+        FocusEvent::Lost.encode_to_vec(&mut buf).unwrap();
+        assert_eq!(buf, b"\x1b[O");
+    }
+
+    #[test]
+    fn paste_safety_rejects_newline_and_bracketed_paste_end() {
+        assert!(paste_is_safe("hello"));
+        assert!(!paste_is_safe("echo hello\n"));
+        assert!(!paste_is_safe("safe prefix\x1b[201~unsafe suffix"));
+    }
+
+    #[test]
+    fn key_encoder_reuses_vec_and_fixed_buffers() {
+        let mut event = KeyEvent::new().unwrap();
+        event.set_action(KeyAction::Press);
+        event.set_key(ffi::GhosttyKey_GHOSTTY_KEY_A);
+        event.set_mods(KeyMods::empty());
+        event.set_consumed_mods(KeyMods::empty());
+        event.set_composing(false);
+        event.set_unshifted_codepoint('a' as u32);
+        event.set_utf8("a");
+
+        let mut encoder = KeyEncoder::new().unwrap();
+        let allocated = encoder.encode(&event).unwrap();
+
+        let mut reused = Vec::with_capacity(1);
+        encoder.encode_to_vec(&event, &mut reused).unwrap();
+        assert_eq!(reused, allocated);
+
+        let mut fixed = [0u8; 8];
+        let written = encoder.encode_buf(&event, &mut fixed).unwrap();
+        assert_eq!(&fixed[..written], allocated.as_slice());
     }
 }

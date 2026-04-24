@@ -6,7 +6,7 @@ use crate::vt;
 use base64::Engine;
 use crossbeam_channel as channel;
 use std::collections::{HashMap, VecDeque};
-use std::ffi::{c_void, CStr};
+use std::ffi::{CStr, c_void};
 use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -74,6 +74,9 @@ pub struct VtPane {
     cell_iterator: vt::CellIterator,
     key_encoder: vt::KeyEncoder,
     mouse_encoder: vt::MouseEncoder,
+    key_event: vt::KeyEvent,
+    mouse_event: vt::MouseEvent,
+    input_encode_buffer: Vec<u8>,
     pty: PtyProcess,
     write_proxy: Box<PtyWriteProxy>,
     cols: u16,
@@ -111,10 +114,10 @@ pub struct VtPaneUpdate {
 
 #[derive(Clone)]
 pub struct VtForwardKey {
-    pub action: i32,
+    pub action: vt::KeyAction,
     pub keycode: u32,
-    pub mods: vt::GhosttyMods,
-    pub consumed_mods: vt::GhosttyMods,
+    pub mods: vt::KeyMods,
+    pub consumed_mods: vt::KeyMods,
     pub key_char: Option<char>,
     pub text: String,
     pub composing: bool,
@@ -149,11 +152,11 @@ enum WorkerCommand {
     WriteVtBytes(Vec<u8>),
     ForwardKey(VtForwardKey),
     MouseInput {
-        action: vt::GhosttyMouseAction,
-        button: Option<vt::GhosttyMouseButton>,
+        action: vt::MouseAction,
+        button: Option<vt::MouseButton>,
         x: f32,
         y: f32,
-        mods: vt::GhosttyMods,
+        mods: vt::KeyMods,
     },
     ScrollViewportDelta(isize),
     ScrollViewportTop,
@@ -321,11 +324,11 @@ impl VtPaneWorker {
 
     pub fn send_mouse_input(
         &self,
-        action: vt::GhosttyMouseAction,
-        button: Option<vt::GhosttyMouseButton>,
+        action: vt::MouseAction,
+        button: Option<vt::MouseButton>,
         x: f32,
         y: f32,
-        mods: vt::GhosttyMods,
+        mods: vt::KeyMods,
     ) -> io::Result<()> {
         self.tx
             .send(WorkerCommand::MouseInput {
@@ -436,6 +439,8 @@ impl VtPane {
             cell_width_px,
             cell_height_px,
         );
+        let key_event = vt::KeyEvent::new().map_err(vt_to_io)?;
+        let mouse_event = vt::MouseEvent::new().map_err(vt_to_io)?;
 
         Ok(Self {
             terminal,
@@ -444,6 +449,9 @@ impl VtPane {
             cell_iterator,
             key_encoder,
             mouse_encoder,
+            key_event,
+            mouse_event,
+            input_encode_buffer: Vec::with_capacity(64),
             pty,
             write_proxy,
             cols,
@@ -674,24 +682,26 @@ impl VtPane {
 
     pub fn send_mouse_input(
         &mut self,
-        action: vt::GhosttyMouseAction,
-        button: Option<vt::GhosttyMouseButton>,
+        action: vt::MouseAction,
+        button: Option<vt::MouseButton>,
         x: f32,
         y: f32,
-        mods: vt::GhosttyMods,
+        mods: vt::KeyMods,
     ) -> io::Result<()> {
-        let mut event = vt::MouseEvent::new().map_err(vt_to_io)?;
-        event.set_action(action);
+        self.mouse_event.set_action(action);
         if let Some(button) = button {
-            event.set_button(button);
+            self.mouse_event.set_button(button);
         } else {
-            event.clear_button();
+            self.mouse_event.clear_button();
         }
-        event.set_mods(mods);
-        event.set_position(x, y);
-        let encoded = self.mouse_encoder.encode(&event).map_err(vt_to_io)?;
-        if !encoded.is_empty() {
-            self.pty.write(&encoded)?;
+        self.mouse_event.set_mods(mods);
+        self.mouse_event.set_position(x, y);
+        self.input_encode_buffer.clear();
+        self.mouse_encoder
+            .encode_to_vec(&self.mouse_event, &mut self.input_encode_buffer)
+            .map_err(vt_to_io)?;
+        if !self.input_encode_buffer.is_empty() {
+            self.pty.write(&self.input_encode_buffer)?;
         }
         Ok(())
     }
@@ -1298,13 +1308,14 @@ fn handle_worker_command(pane: &mut VtPane, command: WorkerCommand) -> bool {
 }
 
 fn pane_forward_key(pane: &mut VtPane, request: &VtForwardKey) -> io::Result<()> {
-    let mut ev = vt::KeyEvent::new().map_err(vt_to_io)?;
-    ev.set_action(request.action);
-    ev.set_key(request.keycode as vt::GhosttyKey);
-    ev.set_mods(request.mods);
-    ev.set_consumed_mods(request.consumed_mods);
-    ev.set_composing(request.composing);
-    ev.set_unshifted_codepoint(request.unshifted_codepoint);
+    pane.key_event.set_action(request.action);
+    pane.key_event.set_key(request.keycode as vt::GhosttyKey);
+    pane.key_event.set_mods(request.mods);
+    pane.key_event.set_consumed_mods(request.consumed_mods);
+    pane.key_event.set_composing(request.composing);
+    pane.key_event
+        .set_unshifted_codepoint(request.unshifted_codepoint);
+    pane.key_event.clear_utf8();
 
     let fallback_text = request
         .key_char
@@ -1321,11 +1332,14 @@ fn pane_forward_key(pane: &mut VtPane, request: &VtForwardKey) -> io::Result<()>
         fallback_text.as_deref()
     };
     if let Some(utf8) = utf8 {
-        ev.set_utf8(utf8);
+        pane.key_event.set_utf8(utf8);
     }
-    let bytes = pane.key_encoder().encode(&ev).map_err(vt_to_io)?;
-    if !bytes.is_empty() {
-        pane.write_input(&bytes)?;
+    pane.input_encode_buffer.clear();
+    pane.key_encoder
+        .encode_to_vec(&pane.key_event, &mut pane.input_encode_buffer)
+        .map_err(vt_to_io)?;
+    if !pane.input_encode_buffer.is_empty() {
+        pane.pty.write(&pane.input_encode_buffer)?;
     }
     Ok(())
 }
