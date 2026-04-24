@@ -218,24 +218,23 @@ trap cleanup EXIT
 
 rm -f "$SOCKET" "$SOCKET.stream" "$GUI_TEST_SOCKET" "$GUI_TEST_STATUS" "$OUT" "$SERVER_LOG" "$CLIENT_LOG"
 
-SERVER_ENV=("BOO_PROFILE=1")
+SERVER_ENV=()
 CLIENT_ENV=(
   "BOO_GUI_TEST_SOCKET=$GUI_TEST_SOCKET"
   "BOO_GUI_TEST_STATUS_PATH=$GUI_TEST_STATUS"
-  "BOO_PROFILE=1"
 )
 if [[ -n "$VT_LIB_DIR" ]]; then
   SERVER_ENV+=("LD_LIBRARY_PATH=$VT_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}")
   CLIENT_ENV+=("LD_LIBRARY_PATH=$VT_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}")
 fi
 
-env "${SERVER_ENV[@]}" "$SERVER_BIN" server --socket "$SOCKET" >"$SERVER_LOG" 2>&1 &
+env "${SERVER_ENV[@]}" "$SERVER_BIN" --profiling server --socket "$SOCKET" >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 if [[ -n "$CLIENT_IMPL" ]]; then
   CLIENT_ENV+=("BOO_TERMINAL_BODY_IMPL=$CLIENT_IMPL")
 fi
 
-env "${CLIENT_ENV[@]}" "$CLIENT_BIN" --socket "$SOCKET" >"$CLIENT_LOG" 2>&1 &
+env "${CLIENT_ENV[@]}" "$CLIENT_BIN" --profiling --socket "$SOCKET" >"$CLIENT_LOG" 2>&1 &
 CLIENT_PID=$!
 
 python3 scripts/ui-test-client.py --socket "$SOCKET" wait-ready --timeout "$READY_TIMEOUT" >/dev/null
@@ -279,7 +278,7 @@ if [[ "$PROFILER" == "perf" ]]; then
   echo "perf data saved to $OUT"
 else
   sleep "$DURATION"
-  echo "no external profiler selected; built-in BOO_PROFILE logs were captured"
+  echo "no external profiler selected; built-in --profiling logs were captured"
 fi
 
 echo "server log: $SERVER_LOG"

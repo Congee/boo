@@ -434,6 +434,9 @@ fn configured_font(family: Option<&'static str>) -> Font {
 
 fn main() {
     let cli = cli::Cli::parse_args();
+    if cli.global.profiling {
+        crate::profiling::enable();
+    }
     trace_init::init_with_filter(cli.global.trace_filter.as_deref());
 
     let server_mode = launch::parse_startup_args(&cli);

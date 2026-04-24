@@ -10,7 +10,7 @@ Profiling in boo uses two complementary lanes:
 - cross-platform: `samply`
 - macOS: Instruments
 - Linux: `perf`, `cargo flamegraph`, Hotspot
-- repo-local instrumentation: `BOO_PROFILE=1`
+- repo-local instrumentation: `boo --profiling` (or `BOO_PROFILE=1` for compatibility)
 
 ## Build
 

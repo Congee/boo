@@ -47,5 +47,5 @@ Convenience runners:
 Linux note:
 
 - Video capture is optional on Linux and should not be the default gate for correctness or performance work.
-- Prefer the existing scenario runner, UI snapshot assertions, `BOO_PROFILE=1`, and Linux samplers such as `perf` or `samply`.
+- Prefer the existing scenario runner, UI snapshot assertions, `--profiling`, and Linux samplers such as `perf` or `samply`.
 - Use video on Linux only when investigating a visual-only issue such as scroll cadence, stutter, or compositor behavior.

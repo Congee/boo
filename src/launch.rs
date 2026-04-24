@@ -452,6 +452,9 @@ pub fn ensure_server_running(socket_path: &str, boo_config: &config::Config) -> 
     };
     let mut command = std::process::Command::new(exe);
     command.arg("server").arg("--socket").arg(socket_path);
+    if crate::profiling::enabled() {
+        command.arg("--profiling");
+    }
     if let Some(port) = boo_config.remote_port {
         command.arg("--remote-port").arg(port.to_string());
     }

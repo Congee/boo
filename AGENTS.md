@@ -78,7 +78,7 @@ xcodebuild \
 ## Benchmark Workflow
 
 - `docs/reference/features.md` is too small to use as the primary terminal performance artifact.
-- On Linux, video capture is optional. Treat socket-based scenario checks, UI snapshots, `BOO_PROFILE=1`, and sampled profiling as the primary benchmark and verification path.
+- On Linux, video capture is optional. Treat socket-based scenario checks, UI snapshots, `--profiling`, and sampled profiling as the primary benchmark and verification path.
 - Use video on Linux only when a regression is specifically visual, such as cadence, stutter, or compositor-facing behavior.
 - Generate the local benchmark corpus with:
   - `bash scripts/gen-terminal-bench-corpus.sh`
@@ -117,7 +117,7 @@ xcodebuild \
 
 - The large visible freeze regression was introduced by unsafe redraw-skip paths and was fixed by commit `77d7d6d`.
 - After that fix, the remaining held-`j` issue is not dominated by renderer CPU.
-- Profiling findings from the real `BOO_PROFILE=1` held-`j` repro:
+- Profiling findings from the real `--profiling` held-`j` repro:
   - `client.canvas.draw` is about `0.21–0.28ms` avg
   - `client.stream.apply_delta` is about `0.10–0.15ms` avg
   - `client.view.render_terminal_scene` is about `0.013–0.018ms` avg

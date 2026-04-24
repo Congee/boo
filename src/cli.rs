@@ -1,7 +1,7 @@
 use crate::config;
 use crate::control;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use clap_complete::{Generator, Shell, generate};
+use clap_complete::{generate, Generator, Shell};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Parser)]
@@ -63,6 +63,13 @@ pub struct GlobalArgs {
 
     #[arg(long, global = true, help = "Run without opening the GUI window")]
     pub headless: bool,
+
+    #[arg(
+        long,
+        global = true,
+        help = "Enable built-in Boo profiling logs; equivalent to setting BOO_PROFILE=1"
+    )]
+    pub profiling: bool,
 
     #[arg(
         long = "trace-filter",
@@ -631,7 +638,7 @@ fn resolve_remote_upgrade_target(
 #[cfg(test)]
 mod tests {
     use super::{Cli, CompletionShell};
-    use clap::{CommandFactory, Parser, error::ErrorKind};
+    use clap::{error::ErrorKind, CommandFactory, Parser};
 
     const DEFAULT_REMOTE_PORT_STR: &str = "7337";
 
@@ -675,7 +682,21 @@ mod tests {
     #[test]
     fn parse_trace_filter_global_flag() {
         let cli = Cli::parse_from(["boo", "server", "--trace-filter", "boo::latency=info"]);
-        assert_eq!(cli.global.trace_filter.as_deref(), Some("boo::latency=info"));
+        assert_eq!(
+            cli.global.trace_filter.as_deref(),
+            Some("boo::latency=info")
+        );
+        assert!(matches!(cli.command, Some(super::Command::Server)));
+    }
+
+    #[test]
+    fn parse_profiling_global_flag() {
+        let cli = Cli::parse_from(["boo", "--profiling", "server"]);
+        assert!(cli.global.profiling);
+        assert!(matches!(cli.command, Some(super::Command::Server)));
+
+        let cli = Cli::parse_from(["boo", "server", "--profiling"]);
+        assert!(cli.global.profiling);
         assert!(matches!(cli.command, Some(super::Command::Server)));
     }
 

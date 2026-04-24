@@ -1,11 +1,15 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex, OnceLock,
+};
 use std::time::{Duration, Instant};
 
 const SUMMARY_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_LINES: usize = 14;
+static CLI_ENABLED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Kind {
@@ -63,7 +67,12 @@ pub struct Record {
 
 pub fn enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("BOO_PROFILE").is_some())
+    CLI_ENABLED.load(Ordering::Relaxed)
+        || *ENABLED.get_or_init(|| std::env::var_os("BOO_PROFILE").is_some())
+}
+
+pub fn enable() {
+    CLI_ENABLED.store(true, Ordering::Relaxed);
 }
 
 pub fn scope(name: &'static str, kind: Kind) -> Scope {
