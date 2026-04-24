@@ -31,6 +31,26 @@ impl MacVtBackend {
     fn pane(&self, focused_pane: PaneHandle) -> Option<&VtPaneWorker> {
         self.panes.get(&focused_pane.id())
     }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_snapshot(
+        &mut self,
+        pane_id: pane::PaneId,
+        snapshot: TerminalSnapshot,
+        cell_width_px: u32,
+        cell_height_px: u32,
+    ) {
+        let version = self
+            .snapshot_versions
+            .get(&pane_id)
+            .copied()
+            .unwrap_or_default()
+            + 1;
+        self.snapshot_versions.insert(pane_id, version);
+        self.snapshots.insert(pane_id, Arc::new(snapshot));
+        self.cell_metrics
+            .insert(pane_id, (cell_width_px, cell_height_px));
+    }
 }
 
 impl crate::backend::TerminalBackend for MacVtBackend {

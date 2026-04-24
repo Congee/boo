@@ -195,80 +195,116 @@ impl<S: DirectReadWrite> DirectTransportClient<S> {
 }
 
 #[cfg(test)]
+pub(crate) mod test_support {
+    use crate::remote_wire::{MessageType, encode_auth_ok_payload, encode_message, read_message};
+    use std::io::{self, Cursor, Read, Write};
+
+    pub(crate) struct ScriptedDirectStream {
+        read: Cursor<Vec<u8>>,
+        written: Vec<u8>,
+    }
+
+    impl ScriptedDirectStream {
+        pub(crate) fn new(replies: Vec<Vec<u8>>) -> Self {
+            Self {
+                read: Cursor::new(replies.concat()),
+                written: Vec::new(),
+            }
+        }
+
+        pub(crate) fn written_frames(&self) -> Vec<(MessageType, Vec<u8>)> {
+            let mut cursor = Cursor::new(self.written.as_slice());
+            let mut frames = Vec::new();
+            while (cursor.position() as usize) < self.written.len() {
+                frames.push(read_message(&mut cursor).expect("decode scripted write"));
+            }
+            frames
+        }
+    }
+
+    impl Read for ScriptedDirectStream {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.read.read(buf)
+        }
+    }
+
+    impl Write for ScriptedDirectStream {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.written.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn auth_ok_reply(server_identity_id: &str, server_instance_id: &str) -> Vec<u8> {
+        encode_message(
+            MessageType::AuthOk,
+            &encode_auth_ok_payload(server_identity_id, server_instance_id),
+        )
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::control::{UiMouseSelectionSnapshot, UiRuntimeState, UiTabSnapshot};
+    use crate::remote_direct_transport::test_support::{ScriptedDirectStream, auth_ok_reply};
     use crate::status_components::UiStatusBarSnapshot;
-    use std::net::{TcpListener, TcpStream};
 
     #[test]
     fn create_tab_uses_runtime_action_and_viewed_tab_runtime_state() {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
-        let port = listener.local_addr().expect("listener addr").port();
-        let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept create client");
-            let (ty, payload) = read_message(&mut stream).expect("read auth request");
-            assert_eq!(ty, MessageType::Auth);
-            assert!(payload.is_empty());
-
-            stream
-                .write_all(&encode_message(
-                    MessageType::AuthOk,
-                    &crate::remote_wire::encode_auth_ok_payload("test-daemon", "test-instance"),
-                ))
-                .expect("write auth ok");
-
-            let (ty, payload) = read_message(&mut stream).expect("read runtime action");
-            assert_eq!(ty, MessageType::RuntimeAction);
-            let action: RuntimeAction = serde_json::from_slice(&payload).expect("decode action");
-            assert_eq!(
-                action,
-                RuntimeAction::NewTab {
-                    view_id: 0,
-                    cols: Some(120),
-                    rows: Some(36),
-                }
-            );
-
-            stream
-                .write_all(&encode_message(
-                    MessageType::UiRuntimeState,
-                    &serde_json::to_vec(&UiRuntimeState {
-                        active_tab: 0,
-                        focused_pane: 5,
-                        tabs: vec![UiTabSnapshot {
-                            tab_id: 77,
-                            index: 0,
-                            active: true,
-                            title: "Tab 1".to_string(),
-                            pane_count: 1,
-                            focused_pane: Some(5),
-                            pane_ids: vec![5],
-                        }],
-                        visible_panes: vec![],
-                        mouse_selection: UiMouseSelectionSnapshot::default(),
-                        status_bar: UiStatusBarSnapshot::default(),
-                        pwd: "/tmp".to_string(),
-                        runtime_revision: 2,
-                        view_revision: 2,
-                        view_id: 4,
-                        viewed_tab_id: Some(77),
-                        viewport_cols: Some(120),
-                        viewport_rows: Some(36),
-                        visible_pane_ids: vec![5],
-                    })
-                    .expect("encode runtime state"),
-                ))
-                .expect("write runtime state");
-        });
-
-        let stream = TcpStream::connect(("127.0.0.1", port)).expect("connect client");
+        let stream = ScriptedDirectStream::new(vec![
+            auth_ok_reply("test-daemon", "test-instance"),
+            encode_message(
+                MessageType::UiRuntimeState,
+                &serde_json::to_vec(&UiRuntimeState {
+                    active_tab: 0,
+                    focused_pane: 5,
+                    tabs: vec![UiTabSnapshot {
+                        tab_id: 77,
+                        index: 0,
+                        active: true,
+                        title: "Tab 1".to_string(),
+                        pane_count: 1,
+                        focused_pane: Some(5),
+                        pane_ids: vec![5],
+                    }],
+                    visible_panes: vec![],
+                    mouse_selection: UiMouseSelectionSnapshot::default(),
+                    status_bar: UiStatusBarSnapshot::default(),
+                    pwd: "/tmp".to_string(),
+                    runtime_revision: 2,
+                    view_revision: 2,
+                    view_id: 4,
+                    viewed_tab_id: Some(77),
+                    viewport_cols: Some(120),
+                    viewport_rows: Some(36),
+                    visible_pane_ids: vec![5],
+                })
+                .expect("encode runtime state"),
+            ),
+        ]);
         let mut client =
-            DirectTransportClient::connect_over_stream(stream, "127.0.0.1".into(), port, None)
+            DirectTransportClient::connect_over_stream(stream, "127.0.0.1".into(), 43210, None)
                 .expect("connect transport");
         let tab_id = client.create_tab(120, 36).expect("create tab");
         assert_eq!(tab_id, 77);
 
-        server.join().expect("server thread");
+        let frames = client.stream.written_frames();
+        assert_eq!(frames[0], (MessageType::Auth, Vec::new()));
+        let (ty, payload) = &frames[1];
+        assert_eq!(*ty, MessageType::RuntimeAction);
+        let action: RuntimeAction = serde_json::from_slice(payload).expect("decode action");
+        assert_eq!(
+            action,
+            RuntimeAction::NewTab {
+                view_id: 0,
+                cols: Some(120),
+                rows: Some(36),
+            }
+        );
     }
 }

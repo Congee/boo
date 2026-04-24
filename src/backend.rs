@@ -175,6 +175,24 @@ impl LinuxBackend {
     fn pane(&self, focused_pane: PaneHandle) -> Option<&crate::vt_backend_core::VtPaneWorker> {
         self.panes.get(&focused_pane.id())
     }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_snapshot(
+        &mut self,
+        pane_id: pane::PaneId,
+        snapshot: crate::vt_backend_core::TerminalSnapshot,
+        _cell_width_px: u32,
+        _cell_height_px: u32,
+    ) {
+        let version = self
+            .snapshot_versions
+            .get(&pane_id)
+            .copied()
+            .unwrap_or_default()
+            + 1;
+        self.snapshot_versions.insert(pane_id, version);
+        self.snapshots.insert(pane_id, Arc::new(snapshot));
+    }
 }
 
 #[cfg(target_os = "linux")]

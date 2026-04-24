@@ -1248,7 +1248,7 @@ mod tests {
 
     fn collect_screen_update_types(rx: &mpsc::Receiver<OutboundMessage>) -> Vec<MessageType> {
         let mut message_types = Vec::new();
-        while let Ok(message) = rx.recv_timeout(Duration::from_millis(20)) {
+        while let Ok(message) = rx.try_recv() {
             let OutboundMessage::ScreenUpdate(frame) = message else {
                 continue;
             };
@@ -1260,7 +1260,7 @@ mod tests {
     }
 
     fn drain_outbound(rx: &mpsc::Receiver<OutboundMessage>) {
-        while rx.recv_timeout(Duration::from_millis(20)).is_ok() {}
+        while rx.try_recv().is_ok() {}
     }
 
     fn decode_pane_update_header(payload: &[u8]) -> (u32, u64, u64, u64) {
@@ -1409,7 +1409,7 @@ mod tests {
 
         let rx = receivers.get(&1).expect("receiver");
         let mut message_types = Vec::new();
-        while let Ok(message) = rx.recv_timeout(Duration::from_millis(20)) {
+        while let Ok(message) = rx.try_recv() {
             let OutboundMessage::Frame(frame) = message else {
                 continue;
             };
@@ -1528,7 +1528,7 @@ mod tests {
         let rx1 = receivers.get(&1).expect("client 1 receiver");
         let mut client_one_first = None;
         let mut client_one_nonfocused = None;
-        while let Ok(message) = rx1.recv_timeout(Duration::from_millis(20)) {
+        while let Ok(message) = rx1.try_recv() {
             let OutboundMessage::ScreenUpdate(frame) = message else {
                 continue;
             };
@@ -1544,7 +1544,7 @@ mod tests {
         let rx2 = receivers.get(&2).expect("client 2 receiver");
         let mut client_two_first = None;
         let mut client_two_nonfocused = None;
-        while let Ok(message) = rx2.recv_timeout(Duration::from_millis(20)) {
+        while let Ok(message) = rx2.try_recv() {
             let OutboundMessage::ScreenUpdate(frame) = message else {
                 continue;
             };
@@ -1615,7 +1615,7 @@ mod tests {
 
         let rx = receivers.get(&1).expect("receiver");
         let mut first_header = None;
-        while let Ok(message) = rx.recv_timeout(Duration::from_millis(20)) {
+        while let Ok(message) = rx.try_recv() {
             let OutboundMessage::ScreenUpdate(frame) = message else {
                 continue;
             };
@@ -1639,7 +1639,7 @@ mod tests {
         app.publish_remote_tab(tab_id);
 
         let mut second_header = None;
-        while let Ok(message) = rx.recv_timeout(Duration::from_millis(20)) {
+        while let Ok(message) = rx.try_recv() {
             let OutboundMessage::ScreenUpdate(frame) = message else {
                 continue;
             };
@@ -1658,73 +1658,51 @@ mod tests {
 
     #[test]
     fn stale_view_refresh_restarts_pane_stream_with_full_state() {
-        let mut app = BooApp::new_headless();
-        app.init_surface();
-        app.create_split(crate::bindings::SplitDirection::Right);
-        let tab_id = app.active_runtime_tab_id().expect("active tab");
-        let pane_ids = app.pane_ids_for_tab(tab_id);
-        let receivers = install_test_remote_server_with_receivers(&mut app, &[1]);
-        app.sync_remote_client_runtime_view(1, true);
-        drain_outbound(receivers.get(&1).expect("receiver"));
-        {
-            let server = app.server.remote_server.as_ref().expect("remote server");
-            server.update_client_view(1, |view| {
-                view.viewed_tab_id = Some(tab_id);
-                view.focused_pane_id = Some(pane_ids[0]);
-                view.visible_pane_ids = pane_ids.clone();
-                view.touch_view();
-            });
-        }
-
-        app.publish_remote_tab(tab_id);
-        let rx = receivers.get(&1).expect("receiver");
-        let mut first_ty = None;
-        while let Ok(message) = rx.recv_timeout(Duration::from_millis(20)) {
-            let OutboundMessage::ScreenUpdate(frame) = message else {
-                continue;
+        let mut state = RemoteState::test_empty();
+        let (tx, rx) = mpsc::channel();
+        state.clients.insert(1, test_remote_client(tx));
+        let server = RemoteServer::for_test(Arc::new(Mutex::new(state)));
+        server.update_client_view(1, |view| {
+            view.view_id = 1;
+            view.subscribed_to_runtime = true;
+            view.touch_view();
+        });
+        let pane_state = Arc::new(remote::RemoteFullState {
+            rows: 1,
+            cols: 1,
+            cursor_x: 0,
+            cursor_y: 0,
+            cursor_visible: true,
+            cursor_blinking: false,
+            cursor_style: 0,
+            cells: vec![remote::RemoteCell {
+                codepoint: u32::from('x'),
+                fg: [255, 255, 255],
+                bg: [0, 0, 0],
+                style_flags: 0,
+                wide: false,
+            }],
+        });
+        let next_pane_update_type = || {
+            let OutboundMessage::ScreenUpdate(frame) = rx.try_recv().expect("pane update") else {
+                panic!("expected screen update");
             };
-            let (ty, _payload) = read_message(&mut Cursor::new(frame)).expect("decode");
-            if matches!(ty, MessageType::UiPaneFullState | MessageType::UiPaneDelta) {
-                first_ty = Some(ty);
-                break;
-            }
-        }
-        assert_eq!(first_ty, Some(MessageType::UiPaneFullState));
+            read_message(&mut Cursor::new(frame))
+                .expect("decode pane update")
+                .0
+        };
 
-        app.publish_remote_tab(tab_id);
-        let mut second_ty = None;
-        while let Ok(message) = rx.recv_timeout(Duration::from_millis(20)) {
-            let OutboundMessage::ScreenUpdate(frame) = message else {
-                continue;
-            };
-            let (ty, _payload) = read_message(&mut Cursor::new(frame)).expect("decode");
-            if matches!(ty, MessageType::UiPaneFullState | MessageType::UiPaneDelta) {
-                second_ty = Some(ty);
-                break;
-            }
-        }
-        assert_eq!(second_ty, Some(MessageType::UiPaneDelta));
+        server.send_pane_state_to_client(1, 7, 9, 1, 1, Arc::clone(&pane_state));
+        assert_eq!(next_pane_update_type(), MessageType::UiPaneFullState);
 
-        {
-            let server = app.server.remote_server.as_ref().expect("remote server");
-            server.update_client_view(1, |view| {
-                view.touch_view();
-            });
-        }
-        app.publish_remote_tab(tab_id);
+        server.send_pane_state_to_client(1, 7, 9, 1, 1, Arc::clone(&pane_state));
+        assert_eq!(next_pane_update_type(), MessageType::UiPaneDelta);
 
-        let mut refreshed_ty = None;
-        while let Ok(message) = rx.recv_timeout(Duration::from_millis(20)) {
-            let OutboundMessage::ScreenUpdate(frame) = message else {
-                continue;
-            };
-            let (ty, _payload) = read_message(&mut Cursor::new(frame)).expect("decode");
-            if matches!(ty, MessageType::UiPaneFullState | MessageType::UiPaneDelta) {
-                refreshed_ty = Some(ty);
-                break;
-            }
-        }
-        assert_eq!(refreshed_ty, Some(MessageType::UiPaneFullState));
+        server.update_client_view(1, |view| {
+            view.touch_view();
+        });
+        server.send_pane_state_to_client(1, 7, 9, 1, 1, Arc::clone(&pane_state));
+        assert_eq!(next_pane_update_type(), MessageType::UiPaneFullState);
     }
 
     #[test]

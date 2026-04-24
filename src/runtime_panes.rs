@@ -227,6 +227,13 @@ impl BooApp {
         command: Option<&CStr>,
         working_directory: Option<&CStr>,
     ) -> Option<PaneHandle> {
+        #[cfg(test)]
+        if self.headless {
+            let pane = self.create_test_headless_pane(frame);
+            self.apply_cursor_defaults_to_pane(pane);
+            return Some(pane);
+        }
+
         let pane = self.backend.create_pane(
             ptr::null_mut(),
             self.parent_view,
@@ -244,6 +251,45 @@ impl BooApp {
         } else {
             None
         }
+    }
+
+    #[cfg(test)]
+    fn create_test_headless_pane(&mut self, frame: platform::Rect) -> PaneHandle {
+        let cols = ((frame.size.width / self.cell_width).floor() as u16).max(2);
+        let rows = ((frame.size.height / self.cell_height).floor() as u16).max(1);
+        let cell_width_px = self.cell_width.max(1.0).round() as u32;
+        let cell_height_px = self.cell_height.max(1.0).round() as u32;
+        let pane = PaneHandle::detached();
+        let snapshot = crate::vt_backend_core::TerminalSnapshot {
+            cols,
+            rows,
+            cursor: crate::vt_backend_core::CursorSnapshot {
+                visible: true,
+                ..Default::default()
+            },
+            rows_data: vec![
+                vec![crate::vt_backend_core::CellSnapshot::default(); cols as usize];
+                rows as usize
+            ],
+            row_revisions: vec![1; rows as usize],
+            colors: crate::vt::GhosttyRenderStateColors {
+                foreground: crate::vt::GhosttyColorRgb {
+                    r: self.terminal_foreground[0],
+                    g: self.terminal_foreground[1],
+                    b: self.terminal_foreground[2],
+                },
+                background: crate::vt::GhosttyColorRgb {
+                    r: self.terminal_background[0],
+                    g: self.terminal_background[1],
+                    b: self.terminal_background[2],
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        self.backend
+            .set_test_snapshot(pane.id(), snapshot, cell_width_px, cell_height_px);
+        pane
     }
 
     pub(crate) fn create_split(&mut self, direction: bindings::SplitDirection) {
