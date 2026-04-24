@@ -1,13 +1,14 @@
 //! Minimal Rust wrappers for `libghostty-vt`.
 //!
 //! Boo keeps its own small wrapper API so the rest of the Linux terminal
-//! backend does not depend directly on the upstream crate layout. On Linux,
-//! the implementation is backed by `libghostty_vt::ffi`.
+//! backend does not depend directly on the raw sys-crate layout. The
+//! implementation is backed by `libghostty_vt_sys` and the native
+//! `libghostty-vt` shared library.
 
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 #![allow(dead_code, non_camel_case_types)]
 
-use libghostty_vt::ffi;
+use libghostty_vt_sys as ffi;
 use std::ffi::c_void;
 use std::fmt;
 use std::mem::MaybeUninit;

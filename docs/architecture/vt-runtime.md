@@ -30,9 +30,8 @@ Current layering is:
 
 ```text
 src/vt.rs Boo-specific wrapper facade
-  -> libghostty_vt::ffi re-export
-    -> libghostty-vt-sys link/build metadata
-      -> native libghostty-vt from Nix or the sys-crate fallback
+  -> libghostty-vt-sys raw bindings and link/build metadata
+    -> native libghostty-vt from Nix or the sys-crate fallback
 ```
 
 `src/vt.rs` exists as a small Boo-shaped API over the C ABI. It predates the
@@ -55,9 +54,8 @@ not yet a drop-in replacement for the whole Boo facade:
 
 Recommended migration order:
 
-1. First remove the accidental dependency shape if we are not adopting the
-   upstream wrapper immediately: depend on `libghostty-vt-sys` directly and let
-   `src/vt.rs` be the explicit Boo facade.
+1. Keep `src/vt.rs` as the explicit Boo facade while we are not adopting the
+   upstream wrapper immediately; it depends on `libghostty-vt-sys` directly.
 2. Ask upstream or carry a very small wrapper improvement for formatter
    hyperlink options. Without this, full `Terminal` adoption loses
    `hyperlink_at`.
