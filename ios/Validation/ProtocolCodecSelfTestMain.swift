@@ -206,9 +206,8 @@ struct ProtocolCodecSelfTestMain {
         ClientWireReducer.reduce(message: .delta, payload: makeDeltaPayload(), state: &clientState)
         assertEqual(clientState.screen.map(WireCodec.screenText(from:)), "BC", "delta reducer applies screen update")
 
-        clientState.activeTabId = 42
         ClientWireReducer.reduce(message: .tabExited, payload: Data(), state: &clientState)
-        assertEqual(clientState.activeTabId, 42, "tab exited does not mutate active tab directly")
+        assertEqual(clientState.tabs, tabs, "tab exited does not mutate tab metadata directly")
 
         let reachableTabs = [
             RemoteTabInfo(

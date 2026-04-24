@@ -56,6 +56,7 @@ private enum OutboundRuntimeAction: Encodable {
     case setViewedTab(viewId: UInt64, tabId: UInt32)
     case focusPane(viewId: UInt64, tabId: UInt32, paneId: UInt64)
     case newTab(viewId: UInt64, cols: UInt16?, rows: UInt16?)
+    case newSplit(viewId: UInt64, direction: String)
     case closeTab(viewId: UInt64, tabId: UInt32?)
     case nextTab(viewId: UInt64)
     case prevTab(viewId: UInt64)
@@ -79,12 +80,65 @@ private enum OutboundRuntimeAction: Encodable {
         case setViewedTab = "set_viewed_tab"
         case focusPane = "focus_pane"
         case newTab = "new_tab"
+        case newSplit = "new_split"
         case closeTab = "close_tab"
         case nextTab = "next_tab"
         case prevTab = "prev_tab"
         case attachView = "attach_view"
         case detachView = "detach_view"
         case resizeSplit = "resize_split"
+    }
+
+    var traceAction: String {
+        switch self {
+        case .setViewedTab: return Kind.setViewedTab.rawValue
+        case .focusPane: return Kind.focusPane.rawValue
+        case .newTab: return Kind.newTab.rawValue
+        case .newSplit: return Kind.newSplit.rawValue
+        case .closeTab: return Kind.closeTab.rawValue
+        case .nextTab: return Kind.nextTab.rawValue
+        case .prevTab: return Kind.prevTab.rawValue
+        case .attachView: return Kind.attachView.rawValue
+        case .detachView: return Kind.detachView.rawValue
+        case .resizeSplit: return Kind.resizeSplit.rawValue
+        }
+    }
+
+    var traceViewId: UInt64 {
+        switch self {
+        case .setViewedTab(let viewId, _),
+             .focusPane(let viewId, _, _),
+             .newTab(let viewId, _, _),
+             .newSplit(let viewId, _),
+             .closeTab(let viewId, _),
+             .nextTab(let viewId),
+             .prevTab(let viewId),
+             .attachView(let viewId),
+             .detachView(let viewId),
+             .resizeSplit(let viewId, _, _, _):
+            return viewId
+        }
+    }
+
+    var traceTabId: UInt32 {
+        switch self {
+        case .setViewedTab(_, let tabId),
+             .focusPane(_, let tabId, _):
+            return tabId
+        case .closeTab(_, let tabId):
+            return tabId ?? 0
+        default:
+            return 0
+        }
+    }
+
+    var tracePaneId: UInt64 {
+        switch self {
+        case .focusPane(_, _, let paneId):
+            return paneId
+        default:
+            return 0
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -104,6 +158,10 @@ private enum OutboundRuntimeAction: Encodable {
             try container.encode(viewId, forKey: .viewId)
             try container.encodeIfPresent(cols, forKey: .cols)
             try container.encodeIfPresent(rows, forKey: .rows)
+        case .newSplit(let viewId, let direction):
+            try container.encode(Kind.newSplit, forKey: .kind)
+            try container.encode(viewId, forKey: .viewId)
+            try container.encode(direction, forKey: .direction)
         case .closeTab(let viewId, let tabId):
             try container.encode(Kind.closeTab, forKey: .kind)
             try container.encode(viewId, forKey: .viewId)
@@ -831,9 +889,14 @@ final class GSPClient: ObservableObject {
     private var authRequestedAt: Date?
     private var tabListRequestedAt: Date?
     private var paneRevisions: [UInt64: UInt64] = [:]
+    private var renderTraceTracker = BooRenderTraceTracker()
 
     private func debugLog(_ message: String) {
-        print("[boo-ios] \(message)")
+        BooTrace.debug(message)
+    }
+
+    private func nextTraceInteractionId() -> UInt64 {
+        renderTraceTracker.nextInteractionId()
     }
 
     private nonisolated static let magic: [UInt8] = [0x47, 0x53]
@@ -922,6 +985,7 @@ final class GSPClient: ObservableObject {
         screen = ScreenState()
         paneScreens = [:]
         paneRevisions = [:]
+        renderTraceTracker = BooRenderTraceTracker()
         stopHeartbeatLoop()
         connectStartedAt = nil
         authRequestedAt = nil
@@ -947,11 +1011,29 @@ final class GSPClient: ObservableObject {
 
     func sendInput(_ text: String) {
         guard let data = text.data(using: .utf8) else { return }
+        beginInputTrace()
         sendMessage(type: .input, payload: data)
     }
 
     func sendInputBytes(_ data: Data) {
+        beginInputTrace()
         sendMessage(type: .input, payload: data)
+    }
+
+    private func beginInputTrace() {
+        let state = runtimeState
+        renderTraceTracker.beginInput(BooTraceFields(
+            interactionId: nextTraceInteractionId(),
+            viewId: currentViewId,
+            tabId: state?.viewedTabId ?? 0,
+            paneId: state?.focusedPane ?? 0,
+            action: "input",
+            route: "remote",
+            runtimeRevision: state?.runtimeRevision ?? 0,
+            viewRevision: state?.viewRevision ?? 0,
+            paneRevision: 0,
+            elapsedMs: 0
+        ))
     }
 
     func sendResize(cols: UInt16, rows: UInt16) {
@@ -977,17 +1059,46 @@ final class GSPClient: ObservableObject {
 
     func setViewedTab(_ tabId: UInt32) {
         guard currentViewId != 0 else { return }
+        renderTraceTracker.beginRuntimeAction(.remoteSetViewedTab, BooTraceFields(
+            interactionId: nextTraceInteractionId(),
+            viewId: currentViewId,
+            tabId: tabId,
+            paneId: 0,
+            action: "set_viewed_tab",
+            route: "remote",
+            runtimeRevision: runtimeState?.runtimeRevision ?? 0,
+            viewRevision: runtimeState?.viewRevision ?? 0,
+            paneRevision: 0,
+            elapsedMs: 0
+        ))
         sendRuntimeAction(.setViewedTab(viewId: currentViewId, tabId: tabId))
     }
 
     func focusPane(tabId: UInt32, paneId: UInt64) {
         guard currentViewId != 0 else { return }
+        renderTraceTracker.beginFocusPane(BooTraceFields(
+            interactionId: nextTraceInteractionId(),
+            viewId: currentViewId,
+            tabId: tabId,
+            paneId: paneId,
+            action: "focus_pane",
+            route: "remote",
+            runtimeRevision: runtimeState?.runtimeRevision ?? 0,
+            viewRevision: runtimeState?.viewRevision ?? 0,
+            paneRevision: paneRevisions[paneId] ?? 0,
+            elapsedMs: 0
+        ))
         sendRuntimeAction(.focusPane(viewId: currentViewId, tabId: tabId, paneId: paneId))
     }
 
     func newTab(cols: UInt16? = nil, rows: UInt16? = nil) {
         guard currentViewId != 0 else { return }
         sendRuntimeAction(.newTab(viewId: currentViewId, cols: cols, rows: rows))
+    }
+
+    func newSplit(direction: String = "right") {
+        guard currentViewId != 0 else { return }
+        sendRuntimeAction(.newSplit(viewId: currentViewId, direction: direction))
     }
 
     func closeViewedTab() {
@@ -1008,6 +1119,18 @@ final class GSPClient: ObservableObject {
     func resizeSplit(direction: String, ratio: Double) {
         guard currentViewId != 0 else { return }
         let clamped = min(max(ratio, 0.1), 0.9)
+        renderTraceTracker.beginRuntimeAction(.remoteResizeSplit, BooTraceFields(
+            interactionId: nextTraceInteractionId(),
+            viewId: currentViewId,
+            tabId: runtimeState?.viewedTabId ?? 0,
+            paneId: runtimeState?.focusedPane ?? 0,
+            action: "resize_split",
+            route: "remote",
+            runtimeRevision: runtimeState?.runtimeRevision ?? 0,
+            viewRevision: runtimeState?.viewRevision ?? 0,
+            paneRevision: 0,
+            elapsedMs: 0
+        ))
         sendRuntimeAction(
             .resizeSplit(
                 viewId: currentViewId,
@@ -1117,6 +1240,18 @@ final class GSPClient: ObservableObject {
 
     private func sendRuntimeAction(_ action: OutboundRuntimeAction) {
         guard let payload = try? JSONEncoder().encode(action) else { return }
+        BooTrace.log(.remoteRuntimeAction, BooTraceFields(
+            interactionId: 0,
+            viewId: action.traceViewId,
+            tabId: action.traceTabId,
+            paneId: action.tracePaneId,
+            action: action.traceAction,
+            route: "remote",
+            runtimeRevision: runtimeState?.runtimeRevision ?? 0,
+            viewRevision: runtimeState?.viewRevision ?? 0,
+            paneRevision: 0,
+            elapsedMs: 0
+        ))
         sendMessage(type: .runtimeAction, payload: payload)
     }
 
@@ -1165,7 +1300,7 @@ final class GSPClient: ObservableObject {
         connection?.stateUpdateHandler = { [weak self] state in
             Task { @MainActor in
                 guard let self, self.connectionGeneration == generation else { return }
-                print("[boo-ios] connection state = \(state)")
+                BooTrace.debug("connection state = \(state)")
                 switch state {
                 case .ready:
                     self.stopConnectionTimeout()
@@ -1173,6 +1308,18 @@ final class GSPClient: ObservableObject {
                     self.lastError = nil
                     if let connectStartedAt = self.connectStartedAt {
                         self.lastConnectLatencyMs = Date().timeIntervalSince(connectStartedAt) * 1000
+                        BooTrace.log(.remoteConnect, BooTraceFields(
+                            interactionId: self.connectionGeneration,
+                            viewId: self.currentViewId,
+                            tabId: self.runtimeState?.viewedTabId ?? 0,
+                            paneId: self.runtimeState?.focusedPane ?? 0,
+                            action: "connect",
+                            route: "quic",
+                            runtimeRevision: self.runtimeState?.runtimeRevision ?? 0,
+                            viewRevision: self.runtimeState?.viewRevision ?? 0,
+                            paneRevision: 0,
+                            elapsedMs: self.lastConnectLatencyMs ?? 0
+                        ))
                         self.connectStartedAt = nil
                     }
                     self.readHeader(generation: generation)
@@ -1241,7 +1388,7 @@ final class GSPClient: ObservableObject {
             Task { @MainActor in
                 guard let self, self.connectionGeneration == generation else { return }
                 if let error {
-                    print("[boo-ios] readHeader error = \(error)")
+                    BooTrace.error("readHeader error = \(error)")
                     self.protocolError("Receive failed: \(error)")
                     return
                 }
@@ -1271,7 +1418,7 @@ final class GSPClient: ObservableObject {
             Task { @MainActor in
                 guard let self, self.connectionGeneration == generation else { return }
                 if let error {
-                    print("[boo-ios] readPayload error = \(error)")
+                    BooTrace.error("readPayload error = \(error)")
                     self.protocolError("Receive failed: \(error)")
                     return
                 }
@@ -1309,8 +1456,10 @@ final class GSPClient: ObservableObject {
             applyReducedMessage(.tabList, payload: payload)
         case .fullState:
             applyReducedMessage(.fullState, payload: payload)
+            completeFocusedScreenRenderTraceIfNeeded()
         case .delta:
             applyReducedMessage(.delta, payload: payload)
+            completeFocusedScreenRenderTraceIfNeeded()
         case .tabExited:
             applyReducedMessage(.tabExited, payload: payload)
         case .errorMsg:
@@ -1345,9 +1494,11 @@ final class GSPClient: ObservableObject {
             guard update.paneRevision >= lastRevision else { return }
             paneRevisions[update.paneId] = update.paneRevision
             paneScreens[update.paneId] = state
+            tracePaneUpdate(update, action: "pane_update")
             if update.paneId == runtimeState?.focusedPane {
                 applyDecodedScreen(state)
                 screen.objectWillChange.send()
+                completeRenderTraceIfNeeded(update: update)
             }
         case .uiPaneDelta:
             guard let (update, deltaPayload) = WireCodec.decodePaneDelta(payload) else { return }
@@ -1358,13 +1509,69 @@ final class GSPClient: ObservableObject {
             guard WireCodec.applyDelta(deltaPayload, to: &state) else { return }
             paneRevisions[update.paneId] = update.paneRevision
             paneScreens[update.paneId] = state
+            tracePaneUpdate(update, action: "pane_update")
             if update.paneId == runtimeState?.focusedPane {
                 applyDecodedScreen(state)
                 screen.objectWillChange.send()
+                completeRenderTraceIfNeeded(update: update)
             }
         default:
             break
         }
+    }
+
+    private func tracePaneUpdate(_ update: DecodedPaneUpdate, action: String) {
+        BooTrace.log(.remotePaneUpdate, BooTraceFields(
+            interactionId: 0,
+            viewId: runtimeState?.viewId ?? currentViewId,
+            tabId: update.tabId,
+            paneId: update.paneId,
+            action: action,
+            route: "remote",
+            runtimeRevision: update.runtimeRevision,
+            viewRevision: runtimeState?.viewRevision ?? 0,
+            paneRevision: update.paneRevision,
+            elapsedMs: 0
+        ))
+    }
+
+    private func completeRenderTraceIfNeeded(update: DecodedPaneUpdate) {
+        let fields = BooTraceFields(
+            interactionId: 0,
+            viewId: runtimeState?.viewId ?? currentViewId,
+            tabId: update.tabId,
+            paneId: update.paneId,
+            action: "render_apply",
+            route: "remote",
+            runtimeRevision: update.runtimeRevision,
+            viewRevision: runtimeState?.viewRevision ?? 0,
+            paneRevision: update.paneRevision,
+            elapsedMs: 0
+        )
+        renderTraceTracker.completeRenderApply(fields: fields, tabId: update.tabId)
+    }
+
+    private func completeFocusedScreenRenderTraceIfNeeded() {
+        guard let state = runtimeState else { return }
+        let tabId = state.viewedTabId
+        let paneId = state.focusedPane
+        let paneUpdateFields = BooTraceFields(
+            interactionId: 0,
+            viewId: state.viewId,
+            tabId: tabId ?? 0,
+            paneId: paneId,
+            action: "pane_update",
+            route: "remote",
+            runtimeRevision: state.runtimeRevision,
+            viewRevision: state.viewRevision,
+            paneRevision: paneRevisions[paneId] ?? 0,
+            elapsedMs: 0
+        )
+        BooTrace.log(.remotePaneUpdate, paneUpdateFields)
+
+        var renderFields = paneUpdateFields
+        renderFields.action = "render_apply"
+        renderTraceTracker.completeRenderApply(fields: renderFields, tabId: tabId)
     }
 
     private func validateAuthOkPayload(_ payload: Data) -> String? {

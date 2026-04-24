@@ -2,6 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BOO_REPO_ROOT="$ROOT"
+source "$ROOT/scripts/lib/vt-dylib-env.sh"
+
 usage() {
   cat <<'EOF'
 Usage: bash scripts/test-ios-ui.sh [options]
@@ -155,7 +158,7 @@ fi
 cargo build >/dev/null
 if [[ "$SKIP_DAEMON" != "1" ]]; then
   rm -f "$SOCKET_PATH"
-  RUST_LOG=info target/debug/boo server --socket "$SOCKET_PATH" --remote-port "$PORT" --remote-bind-address "$BIND_ADDRESS" >/tmp/boo-ios-ui-tests.log 2>&1 &
+  boo_with_vt_lib_env target/debug/boo --trace-filter info server --socket "$SOCKET_PATH" --remote-port "$PORT" --remote-bind-address "$BIND_ADDRESS" >/tmp/boo-ios-ui-tests.log 2>&1 &
   SERVER_PID=$!
   sleep 1
   if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then

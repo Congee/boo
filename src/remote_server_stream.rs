@@ -83,7 +83,7 @@ pub(crate) fn send_pane_state_to_client(
     runtime_revision: u64,
     next_state: Arc<RemoteFullState>,
 ) {
-    let (outbound, previous_state) = {
+    let (outbound, previous_state, view_id, view_revision) = {
         let guard = state.lock().expect("remote server state poisoned");
         let Some(client) = guard.clients.get(&client_id) else {
             return;
@@ -94,6 +94,8 @@ pub(crate) fn send_pane_state_to_client(
         (
             client.outbound.clone(),
             client.runtime_view.pane_states.get(&pane_id).cloned(),
+            client.runtime_view.view_id,
+            client.runtime_view.view_revision,
         )
     };
     let (ty, payload) = match previous_state
@@ -124,6 +126,21 @@ pub(crate) fn send_pane_state_to_client(
     if !should_send {
         return;
     }
+    tracing::info!(
+        target: "boo::latency",
+        interaction_id = 0_u64,
+        view_id = view_id,
+        tab_id = tab_id,
+        pane_id = pane_id,
+        action = "pane_update",
+        route = "remote",
+        runtime_revision = runtime_revision,
+        view_revision = view_revision,
+        pane_revision = pane_revision,
+        elapsed_ms = 0.0_f64,
+        "{}",
+        crate::trace_schema::events::REMOTE_PANE_UPDATE
+    );
     let prefixed = encode_ui_pane_update_payload(
         tab_id,
         pane_id,

@@ -49,6 +49,8 @@ mod splits;
 mod status_components;
 mod tabs;
 mod tmux;
+mod trace_init;
+mod trace_schema;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod unix_pty;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -431,9 +433,9 @@ fn configured_font(family: Option<&'static str>) -> Font {
 }
 
 fn main() {
-    env_logger::init();
-
     let cli = cli::Cli::parse_args();
+    trace_init::init_with_filter(cli.global.trace_filter.as_deref());
+
     let server_mode = launch::parse_startup_args(&cli);
     let startup_config = launch::load_startup_config();
     match cli::handle_command(&cli, &startup_config, launch::ensure_server_running) {

@@ -30,8 +30,30 @@ fi
 
 mkdir -p "$DERIVED_DATA"
 
+xcodebuild_clean_env() {
+  env \
+    -u DEVELOPER_DIR \
+    -u SDKROOT \
+    -u MACOSX_DEPLOYMENT_TARGET \
+    -u IPHONEOS_DEPLOYMENT_TARGET \
+    -u NIX_LDFLAGS \
+    -u NIX_CFLAGS_COMPILE \
+    -u NIX_CXXSTDLIB_COMPILE \
+    -u CC \
+    -u CXX \
+    -u LD \
+    -u AR \
+    -u NM \
+    -u RANLIB \
+    -u LIBTOOL \
+    -u LDPLUSPLUS \
+    -u OTHER_LDFLAGS \
+    -u OTHER_SWIFT_FLAGS \
+    "$@"
+}
+
 cd "$ROOT"
-xcodebuild \
+xcodebuild_clean_env xcodebuild \
   -project ios/Boo.xcodeproj \
   -scheme Boo \
   -configuration "$CONFIGURATION" \

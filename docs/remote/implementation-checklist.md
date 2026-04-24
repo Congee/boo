@@ -125,12 +125,101 @@ deferred section at the bottom of this file.
 ### Deferred / TODO
 
 - [ ] define scroll/search/copy-mode semantics across per-screen views
-- [ ] add latency measurement for user-perceived focus/tab/pane interactions
-- [ ] decide whether to add local prediction after latency tooling exists
 - [ ] harden transport QoS beyond current focused-pane-first publish ordering:
       focused pane priority, non-focused pane coalescing, and starvation checks
 - [ ] refine canonical host/runtime reconnect UX and view timeout affordances
 - [ ] keep real-device iOS UI smoke tests current for both iPad and iPhone
+
+### Latency tracing and local prediction follow-up
+
+- [x] add shared runtime-view latency tracing foundation:
+      Rust `tracing`/`tracing-subscriber`, iOS `Logger`/`OSSignposter`, and
+      shared event/field names
+- [x] manually verify Rust latency traces with the `RUST_LOG`-style
+      `--trace-filter boo::latency=info` CLI override
+- [x] add repeatable Rust local-stream trace verification for
+      `remote.focus_pane` -> focused screen update + `remote.pane_update`
+      using `scripts/test-latency-traces.sh`
+- [x] add repeatable iOS trace-state verification that pending input,
+      focus-pane, and runtime-action spans end as `remote.render_apply`
+- [x] verify iOS Logger output and Instruments signpost intervals for
+      the same event names
+- [x] add automated trace-output assertions for the remaining core latency flows:
+  - [x] iOS tap pane -> `FocusPane` -> runtime state/pane update -> render
+  - [x] iOS tap tab/status action -> runtime action -> update -> render
+  - [x] iOS key/input -> terminal delta/full-state -> render
+- [ ] collect baseline measurements for user-perceived focus/tab/pane/input
+      interactions before changing behavior
+- [ ] decide whether to add local prediction after the latency traces and
+      baseline measurements are available
+- [x] bridge Rust traces to Apple OSLog with `tracing-oslog`
+- [x] resolve the current device `xcodebuild` linker
+      boundary if full iOS build verification is required
+
+Trace verification notes:
+
+- 2026-04-23 Rust smoke verification built `target/debug/boo`, ran a headless
+  server with `RUST_LOG=boo::latency=info`, connected to the local stream
+  socket, and sent minimal runtime-action/input frames.
+- Observed shared event names and fields for `remote.connect`,
+  `remote.runtime_action`, `remote.set_viewed_tab`, `remote.focus_pane`, and
+  `remote.input`.
+- 2026-04-24 added and ran `scripts/test-latency-traces.sh`. The script starts
+  Boo with `--trace-filter boo::latency=info`, drives the local stream through
+  `new_split` and `focus_pane`, asserts a focused screen update plus a
+  non-focused `UiPaneFullState`/`UiPaneDelta`, and verifies trace output for
+  `remote.connect`, `remote.runtime_action`, `remote.focus_pane`, and
+  `remote.pane_update`.
+- Rust/server `remote.pane_update` now has an end-to-end local-stream
+  verification path.
+- 2026-04-24 moved iOS pending render span completion into
+  `BooRenderTraceTracker`, completed spans for focused `FullState`/`Delta`
+  render applies as well as focused `UiPaneFullState`/`UiPaneDelta`, and added
+  `ios/Validation/TraceRenderApplySelfTestMain.swift`. `scripts/test-ios-remote-view.sh`
+  now runs that self-test and verifies `remote.render_apply` end records for
+  input, focus-pane, and set-viewed-tab traces.
+- 2026-04-24 added `scripts/verify-ios-signposts.sh` for real-device native
+  verification. The script builds/installs Boo, starts a traced Boo daemon with
+  the first-class `--trace-filter` flag, launches the iOS app under
+  `xcrun xctrace record --template Logging --launch`, exports `os-log`,
+  `os-signpost`, and `os-signpost-interval` tables, and asserts
+  `remote.connect`, `remote.runtime_action`, `remote.pane_update`,
+  `remote.input`, and `remote.render_apply`.
+- Real-device signpost verification passed against a physical iPad. The
+  Instruments interval export included a `remote.input` interval whose end
+  metadata was `remote.render_apply`.
+- `xctrace` all-processes Logging recordings ended early in this environment
+  with `Device disconnected`; targeted `--launch -- me.congee.boo ...`
+  recordings stayed alive for the requested time limit and are the repeatable
+  verification path.
+- The initial automated iOS native trace assertion covered auto-connect plus the
+  input -> render path. It has since been extended to cover the focus-pane and
+  set-viewed-tab core latency flows as well.
+- `scripts/build-ios-device.sh` and `scripts/test-ios-remote-view.sh` now run
+  `xcodebuild` through a clean environment so Nix/Xcode variables do not leak
+  into the linker invocation. With that wrapper, physical-device build/install
+  and the remote-view iOS build smoke both pass.
+- 2026-04-24 extended `scripts/verify-ios-signposts.sh` with automated
+  trace-output assertions for the remaining core flows. The launched iOS app can
+  now drive a UI-test-only sequence of `new_split` -> `focus_pane`,
+  `new_tab` -> `set_viewed_tab`, and input, then the script asserts both the
+  begin events and `remote.render_apply` end records via `source_event` plus
+  Instruments interval rows for `remote.focus_pane`, `remote.set_viewed_tab`,
+  and `remote.input`.
+- 2026-04-24 post-change real-device verification passed after extending the
+  verifier to set the local Boo server's `libghostty-vt` dynamic-library search
+  path. The passing run used:
+  `bash scripts/verify-ios-signposts.sh --device-id <device-udid> --team-id <team-id> --time-limit 20s --output-dir /tmp/boo-ios-signpost-core-flows2 --skip-build --skip-install`.
+- 2026-04-24 added the Rust-to-Apple-OSLog bridge with `tracing-oslog` on
+  Apple targets. Rust traces still go to the normal formatted tracing sink, and
+  the same events are also emitted to OSLog under subsystem `dev.boo.rust` and
+  category `latency` for Console/Instruments correlation with iOS
+  `dev.boo.ios` latency events.
+- Verified the Rust OSLog bridge with `/usr/bin/log stream --predicate
+  'subsystem == "dev.boo.rust" && category == "latency"'` while running
+  `scripts/test-latency-traces.sh`; the OSLog stream included
+  `remote.connect`, `remote.runtime_action`, `remote.focus_pane`, and
+  `remote.pane_update`.
 
 ## Related Docs
 

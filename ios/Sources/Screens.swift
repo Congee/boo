@@ -689,7 +689,7 @@ struct ConnectScreen: View {
                     serviceResolver = nil
                     switch result {
                     case .success(let resolved):
-                        print("[boo-ios] resolved Bonjour service \(display.nodeName) -> \(resolved.host):\(resolved.port)")
+                        BooTrace.debug("resolved Bonjour service \(display.nodeName) -> \(resolved.host):\(resolved.port)")
                         connectToHost(resolved.host, port: resolved.port, nodeName: display.nodeName, routeKind: .bonjourLAN)
                     case .failure(let error):
                         client.lastError = error.localizedDescription
@@ -909,6 +909,18 @@ private enum TerminalModifierState {
     }
 }
 
+private enum UITestTraceAutomationStep {
+    case idle
+    case requestedSplit
+    case requestedFocus(paneId: UInt64)
+    case focusDone
+    case requestedNewTab(originalTabId: UInt32?)
+    case requestedSetViewedTab(tabId: UInt32)
+    case setViewedTabDone
+    case sentInput
+    case done
+}
+
 struct TerminalTabScreen: View {
     @ObservedObject var client: GSPClient
     @ObservedObject var monitor: ConnectionMonitor
@@ -924,6 +936,8 @@ struct TerminalTabScreen: View {
     @State private var altModifierConsumedWhileHeld = false
     @State private var metaModifierConsumedWhileHeld = false
     @State private var didApplyUITestForcedError = false
+    @State private var didSendUITestTraceInput = false
+    @State private var uiTestTraceAutomationStep: UITestTraceAutomationStep = .idle
 
     private var tabHealth: ActiveTabHealth {
         resolveActiveTabHealth(activeTabId: client.activeTabId, tabs: client.tabs)
@@ -969,9 +983,15 @@ struct TerminalTabScreen: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 keyboardFocused = true
             }
+            advanceUITestTraceAutomationIfNeeded()
         }
         .onReceive(client.$tabs) { _ in
             applyUITestForcedErrorIfNeeded()
+            advanceUITestTraceAutomationIfNeeded()
+        }
+        .onReceive(client.$runtimeState) { _ in
+            applyUITestForcedErrorIfNeeded()
+            advanceUITestTraceAutomationIfNeeded()
         }
         .onChange(of: client.activeTabId) { _, activeTabId in
             if activeTabId != nil {
@@ -981,6 +1001,7 @@ struct TerminalTabScreen: View {
                     keyboardFocused = true
                 }
                 applyUITestForcedErrorIfNeeded()
+                advanceUITestTraceAutomationIfNeeded()
             }
         }
         .onChange(of: isDisconnected) { _, disconnected in
@@ -1398,6 +1419,107 @@ struct TerminalTabScreen: View {
         didApplyUITestForcedError = true
         client.lastErrorKind = kind
         client.lastError = kind.message
+    }
+
+    private func sendUITestTraceInputIfNeeded() {
+        guard !didSendUITestTraceInput,
+              client.activeTabId != nil,
+              let command = UITestLaunchConfiguration.current()?.traceInputCommand,
+              !command.isEmpty
+        else { return }
+        didSendUITestTraceInput = true
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            var payload = Data(command.utf8)
+            payload.append(0x0d)
+            client.sendInputBytes(payload)
+        }
+    }
+
+    private func advanceUITestTraceAutomationIfNeeded() {
+        guard let config = UITestLaunchConfiguration.current() else { return }
+        let actions = config.traceActions
+        if actions.isEmpty {
+            sendUITestTraceInputIfNeeded()
+            return
+        }
+        guard client.activeTabId != nil,
+              let runtimeState = client.runtimeState,
+              runtimeState.viewId != 0
+        else { return }
+
+        switch uiTestTraceAutomationStep {
+        case .idle:
+            if actions.contains("focus-pane") {
+                if runtimeState.visiblePanes.count >= 2 {
+                    requestUITestFocusPane(runtimeState)
+                } else {
+                    uiTestTraceAutomationStep = .requestedSplit
+                    client.newSplit(direction: "right")
+                }
+                return
+            }
+            uiTestTraceAutomationStep = .focusDone
+            advanceUITestTraceAutomationIfNeeded()
+
+        case .requestedSplit:
+            guard runtimeState.visiblePanes.count >= 2 else { return }
+            requestUITestFocusPane(runtimeState)
+
+        case .requestedFocus(let paneId):
+            guard runtimeState.focusedPane == paneId else { return }
+            uiTestTraceAutomationStep = .focusDone
+            advanceUITestTraceAutomationIfNeeded()
+
+        case .focusDone:
+            if actions.contains("set-viewed-tab") {
+                uiTestTraceAutomationStep = .requestedNewTab(originalTabId: runtimeState.viewedTabId)
+                client.newTab()
+                return
+            }
+            uiTestTraceAutomationStep = .setViewedTabDone
+            advanceUITestTraceAutomationIfNeeded()
+
+        case .requestedNewTab(let originalTabId):
+            guard runtimeState.tabs.count >= 2 else { return }
+            guard let currentTabId = runtimeState.viewedTabId else { return }
+            let targetTabId =
+                (originalTabId != nil && originalTabId != currentTabId)
+                ? originalTabId
+                : runtimeState.tabs.first(where: { $0.tabId != currentTabId })?.tabId
+            guard let targetTabId else { return }
+            uiTestTraceAutomationStep = .requestedSetViewedTab(tabId: targetTabId)
+            client.setViewedTab(targetTabId)
+
+        case .requestedSetViewedTab(let tabId):
+            guard runtimeState.viewedTabId == tabId else { return }
+            uiTestTraceAutomationStep = .setViewedTabDone
+            advanceUITestTraceAutomationIfNeeded()
+
+        case .setViewedTabDone:
+            if actions.contains("input") {
+                uiTestTraceAutomationStep = .sentInput
+                sendUITestTraceInputIfNeeded()
+                return
+            }
+            uiTestTraceAutomationStep = .done
+
+        case .sentInput:
+            if didSendUITestTraceInput {
+                uiTestTraceAutomationStep = .done
+            }
+
+        case .done:
+            return
+        }
+    }
+
+    private func requestUITestFocusPane(_ runtimeState: RemoteRuntimeStateSnapshot) {
+        guard let tabId = runtimeState.viewedTabId,
+              let targetPane = runtimeState.visiblePanes.first(where: { !$0.focused })
+        else { return }
+        uiTestTraceAutomationStep = .requestedFocus(paneId: targetPane.paneId)
+        client.focusPane(tabId: tabId, paneId: targetPane.paneId)
     }
 
     private func sendTypedText(_ text: String) {

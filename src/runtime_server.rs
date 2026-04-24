@@ -692,6 +692,21 @@ impl BooApp {
                     self.recover_remote_client_runtime_view(client_id);
                     return;
                 };
+                tracing::info!(
+                    target: "boo::latency",
+                    interaction_id = input_seq.unwrap_or_default(),
+                    view_id = view.view_id,
+                    tab_id = active_tab_id,
+                    pane_id = pane_id,
+                    action = "input",
+                    route = "remote",
+                    runtime_revision = self.runtime_revision,
+                    view_revision = view.view_revision,
+                    pane_revision = 0_u64,
+                    elapsed_ms = started_at.elapsed().as_secs_f64() * 1000.0,
+                    "{}",
+                    crate::trace_schema::events::REMOTE_INPUT
+                );
                 if let Some(server) = self.remote_server_for_client(client_id) {
                     server.record_input_seq(client_id, input_seq);
                 }
@@ -825,6 +840,7 @@ impl BooApp {
                 self.broadcast_runtime_view_to_all_viewers();
             }
             server::Command::RemoteFocusPane { client_id, pane_id } => {
+                let started_at = Instant::now();
                 let Some(mut view) = self.ensure_remote_client_view_state(client_id) else {
                     return;
                 };
@@ -840,6 +856,21 @@ impl BooApp {
                 };
                 let valid_panes = self.pane_ids_for_tab(active_tab_id);
                 if valid_panes.contains(&pane_id) {
+                    tracing::info!(
+                        target: "boo::latency",
+                        interaction_id = 0_u64,
+                        view_id = view.view_id,
+                        tab_id = active_tab_id,
+                        pane_id = pane_id,
+                        action = "focus_pane",
+                        route = "remote",
+                        runtime_revision = self.runtime_revision,
+                        view_revision = view.view_revision,
+                        pane_revision = 0_u64,
+                        elapsed_ms = started_at.elapsed().as_secs_f64() * 1000.0,
+                        "{}",
+                        crate::trace_schema::events::REMOTE_FOCUS_PANE
+                    );
                     view.focused_pane_id = Some(pane_id);
                     view.visible_pane_ids = valid_panes.clone();
                     if let Some(server) = self.remote_server_for_client(client_id) {
@@ -860,8 +891,41 @@ impl BooApp {
             server::Command::RemoteDestroy { client_id, tab_id } => {
                 self.destroy_remote_runtime_tab(client_id, tab_id);
             }
-            server::Command::RemoteRuntimeAction { client_id, action } => match action {
-                remote::RuntimeAction::SetViewedTab { view_id: _, tab_id } => {
+            server::Command::RemoteRuntimeAction { client_id, action } => {
+                let started_at = Instant::now();
+                let action_name = action.trace_action().as_str();
+                tracing::info!(
+                    target: "boo::latency",
+                    interaction_id = 0_u64,
+                    view_id = 0_u64,
+                    tab_id = 0_u32,
+                    pane_id = 0_u64,
+                    action = action_name,
+                    route = "remote",
+                    runtime_revision = self.runtime_revision,
+                    view_revision = 0_u64,
+                    pane_revision = 0_u64,
+                    elapsed_ms = 0.0_f64,
+                    "{}",
+                    crate::trace_schema::events::REMOTE_RUNTIME_ACTION
+                );
+                match action {
+                remote::RuntimeAction::SetViewedTab { view_id, tab_id } => {
+                    tracing::info!(
+                        target: "boo::latency",
+                        interaction_id = 0_u64,
+                        view_id = view_id,
+                        tab_id = tab_id,
+                        pane_id = 0_u64,
+                        action = action_name,
+                        route = "remote",
+                        runtime_revision = self.runtime_revision,
+                        view_revision = 0_u64,
+                        pane_revision = 0_u64,
+                        elapsed_ms = started_at.elapsed().as_secs_f64() * 1000.0,
+                        "{}",
+                        crate::trace_schema::events::REMOTE_SET_VIEWED_TAB
+                    );
                     let valid_panes = self.pane_ids_for_tab(tab_id);
                     let focused_pane_id = self.default_focused_pane_for_tab(tab_id);
                     if let Some(server) = self.remote_server_for_client(client_id) {
@@ -972,10 +1036,10 @@ impl BooApp {
                     self.broadcast_runtime_view_to_all_viewers();
                 }
                 remote::RuntimeAction::ResizeSplit {
+                    view_id,
                     direction,
                     amount,
                     ratio,
-                    ..
                 } => {
                     let Some(view) = self.ensure_remote_client_view_state(client_id) else {
                         return;
@@ -983,6 +1047,21 @@ impl BooApp {
                     let Some(tab_id) = view.viewed_tab_id else {
                         return;
                     };
+                    tracing::info!(
+                        target: "boo::latency",
+                        interaction_id = 0_u64,
+                        view_id = view_id,
+                        tab_id = tab_id,
+                        pane_id = view.focused_pane_id.unwrap_or_default(),
+                        action = action_name,
+                        route = "remote",
+                        runtime_revision = self.runtime_revision,
+                        view_revision = view.view_revision,
+                        pane_revision = 0_u64,
+                        elapsed_ms = started_at.elapsed().as_secs_f64() * 1000.0,
+                        "{}",
+                        crate::trace_schema::events::REMOTE_RESIZE_SPLIT
+                    );
                     let target_pane_id = view
                         .focused_pane_id
                         .filter(|pane_id| self.pane_ids_for_tab(tab_id).contains(pane_id))
@@ -1022,7 +1101,8 @@ impl BooApp {
                     }
                     self.broadcast_runtime_view_to_all_viewers();
                 }
-            },
+                }
+            }
         }
     }
 

@@ -18,6 +18,8 @@ struct UITestLaunchConfiguration {
     let tailscaleToken: String?
     let showFloatingBackButton: Bool?
     let forcedTerminalErrorKind: String?
+    let traceActions: Set<String>
+    let traceInputCommand: String?
     let mockTailscaleDevices: [MockTailscaleDevice]
 
     private static func fileConfiguredHostAndPort() -> (host: String, port: UInt16)? {
@@ -101,6 +103,16 @@ struct UITestLaunchConfiguration {
             ?? env["BOO_UI_TEST_SHOW_FLOATING_BACK_BUTTON"].flatMap { ["1", "true", "yes"].contains($0.lowercased()) ? true : ["0", "false", "no"].contains($0.lowercased()) ? false : nil }
         let forcedTerminalErrorKind = argumentValue(prefix: "--boo-ui-test-terminal-error=", arguments: arguments)
             ?? env["BOO_UI_TEST_TERMINAL_ERROR"]
+        let traceActionsRaw = argumentValue(prefix: "--boo-ui-test-trace-actions=", arguments: arguments)
+            ?? env["BOO_UI_TEST_TRACE_ACTIONS"]
+        let traceActions = Set(
+            (traceActionsRaw ?? "")
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+        let traceInputCommand = argumentValue(prefix: "--boo-ui-test-trace-input-command=", arguments: arguments)
+            ?? env["BOO_UI_TEST_TRACE_INPUT_COMMAND"]
         return UITestLaunchConfiguration(
             resetStorage: resetStorage,
             nodeName: nodeName,
@@ -111,6 +123,8 @@ struct UITestLaunchConfiguration {
             tailscaleToken: tailscaleToken,
             showFloatingBackButton: showFloatingBackButton,
             forcedTerminalErrorKind: forcedTerminalErrorKind,
+            traceActions: traceActions,
+            traceInputCommand: traceInputCommand,
             mockTailscaleDevices: parseMockTailscaleDevices(arguments: arguments, env: env)
         )
     }

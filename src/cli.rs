@@ -65,6 +65,14 @@ pub struct GlobalArgs {
     pub headless: bool,
 
     #[arg(
+        long = "trace-filter",
+        global = true,
+        value_name = "FILTER",
+        help = "Set tracing filter directives using RUST_LOG syntax, for example boo::latency=info"
+    )]
+    pub trace_filter: Option<String>,
+
+    #[arg(
         long,
         global = true,
         help = "Connect through SSH to a remote Boo host using forwarded Boo control/stream sockets"
@@ -662,6 +670,13 @@ mod tests {
         );
         assert!(cli.global.remote_prefer_nix_profile_binary);
         assert!(matches!(cli.command, Some(super::Command::Ls)));
+    }
+
+    #[test]
+    fn parse_trace_filter_global_flag() {
+        let cli = Cli::parse_from(["boo", "server", "--trace-filter", "boo::latency=info"]);
+        assert_eq!(cli.global.trace_filter.as_deref(), Some("boo::latency=info"));
+        assert!(matches!(cli.command, Some(super::Command::Server)));
     }
 
     #[test]

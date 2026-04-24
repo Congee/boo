@@ -92,6 +92,23 @@ pub enum RuntimeAction {
     },
 }
 
+impl RuntimeAction {
+    pub(crate) fn trace_action(&self) -> crate::trace_schema::RuntimeActionKind {
+        match self {
+            Self::SetViewedTab { .. } => crate::trace_schema::RuntimeActionKind::SetViewedTab,
+            Self::FocusPane { .. } => crate::trace_schema::RuntimeActionKind::FocusPane,
+            Self::NewTab { .. } => crate::trace_schema::RuntimeActionKind::NewTab,
+            Self::CloseTab { .. } => crate::trace_schema::RuntimeActionKind::CloseTab,
+            Self::NextTab { .. } => crate::trace_schema::RuntimeActionKind::NextTab,
+            Self::PrevTab { .. } => crate::trace_schema::RuntimeActionKind::PrevTab,
+            Self::AttachView { .. } => crate::trace_schema::RuntimeActionKind::AttachView,
+            Self::DetachView { .. } => crate::trace_schema::RuntimeActionKind::DetachView,
+            Self::NewSplit { .. } => crate::trace_schema::RuntimeActionKind::NewSplit,
+            Self::ResizeSplit { .. } => crate::trace_schema::RuntimeActionKind::ResizeSplit,
+        }
+    }
+}
+
 impl RemoteConfig {
     pub(crate) fn effective_bind_address(&self) -> &str {
         self.bind_address.as_deref().unwrap_or("127.0.0.1")
@@ -307,6 +324,21 @@ impl RemoteServer {
                     (client_id, outbound_rx)
                 };
                 log::info!("remote local-stream client connected: client_id={client_id}");
+                tracing::info!(
+                    target: "boo::latency",
+                    interaction_id = 0_u64,
+                    view_id = client_id,
+                    tab_id = 0_u32,
+                    pane_id = 0_u64,
+                    action = "connect",
+                    route = "local_stream",
+                    runtime_revision = 0_u64,
+                    view_revision = 1_u64,
+                    pane_revision = 0_u64,
+                    elapsed_ms = 0.0_f64,
+                    "{}",
+                    crate::trace_schema::events::REMOTE_CONNECT
+                );
 
                 let Ok(writer_stream) = stream.try_clone() else {
                     let mut state = state_for_listener
