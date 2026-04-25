@@ -197,8 +197,7 @@ if [[ "$SKIP_DAEMON" != "1" ]]; then
   rm -f "$SOCKET_PATH"
   boo_with_vt_lib_env target/debug/boo --trace-filter info server --socket "$SOCKET_PATH" --remote-port "$PORT" --remote-bind-address "$BIND_ADDRESS" >/tmp/boo-ios-ui-tests.log 2>&1 &
   SERVER_PID=$!
-  sleep 1
-  if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
+  if ! python3 scripts/ui-test-client.py --socket "$SOCKET_PATH" wait-ready --timeout 30 >/tmp/boo-ios-ui-tests-ready.json; then
     cat /tmp/boo-ios-ui-tests.log >&2
     exit 1
   fi

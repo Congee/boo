@@ -75,7 +75,7 @@ Canonical design:
 - [ ] Keep MainActor responsible only for reduced state publication into
       SwiftUI.
 - [ ] Verify heartbeat/no-op ack can progress while UI/AX work is busy.
-- [ ] Replace sleep-based readiness checks with deterministic protocol-state
+- [x] Replace sleep-based readiness checks with deterministic protocol-state
       waits.
 
 ### Safe optimistic view-local UI

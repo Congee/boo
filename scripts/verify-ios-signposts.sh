@@ -293,8 +293,7 @@ if [[ "$USE_EXISTING_SERVER" != "1" ]]; then
     >"$SERVER_LOG" 2>&1 &
   SERVER_PID=$!
 
-  sleep 1
-  if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
+  if ! python3 "$ROOT/scripts/ui-test-client.py" --socket "$SOCKET_PATH" wait-ready --timeout 30 >"${SERVER_LOG%.log}-ready.json"; then
     cat "$SERVER_LOG" >&2
     exit 1
   fi

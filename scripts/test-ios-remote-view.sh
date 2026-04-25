@@ -99,8 +99,7 @@ mkdir -p "$(dirname "$VALIDATOR_BIN")"
 rm -f "$SOCKET_PATH"
 boo_with_vt_lib_env target/debug/boo server --socket "$SOCKET_PATH" --remote-port "$PORT" >/tmp/boo-ios-remote-server.log 2>&1 &
 SERVER_PID=$!
-sleep 1
-if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
+if ! python3 scripts/ui-test-client.py --socket "$SOCKET_PATH" wait-ready --timeout 30 >/tmp/boo-ios-remote-ready.json; then
   cat /tmp/boo-ios-remote-server.log >&2
   exit 1
 fi

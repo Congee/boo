@@ -234,7 +234,7 @@ authority.
 - [ ] Move `NWConnection`, heartbeat, frame IO, and decode off MainActor.
 - [ ] Keep MainActor responsible only for reduced state publication into SwiftUI.
 - [ ] Verify heartbeat/no-op ack can progress while UI/AX work is busy.
-- [ ] Replace sleep-based readiness checks with deterministic protocol-state
+- [x] Replace sleep-based readiness checks with deterministic protocol-state
       waits.
 
 ### Safe optimistic UI
