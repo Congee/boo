@@ -106,6 +106,18 @@ extension RemoteRuntimePaneSnapshot {
             splitRatio: splitRatio
         )
     }
+
+    func withFrame(_ nextFrame: RemoteRuntimeRectSnapshot) -> RemoteRuntimePaneSnapshot {
+        RemoteRuntimePaneSnapshot(
+            leafIndex: leafIndex,
+            leafId: leafId,
+            paneId: paneId,
+            focused: focused,
+            frame: nextFrame,
+            splitDirection: splitDirection,
+            splitRatio: splitRatio
+        )
+    }
 }
 
 extension RemoteRuntimeStateSnapshot {
@@ -148,6 +160,77 @@ extension RemoteRuntimeStateSnapshot {
             viewRevision: viewRevision,
             viewId: viewId,
             viewedTabId: tabId,
+            viewportCols: viewportCols,
+            viewportRows: viewportRows,
+            visiblePaneIds: visiblePaneIds,
+            ackedClientActionId: ackedClientActionId
+        )
+    }
+
+    func withOptimisticResize(
+        direction: String,
+        ratio: Double,
+        firstPaneId: UInt64,
+        secondPaneId: UInt64
+    ) -> RemoteRuntimeStateSnapshot {
+        guard let first = visiblePanes.first(where: { $0.paneId == firstPaneId }),
+              let second = visiblePanes.first(where: { $0.paneId == secondPaneId })
+        else { return self }
+
+        let clamped = min(max(ratio, 0.1), 0.9)
+        let minX = min(first.frame.x, second.frame.x)
+        let minY = min(first.frame.y, second.frame.y)
+        let maxX = max(first.frame.x + first.frame.width, second.frame.x + second.frame.width)
+        let maxY = max(first.frame.y + first.frame.height, second.frame.y + second.frame.height)
+        let unionWidth = max(1, maxX - minX)
+        let unionHeight = max(1, maxY - minY)
+
+        let nextFirstFrame: RemoteRuntimeRectSnapshot
+        let nextSecondFrame: RemoteRuntimeRectSnapshot
+        if direction == "left" || direction == "right" {
+            let leftWidth = max(1, unionWidth * clamped)
+            let rightWidth = max(1, unionWidth - leftWidth)
+            let leftFrame = RemoteRuntimeRectSnapshot(x: minX, y: minY, width: leftWidth, height: unionHeight)
+            let rightFrame = RemoteRuntimeRectSnapshot(x: minX + leftWidth, y: minY, width: rightWidth, height: unionHeight)
+            if first.frame.x <= second.frame.x {
+                nextFirstFrame = leftFrame
+                nextSecondFrame = rightFrame
+            } else {
+                nextFirstFrame = rightFrame
+                nextSecondFrame = leftFrame
+            }
+        } else {
+            let topHeight = max(1, unionHeight * clamped)
+            let bottomHeight = max(1, unionHeight - topHeight)
+            let topFrame = RemoteRuntimeRectSnapshot(x: minX, y: minY, width: unionWidth, height: topHeight)
+            let bottomFrame = RemoteRuntimeRectSnapshot(x: minX, y: minY + topHeight, width: unionWidth, height: bottomHeight)
+            if first.frame.y <= second.frame.y {
+                nextFirstFrame = topFrame
+                nextSecondFrame = bottomFrame
+            } else {
+                nextFirstFrame = bottomFrame
+                nextSecondFrame = topFrame
+            }
+        }
+
+        return RemoteRuntimeStateSnapshot(
+            activeTab: activeTab,
+            focusedPane: focusedPane,
+            tabs: tabs,
+            visiblePanes: visiblePanes.map { pane in
+                if pane.paneId == firstPaneId {
+                    return pane.withFrame(nextFirstFrame)
+                }
+                if pane.paneId == secondPaneId {
+                    return pane.withFrame(nextSecondFrame)
+                }
+                return pane
+            },
+            pwd: pwd,
+            runtimeRevision: runtimeRevision,
+            viewRevision: viewRevision,
+            viewId: viewId,
+            viewedTabId: viewedTabId,
             viewportCols: viewportCols,
             viewportRows: viewportRows,
             visiblePaneIds: visiblePaneIds,

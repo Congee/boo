@@ -241,7 +241,7 @@ authority.
 
 - [x] Optimistically apply focus-pane UI state immediately.
 - [x] Optimistically apply viewed-tab/statusbar selection immediately.
-- [ ] Optimistically apply split-resize handle geometry while dragging.
+- [x] Optimistically apply split-resize handle geometry while dragging.
 - [x] Tag optimistic focus/viewed-tab state with `client_action_id`.
 - [x] Clear optimistic focus/viewed-tab state on matching server ack/revision.
 - [x] Roll back optimistic focus/viewed-tab state on conflicting

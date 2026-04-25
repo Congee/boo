@@ -1206,7 +1206,12 @@ final class GSPClient: ObservableObject {
         sendRuntimeAction(.prevTab(viewId: currentViewId))
     }
 
-    func resizeSplit(direction: String, ratio: Double) {
+    func resizeSplit(
+        direction: String,
+        ratio: Double,
+        optimisticFirstPaneId: UInt64? = nil,
+        optimisticSecondPaneId: UInt64? = nil
+    ) {
         guard currentViewId != 0 else { return }
         let clamped = min(max(ratio, 0.1), 0.9)
         renderTraceTracker.beginRuntimeAction(.remoteResizeSplit, BooTraceFields(
@@ -1221,7 +1226,7 @@ final class GSPClient: ObservableObject {
             paneRevision: 0,
             elapsedMs: 0
         ))
-        sendRuntimeAction(
+        let clientActionId = sendRuntimeAction(
             .resizeSplit(
                 viewId: currentViewId,
                 direction: direction,
@@ -1229,6 +1234,18 @@ final class GSPClient: ObservableObject {
                 ratio: clamped
             )
         )
+        if let clientActionId,
+           let optimisticFirstPaneId,
+           let optimisticSecondPaneId
+        {
+            applyOptimisticResizeSplit(
+                clientActionId: clientActionId,
+                direction: direction,
+                ratio: clamped,
+                firstPaneId: optimisticFirstPaneId,
+                secondPaneId: optimisticSecondPaneId
+            )
+        }
     }
 
     func attachView() {
@@ -1387,6 +1404,32 @@ final class GSPClient: ObservableObject {
         runtimeState = currentState.withOptimisticViewedTab(tabId)
         activeTabId = runtimeActiveTabId
         markOptimisticRuntimeState(clientActionId: clientActionId, previousState: currentState, paneId: 0)
+    }
+
+    private func applyOptimisticResizeSplit(
+        clientActionId: UInt64,
+        direction: String,
+        ratio: Double,
+        firstPaneId: UInt64,
+        secondPaneId: UInt64
+    ) {
+        guard let currentState = runtimeState,
+              currentState.visiblePaneIds.contains(firstPaneId),
+              currentState.visiblePaneIds.contains(secondPaneId)
+        else { return }
+
+        runtimeState = currentState.withOptimisticResize(
+            direction: direction,
+            ratio: ratio,
+            firstPaneId: firstPaneId,
+            secondPaneId: secondPaneId
+        )
+        activeTabId = runtimeActiveTabId
+        markOptimisticRuntimeState(
+            clientActionId: clientActionId,
+            previousState: currentState,
+            paneId: currentState.focusedPane
+        )
     }
 
     private func markOptimisticRuntimeState(

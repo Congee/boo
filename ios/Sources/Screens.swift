@@ -1172,7 +1172,12 @@ struct TerminalTabScreen: View {
                                     DragGesture(minimumDistance: 4)
                                         .onEnded { value in
                                             guard let ratio = divider.normalizedRatio(for: value.location) else { return }
-                                            client.resizeSplit(direction: divider.runtimeDirection, ratio: ratio)
+                                            client.resizeSplit(
+                                                direction: divider.runtimeDirection,
+                                                ratio: ratio,
+                                                optimisticFirstPaneId: divider.firstPaneId,
+                                                optimisticSecondPaneId: divider.secondPaneId
+                                            )
                                         }
                                 )
                         }
@@ -2200,6 +2205,8 @@ private struct RuntimePaneDivider {
     let center: CGPoint
     let hitWidth: CGFloat
     let hitHeight: CGFloat
+    let firstPaneId: UInt64
+    let secondPaneId: UInt64
 
     var runtimeDirection: String {
         switch axis {
@@ -2231,44 +2238,62 @@ private struct RuntimePaneDivider {
         let left = CGRect(x: first.frame.x, y: first.frame.y, width: first.frame.width, height: first.frame.height)
         let right = CGRect(x: second.frame.x, y: second.frame.y, width: second.frame.width, height: second.frame.height)
 
-        if let divider = verticalDivider(left: left, right: right) ?? verticalDivider(left: right, right: left) {
+        if let divider = verticalDivider(left: first, leftFrame: left, right: second, rightFrame: right)
+            ?? verticalDivider(left: second, leftFrame: right, right: first, rightFrame: left)
+        {
             return divider
         }
-        if let divider = horizontalDivider(top: left, bottom: right) ?? horizontalDivider(top: right, bottom: left) {
+        if let divider = horizontalDivider(top: first, topFrame: left, bottom: second, bottomFrame: right)
+            ?? horizontalDivider(top: second, topFrame: right, bottom: first, bottomFrame: left)
+        {
             return divider
         }
         return nil
     }
 
-    private static func verticalDivider(left: CGRect, right: CGRect) -> RuntimePaneDivider? {
-        let leftEdge = left.maxX
-        let gap = right.minX - leftEdge
+    private static func verticalDivider(
+        left: RemoteRuntimePaneSnapshot,
+        leftFrame: CGRect,
+        right: RemoteRuntimePaneSnapshot,
+        rightFrame: CGRect
+    ) -> RuntimePaneDivider? {
+        let leftEdge = leftFrame.maxX
+        let gap = rightFrame.minX - leftEdge
         guard (0 ... 2).contains(gap) else { return nil }
-        let top = max(left.minY, right.minY)
-        let bottom = min(left.maxY, right.maxY)
+        let top = max(leftFrame.minY, rightFrame.minY)
+        let bottom = min(leftFrame.maxY, rightFrame.maxY)
         guard bottom - top > 1 else { return nil }
         return RuntimePaneDivider(
             axis: .vertical,
-            union: left.union(right),
+            union: leftFrame.union(rightFrame),
             center: CGPoint(x: leftEdge + gap * 0.5, y: (top + bottom) * 0.5),
             hitWidth: 28,
-            hitHeight: bottom - top
+            hitHeight: bottom - top,
+            firstPaneId: left.paneId,
+            secondPaneId: right.paneId
         )
     }
 
-    private static func horizontalDivider(top: CGRect, bottom: CGRect) -> RuntimePaneDivider? {
-        let topEdge = top.maxY
-        let gap = bottom.minY - topEdge
+    private static func horizontalDivider(
+        top: RemoteRuntimePaneSnapshot,
+        topFrame: CGRect,
+        bottom: RemoteRuntimePaneSnapshot,
+        bottomFrame: CGRect
+    ) -> RuntimePaneDivider? {
+        let topEdge = topFrame.maxY
+        let gap = bottomFrame.minY - topEdge
         guard (0 ... 2).contains(gap) else { return nil }
-        let left = max(top.minX, bottom.minX)
-        let right = min(top.maxX, bottom.maxX)
-        guard right - left > 1 else { return nil }
+        let left = max(topFrame.minX, bottomFrame.minX)
+        let rightEdge = min(topFrame.maxX, bottomFrame.maxX)
+        guard rightEdge - left > 1 else { return nil }
         return RuntimePaneDivider(
             axis: .horizontal,
-            union: top.union(bottom),
-            center: CGPoint(x: (left + right) * 0.5, y: topEdge + gap * 0.5),
-            hitWidth: right - left,
-            hitHeight: 28
+            union: topFrame.union(bottomFrame),
+            center: CGPoint(x: (left + rightEdge) * 0.5, y: topEdge + gap * 0.5),
+            hitWidth: rightEdge - left,
+            hitHeight: 28,
+            firstPaneId: top.paneId,
+            secondPaneId: bottom.paneId
         )
     }
 }
