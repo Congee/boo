@@ -143,17 +143,6 @@ const LOCAL_SERVER_READY_DEADLINE: std::time::Duration = std::time::Duration::fr
 /// Poll interval for the local-server readiness check.
 const LOCAL_SERVER_READY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 
-/// How long the SSH-bootstrapped remote boo server has to become reachable
-/// over the forwarded control socket before we declare the bootstrap broken.
-/// Longer than the local deadline because SSH connection reuse + remote
-/// process spawn adds non-trivial latency.
-const REMOTE_SERVER_READY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(8);
-
-/// Poll interval for the remote-server readiness check. Slightly longer than
-/// the local one so a slow remote doesn't get hit too aggressively.
-const REMOTE_SERVER_READY_POLL_INTERVAL: std::time::Duration =
-    std::time::Duration::from_millis(100);
-
 pub fn parse_startup_args(cli: &crate::cli::Cli) -> bool {
     if let Some(name) = cli.global.layout.as_ref() {
         STARTUP_LAYOUT.set(name.clone()).ok();
@@ -579,15 +568,12 @@ fn ensure_remote_server_running(
         }
     }
 
-    let deadline = std::time::Instant::now() + REMOTE_SERVER_READY_DEADLINE;
-    while std::time::Instant::now() < deadline {
-        if server_ui_ready(&client) {
-            return true;
-        }
-        std::thread::sleep(REMOTE_SERVER_READY_POLL_INTERVAL);
-    }
-    log::warn!("remote boo server did not become ready through {local_socket_path}");
-    false
+    // Remote control-socket version negotiation above proves that the server
+    // and SSH tunnel are reachable. Do not require the remote runtime to have
+    // finished first-pane VT initialization here: cold Linux hosts can take
+    // long enough that a `new-tab --host ...` bootstrap times out even though
+    // the server is already healthy and able to accept the requested action.
+    true
 }
 
 fn bootstrap_remote_server(host: &str, resolved_paths: &ResolvedRemotePaths) -> Result<(), String> {
@@ -1068,6 +1054,8 @@ fn ensure_remote_tunnel(
             .arg("-O")
             .arg("exit")
             .arg(host)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status();
     }
 
