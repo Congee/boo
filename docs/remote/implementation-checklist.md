@@ -27,19 +27,10 @@ deferred section at the bottom of this file.
 ## Current TODO (updated 2026-04-25)
 
 - [ ] Define scroll/search/copy-mode semantics across per-screen runtime views.
-- [ ] Harden transport QoS beyond focused-pane-first publishing:
-      focused-pane priority, non-focused visible-pane coalescing, and starvation
-      guards.
-- [ ] Collect runtime-view E2E baseline measurements for user-perceived
-      focus/tab/pane/input interactions, producing parseable metrics artifacts
-      before changing behavior.
-      - desktop smoke metrics now record base no-op RTT, throughput, final
-        two-tab/three-pane layout, and QoS candidate output
-      - iPad runtime-view screenshot/tap-focus smoke now passes on a physical
-        device; full desktop+iOS baseline artifacts still need to be reviewed
-        before QoS changes
-- [ ] Decide whether local prediction is needed after reviewing the baseline
-      measurements and QoS options.
+- [ ] Implement the latency-tolerant remote UI plan:
+      action acknowledgements, no-op baseline metrics, off-main iOS transport,
+      safe optimistic view-local UI, and pane-aware QoS/backpressure.
+      See [latency-tolerant-remote-ui.md](./latency-tolerant-remote-ui.md).
 - [ ] Refine canonical host/runtime reconnect UX and view timeout affordances.
 - [ ] Keep real-device iOS UI smoke tests current for both iPad and iPhone.
 
@@ -58,6 +49,62 @@ Recently closed:
       input routing, statusbar tab clicks, and normal-click hyperlink crashes.
 - [x] Moved remaining macOS/iOS toolchain cleanup into `flake.nix` so scripts no
       longer need ad hoc Xcode/SDK unsetting or local VT library discovery.
+
+## Latency-Tolerant Remote UI Tracking
+
+Canonical design:
+[latency-tolerant-remote-ui.md](./latency-tolerant-remote-ui.md).
+
+### Measurement and acknowledgements
+
+- [ ] Add a backward-compatible runtime-action envelope with
+      `client_action_id`.
+- [ ] Continue accepting legacy bare `RuntimeAction` payloads.
+- [ ] Add `RuntimeAction::Noop { view_id }`.
+- [ ] Add action acknowledgement metadata to runtime-view state.
+- [ ] Add `remote.noop_roundtrip`.
+- [ ] Add `remote.action_ack`.
+- [ ] Add `remote.optimistic_apply`.
+- [ ] Add `remote.reconcile`.
+- [ ] Update simulator+iPad metrics comparison so no-op/action metrics are
+      reported separately from `remote.heartbeat_rtt`.
+
+### iOS transport isolation
+
+- [ ] Move `NWConnection`, heartbeat, frame IO, and decode off MainActor.
+- [ ] Keep MainActor responsible only for reduced state publication into
+      SwiftUI.
+- [ ] Verify heartbeat/no-op ack can progress while UI/AX work is busy.
+- [ ] Replace sleep-based readiness checks with deterministic protocol-state
+      waits.
+
+### Safe optimistic view-local UI
+
+- [ ] Optimistically apply focus-pane UI state immediately.
+- [ ] Optimistically apply viewed-tab/statusbar selection immediately.
+- [ ] Optimistically apply split-resize handle geometry while dragging.
+- [ ] Tag optimistic state with `client_action_id`.
+- [ ] Clear optimistic state on matching server ack/revision.
+- [ ] Roll back optimistic state on conflicting authoritative state.
+- [ ] Keep terminal text output server-authored.
+
+### Pane-aware QoS and backpressure
+
+- [ ] Replace single latest-screen coalescing with pane-aware scheduling.
+- [ ] Prioritize health/control/action acknowledgement frames.
+- [ ] Prioritize focused visible pane updates per client.
+- [ ] Coalesce non-focused visible pane updates by pane.
+- [ ] Add starvation guard for non-focused visible panes.
+- [ ] Add queue-depth/render-ack feedback for passive pane throttling.
+- [ ] Preserve per-client priority differences when clients view/focus
+      different tabs or panes.
+
+### Future transport separation
+
+- [ ] Evaluate multi-stream QUIC only after action ack, off-main iOS transport,
+      optimistic UI, and QoS metrics are available.
+- [ ] Evaluate unreliable delivery only for staleable transient UI state.
+- [ ] Keep authoritative terminal state on reliable state/delta paths.
 
 ## Post-completion verification notes
 
@@ -162,8 +209,11 @@ Recently closed:
 ### Deferred / TODO
 
 - [ ] define scroll/search/copy-mode semantics across per-screen views
-- [ ] harden transport QoS beyond current focused-pane-first publish ordering:
-      focused pane priority, non-focused pane coalescing, and starvation checks
+- [ ] implement latency-tolerant remote UI architecture:
+      action acknowledgements, no-op roundtrip baseline, safe optimistic
+      view-local UI, iOS transport off MainActor, pane-aware QoS, and
+      backpressure. Keep terminal text prediction deferred until those slices
+      are measured.
 - [x] revisit terminal UI regressions found during macOS runtime-view testing:
       invisible/transparent content, inconsistent glyph width, and the content
       background changing from translucent to fully dark
@@ -206,10 +256,15 @@ Recently closed:
   - [x] iOS tap pane -> `FocusPane` -> runtime state/pane update -> render
   - [x] iOS statusbar/tab runtime action -> update -> render
   - [x] iOS key/input -> terminal delta/full-state -> render
-- [ ] collect baseline measurements for user-perceived focus/tab/pane/input
-      interactions before changing behavior
-- [ ] decide whether to add local prediction after the latency traces and
-      baseline measurements are available
+- [ ] add no-op/action-ack metrics so minimal protocol roundtrip and
+      user-perceived action latency are reported separately from
+      `remote.heartbeat_rtt`
+- [ ] add safe optimistic UI for view-local actions only:
+      focus pane, viewed tab/statusbar selection, and split-resize handle
+      geometry
+- [ ] keep terminal text/content prediction deferred until action acks,
+      optimistic view-local UI, off-main iOS transport, and pane-aware QoS are
+      measured
 - [x] bridge Rust traces to Apple OSLog with `tracing-oslog`
 - [x] resolve the current device `xcodebuild` linker
       boundary if full iOS build verification is required

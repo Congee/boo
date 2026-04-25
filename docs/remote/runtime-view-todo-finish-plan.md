@@ -22,27 +22,41 @@ validated desktop + iOS paths.
 - Add pure unit tests for two clients viewing the same tab with independent
   focus, scroll/search/copy state.
 
-### Transport QoS
+### Latency-tolerant remote UI
 
-- Replace focused-pane-first-only publishing with explicit per-client
-  scheduling:
-  - focused pane always emitted first
-  - non-focused visible panes coalesced within a small bounded window
-  - starvation guard forces visible non-focused panes after a max skipped/update
-    count
-- Keep wire formats unchanged; change only server-side scheduling/coalescing
-  behavior.
-- Add deterministic tests for focused priority, non-focused coalescing,
-  starvation, and multi-client focused-pane differences.
+Follow [latency-tolerant-remote-ui.md](./latency-tolerant-remote-ui.md). High
+`remote.heartbeat_rtt` is expected under bad Wi-Fi/LAN jitter, so Boo should
+decouple local intent feedback from authoritative server reconciliation.
 
-### Runtime-view E2E metrics and local prediction decision
+Implementation order:
 
-- Run and fix the desktop `runtime-view-e2e` metrics path until it reliably
-  produces parseable `metrics.json`, `summary.md`, and `qos-baseline.md`.
-- Use the baseline to close the local-prediction TODO with a documented
-  decision: no local prediction in this pass unless QoS still leaves
-  user-visible input/focus p95 latency above the recorded threshold.
-- Keep artifacts generated/ignored, not committed as large files.
+1. Measurement and acknowledgements:
+   - add a backward-compatible runtime-action envelope with `client_action_id`
+   - keep legacy bare `RuntimeAction` decode working
+   - add `RuntimeAction::Noop { view_id }`
+   - report no-op/action-ack metrics separately from `remote.heartbeat_rtt`
+   - update simulator+iPad comparison artifacts to include those metrics
+2. iOS transport isolation:
+   - move `NWConnection`, heartbeat, frame IO, and wire decode off MainActor
+   - keep MainActor responsible only for reduced SwiftUI state publication
+   - prove heartbeat/no-op ack progress while UI/AX work is busy
+3. Safe optimistic view-local UI:
+   - optimistically show focus-pane, viewed-tab/statusbar, and split-resize
+     handle feedback
+   - tag optimistic state with `client_action_id`
+   - clear or roll back optimistic state on authoritative ack/revision
+   - keep terminal text/content server-authored
+4. Pane-aware QoS/backpressure:
+   - prioritize health/control/action acknowledgements and focused visible pane
+     updates per client
+   - coalesce non-focused visible panes by pane
+   - add starvation guards and queue-depth/render-ack feedback
+   - preserve different priority ordering for clients with different viewed or
+     focused panes
+5. Future transport split:
+   - evaluate QUIC multi-stream only after the above slices are measured
+   - reserve unreliable delivery for staleable transient UI, not authoritative
+     terminal state
 
 ### macOS terminal UI regressions
 
@@ -108,5 +122,6 @@ validated desktop + iOS paths.
 - Do not run broad `cargo fmt`/`rustfmt`; avoid formatting crate roots unless
   specifically necessary.
 - Generated metrics/workload files stay under ignored generated paths.
-- QoS changes are allowed; local prediction remains off unless baseline results
-  prove it is necessary.
+- General terminal text prediction remains off. The first latency-tolerant pass
+  is limited to action acknowledgements, off-main iOS transport, safe
+  optimistic view-local UI, and pane-aware QoS/backpressure.

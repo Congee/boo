@@ -39,6 +39,7 @@ This is the structured documentation hub for boo.
 ## Remote
 
 - [remote/requirements.md](./remote/requirements.md)
+- [remote/latency-tolerant-remote-ui.md](./remote/latency-tolerant-remote-ui.md)
 - [remote/ssh-desktop.md](./remote/ssh-desktop.md)
 - [remote/implementation-checklist.md](./remote/implementation-checklist.md)
 - [remote/nix-builder.md](./remote/nix-builder.md)

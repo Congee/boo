@@ -52,9 +52,12 @@ The current live model is:
 Remote clients do not own terminal lifecycle objects; they view and control the
 server-owned runtime.
 
-Post-v1 work should focus on scroll/search semantics across screens, baseline
-latency measurement before deciding whether local prediction is needed,
-focused-pane QoS under load, and host-scoped reconnect UX.
+Post-v1 work should focus on scroll/search semantics across screens,
+latency-tolerant remote UI under high RTT/jitter, pane-aware QoS/backpressure,
+and host-scoped reconnect UX. See
+[../remote/latency-tolerant-remote-ui.md](../remote/latency-tolerant-remote-ui.md)
+for the action-acknowledgement, optimistic view-local UI, off-main iOS
+transport, and QoS plan.
 
 Primary code:
 

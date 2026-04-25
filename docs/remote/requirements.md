@@ -23,6 +23,13 @@ time, even though rollout and UX differ today.
 - preserve deterministic verification paths
 - keep desktop SSH practical without blocking on mobile-specific work
 - converge toward one shared remote runtime-view protocol
+- remain usable when LAN/Wi-Fi RTT and jitter are high by decoupling local
+  intent feedback from authoritative server reconciliation
+- report no-op/action/render latency separately from heartbeat RTT; heartbeat
+  RTT is link-quality telemetry, not the primary perceived-latency metric
+- allow only safe optimistic view-local UI first, such as focus, viewed tab,
+  statusbar selection, and split-resize handle feedback; keep terminal content
+  server-authored until later evidence justifies prediction
 - do not rely on Boo-managed shared secrets for remote auth
 - if key-based auth is added, verify public keys server-side in an
   `authorized_keys`-style model and use platform keychain or agent integration
@@ -133,11 +140,10 @@ Additional 2026-04-23 real-device verification result:
 
 - define how search, copy mode, and server-owned scrollback should behave when
   multiple screens view the same runtime with different viewport sizes
-- collect baseline user-perceived latency measurements for pane focus, tab
-  changes, input, and status interactions using the tracing foundation before
-  deciding whether client-side prediction is warranted
-- strengthen focused-pane QoS under load: prioritize focused panes, coalesce
-  non-focused visible pane updates, and verify visible panes do not starve
+- implement latency-tolerant remote UI slices from
+  [./latency-tolerant-remote-ui.md](./latency-tolerant-remote-ui.md): action
+  acknowledgements, no-op baseline metrics, iOS transport off MainActor, safe
+  optimistic view-local UI, and pane-aware QoS/backpressure
 - refine host-scoped reconnect UX so closing a mobile view, disconnecting, and
   closing a shared runtime tab remain visually distinct
 - continue to keep Tailscale discovery clearly separated from Boo service
@@ -146,6 +152,7 @@ Additional 2026-04-23 real-device verification result:
 ## Related Docs
 
 - [./runtime-view-migration.md](./runtime-view-migration.md)
+- [./latency-tolerant-remote-ui.md](./latency-tolerant-remote-ui.md)
 - [./ssh-desktop.md](./ssh-desktop.md)
 - [./implementation-checklist.md](./implementation-checklist.md)
 - [../modules/remote-daemon.md](../modules/remote-daemon.md)

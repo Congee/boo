@@ -121,12 +121,12 @@ These should not be confused with remote runtime-view architecture.
 
 - scroll, search, and copy-mode behavior still need a dedicated design pass for
   multiple screens and different viewport sizes
-- local prediction is intentionally not part of v1; use the tracing foundation
-  to collect user-perceived latency baselines first, then decide whether to
-  predict focus/tab/status changes
-- focused-pane-first publishing exists, but transport QoS should be hardened
-  under load with explicit coalescing and starvation checks for non-focused
-  visible panes
+- latency-tolerant remote UI is intentionally post-v1; start with action
+  acknowledgements, no-op/action metrics, iOS transport off MainActor, safe
+  optimistic view-local UI, and pane-aware QoS/backpressure as documented in
+  [latency-tolerant-remote-ui.md](./latency-tolerant-remote-ui.md)
+- terminal text prediction remains deferred until the latency-tolerant UI slices
+  are measured
 - host-scoped reconnect UX needs continued refinement so a detached mobile view,
   a disconnected transport, and a closed shared runtime tab are clearly
   different user actions
