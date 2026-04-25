@@ -212,6 +212,8 @@ text = path.read_text(encoding='utf-8', errors='ignore') if path.exists() else '
 events = [
     'remote.connect',
     'remote.runtime_action',
+    'remote.noop_roundtrip',
+    'remote.action_ack',
     'remote.focus_pane',
     'remote.set_viewed_tab',
     'remote.resize_split',
@@ -285,6 +287,8 @@ for label, metrics_path in zip(sys.argv[2::2], sys.argv[3::2]):
 
 events = [
     'remote.heartbeat_rtt',
+    'remote.noop_roundtrip',
+    'remote.action_ack',
     'remote.input',
     'remote.pane_update',
     'remote.render_apply',

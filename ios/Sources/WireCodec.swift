@@ -60,6 +60,7 @@ struct RemoteRuntimeStateSnapshot: Decodable, Equatable {
     let viewportCols: UInt16?
     let viewportRows: UInt16?
     let visiblePaneIds: [UInt64]
+    let ackedClientActionId: UInt64?
 }
 
 struct RemoteRuntimeRectSnapshot: Decodable, Equatable {

@@ -12,6 +12,9 @@ pub(crate) mod events {
     pub(crate) const REMOTE_INPUT: &str = "remote.input";
     pub(crate) const REMOTE_PANE_UPDATE: &str = "remote.pane_update";
     #[allow(dead_code)]
+    pub(crate) const REMOTE_NOOP_ROUNDTRIP: &str = "remote.noop_roundtrip";
+    pub(crate) const REMOTE_ACTION_ACK: &str = "remote.action_ack";
+    #[allow(dead_code)]
     pub(crate) const REMOTE_RENDER_APPLY: &str = "remote.render_apply";
 }
 
@@ -27,6 +30,7 @@ pub(crate) enum RuntimeActionKind {
     DetachView,
     NewSplit,
     ResizeSplit,
+    Noop,
 }
 
 impl RuntimeActionKind {
@@ -42,6 +46,7 @@ impl RuntimeActionKind {
             Self::DetachView => "detach_view",
             Self::NewSplit => "new_split",
             Self::ResizeSplit => "resize_split",
+            Self::Noop => "noop",
         }
     }
 }

@@ -206,6 +206,8 @@ pub struct UiRuntimeState {
     pub viewport_cols: Option<u16>,
     pub viewport_rows: Option<u16>,
     pub visible_pane_ids: Vec<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acked_client_action_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

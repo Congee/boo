@@ -50,6 +50,7 @@ mod tests {
             viewport_cols: None,
             viewport_rows: None,
             visible_pane_ids: Vec::new(),
+            acked_client_action_id: None,
         }
     }
 

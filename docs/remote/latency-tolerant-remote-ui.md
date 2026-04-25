@@ -218,15 +218,15 @@ authority.
 
 ### Measurement and acknowledgements
 
-- [ ] Add backward-compatible runtime-action envelope with `client_action_id`.
-- [ ] Continue accepting legacy bare `RuntimeAction` payloads.
-- [ ] Add `RuntimeAction::Noop { view_id }`.
-- [ ] Add action acknowledgement metadata to runtime-view state.
-- [ ] Add `remote.noop_roundtrip` metric.
-- [ ] Add `remote.action_ack` metric.
+- [x] Add backward-compatible runtime-action envelope with `client_action_id`.
+- [x] Continue accepting legacy bare `RuntimeAction` payloads.
+- [x] Add `RuntimeAction::Noop { view_id }`.
+- [x] Add action acknowledgement metadata to runtime-view state.
+- [x] Add `remote.noop_roundtrip` metric.
+- [x] Add `remote.action_ack` metric.
 - [ ] Add `remote.optimistic_apply` metric.
 - [ ] Add `remote.reconcile` metric.
-- [ ] Update simulator+iPad comparison output to list no-op/action metrics
+- [x] Update simulator+iPad comparison output to list no-op/action metrics
       separately from `remote.heartbeat_rtt`.
 
 ### iOS transport isolation

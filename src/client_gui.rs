@@ -3323,6 +3323,7 @@ mod tests {
             viewport_cols: None,
             viewport_rows: None,
             visible_pane_ids: vec![7],
+            acked_client_action_id: None,
         });
 
         assert!(app.mouse_selection.active);
@@ -3357,6 +3358,7 @@ mod tests {
             viewport_cols: None,
             viewport_rows: None,
             visible_pane_ids: vec![7],
+            acked_client_action_id: None,
         }));
         app.handle_stream_event(LocalStreamEvent::FullState {
             ack_input_seq: None,
@@ -3704,6 +3706,7 @@ mod tests {
             viewport_cols: None,
             viewport_rows: None,
             visible_pane_ids: vec![],
+            acked_client_action_id: None,
         });
         let runtime_b = LocalStreamEvent::UiRuntimeState(control::UiRuntimeState {
             tabs: vec![],
@@ -3720,6 +3723,7 @@ mod tests {
             viewport_cols: None,
             viewport_rows: None,
             visible_pane_ids: vec![],
+            acked_client_action_id: None,
         });
         let appearance_a = LocalStreamEvent::UiAppearance(appearance("A"));
         let appearance_b = LocalStreamEvent::UiAppearance(appearance("B"));
@@ -4040,6 +4044,7 @@ mod tests {
             viewport_cols: None,
             viewport_rows: None,
             visible_pane_ids: vec![7],
+            acked_client_action_id: None,
         }));
 
         assert_eq!(app.active_remote_tab_id, Some(7));
@@ -4112,6 +4117,7 @@ mod tests {
             viewport_cols: None,
             viewport_rows: None,
             visible_pane_ids: vec![7],
+            acked_client_action_id: None,
         });
         app.handle_stream_event(LocalStreamEvent::UiPaneFullState {
             pane_id: 7,
@@ -4203,6 +4209,7 @@ mod tests {
             viewport_cols: None,
             viewport_rows: None,
             visible_pane_ids: vec![7],
+            acked_client_action_id: None,
         });
 
         assert!(app.pane_snapshots.is_empty());

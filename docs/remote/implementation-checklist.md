@@ -57,16 +57,16 @@ Canonical design:
 
 ### Measurement and acknowledgements
 
-- [ ] Add a backward-compatible runtime-action envelope with
+- [x] Add a backward-compatible runtime-action envelope with
       `client_action_id`.
-- [ ] Continue accepting legacy bare `RuntimeAction` payloads.
-- [ ] Add `RuntimeAction::Noop { view_id }`.
-- [ ] Add action acknowledgement metadata to runtime-view state.
-- [ ] Add `remote.noop_roundtrip`.
-- [ ] Add `remote.action_ack`.
+- [x] Continue accepting legacy bare `RuntimeAction` payloads.
+- [x] Add `RuntimeAction::Noop { view_id }`.
+- [x] Add action acknowledgement metadata to runtime-view state.
+- [x] Add `remote.noop_roundtrip`.
+- [x] Add `remote.action_ack`.
 - [ ] Add `remote.optimistic_apply`.
 - [ ] Add `remote.reconcile`.
-- [ ] Update simulator+iPad metrics comparison so no-op/action metrics are
+- [x] Update simulator+iPad metrics comparison so no-op/action metrics are
       reported separately from `remote.heartbeat_rtt`.
 
 ### iOS transport isolation

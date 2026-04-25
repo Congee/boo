@@ -153,6 +153,7 @@ pub enum Command {
     },
     RemoteRuntimeAction {
         client_id: u64,
+        client_action_id: Option<u64>,
         action: remote::RuntimeAction,
     },
 }
@@ -341,8 +342,14 @@ impl From<remote::RemoteCmd> for Command {
             remote::RemoteCmd::Destroy { client_id, tab_id } => {
                 Self::RemoteDestroy { client_id, tab_id }
             }
-            remote::RemoteCmd::RuntimeAction { client_id, action } => {
-                Self::RemoteRuntimeAction { client_id, action }
+            remote::RemoteCmd::RuntimeAction {
+                client_id,
+                client_action_id,
+                action,
+            } => Self::RemoteRuntimeAction {
+                client_id,
+                client_action_id,
+                action,
             }
         }
     }

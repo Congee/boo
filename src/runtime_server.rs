@@ -136,6 +136,7 @@ impl BooApp {
             viewport_cols,
             viewport_rows,
             visible_pane_ids: visible_panes.into_iter().map(|pane| pane.pane_id).collect(),
+            acked_client_action_id: view.as_ref().and_then(|view| view.acked_client_action_id),
         }
     }
 
@@ -953,12 +954,24 @@ impl BooApp {
             server::Command::RemoteDestroy { client_id, tab_id } => {
                 self.destroy_remote_runtime_tab(client_id, tab_id);
             }
-            server::Command::RemoteRuntimeAction { client_id, action } => {
+            server::Command::RemoteRuntimeAction {
+                client_id,
+                client_action_id,
+                action,
+            } => {
                 let started_at = Instant::now();
                 let action_name = action.trace_action().as_str();
+                if let Some(client_action_id) = client_action_id
+                    && let Some(server) = self.remote_server_for_client(client_id)
+                {
+                    server.update_client_view(client_id, |view| {
+                        view.acked_client_action_id = Some(client_action_id);
+                        view.touch_view();
+                    });
+                }
                 tracing::info!(
                     target: "boo::latency",
-                    interaction_id = 0_u64,
+                    interaction_id = client_action_id.unwrap_or_default(),
                     view_id = 0_u64,
                     tab_id = 0_u32,
                     pane_id = 0_u64,
@@ -972,10 +985,34 @@ impl BooApp {
                     crate::trace_schema::events::REMOTE_RUNTIME_ACTION
                 );
                 match action {
+                remote::RuntimeAction::Noop { view_id } => {
+                    if let Some(server) = self.remote_server_for_delivery(client_id) {
+                        let ui_runtime_state = self.ui_runtime_state_for_client(client_id);
+                        server.send_ui_runtime_state(client_id, &ui_runtime_state);
+                    }
+                    tracing::info!(
+                        target: "boo::latency",
+                        interaction_id = client_action_id.unwrap_or_default(),
+                        view_id = view_id,
+                        tab_id = 0_u32,
+                        pane_id = 0_u64,
+                        action = action_name,
+                        route = "remote",
+                        runtime_revision = self.runtime_revision,
+                        view_revision = self
+                            .remote_view_state_for_client(client_id)
+                            .map(|view| view.view_revision)
+                            .unwrap_or_default(),
+                        pane_revision = 0_u64,
+                        elapsed_ms = started_at.elapsed().as_secs_f64() * 1000.0,
+                        "{}",
+                        crate::trace_schema::events::REMOTE_ACTION_ACK
+                    );
+                }
                 remote::RuntimeAction::SetViewedTab { view_id, tab_id } => {
                     tracing::info!(
                         target: "boo::latency",
-                        interaction_id = 0_u64,
+                        interaction_id = client_action_id.unwrap_or_default(),
                         view_id = view_id,
                         tab_id = tab_id,
                         pane_id = 0_u64,
@@ -1044,6 +1081,7 @@ impl BooApp {
                     if let Some(tab_id) = self.server.tabs.tab_id_for_index(next_index) {
                         self.handle_server_cmd(server::Command::RemoteRuntimeAction {
                             client_id,
+                            client_action_id,
                             action: remote::RuntimeAction::SetViewedTab { view_id: view.view_id, tab_id },
                         });
                     }
@@ -1064,6 +1102,7 @@ impl BooApp {
                     if let Some(tab_id) = self.server.tabs.tab_id_for_index(next_index) {
                         self.handle_server_cmd(server::Command::RemoteRuntimeAction {
                             client_id,
+                            client_action_id,
                             action: remote::RuntimeAction::SetViewedTab { view_id: view.view_id, tab_id },
                         });
                     }
@@ -1113,7 +1152,7 @@ impl BooApp {
                     };
                     tracing::info!(
                         target: "boo::latency",
-                        interaction_id = 0_u64,
+                        interaction_id = client_action_id.unwrap_or_default(),
                         view_id = view_id,
                         tab_id = tab_id,
                         pane_id = view.focused_pane_id.unwrap_or_default(),
@@ -1358,6 +1397,7 @@ mod tests {
 
         app.handle_server_cmd(crate::server::Command::RemoteRuntimeAction {
             client_id: 1,
+            client_action_id: None,
             action: crate::remote::RuntimeAction::SetViewedTab {
                 view_id: 1,
                 tab_id: second_tab_id,
@@ -1369,6 +1409,38 @@ mod tests {
         let client_two = server.client_runtime_view(2).expect("client 2 view");
         assert_eq!(client_one.viewed_tab_id, Some(second_tab_id));
         assert_eq!(client_two.viewed_tab_id, Some(first_tab_id));
+    }
+
+    #[test]
+    fn runtime_action_noop_acknowledges_client_action_without_runtime_change() {
+        let mut app = BooApp::new_headless();
+        app.init_surface();
+        let receivers = install_test_remote_server_with_receivers(&mut app, &[1]);
+        app.sync_remote_client_runtime_view(1, true);
+        let runtime_revision_before = app.runtime_revision;
+        let rx = receivers.get(&1).expect("client receiver");
+        drain_outbound(rx);
+
+        app.handle_server_cmd(crate::server::Command::RemoteRuntimeAction {
+            client_id: 1,
+            client_action_id: Some(42),
+            action: crate::remote::RuntimeAction::Noop { view_id: 1 },
+        });
+
+        assert_eq!(app.runtime_revision, runtime_revision_before);
+        let server = app.server.remote_server.as_ref().expect("remote server");
+        let view = server.client_runtime_view(1).expect("client view");
+        assert_eq!(view.acked_client_action_id, Some(42));
+        match rx.recv().expect("runtime ack frame") {
+            OutboundMessage::Frame(frame) => {
+                let (ty, payload) = read_message(&mut Cursor::new(frame)).expect("decode frame");
+                assert_eq!(ty, MessageType::UiRuntimeState);
+                let state: control::UiRuntimeState =
+                    serde_json::from_slice(&payload).expect("decode runtime state");
+                assert_eq!(state.acked_client_action_id, Some(42));
+            }
+            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+        }
     }
 
     #[test]
@@ -1632,6 +1704,7 @@ mod tests {
 
         app.handle_server_cmd(crate::server::Command::RemoteRuntimeAction {
             client_id: 1,
+            client_action_id: None,
             action: crate::remote::RuntimeAction::NewTab {
                 view_id: 1,
                 cols: Some(120),
@@ -1793,6 +1866,7 @@ mod tests {
 
         app.handle_server_cmd(crate::server::Command::RemoteRuntimeAction {
             client_id: 1,
+            client_action_id: None,
             action: crate::remote::RuntimeAction::ResizeSplit {
                 view_id: 1,
                 direction: "right".to_string(),
@@ -1841,6 +1915,7 @@ mod tests {
 
         app.handle_server_cmd(crate::server::Command::RemoteRuntimeAction {
             client_id: 1,
+            client_action_id: None,
             action: crate::remote::RuntimeAction::DetachView { view_id: 1 },
         });
 

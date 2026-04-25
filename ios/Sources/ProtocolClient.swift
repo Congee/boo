@@ -63,6 +63,7 @@ private enum OutboundRuntimeAction: Encodable {
     case attachView(viewId: UInt64)
     case detachView(viewId: UInt64)
     case resizeSplit(viewId: UInt64, direction: String, amount: UInt16, ratio: Double?)
+    case noop(viewId: UInt64)
 
     private enum CodingKeys: String, CodingKey {
         case kind
@@ -87,6 +88,7 @@ private enum OutboundRuntimeAction: Encodable {
         case attachView = "attach_view"
         case detachView = "detach_view"
         case resizeSplit = "resize_split"
+        case noop = "noop"
     }
 
     var traceAction: String {
@@ -101,6 +103,7 @@ private enum OutboundRuntimeAction: Encodable {
         case .attachView: return Kind.attachView.rawValue
         case .detachView: return Kind.detachView.rawValue
         case .resizeSplit: return Kind.resizeSplit.rawValue
+        case .noop: return Kind.noop.rawValue
         }
     }
 
@@ -115,7 +118,8 @@ private enum OutboundRuntimeAction: Encodable {
              .prevTab(let viewId),
              .attachView(let viewId),
              .detachView(let viewId),
-             .resizeSplit(let viewId, _, _, _):
+             .resizeSplit(let viewId, _, _, _),
+             .noop(let viewId):
             return viewId
         }
     }
@@ -184,7 +188,20 @@ private enum OutboundRuntimeAction: Encodable {
             try container.encode(direction, forKey: .direction)
             try container.encode(amount, forKey: .amount)
             try container.encodeIfPresent(ratio, forKey: .ratio)
+        case .noop(let viewId):
+            try container.encode(Kind.noop, forKey: .kind)
+            try container.encode(viewId, forKey: .viewId)
         }
+    }
+}
+
+private struct OutboundRuntimeActionEnvelope: Encodable {
+    let clientActionId: UInt64
+    let action: OutboundRuntimeAction
+
+    private enum CodingKeys: String, CodingKey {
+        case clientActionId = "client_action_id"
+        case action
     }
 }
 
@@ -900,6 +917,9 @@ final class GSPClient: ObservableObject {
     private var authRequestedAt: Date?
     private var tabListRequestedAt: Date?
     private var renderTraceTracker = BooRenderTraceTracker()
+    private var nextClientActionIdValue: UInt64 = 0
+    private var pendingActionAcks: [UInt64: (action: String, startedAt: Date, fields: BooTraceFields)] = [:]
+    private var noopBaselineSentForViewIds: Set<UInt64> = []
 
     private func debugLog(_ message: String) {
         BooTrace.debug(message)
@@ -907,6 +927,11 @@ final class GSPClient: ObservableObject {
 
     private func nextTraceInteractionId() -> UInt64 {
         renderTraceTracker.nextInteractionId()
+    }
+
+    private func nextClientActionId() -> UInt64 {
+        nextClientActionIdValue &+= 1
+        return nextClientActionIdValue
     }
 
     private nonisolated static let magic: [UInt8] = [0x47, 0x53]
@@ -1200,6 +1225,12 @@ final class GSPClient: ObservableObject {
         sendRuntimeAction(.detachView(viewId: currentViewId))
     }
 
+    private func sendNoopBaselineIfNeeded(for state: RemoteRuntimeStateSnapshot) {
+        guard state.viewId != 0, !noopBaselineSentForViewIds.contains(state.viewId) else { return }
+        noopBaselineSentForViewIds.insert(state.viewId)
+        sendRuntimeAction(.noop(viewId: state.viewId))
+    }
+
     func sendHeartbeat() {
         let token = UInt64(Date().timeIntervalSince1970 * 1000)
         pendingHeartbeatToken = token
@@ -1288,9 +1319,9 @@ final class GSPClient: ObservableObject {
     }
 
     private func sendRuntimeAction(_ action: OutboundRuntimeAction) {
-        guard let payload = try? JSONEncoder().encode(action) else { return }
-        BooTrace.log(.remoteRuntimeAction, BooTraceFields(
-            interactionId: 0,
+        let clientActionId = nextClientActionId()
+        var fields = BooTraceFields(
+            interactionId: clientActionId,
             viewId: action.traceViewId,
             tabId: action.traceTabId,
             paneId: action.tracePaneId,
@@ -1300,7 +1331,15 @@ final class GSPClient: ObservableObject {
             viewRevision: runtimeState?.viewRevision ?? 0,
             paneRevision: 0,
             elapsedMs: 0
-        ))
+        )
+        pendingActionAcks[clientActionId] = (action.traceAction, Date(), fields)
+        guard let payload = try? JSONEncoder().encode(
+            OutboundRuntimeActionEnvelope(clientActionId: clientActionId, action: action)
+        ) else {
+            pendingActionAcks.removeValue(forKey: clientActionId)
+            return
+        }
+        BooTrace.log(.remoteRuntimeAction, fields)
         sendMessage(type: .runtimeAction, payload: payload)
     }
 
@@ -1315,6 +1354,8 @@ final class GSPClient: ObservableObject {
         lastHeartbeatRttMs = nil
         lastHeartbeatSent = nil
         pendingHeartbeatToken = nil
+        pendingActionAcks.removeAll()
+        noopBaselineSentForViewIds.removeAll()
         connectionGeneration &+= 1
         connectionDebugGeneration = connectionGeneration
         connectionAttemptCount &+= 1
@@ -1543,11 +1584,13 @@ final class GSPClient: ObservableObject {
         case .uiRuntimeState:
             guard let decodedRuntimeState = decodeRemoteRuntimeState(payload) else { return }
             runtimeState = decodedRuntimeState
+            completeActionAckIfNeeded(decodedRuntimeState)
             let visible = Set(decodedRuntimeState.visiblePaneIds)
             paneScreens = paneScreens.filter { visible.contains($0.key) }
             paneRevisions = paneRevisions.filter { visible.contains($0.key) }
             paneServerRevisions = paneServerRevisions.filter { visible.contains($0.key) }
             activeTabId = runtimeActiveTabId
+            sendNoopBaselineIfNeeded(for: decodedRuntimeState)
         case .uiAppearance:
             break
         case .uiPaneFullState:
@@ -1618,6 +1661,24 @@ final class GSPClient: ObservableObject {
             paneRevision: update.paneRevision,
             elapsedMs: 0
         ))
+    }
+
+    private func completeActionAckIfNeeded(_ state: RemoteRuntimeStateSnapshot) {
+        guard let clientActionId = state.ackedClientActionId,
+              let pending = pendingActionAcks.removeValue(forKey: clientActionId)
+        else { return }
+        let elapsedMs = Date().timeIntervalSince(pending.startedAt) * 1000
+        var fields = pending.fields
+        fields.viewId = state.viewId
+        fields.tabId = state.viewedTabId ?? fields.tabId
+        fields.paneId = state.focusedPane
+        fields.runtimeRevision = state.runtimeRevision
+        fields.viewRevision = state.viewRevision
+        fields.elapsedMs = elapsedMs
+        BooTrace.log(.remoteActionAck, fields)
+        if pending.action == "noop" {
+            BooTrace.log(.remoteNoopRoundtrip, fields)
+        }
     }
 
     private func paneUpdateIsFocusedVisiblePane(_ update: DecodedPaneUpdate) -> Bool {

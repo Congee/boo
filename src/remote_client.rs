@@ -250,6 +250,7 @@ mod tests {
                         viewport_cols: None,
                         viewport_rows: None,
                         visible_pane_ids: vec![1],
+                        acked_client_action_id: None,
                     })
                     .expect("encode runtime state"),
                 ),

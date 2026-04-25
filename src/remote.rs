@@ -90,6 +90,15 @@ pub enum RuntimeAction {
         amount: u16,
         ratio: Option<f64>,
     },
+    Noop {
+        view_id: u64,
+    },
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RuntimeActionEnvelope {
+    pub client_action_id: u64,
+    pub action: RuntimeAction,
 }
 
 impl RuntimeAction {
@@ -105,7 +114,17 @@ impl RuntimeAction {
             Self::DetachView { .. } => crate::trace_schema::RuntimeActionKind::DetachView,
             Self::NewSplit { .. } => crate::trace_schema::RuntimeActionKind::NewSplit,
             Self::ResizeSplit { .. } => crate::trace_schema::RuntimeActionKind::ResizeSplit,
+            Self::Noop { .. } => crate::trace_schema::RuntimeActionKind::Noop,
         }
+    }
+}
+
+pub(crate) fn decode_runtime_action_payload(
+    payload: &[u8],
+) -> Result<(Option<u64>, RuntimeAction), serde_json::Error> {
+    match serde_json::from_slice::<RuntimeActionEnvelope>(payload) {
+        Ok(envelope) => Ok((Some(envelope.client_action_id), envelope.action)),
+        Err(_) => serde_json::from_slice::<RuntimeAction>(payload).map(|action| (None, action)),
     }
 }
 
@@ -176,6 +195,7 @@ pub enum RemoteCmd {
     },
     RuntimeAction {
         client_id: u64,
+        client_action_id: Option<u64>,
         action: RuntimeAction,
     },
 }
@@ -731,6 +751,7 @@ pub struct ClientRuntimeViewSnapshot {
     pub viewport_rows: Option<u16>,
     pub visible_pane_ids: Vec<u64>,
     pub ui_attached: bool,
+    pub acked_client_action_id: Option<u64>,
 }
 
 impl From<&ClientRuntimeView> for ClientRuntimeViewSnapshot {
@@ -745,6 +766,7 @@ impl From<&ClientRuntimeView> for ClientRuntimeViewSnapshot {
             viewport_rows: value.viewport_rows,
             visible_pane_ids: value.visible_pane_ids.clone(),
             ui_attached: value.ui_attached,
+            acked_client_action_id: value.acked_client_action_id,
         }
     }
 }

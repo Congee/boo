@@ -283,6 +283,7 @@ mod tests {
                     viewport_cols: Some(120),
                     viewport_rows: Some(36),
                     visible_pane_ids: vec![5],
+                    acked_client_action_id: None,
                 })
                 .expect("encode runtime state"),
             ),

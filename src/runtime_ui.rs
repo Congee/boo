@@ -431,6 +431,7 @@ impl BooApp {
             viewport_cols: None,
             viewport_rows: None,
             visible_pane_ids: visible_panes.iter().map(|pane| pane.pane_id).collect(),
+            acked_client_action_id: None,
         }
     }
 
