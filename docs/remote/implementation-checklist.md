@@ -24,7 +24,7 @@ Implemented outcomes:
 Remaining follow-up work is intentionally post-v1 and is documented in the
 deferred section at the bottom of this file.
 
-## Current TODO (updated 2026-04-24)
+## Current TODO (updated 2026-04-25)
 
 - [ ] Define scroll/search/copy-mode semantics across per-screen runtime views.
 - [ ] Harden transport QoS beyond focused-pane-first publishing:
@@ -33,9 +33,11 @@ deferred section at the bottom of this file.
 - [ ] Collect runtime-view E2E baseline measurements for user-perceived
       focus/tab/pane/input interactions, producing parseable metrics artifacts
       before changing behavior.
-      - the metrics script now has a two-client lane for one macOS GUI client
-        and one real iPad client connected to the same macOS server; final
-        artifact collection still requires an unlocked physical iPad
+      - desktop smoke metrics now record base no-op RTT, throughput, final
+        two-tab/three-pane layout, and QoS candidate output
+      - iPad runtime-view screenshot/tap-focus smoke now passes on a physical
+        device; full desktop+iOS baseline artifacts still need to be reviewed
+        before QoS changes
 - [ ] Decide whether local prediction is needed after reviewing the baseline
       measurements and QoS options.
 - [ ] Refine canonical host/runtime reconnect UX and view timeout affordances.
@@ -43,6 +45,14 @@ deferred section at the bottom of this file.
 
 Recently closed:
 
+- [x] Added runtime-view E2E/iOS verification hooks:
+      argv result bundles for iOS UI tests, physical-device screenshot export,
+      desktop base no-op RTT metrics, iOS heartbeat RTT tracing, and
+      `runtime-view-e2e` signpost defaults.
+- [x] Fixed real-device iOS runtime-view pane rendering and tap focus:
+      pane UI state now decodes the local input-sequence prefix, SwiftUI is
+      forced to observe pane-state publication, and the physical iPad
+      three-pane screenshot/tap-focus smoke test passes.
 - [x] Fixed macOS terminal UI regressions: invisible/transparent content,
       inconsistent glyph width, fully-dark background regression, desktop
       input routing, statusbar tab clicks, and normal-click hyperlink crashes.

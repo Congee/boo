@@ -92,7 +92,10 @@ class BooUITestCase: XCTestCase {
         tailscaleToken: String? = nil,
         tailscalePort: UInt16? = nil,
         includeConfiguredHost: Bool = true,
-        forcedTerminalErrorKind: String? = nil
+        forcedTerminalErrorKind: String? = nil,
+        traceActions: String? = nil,
+        traceInputCommand: String? = nil,
+        targetViewedTabIndex: Int? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-ApplePersistenceIgnoreState", "YES", "--boo-ui-test-mode"]
@@ -123,6 +126,15 @@ class BooUITestCase: XCTestCase {
         }
         if let forcedTerminalErrorKind {
             app.launchArguments.append("--boo-ui-test-terminal-error=\(forcedTerminalErrorKind)")
+        }
+        if let traceActions {
+            app.launchArguments.append("--boo-ui-test-trace-actions=\(traceActions)")
+        }
+        if let traceInputCommand {
+            app.launchArguments.append("--boo-ui-test-trace-input-command=\(traceInputCommand)")
+        }
+        if let targetViewedTabIndex {
+            app.launchArguments.append("--boo-ui-test-target-viewed-tab-index=\(targetViewedTabIndex)")
         }
         app.launchEnvironment["BOO_UI_TEST_AUTO_CONNECT"] = autoConnect ? "1" : "0"
         return app
@@ -163,14 +175,25 @@ class BooUITestCase: XCTestCase {
             app.buttons["saved-node-Local Boo"].tap()
             return
         }
+        if let explicitHost, app.buttons[explicitHost].waitForExistence(timeout: 1) {
+            app.buttons[explicitHost].tap()
+            return
+        }
+        if let explicitHost {
+            let hostField = app.textFields["connect-host-input"]
+            if hostField.waitForExistence(timeout: 2) {
+                hostField.tap()
+                hostField.typeText("\(explicitHost):\(port)")
+                let manualConnectButton = app.buttons["connect-button"]
+                XCTAssertTrue(manualConnectButton.waitForExistence(timeout: 5), file: file, line: line)
+                manualConnectButton.tap()
+                return
+            }
+        }
         let discoveredRows = discoveredDaemonRows(in: app)
         if discoveredRows.firstMatch.waitForExistence(timeout: 2),
            let hittableDiscoveredRow = firstHittableDiscoveredDaemonRow(in: app) {
             hittableDiscoveredRow.tap()
-            return
-        }
-        if let explicitHost, app.buttons[explicitHost].waitForExistence(timeout: 1) {
-            app.buttons[explicitHost].tap()
             return
         }
         if app.buttons["Local Boo"].waitForExistence(timeout: 1) {

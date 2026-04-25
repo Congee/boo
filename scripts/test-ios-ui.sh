@@ -14,6 +14,7 @@ Options:
   --port PORT
   --destination DESTINATION
   --derived-data PATH
+  --result-bundle PATH
   --host HOST
   --team-id TEAM_ID
   --only-testing TEST_IDENTIFIER
@@ -25,6 +26,7 @@ Environment variable fallbacks remain supported:
   BOO_IOS_UI_TEST_PORT
   BOO_IOS_UI_TEST_DESTINATION
   BOO_IOS_UI_TEST_DERIVED_DATA
+  BOO_IOS_UI_TEST_RESULT_BUNDLE
   BOO_IOS_UI_TEST_HOST
   BOO_IOS_TEAM_ID
   BOO_IOS_UI_TEST_ONLY
@@ -44,12 +46,15 @@ SOCKET_PATH="${BOO_IOS_UI_TEST_SOCKET:-/tmp/boo-ios-ui-tests.sock}"
 PORT="${BOO_IOS_UI_TEST_PORT:-}"
 DESTINATION="${BOO_IOS_UI_TEST_DESTINATION:-platform=iOS Simulator,name=iPad mini (A17 Pro),OS=26.3.1}"
 DERIVED_DATA="${BOO_IOS_UI_TEST_DERIVED_DATA:-/tmp/boo-ios-derived}"
+RESULT_BUNDLE="${BOO_IOS_UI_TEST_RESULT_BUNDLE:-}"
 HOST="${BOO_IOS_UI_TEST_HOST:-}"
 TEAM_ID="${BOO_IOS_TEAM_ID:-}"
 ONLY_TEST="${BOO_IOS_UI_TEST_ONLY:-}"
 HOST_PORT_FILE="/tmp/boo-ios-ui-tests.env"
 SKIP_DAEMON="${BOO_IOS_UI_TEST_SKIP_DAEMON:-0}"
 XCODEBUILD_LOG="/tmp/boo-ios-ui-tests.xcodebuild.log"
+GENERATED_UI_TEST_CONFIG="$ROOT/ios/BooUITests/GeneratedUITestConfig.swift"
+GENERATED_UI_TEST_CONFIG_BACKUP=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -71,6 +76,11 @@ while [[ $# -gt 0 ]]; do
     --derived-data)
       require_arg "$@"
       DERIVED_DATA="$2"
+      shift 2
+      ;;
+    --result-bundle)
+      require_arg "$@"
+      RESULT_BUNDLE="$2"
       shift 2
       ;;
     --host)
@@ -141,6 +151,10 @@ cleanup() {
   rm -f "$SOCKET_PATH"
   rm -f "$HOST_PORT_FILE"
   rm -f "$XCODEBUILD_LOG"
+  if [[ -n "$GENERATED_UI_TEST_CONFIG_BACKUP" && -f "$GENERATED_UI_TEST_CONFIG_BACKUP" ]]; then
+    cp "$GENERATED_UI_TEST_CONFIG_BACKUP" "$GENERATED_UI_TEST_CONFIG"
+    rm -f "$GENERATED_UI_TEST_CONFIG_BACKUP"
+  fi
 }
 trap cleanup EXIT
 
@@ -155,6 +169,25 @@ BOO_UI_TEST_HOST=$HOST
 BOO_UI_TEST_PORT=$PORT
 EOF
 fi
+
+GENERATED_UI_TEST_CONFIG_BACKUP="$(mktemp -t boo-ui-test-config.XXXXXX)"
+cp "$GENERATED_UI_TEST_CONFIG" "$GENERATED_UI_TEST_CONFIG_BACKUP"
+python3 - "$GENERATED_UI_TEST_CONFIG" "$HOST" "$PORT" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+host = sys.argv[2]
+port = int(sys.argv[3])
+path.write_text(
+    "enum GeneratedUITestConfig {\n"
+    f"    static let host: String? = {json.dumps(host)}\n"
+    f"    static let port: UInt16 = {port}\n"
+    "}\n",
+    encoding="utf-8",
+)
+PY
 cargo build >/dev/null
 if [[ "$SKIP_DAEMON" != "1" ]]; then
   rm -f "$SOCKET_PATH"
@@ -170,6 +203,11 @@ fi
 TEST_ARGS=()
 if [[ -n "$ONLY_TEST" ]]; then
   TEST_ARGS+=("-only-testing:$ONLY_TEST")
+fi
+if [[ -n "$RESULT_BUNDLE" ]]; then
+  mkdir -p "$(dirname "$RESULT_BUNDLE")"
+  rm -rf "$RESULT_BUNDLE"
+  TEST_ARGS+=("-resultBundlePath" "$RESULT_BUNDLE")
 fi
 
 run_xcodebuild() {

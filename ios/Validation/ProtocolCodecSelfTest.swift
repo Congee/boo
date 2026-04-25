@@ -60,6 +60,13 @@ func makeDeltaPayload() -> Data {
     return data
 }
 
+func makeLocalStreamPayload(inputSeq: UInt64 = 99, body: Data) -> Data {
+    var data = Data()
+    data.append(contentsOf: inputSeq.littleEndianBytes)
+    data.append(body)
+    return data
+}
+
 func makePaneUpdatePayload(
     tabId: UInt32,
     paneId: UInt64,

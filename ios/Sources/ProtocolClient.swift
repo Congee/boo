@@ -846,7 +846,16 @@ final class TailscalePeerBrowser: ObservableObject {
 @MainActor
 final class GSPClient: ObservableObject {
     private static let heartbeatInterval: TimeInterval = 5
-    private static let heartbeatTimeout: TimeInterval = 12
+    private static var heartbeatTimeout: TimeInterval {
+        // XCUITest accessibility snapshots and screenshots can pause the app's
+        // main actor for tens of seconds on a physical iPad. Keep production
+        // detection tight, but do not let test-only AX stalls masquerade as a
+        // remote transport failure while the runtime-view scenario is probing UI.
+        if UITestLaunchConfiguration.current()?.traceActions.contains("runtime-view-e2e") == true {
+            return 60
+        }
+        return 12
+    }
     private static let connectionTimeout: TimeInterval = 10
 
     @Published var connected = false
@@ -873,6 +882,8 @@ final class GSPClient: ObservableObject {
     @Published var runtimeState: RemoteRuntimeStateSnapshot?
     @Published var screen = ScreenState()
     @Published var paneScreens: [UInt64: DecodedWireScreenState] = [:]
+    @Published private(set) var paneRevisions: [UInt64: UInt64] = [:]
+    private var paneServerRevisions: [UInt64: UInt64] = [:]
     @Published var activeTabId: UInt32?
     @Published var lastErrorKind: ClientWireErrorKind?
     @Published var lastError: String?
@@ -888,7 +899,6 @@ final class GSPClient: ObservableObject {
     private var connectStartedAt: Date?
     private var authRequestedAt: Date?
     private var tabListRequestedAt: Date?
-    private var paneRevisions: [UInt64: UInt64] = [:]
     private var renderTraceTracker = BooRenderTraceTracker()
 
     private func debugLog(_ message: String) {
@@ -941,14 +951,52 @@ final class GSPClient: ObservableObject {
 
     var uiTestTabDebugSummary: String {
         let tabIds = tabs.map(\.id).map(String.init).joined(separator: ",")
+        let visiblePaneIds = runtimeState?.visiblePanes.map(\.paneId).map(String.init).joined(separator: ",") ?? ""
+        let paneFrameSummary = runtimeState?.visiblePanes.map { pane in
+            let frame = pane.frame
+            return String(
+                format: "%llu:%.1f,%.1f,%.1f,%.1f",
+                pane.paneId,
+                frame.x,
+                frame.y,
+                frame.width,
+                frame.height
+            )
+        }.joined(separator: ";") ?? ""
+        let paneStateIds = paneScreens.keys.sorted().map(String.init).joined(separator: ",")
+        let paneRevisionSummary = paneRevisions.keys.sorted().map { "\($0):\(paneRevisions[$0] ?? 0)" }.joined(separator: ",")
         return [
             "connected=\(connected)",
             "authenticated=\(authenticated)",
             "active=\(activeTabId.map(String.init) ?? "nil")",
             "runtimeActive=\(runtimeActiveTabId.map(String.init) ?? "nil")",
             "tabs=[\(tabIds)]",
+            "runtimeTabs=\(runtimeState?.tabs.count ?? 0)",
+            "visiblePanes=\(runtimeState?.visiblePanes.count ?? 0)",
+            "focusedPane=\(runtimeState?.focusedPane.description ?? "nil")",
+            "paneStates=\(paneScreens.count)",
+            "visiblePaneIds=[\(visiblePaneIds)]",
+            "paneFrames=[\(paneFrameSummary)]",
+            "paneStateIds=[\(paneStateIds)]",
+            "paneRevisions=[\(paneRevisionSummary)]",
+            "heartbeatRttMs=\(lastHeartbeatRttMs.map { String(format: "%.1f", $0) } ?? "nil")",
             "lastError=\(lastError ?? "<none>")",
         ].joined(separator: " ")
+    }
+
+    var runtimeAccessibilityTextSnapshot: String {
+        guard let runtimeState, !runtimeState.visiblePanes.isEmpty else {
+            return screen.accessibilityTextSnapshot
+        }
+        return runtimeState.visiblePanes.map { pane in
+            let text = paneAccessibilityText(paneId: pane.paneId)
+            return "pane \(pane.paneId)\(pane.focused ? " focused" : ""):\n\(text)"
+        }.joined(separator: "\n---\n")
+    }
+
+    func paneAccessibilityText(paneId: UInt64) -> String {
+        guard let state = paneScreens[paneId] else { return "" }
+        return WireCodec.screenText(from: state)
     }
 
     func connect(host: String, port: UInt16) {
@@ -985,6 +1033,7 @@ final class GSPClient: ObservableObject {
         screen = ScreenState()
         paneScreens = [:]
         paneRevisions = [:]
+        paneServerRevisions = [:]
         renderTraceTracker = BooRenderTraceTracker()
         stopHeartbeatLoop()
         connectStartedAt = nil
@@ -1471,9 +1520,22 @@ final class GSPClient: ObservableObject {
                     UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt64.self))
                 }
                 if let pendingHeartbeatToken, token == pendingHeartbeatToken, let lastHeartbeatSent {
-                    lastHeartbeatRttMs = Date().timeIntervalSince(lastHeartbeatSent) * 1000
+                    let rttMs = Date().timeIntervalSince(lastHeartbeatSent) * 1000
+                    lastHeartbeatRttMs = rttMs
                     heartbeatAckCount &+= 1
                     self.pendingHeartbeatToken = nil
+                    BooTrace.log(.remoteHeartbeatRtt, BooTraceFields(
+                        interactionId: token,
+                        viewId: currentViewId,
+                        tabId: runtimeState?.viewedTabId ?? 0,
+                        paneId: runtimeState?.focusedPane ?? 0,
+                        action: "heartbeat_ack",
+                        route: "remote",
+                        runtimeRevision: runtimeState?.runtimeRevision ?? 0,
+                        viewRevision: runtimeState?.viewRevision ?? 0,
+                        paneRevision: runtimeState.map { paneRevisions[$0.focusedPane] ?? 0 } ?? 0,
+                        elapsedMs: rttMs
+                    ))
                 }
             }
         case .clipboard:
@@ -1484,33 +1546,36 @@ final class GSPClient: ObservableObject {
             let visible = Set(decodedRuntimeState.visiblePaneIds)
             paneScreens = paneScreens.filter { visible.contains($0.key) }
             paneRevisions = paneRevisions.filter { visible.contains($0.key) }
+            paneServerRevisions = paneServerRevisions.filter { visible.contains($0.key) }
             activeTabId = runtimeActiveTabId
         case .uiAppearance:
             break
         case .uiPaneFullState:
             guard let (update, state) = WireCodec.decodePaneFullState(payload) else { return }
-            guard update.tabId == runtimeState?.viewedTabId else { return }
-            let lastRevision = paneRevisions[update.paneId] ?? 0
+            guard paneUpdateTargetsCurrentView(update) else { return }
+            let lastRevision = paneServerRevisions[update.paneId] ?? 0
             guard update.paneRevision >= lastRevision else { return }
-            paneRevisions[update.paneId] = update.paneRevision
-            paneScreens[update.paneId] = state
+            paneServerRevisions[update.paneId] = update.paneRevision
+            setPaneScreen(update.paneId, state)
+            bumpPaneRenderRevision(update.paneId)
             tracePaneUpdate(update, action: "pane_update")
-            if update.paneId == runtimeState?.focusedPane {
+            if paneUpdateIsFocusedVisiblePane(update) {
                 applyDecodedScreen(state)
                 screen.objectWillChange.send()
                 completeRenderTraceIfNeeded(update: update)
             }
         case .uiPaneDelta:
             guard let (update, deltaPayload) = WireCodec.decodePaneDelta(payload) else { return }
-            guard update.tabId == runtimeState?.viewedTabId else { return }
-            let lastRevision = paneRevisions[update.paneId] ?? 0
+            guard paneUpdateTargetsCurrentView(update) else { return }
+            let lastRevision = paneServerRevisions[update.paneId] ?? 0
             guard update.paneRevision >= lastRevision else { return }
             guard var state = paneScreens[update.paneId] else { return }
-            guard WireCodec.applyDelta(deltaPayload, to: &state) else { return }
-            paneRevisions[update.paneId] = update.paneRevision
-            paneScreens[update.paneId] = state
+            guard WireCodec.applyPaneDelta(deltaPayload, to: &state) else { return }
+            paneServerRevisions[update.paneId] = update.paneRevision
+            setPaneScreen(update.paneId, state)
+            bumpPaneRenderRevision(update.paneId)
             tracePaneUpdate(update, action: "pane_update")
-            if update.paneId == runtimeState?.focusedPane {
+            if paneUpdateIsFocusedVisiblePane(update) {
                 applyDecodedScreen(state)
                 screen.objectWillChange.send()
                 completeRenderTraceIfNeeded(update: update)
@@ -1518,6 +1583,26 @@ final class GSPClient: ObservableObject {
         default:
             break
         }
+    }
+
+    private func bumpPaneRenderRevision(_ paneId: UInt64) {
+        var updated = paneRevisions
+        updated[paneId] = (updated[paneId] ?? 0) &+ 1
+        paneRevisions = updated
+    }
+
+    private func setPaneScreen(_ paneId: UInt64, _ state: DecodedWireScreenState) {
+        var updated = paneScreens
+        updated[paneId] = state
+        paneScreens = updated
+    }
+
+    private func mirrorFocusedLegacyScreen(_ decoded: DecodedWireScreenState) {
+        guard let runtimeState,
+              runtimeState.visiblePaneIds.contains(runtimeState.focusedPane)
+        else { return }
+        setPaneScreen(runtimeState.focusedPane, decoded)
+        bumpPaneRenderRevision(runtimeState.focusedPane)
     }
 
     private func tracePaneUpdate(_ update: DecodedPaneUpdate, action: String) {
@@ -1533,6 +1618,18 @@ final class GSPClient: ObservableObject {
             paneRevision: update.paneRevision,
             elapsedMs: 0
         ))
+    }
+
+    private func paneUpdateIsFocusedVisiblePane(_ update: DecodedPaneUpdate) -> Bool {
+        guard let runtimeState else { return false }
+        return update.tabId == runtimeState.viewedTabId
+            && update.paneId == runtimeState.focusedPane
+    }
+
+    private func paneUpdateTargetsCurrentView(_ update: DecodedPaneUpdate) -> Bool {
+        guard let runtimeState else { return true }
+        return update.tabId == runtimeState.viewedTabId
+            && runtimeState.visiblePaneIds.contains(update.paneId)
     }
 
     private func completeRenderTraceIfNeeded(update: DecodedPaneUpdate) {
@@ -1603,6 +1700,7 @@ final class GSPClient: ObservableObject {
         screen = ScreenState()
         paneScreens = [:]
         paneRevisions = [:]
+        paneServerRevisions = [:]
         if message == "Remote heartbeat timed out" {
             heartbeatTimeoutCount &+= 1
         }
@@ -1713,6 +1811,9 @@ final class GSPClient: ObservableObject {
         activeTabId = runtimeActiveTabId
         if let decodedScreen = state.screen {
             applyDecodedScreen(decodedScreen)
+            if message == .fullState || message == .delta {
+                mirrorFocusedLegacyScreen(decodedScreen)
+            }
             screen.objectWillChange.send()
         }
         if message == .authOk,

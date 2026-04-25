@@ -102,10 +102,46 @@ struct ProtocolCodecSelfTestMain {
         assertEqual(paneFull?.0.runtimeRevision, 3, "pane full runtime revision decode")
         assertEqual(paneFull?.1.cols, 2, "pane full state body decode")
 
+        let localPaneFullPayload = makePaneUpdatePayload(
+            tabId: 42,
+            paneId: 8,
+            paneRevision: 6,
+            runtimeRevision: 7,
+            body: makeLocalStreamPayload(body: makeFullStatePayload())
+        )
+        let localPaneFull = WireCodec.decodePaneFullState(localPaneFullPayload)
+        assertEqual(localPaneFull?.0.paneId, 8, "local-prefixed pane full pane id decode")
+        assertEqual(localPaneFull?.1.cols, 2, "local-prefixed pane full state body decode")
+        assertEqual(localPaneFull.map { WireCodec.screenText(from: $0.1) }, "A好", "local-prefixed pane full text")
+
         let paneDeltaPayload = makePaneUpdatePayload(tabId: 42, paneId: 7, paneRevision: 4, runtimeRevision: 5, body: makeDeltaPayload())
         let paneDelta = WireCodec.decodePaneDelta(paneDeltaPayload)
         assertEqual(paneDelta?.0.paneRevision, 4, "pane delta pane revision decode")
         assertEqual(paneDelta?.0.runtimeRevision, 5, "pane delta runtime revision decode")
+        if let prefixedPaneDelta = WireCodec.decodePaneDelta(
+            makePaneUpdatePayload(
+                tabId: 42,
+                paneId: 8,
+                paneRevision: 8,
+                runtimeRevision: 9,
+                body: makeLocalStreamPayload(body: makeDeltaPayload())
+            )
+        ) {
+            var prefixedDeltaState = state
+            assertEqual(
+                WireCodec.applyPaneDelta(prefixedPaneDelta.1, to: &prefixedDeltaState),
+                true,
+                "local-prefixed pane delta apply succeeds"
+            )
+            assertEqual(
+                WireCodec.screenText(from: prefixedDeltaState),
+                "BC",
+                "local-prefixed pane delta screen text decoding"
+            )
+        } else {
+            fputs("failed to decode local-prefixed pane delta header\n", stderr)
+            exit(1)
+        }
 
         var clientState = ClientWireState()
         let buildId = "0.1.0"

@@ -419,7 +419,7 @@ struct RemoteTerminalCanvasView: View {
                     let cell = state.cells[index]
                     let x = CGFloat(col) * cellWidth
                     let y = CGFloat(row) * cellHeight
-                    if cell.bg_r != 0 || cell.bg_g != 0 || cell.bg_b != 0 || (cell.styleFlags & 0x40) != 0 {
+                    if cell.hasBg {
                         let rect = CGRect(x: x, y: y, width: cellWidth, height: cellHeight)
                         context.fill(
                             Path(rect),
@@ -431,12 +431,12 @@ struct RemoteTerminalCanvasView: View {
                         )
                     }
                     guard cell.codepoint > 0x20, let scalar = Unicode.Scalar(cell.codepoint) else { continue }
-                    let color: Color = (cell.styleFlags & 0x20) != 0
+                    let color: Color = cell.hasFg
                         ? Color(red: Double(cell.fg_r)/255, green: Double(cell.fg_g)/255, blue: Double(cell.fg_b)/255)
                         : .white
                     var text = Text(String(Character(scalar))).font(font).foregroundColor(color)
-                    if (cell.styleFlags & 0x01) != 0 { text = text.bold() }
-                    if (cell.styleFlags & 0x02) != 0 { text = text.italic() }
+                    if cell.isBold { text = text.bold() }
+                    if cell.isItalic { text = text.italic() }
                     context.draw(context.resolve(text), at: CGPoint(x: x, y: y), anchor: .topLeading)
                 }
             }

@@ -24,7 +24,7 @@ Options:
   --output-dir PATH
   --time-limit DURATION        xctrace duration such as 18s, 1m
   --scenario NAME             named defaults: default, runtime-view-e2e
-  --trace-actions ACTIONS      comma-separated: focus-pane,set-viewed-tab,input
+  --trace-actions ACTIONS      comma-separated: runtime-view-e2e,focus-pane,set-viewed-tab,input
   --trace-input-command TEXT   command sent after the terminal connects
   --target-viewed-tab-index N  zero-based runtime tab index to view after connect
   --target-viewed-tab-id ID    runtime tab id to view after connect
@@ -63,6 +63,7 @@ OUTPUT_DIR=""
 TIME_LIMIT="18s"
 SCENARIO="default"
 TRACE_ACTIONS="focus-pane,set-viewed-tab,input"
+TRACE_ACTIONS_WAS_SET=0
 TRACE_INPUT_COMMAND="echo BOO_SIGNPOST_VERIFY"
 TARGET_VIEWED_TAB_INDEX=""
 TARGET_VIEWED_TAB_ID=""
@@ -126,6 +127,7 @@ while [[ $# -gt 0 ]]; do
     --trace-actions)
       require_arg "$@"
       TRACE_ACTIONS="$2"
+      TRACE_ACTIONS_WAS_SET=1
       shift 2
       ;;
     --trace-input-command)
@@ -189,7 +191,9 @@ case "$SCENARIO" in
   default)
     ;;
   runtime-view-e2e)
-    TRACE_ACTIONS="${TRACE_ACTIONS:-focus-pane,set-viewed-tab,input}"
+    if [[ "$TRACE_ACTIONS_WAS_SET" != "1" ]]; then
+      TRACE_ACTIONS="runtime-view-e2e,input"
+    fi
     if [[ "$TRACE_INPUT_COMMAND" == "echo BOO_SIGNPOST_VERIFY" ]]; then
       TRACE_INPUT_COMMAND="printf \'BOO_RV_E2E_IOS 🙂 測試 é\\n\'"
     fi

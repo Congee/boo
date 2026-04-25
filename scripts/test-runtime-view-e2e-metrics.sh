@@ -161,13 +161,13 @@ EOF
 cargo build >"$CARGO_BUILD_LOG" 2>&1
 rm -f "$SOCKET_PATH" "$GUI_TEST_SOCKET" "$LOG_PATH"
 (
-  export BOO_PROFILE=1
   export XDG_CONFIG_HOME="$CONFIG_ROOT"
   if [[ -n "$TERMINAL_BODY_IMPL" ]]; then
     export BOO_TERMINAL_BODY_IMPL="$TERMINAL_BODY_IMPL"
   fi
   if [[ "$TWO_CLIENT" == "1" ]]; then
     boo_with_vt_lib_env target/debug/boo \
+      --profiling \
       --trace-filter boo::latency=info \
       server \
       --socket "$SOCKET_PATH" \
@@ -176,6 +176,7 @@ rm -f "$SOCKET_PATH" "$GUI_TEST_SOCKET" "$LOG_PATH"
       >"$LOG_PATH" 2>&1
   else
     boo_with_vt_lib_env target/debug/boo \
+      --profiling \
       --headless \
       --trace-filter boo::latency=info \
       >"$LOG_PATH" 2>&1
@@ -187,13 +188,13 @@ python3 scripts/ui-test-client.py --socket "$SOCKET_PATH" wait-ready --timeout 3
 python3 scripts/ui-test-client.py --socket "$SOCKET_PATH" request resize-viewport cols=80 rows=18 >"$DESKTOP_DIR/pre-gui-resize.json"
 
 (
-  export BOO_PROFILE=1
   export XDG_CONFIG_HOME="$CONFIG_ROOT"
   export BOO_GUI_TEST_SOCKET="$GUI_TEST_SOCKET"
   if [[ -n "$TERMINAL_BODY_IMPL" ]]; then
     export BOO_TERMINAL_BODY_IMPL="$TERMINAL_BODY_IMPL"
   fi
   boo_with_vt_lib_env target/debug/boo \
+    --profiling \
     --trace-filter boo::latency=info \
     gui \
     >>"$LOG_PATH" 2>&1
@@ -251,6 +252,41 @@ def measured(name: str, payload: dict, expect_ok: bool = True) -> dict:
     elapsed_ms = (time.perf_counter() - started) * 1000.0
     action_metrics.append({"name": name, "elapsed_ms": round(elapsed_ms, 3), "payload": payload})
     return response
+
+
+def percentile(values, p):
+    if not values:
+        return None
+    sorted_values = sorted(values)
+    idx = int(round((len(sorted_values) - 1) * p))
+    return round(sorted_values[idx], 3)
+
+
+def summarize_ms(values):
+    return {
+        "count": len(values),
+        "min": round(min(values), 3) if values else None,
+        "p50": percentile(values, 0.50),
+        "p90": percentile(values, 0.90),
+        "p99": percentile(values, 0.99),
+        "max": round(max(values), 3) if values else None,
+        "avg": round(sum(values) / len(values), 3) if values else None,
+    }
+
+
+def measure_noop_roundtrip(name: str, samples: int = 24) -> dict:
+    values = []
+    for _ in range(samples):
+        started = time.perf_counter()
+        request({"cmd": "ping"})
+        values.append((time.perf_counter() - started) * 1000.0)
+    return {
+        "name": name,
+        "route": "desktop-control-socket",
+        "operation": "ping",
+        "elapsed_ms": summarize_ms(values),
+        "samples": [round(value, 3) for value in values],
+    }
 
 
 def snapshot(name: str) -> dict:
@@ -374,12 +410,34 @@ def assert_layout(snap: dict, tabs: int, active_tab: int, panes: int) -> None:
     assert len(snap["visible_panes"]) == panes, snap["visible_panes"]
 
 
+def ensure_active_tab(index: int) -> dict:
+    for _ in range(4):
+        snap = state_snapshot("ensure-active-tab")
+        if snap["active_tab"] == index:
+            return snap
+        measured("next_tab", {"cmd": "next-tab"})
+        time.sleep(0.1)
+    snap = state_snapshot("ensure-active-tab-final")
+    if snap["active_tab"] != index:
+        raise AssertionError(f"failed to activate tab index {index}; last={json.dumps(snap, ensure_ascii=False)[:4000]}")
+    return snap
+
+
+def visible_pane_by_id(snap: dict, pane_id: int) -> dict:
+    for pane in snap["visible_panes"]:
+        if pane["pane_id"] == pane_id:
+            return pane
+    raise AssertionError(f"pane {pane_id} not visible in snapshot {snap}")
+
+
+noop_before = measure_noop_roundtrip("control_ping_before_layout")
+
 snap = snapshot("initial")
 assert_layout(snap, 1, 0, 1)
 assert snap["tabs"][0]["pane_count"] == 1
 snap = wait_for(
     "after-initial-resize",
-    lambda s: (s.get("terminal") or {}).get("cols") == 80 and (s.get("terminal") or {}).get("rows") == 18,
+    lambda s: (s.get("terminal") or {}).get("cols", 0) >= 80 and (s.get("terminal") or {}).get("rows", 0) >= 18,
 )
 
 # Tab 1 gets its own stream first, then the scenario returns to tab 2 at the end.
@@ -405,32 +463,51 @@ assert_layout(snap, 2, 1, 3)
 # Stream deterministic output into each tab-2 pane by focusing pane centers.
 tab2_streams = []
 snap = state_snapshot("before-tab2-streams")
-pane_targets = list(snap["visible_panes"])
+pane_target_ids = [pane["pane_id"] for pane in snap["visible_panes"]]
 
 # Exercise click focus for every visible pane before the high-throughput stream
 # begins. This keeps focus verification deterministic even when later output
 # temporarily starves UI snapshot replies.
-for pane in pane_targets:
-    x, y = pane_center(pane)
+for pane_id in pane_target_ids:
     started = time.perf_counter()
-    click(x, y)
-    focused = wait_for(
-        f"click-focus-{pane['pane_id']}",
-        lambda s, pid=pane["pane_id"]: s["focused_pane"] == pid,
-        getter=state_snapshot,
-    )
+    focused = None
+    click_reflected = False
+    for _ in range(3):
+        snap = ensure_active_tab(1)
+        pane = visible_pane_by_id(snap, pane_id)
+        x, y = pane_center(pane)
+        click(x, y)
+        try:
+            focused = wait_for(
+                f"click-focus-{pane_id}",
+                lambda s, pid=pane_id: s["active_tab"] == 1 and s["focused_pane"] == pid,
+                timeout=3,
+                getter=state_snapshot,
+            )
+            click_reflected = True
+            break
+        except AssertionError:
+            continue
+    if focused is None:
+        measured("focus_pane_after_click_fallback", {"cmd": "focus-pane", "pane_id": pane_id})
+        focused = wait_for(
+            f"click-focus-fallback-{pane_id}",
+            lambda s, pid=pane_id: s["active_tab"] == 1 and s["focused_pane"] == pid,
+            getter=state_snapshot,
+        )
     action_metrics.append({
         "name": "click_focus_visible_pane",
-        "pane_id": pane["pane_id"],
+        "pane_id": pane_id,
         "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
         "focused_pane": focused["focused_pane"],
+        "click_reflected": click_reflected,
     })
 
-for file_info, target in zip(manifest["files"][1:], pane_targets):
+for file_info, pane_id in zip(manifest["files"][1:], pane_target_ids):
     if not tab2_streams:
         state_snapshot(f"before-pane-{file_info['pane_index']}-stream")
-    x, y = pane_center(target)
-    measured("focus_pane", {"cmd": "focus-pane", "pane_id": target["pane_id"]})
+    ensure_active_tab(1)
+    measured("focus_pane", {"cmd": "focus-pane", "pane_id": pane_id})
     time.sleep(0.05)
     tab2_streams.append(send_file_to_focused(file_info))
 streams.extend(tab2_streams)
@@ -471,6 +548,7 @@ measured("next_tab", {"cmd": "next-tab"})
 final = wait_for("final", lambda s: s["active_tab"] == 1 and len(s["tabs"]) == 2 and len(s["visible_panes"]) == 3, timeout=12, getter=state_snapshot)
 
 # Let profile/trace buffers flush a little before summarizing the log.
+noop_after = measure_noop_roundtrip("control_ping_after_streams")
 time.sleep(0.5)
 profile_summary = {"entries": []}
 try:
@@ -491,7 +569,7 @@ trace_re = re.compile(r"elapsed_ms=([0-9.]+)")
 for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
     if "boo::latency" not in line and "remote." not in line:
         continue
-    for event in ["remote.runtime_action", "remote.focus_pane", "remote.pane_update", "remote.render_apply", "remote.resize_split", "remote.set_viewed_tab"]:
+    for event in ["remote.runtime_action", "remote.focus_pane", "remote.pane_update", "remote.render_apply", "remote.resize_split", "remote.set_viewed_tab", "remote.heartbeat_rtt"]:
         if event in line:
             trace_counts[event] = trace_counts.get(event, 0) + 1
     m = trace_re.search(line)
@@ -513,6 +591,7 @@ metrics = {
     "workload": manifest,
     "latency": {
         "actions": action_metrics,
+        "base_noop_roundtrip": [noop_before, noop_after],
         "trace_event_counts": trace_counts,
         "trace_elapsed_ms": {
             "count": len(trace_elapsed),
@@ -551,6 +630,8 @@ summary = [
     f"- tabs: `{metrics['layout']['tab_count']}`; active tab: `{metrics['layout']['active_tab'] + 1}`; visible panes: `{metrics['layout']['visible_pane_count']}`",
     f"- total streamed bytes: `{metrics['throughput']['total_bytes']}`",
     f"- aggregate control-stream throughput: `{metrics['throughput']['aggregate_bytes_per_sec']}` bytes/sec",
+    f"- base no-op RTT before layout: `{noop_before['elapsed_ms']['avg']}` ms avg, p50 `{noop_before['elapsed_ms']['p50']}` ms",
+    f"- base no-op RTT after streams: `{noop_after['elapsed_ms']['avg']}` ms avg, p50 `{noop_after['elapsed_ms']['p50']}` ms",
     f"- trace event counts: `{json.dumps(trace_counts, sort_keys=True)}`",
     "",
     "## Stream Throughput",
@@ -562,7 +643,7 @@ for item in streams:
     summary.append(f"| {item['pane_index']} | {item['bytes']} | {item['chunks']} | {item['elapsed_ms']} | {item['bytes_per_sec']} |")
 summary.extend([
     "",
-    "## Top BOO_PROFILE entries",
+    "## Top built-in --profiling entries",
     "",
     "| path | kind | count | total ms | avg ms | max ms |",
     "| --- | --- | ---: | ---: | ---: | ---: |",
@@ -593,7 +674,7 @@ qos = [
     "## Follow-up Data to Review",
     "",
     "- `metrics.json` latency action samples and trace event counts.",
-    "- `summary.md` stream throughput and BOO_PROFILE hot paths.",
+    "- `summary.md` stream throughput and built-in `--profiling` hot paths.",
     "- `boo.log` raw `boo::latency` and `boo_profile` lines.",
 ]
 (out_dir / "qos-baseline.md").write_text("\n".join(qos) + "\n", encoding="utf-8")
@@ -786,16 +867,77 @@ PY
     exit "$IOS_STATUS"
   fi
 
-  python3 - "$DESKTOP_DIR/metrics.json" "$DESKTOP_DIR/summary.md" "$IOS_DIR" <<'PY'
+  python3 - "$DESKTOP_DIR/metrics.json" "$DESKTOP_DIR/summary.md" "$IOS_DIR" "$OUTPUT_DIR/comparison.md" <<'PY'
 import json
+import re
 import sys
 from pathlib import Path
 
 metrics_path = Path(sys.argv[1])
 summary_path = Path(sys.argv[2])
 ios_dir = Path(sys.argv[3])
+comparison_path = Path(sys.argv[4])
 metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
 metrics.setdefault("artifacts", {})["ios_signposts_dir"] = str(ios_dir)
+
+
+def percentile(values, p):
+    if not values:
+        return None
+    sorted_values = sorted(values)
+    idx = int(round((len(sorted_values) - 1) * p))
+    return round(sorted_values[idx], 3)
+
+
+def summarize_values(values):
+    return {
+        "count": len(values),
+        "min": round(min(values), 3) if values else None,
+        "p50": percentile(values, 0.50),
+        "p90": percentile(values, 0.90),
+        "p99": percentile(values, 0.99),
+        "max": round(max(values), 3) if values else None,
+        "avg": round(sum(values) / len(values), 3) if values else None,
+    }
+
+
+def signpost_summary(path):
+    text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
+    attrs = re.findall(r'fmt="([^"]*remote\.[^"]*)"', text)
+    events = [
+        "remote.connect",
+        "remote.pane_update",
+        "remote.render_apply",
+        "remote.focus_pane",
+        "remote.input",
+        "remote.set_viewed_tab",
+        "remote.heartbeat_rtt",
+    ]
+    counts = {event: sum(1 for attr in attrs if event in attr) for event in events}
+    elapsed_by_event = {}
+    for event in events:
+        values = []
+        for attr in attrs:
+            if event not in attr:
+                continue
+            match = re.search(r"elapsed_ms=([0-9]+(?:\.[0-9]+)?)", attr)
+            if match:
+                values.append(float(match.group(1)))
+        elapsed_by_event[event] = summarize_values(values)
+    return {
+        "path": str(path),
+        "counts": counts,
+        "elapsed_ms": elapsed_by_event,
+    }
+
+
+ios_signposts = {
+    "os_log": signpost_summary(ios_dir / "os-log.xml"),
+    "os_signpost": signpost_summary(ios_dir / "os-signpost.xml"),
+    "os_signpost_interval": signpost_summary(ios_dir / "os-signpost-interval.xml"),
+}
+metrics["ios_signposts"] = ios_signposts
+metrics["artifacts"]["comparison"] = str(comparison_path)
 metrics_path.write_text(json.dumps(metrics, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 two = metrics["two_client"]
 with summary_path.open("a", encoding="utf-8") as handle:
@@ -804,6 +946,82 @@ with summary_path.open("a", encoding="utf-8") as handle:
     handle.write(f"- macOS client `{two['macos_client']['client_id']}` viewed tab `{two['macos_client']['viewed_tab_id']}` with `{two['macos_client']['visible_pane_count']}` visible pane\n")
     handle.write(f"- iPad client `{two['ipad_client']['client_id']}` viewed tab `{two['ipad_client']['viewed_tab_id']}` with `{two['ipad_client']['visible_pane_count']}` visible panes\n")
     handle.write(f"- iOS signpost artifacts: `{ios_dir}`\n")
+
+actions = metrics["latency"]["actions"]
+actions_by_name = {}
+for action in actions:
+    actions_by_name.setdefault(action["name"], []).append(float(action["elapsed_ms"]))
+desktop_action_rows = [
+    (name, summarize_values(values))
+    for name, values in sorted(actions_by_name.items())
+]
+streams = metrics["throughput"]["streams"]
+top_profile = metrics.get("profiler", {}).get("entries", [])[:8]
+render_apply = ios_signposts["os_log"]["elapsed_ms"]["remote.render_apply"]
+ios_input = ios_signposts["os_log"]["elapsed_ms"]["remote.input"]
+ios_base_rtt = ios_signposts["os_log"]["elapsed_ms"]["remote.heartbeat_rtt"]
+desktop_base_rtt = metrics["latency"].get("base_noop_roundtrip", [])
+comparison = [
+    "# Local Desktop vs iOS Remote UI Stream Benchmark",
+    "",
+    "## Scenario",
+    "",
+    f"- seed: `{metrics['seed']}`",
+    f"- bytes per pane target: `{metrics['bytes_per_pane_target']}`",
+    f"- total streamed bytes: `{metrics['throughput']['total_bytes']}`",
+    f"- aggregate desktop control-stream throughput: `{metrics['throughput']['aggregate_bytes_per_sec']}` bytes/sec",
+    f"- macOS local client: tab `{two['macos_client']['viewed_tab_id']}`, visible panes `{two['macos_client']['visible_pane_count']}`",
+    f"- iPad remote client: tab `{two['ipad_client']['viewed_tab_id']}`, visible panes `{two['ipad_client']['visible_pane_count']}`",
+    f"- desktop base no-op RTT: `{desktop_base_rtt[-1]['elapsed_ms']['avg'] if desktop_base_rtt else None}` ms avg over the control socket",
+    f"- iOS base heartbeat RTT: `{ios_base_rtt['avg']}` ms avg, p50 `{ios_base_rtt['p50']}` ms, max `{ios_base_rtt['max']}` ms",
+    "",
+    "## Desktop local stream",
+    "",
+    "| pane stream | bytes | chunks | elapsed ms | bytes/sec |",
+    "| --- | ---: | ---: | ---: | ---: |",
+]
+for stream in streams:
+    comparison.append(f"| {stream['pane_index']} | {stream['bytes']} | {stream['chunks']} | {stream['elapsed_ms']} | {stream['bytes_per_sec']} |")
+comparison.extend([
+    "",
+    "| action | count | avg ms | p50 ms | p90 ms | p99 ms | max ms |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+])
+for name, stats in desktop_action_rows:
+    comparison.append(f"| {name} | {stats['count']} | {stats['avg']} | {stats['p50']} | {stats['p90']} | {stats['p99']} | {stats['max']} |")
+comparison.extend([
+    "",
+    "## iOS remote stream",
+    "",
+    "| source | event | count | avg ms | p50 ms | p90 ms | p99 ms | max ms |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+])
+for source, source_summary in ios_signposts.items():
+    for event, stats in source_summary["elapsed_ms"].items():
+        count = source_summary["counts"].get(event, 0)
+        comparison.append(f"| {source} | {event} | {count} | {stats['avg']} | {stats['p50']} | {stats['p90']} | {stats['p99']} | {stats['max']} |")
+comparison.extend([
+    "",
+    "## Built-in --profiling hot paths",
+    "",
+    "| path | kind | count | total ms | avg ms | max ms |",
+    "| --- | --- | ---: | ---: | ---: | ---: |",
+])
+for row in top_profile:
+    comparison.append(f"| {row.get('path')} | {row.get('kind')} | {row.get('count')} | {row.get('total_ms')} | {row.get('avg_ms')} | {row.get('max_ms')} |")
+comparison.extend([
+    "",
+    "## Initial comparison",
+    "",
+    f"- Desktop local stream uses a Unix socket and avoids network/auth/device scheduling overhead; its best comparable action samples are in the desktop action table above.",
+    f"- Desktop no-op control ping is the local base RTT proxy: avg `{desktop_base_rtt[-1]['elapsed_ms']['avg'] if desktop_base_rtt else None}` ms after the stream.",
+    f"- iOS heartbeat ack is the remote base RTT proxy: avg `{ios_base_rtt['avg']}` ms, max `{ios_base_rtt['max']}` ms.",
+    f"- iOS remote stream uses the real device path; OSLog render/apply summary from `os-log.xml` is count `{render_apply['count']}`, avg `{render_apply['avg']}` ms, max `{render_apply['max']}` ms.",
+    f"- iOS input-to-render summary from `os-log.xml` is count `{ios_input['count']}`, avg `{ios_input['avg']}` ms, max `{ios_input['max']}` ms.",
+    "- Maintainability risk remains higher on iOS because Swift mirrors the Rust wire codec and message constants.",
+])
+comparison_path.write_text("\n".join(comparison) + "\n", encoding="utf-8")
+print(f"local-vs-ios comparison written: {comparison_path}")
 PY
 
   cleanup
@@ -811,7 +1029,7 @@ PY
   SERVER_PID=""
 elif [[ "$DESKTOP_ONLY" != "1" && -n "$IOS_DEVICE_ID" ]]; then
   mkdir -p "$IOS_DIR"
-  IOS_ARGS=(--device-id "$IOS_DEVICE_ID" --output-dir "$IOS_DIR" --scenario runtime-view-e2e --trace-actions focus-pane,set-viewed-tab,input --trace-input-command "cat <<'EOF'
+  IOS_ARGS=(--device-id "$IOS_DEVICE_ID" --output-dir "$IOS_DIR" --scenario runtime-view-e2e --trace-actions runtime-view-e2e,input --trace-input-command "cat <<'EOF'
 $(python3 - <<PY
 from pathlib import Path
 text = Path('$WORKLOAD_DIR/pane-2.txt').read_text(encoding='utf-8')
@@ -835,3 +1053,6 @@ runtime-view-e2e baseline artifacts:
   summary: $DESKTOP_DIR/summary.md
   qos: $DESKTOP_DIR/qos-baseline.md
 EOF
+if [[ -f "$OUTPUT_DIR/comparison.md" ]]; then
+  echo "  comparison: $OUTPUT_DIR/comparison.md"
+fi

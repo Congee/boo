@@ -250,7 +250,7 @@ struct BooRootView: View {
                                     showingConnectedTerminal = false
                                 }
                             )
-                            .ignoresSafeArea()
+                            .ignoresSafeArea(.container)
                             .zIndex(1)
                         }
                     }
@@ -911,6 +911,11 @@ private enum TerminalModifierState {
 
 private enum UITestTraceAutomationStep {
     case idle
+    case requestedRuntimeViewE2ENewTab
+    case requestedRuntimeViewE2ESetViewedTab(tabId: UInt32)
+    case requestedRuntimeViewE2ESplitRight
+    case requestedRuntimeViewE2ESplitDown
+    case requestedRuntimeViewE2EFocus(paneId: UInt64)
     case requestedInitialSetViewedTab(tabId: UInt32)
     case requestedSplit
     case requestedFocus(paneId: UInt64)
@@ -952,7 +957,7 @@ struct TerminalTabScreen: View {
         ZStack(alignment: .topLeading) {
             terminalTabBody
                 .background(KineticColor.surface)
-                .ignoresSafeArea()
+                .ignoresSafeArea(.container)
                 .navigationBarBackButtonHidden(true)
                 .toolbar(.hidden, for: .navigationBar)
 
@@ -981,8 +986,10 @@ struct TerminalTabScreen: View {
             applyUITestForcedErrorIfNeeded()
             client.attachView()
             guard !isDisconnected, client.activeTabId != nil else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                keyboardFocused = true
+            if !suppressesAutomaticKeyboardFocusForUITest {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    keyboardFocused = true
+                }
             }
             advanceUITestTraceAutomationIfNeeded()
         }
@@ -998,8 +1005,10 @@ struct TerminalTabScreen: View {
             if activeTabId != nil {
                 client.attachView()
                 keyboardFocused = false
-                DispatchQueue.main.async {
-                    keyboardFocused = true
+                if !suppressesAutomaticKeyboardFocusForUITest {
+                    DispatchQueue.main.async {
+                        keyboardFocused = true
+                    }
                 }
                 applyUITestForcedErrorIfNeeded()
                 advanceUITestTraceAutomationIfNeeded()
@@ -1064,15 +1073,18 @@ struct TerminalTabScreen: View {
     private var terminalView: some View {
         let bridge = terminalKeyboardBridge
 
-        return Group {
+        return ZStack {
             if let runtimeState = client.runtimeState, !runtimeState.visiblePanes.isEmpty {
                 GeometryReader { geo in
                     ZStack(alignment: .topLeading) {
                         ForEach(runtimeState.visiblePanes, id: \.paneId) { pane in
-                            RemoteTerminalCanvasView(
-                                state: client.paneScreens[pane.paneId],
-                                onGestureAction: pane.paneId == runtimeState.focusedPane ? handleTerminalGesture : nil
-                            )
+                            ZStack {
+                                RemoteTerminalCanvasView(
+                                    state: client.paneScreens[pane.paneId],
+                                    onGestureAction: pane.paneId == runtimeState.focusedPane ? handleTerminalGesture : nil
+                                )
+                                .id("terminal-pane-canvas-\(pane.paneId)-\(client.paneRevisions[pane.paneId] ?? 0)")
+                            }
                             .overlay(
                                 RoundedRectangle(cornerRadius: 8)
                                     .stroke(
@@ -1090,10 +1102,14 @@ struct TerminalTabScreen: View {
                             )
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                if let tabId = runtimeState.viewedTabId {
-                                    client.focusPane(tabId: tabId, paneId: pane.paneId)
-                                }
-                                keyboardFocused = true
+                                focusRuntimePane(pane.paneId, viewedTabId: runtimeState.viewedTabId)
+                            }
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityIdentifier("terminal-pane-\(pane.paneId)")
+                            .accessibilityLabel("pane \(pane.paneId)\(pane.paneId == runtimeState.focusedPane ? " focused" : "")")
+                            .accessibilityValue(client.paneAccessibilityText(paneId: pane.paneId))
+                            .accessibilityAction {
+                                focusRuntimePane(pane.paneId, viewedTabId: runtimeState.viewedTabId)
                             }
                         }
 
@@ -1113,6 +1129,20 @@ struct TerminalTabScreen: View {
                         }
                     }
                     .background(.black)
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 0)
+                            .onEnded { value in
+                                guard abs(value.translation.width) < 4,
+                                      abs(value.translation.height) < 4,
+                                      let paneId = runtimePaneId(
+                                        at: value.location,
+                                        in: runtimeState.visiblePanes
+                                      )
+                                else { return }
+                                focusRuntimePane(paneId, viewedTabId: runtimeState.viewedTabId)
+                            }
+                    )
                     .onAppear {
                         client.sendResize(
                             cols: max(1, UInt16(geo.size.width / 8.4)),
@@ -1132,26 +1162,37 @@ struct TerminalTabScreen: View {
                 } onGestureAction: { action in
                     handleTerminalGesture(action)
                 }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard !isDisconnected, client.activeTabId != nil else { return }
+                    keyboardFocused = true
+                }
             }
         }
         .opacity(isDisconnected || client.activeTabId == nil ? 0.5 : 1.0)
-        .accessibilityIdentifier("terminal-screen")
-        .accessibilityLabel(client.activeTabId.map { "active-\($0)" } ?? "inactive")
-        .accessibilityValue(client.screen.accessibilityTextSnapshot)
         .contentShape(Rectangle())
-        .onTapGesture {
-            guard !isDisconnected, client.activeTabId != nil else { return }
-            keyboardFocused = true
+        .overlay {
+            terminalAccessibilityOverlay
         }
         .overlay {
             bridge
             .id("terminal-keyboard-\(client.connectionDebugGeneration)-\(client.activeTabId ?? 0)")
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
+            .allowsHitTesting(false)
         }
         .overlay {
             runtimeOpeningOverlay
         }
+    }
+
+    private var terminalAccessibilityOverlay: some View {
+        Color.clear
+            .accessibilityElement(children: .ignore)
+            .accessibilityIdentifier("terminal-screen")
+            .accessibilityLabel(client.activeTabId.map { "active-\($0)" } ?? "inactive")
+            .accessibilityValue(client.runtimeAccessibilityTextSnapshot)
+            .allowsHitTesting(false)
     }
 
     private func runtimePaneDividers(_ panes: [RemoteRuntimePaneSnapshot]) -> [RuntimePaneDivider] {
@@ -1165,6 +1206,32 @@ struct TerminalTabScreen: View {
             }
         }
         return dividers
+    }
+
+    private func runtimePaneId(
+        at location: CGPoint,
+        in panes: [RemoteRuntimePaneSnapshot]
+    ) -> UInt64? {
+        panes.first { pane in
+            let minX = CGFloat(pane.frame.x)
+            let minY = CGFloat(pane.frame.y)
+            let maxX = minX + CGFloat(pane.frame.width)
+            let maxY = minY + CGFloat(pane.frame.height)
+            return location.x >= minX &&
+                location.x <= maxX &&
+                location.y >= minY &&
+                location.y <= maxY
+        }?.paneId
+    }
+
+    private func focusRuntimePane(_ paneId: UInt64, viewedTabId: UInt32?) {
+        guard let viewedTabId else { return }
+        client.focusPane(tabId: viewedTabId, paneId: paneId)
+        keyboardFocused = true
+    }
+
+    private var suppressesAutomaticKeyboardFocusForUITest: Bool {
+        UITestLaunchConfiguration.current()?.traceActions.contains("runtime-view-e2e") ?? false
     }
 
     private var terminalKeyboardBridge: some View {
@@ -1382,10 +1449,16 @@ struct TerminalTabScreen: View {
             sendUITestTraceInputIfNeeded()
             return
         }
-        guard client.activeTabId != nil,
-              let runtimeState = client.runtimeState,
+        guard let runtimeState = client.runtimeState,
               runtimeState.viewId != 0
         else { return }
+
+        if actions.contains("runtime-view-e2e"),
+           advanceUITestRuntimeViewE2EIfNeeded(runtimeState) {
+            return
+        }
+
+        guard client.activeTabId != nil else { return }
 
         switch uiTestTraceAutomationStep {
         case .idle:
@@ -1422,6 +1495,13 @@ struct TerminalTabScreen: View {
             uiTestTraceAutomationStep = .idle
             advanceUITestTraceAutomationIfNeeded()
 
+        case .requestedRuntimeViewE2ENewTab,
+             .requestedRuntimeViewE2ESetViewedTab,
+             .requestedRuntimeViewE2ESplitRight,
+             .requestedRuntimeViewE2ESplitDown,
+             .requestedRuntimeViewE2EFocus:
+            return
+
         case .focusDone:
             if actions.contains("set-viewed-tab") {
                 if config.targetViewedTabIndex != nil || config.targetViewedTabId != nil {
@@ -1454,6 +1534,10 @@ struct TerminalTabScreen: View {
 
         case .setViewedTabDone:
             if actions.contains("input") {
+                if actions.contains("runtime-view-e2e"),
+                   !focusedRuntimePaneHasText(runtimeState) {
+                    return
+                }
                 uiTestTraceAutomationStep = .sentInput
                 sendUITestTraceInputIfNeeded()
                 return
@@ -1483,6 +1567,85 @@ struct TerminalTabScreen: View {
             return runtimeState.tabs[index].tabId
         }
         return nil
+    }
+
+    private func focusedRuntimePaneHasText(_ runtimeState: RemoteRuntimeStateSnapshot) -> Bool {
+        let paneText = client.paneAccessibilityText(paneId: runtimeState.focusedPane)
+        if paneText.contains(where: { !$0.isWhitespace }) {
+            return true
+        }
+        return client.screen.accessibilityTextSnapshot.contains(where: { !$0.isWhitespace })
+    }
+
+    private func advanceUITestRuntimeViewE2EIfNeeded(_ runtimeState: RemoteRuntimeStateSnapshot) -> Bool {
+        switch uiTestTraceAutomationStep {
+        case .idle:
+            if runtimeState.tabs.count < 2 {
+                uiTestTraceAutomationStep = .requestedRuntimeViewE2ENewTab
+                client.newTab()
+                return true
+            }
+            guard runtimeState.tabs.indices.contains(1) else { return true }
+            let targetTabId = runtimeState.tabs[1].tabId
+            if runtimeState.viewedTabId != targetTabId {
+                uiTestTraceAutomationStep = .requestedRuntimeViewE2ESetViewedTab(tabId: targetTabId)
+                client.setViewedTab(targetTabId)
+                return true
+            }
+            if runtimeState.visiblePanes.count < 2 {
+                uiTestTraceAutomationStep = .requestedRuntimeViewE2ESplitRight
+                client.newSplit(direction: "right")
+                return true
+            }
+            if runtimeState.visiblePanes.count < 3 {
+                uiTestTraceAutomationStep = .requestedRuntimeViewE2ESplitDown
+                client.newSplit(direction: "down")
+                return true
+            }
+            if let tabId = runtimeState.viewedTabId,
+               let targetPane = runtimeState.visiblePanes.first(where: { !$0.focused })
+            {
+                uiTestTraceAutomationStep = .requestedRuntimeViewE2EFocus(paneId: targetPane.paneId)
+                client.focusPane(tabId: tabId, paneId: targetPane.paneId)
+                return true
+            }
+            uiTestTraceAutomationStep = .setViewedTabDone
+            advanceUITestTraceAutomationIfNeeded()
+            return true
+
+        case .requestedRuntimeViewE2ENewTab:
+            guard runtimeState.tabs.count >= 2 else { return true }
+            uiTestTraceAutomationStep = .idle
+            advanceUITestTraceAutomationIfNeeded()
+            return true
+
+        case .requestedRuntimeViewE2ESetViewedTab(let tabId):
+            guard runtimeState.viewedTabId == tabId else { return true }
+            uiTestTraceAutomationStep = .idle
+            advanceUITestTraceAutomationIfNeeded()
+            return true
+
+        case .requestedRuntimeViewE2ESplitRight:
+            guard runtimeState.visiblePanes.count >= 2 else { return true }
+            uiTestTraceAutomationStep = .idle
+            advanceUITestTraceAutomationIfNeeded()
+            return true
+
+        case .requestedRuntimeViewE2ESplitDown:
+            guard runtimeState.visiblePanes.count >= 3 else { return true }
+            uiTestTraceAutomationStep = .idle
+            advanceUITestTraceAutomationIfNeeded()
+            return true
+
+        case .requestedRuntimeViewE2EFocus(let paneId):
+            guard runtimeState.focusedPane == paneId else { return true }
+            uiTestTraceAutomationStep = .setViewedTabDone
+            advanceUITestTraceAutomationIfNeeded()
+            return true
+
+        default:
+            return false
+        }
     }
 
     private func requestUITestFocusPane(_ runtimeState: RemoteRuntimeStateSnapshot) {
