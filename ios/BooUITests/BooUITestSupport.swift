@@ -95,6 +95,7 @@ class BooUITestCase: XCTestCase {
         forcedTerminalErrorKind: String? = nil,
         traceActions: String? = nil,
         traceInputCommand: String? = nil,
+        traceOutputMarker: String? = nil,
         targetViewedTabIndex: Int? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
@@ -132,6 +133,9 @@ class BooUITestCase: XCTestCase {
         }
         if let traceInputCommand {
             app.launchArguments.append("--boo-ui-test-trace-input-command=\(traceInputCommand)")
+        }
+        if let traceOutputMarker {
+            app.launchArguments.append("--boo-ui-test-trace-output-marker=\(traceOutputMarker)")
         }
         if let targetViewedTabIndex {
             app.launchArguments.append("--boo-ui-test-target-viewed-tab-index=\(targetViewedTabIndex)")

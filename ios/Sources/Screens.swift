@@ -925,6 +925,41 @@ private enum UITestTraceAutomationStep {
     case setViewedTabDone
     case sentInput
     case done
+
+    var debugName: String {
+        switch self {
+        case .idle:
+            return "idle"
+        case .requestedRuntimeViewE2ENewTab:
+            return "requestedRuntimeViewE2ENewTab"
+        case .requestedRuntimeViewE2ESetViewedTab(let tabId):
+            return "requestedRuntimeViewE2ESetViewedTab:\(tabId)"
+        case .requestedRuntimeViewE2ESplitRight:
+            return "requestedRuntimeViewE2ESplitRight"
+        case .requestedRuntimeViewE2ESplitDown:
+            return "requestedRuntimeViewE2ESplitDown"
+        case .requestedRuntimeViewE2EFocus(let paneId):
+            return "requestedRuntimeViewE2EFocus:\(paneId)"
+        case .requestedInitialSetViewedTab(let tabId):
+            return "requestedInitialSetViewedTab:\(tabId)"
+        case .requestedSplit:
+            return "requestedSplit"
+        case .requestedFocus(let paneId):
+            return "requestedFocus:\(paneId)"
+        case .focusDone:
+            return "focusDone"
+        case .requestedNewTab(let originalTabId):
+            return "requestedNewTab:\(originalTabId.map(String.init) ?? "nil")"
+        case .requestedSetViewedTab(let tabId):
+            return "requestedSetViewedTab:\(tabId)"
+        case .setViewedTabDone:
+            return "setViewedTabDone"
+        case .sentInput:
+            return "sentInput"
+        case .done:
+            return "done"
+        }
+    }
 }
 
 struct TerminalTabScreen: View {
@@ -1034,8 +1069,22 @@ struct TerminalTabScreen: View {
                     .frame(width: 1, height: 1)
                     .accessibilityIdentifier("terminal-debug-state")
                     .accessibilityLabel(client.uiTestTabDebugSummary)
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .accessibilityIdentifier("terminal-trace-state")
+                    .accessibilityLabel(uiTestTraceAutomationDebugSummary)
             }
         }
+    }
+
+    private var uiTestTraceAutomationDebugSummary: String {
+        let marker = UITestLaunchConfiguration.current()?.traceOutputMarker ?? ""
+        let outputObserved = !marker.isEmpty && client.runtimeAccessibilityTextSnapshot.contains(marker)
+        return [
+            "traceStep=\(uiTestTraceAutomationStep.debugName)",
+            "traceInputSent=\(didSendUITestTraceInput)",
+            "traceOutputObserved=\(outputObserved)",
+        ].joined(separator: " ")
     }
 
     @ViewBuilder
@@ -1435,11 +1484,9 @@ struct TerminalTabScreen: View {
         else { return }
         didSendUITestTraceInput = true
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            var payload = Data(command.utf8)
-            payload.append(0x0d)
-            client.sendInputBytes(payload)
-        }
+        var payload = Data(command.utf8)
+        payload.append(0x0d)
+        client.sendInputBytes(payload)
     }
 
     private func advanceUITestTraceAutomationIfNeeded() {

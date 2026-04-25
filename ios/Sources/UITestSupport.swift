@@ -20,6 +20,7 @@ struct UITestLaunchConfiguration {
     let forcedTerminalErrorKind: String?
     let traceActions: Set<String>
     let traceInputCommand: String?
+    let traceOutputMarker: String?
     let targetViewedTabIndex: Int?
     let targetViewedTabId: UInt32?
     let mockTailscaleDevices: [MockTailscaleDevice]
@@ -115,6 +116,8 @@ struct UITestLaunchConfiguration {
         )
         let traceInputCommand = argumentValue(prefix: "--boo-ui-test-trace-input-command=", arguments: arguments)
             ?? env["BOO_UI_TEST_TRACE_INPUT_COMMAND"]
+        let traceOutputMarker = argumentValue(prefix: "--boo-ui-test-trace-output-marker=", arguments: arguments)
+            ?? env["BOO_UI_TEST_TRACE_OUTPUT_MARKER"]
         let targetViewedTabIndex = argumentValue(prefix: "--boo-ui-test-target-viewed-tab-index=", arguments: arguments)
             .flatMap(Int.init)
             ?? env["BOO_UI_TEST_TARGET_VIEWED_TAB_INDEX"].flatMap(Int.init)
@@ -133,6 +136,7 @@ struct UITestLaunchConfiguration {
             forcedTerminalErrorKind: forcedTerminalErrorKind,
             traceActions: traceActions,
             traceInputCommand: traceInputCommand,
+            traceOutputMarker: traceOutputMarker,
             targetViewedTabIndex: targetViewedTabIndex,
             targetViewedTabId: targetViewedTabId,
             mockTailscaleDevices: parseMockTailscaleDevices(arguments: arguments, env: env)

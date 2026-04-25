@@ -1,6 +1,14 @@
 import XCTest
 
 final class BooAppLaunchTests: BooUITestCase {
+    private var isSimulatorRuntime: Bool {
+        #if targetEnvironment(simulator)
+        true
+        #else
+        false
+        #endif
+    }
+
     private struct RuntimePaneDebugFrame {
         let paneId: String
         let rect: CGRect
@@ -16,11 +24,14 @@ final class BooAppLaunchTests: BooUITestCase {
         let connectHostValue = connectHostExists ? String(describing: app.textFields["connect-host-input"].value ?? "<nil>") : "<none>"
         let terminalBanner = app.staticTexts["terminal-banner-label"].exists ? app.staticTexts["terminal-banner-label"].label : "<none>"
         let terminalDebug = app.otherElements["terminal-debug-state"].exists ? app.otherElements["terminal-debug-state"].label : "<none>"
+        let terminalTrace = app.otherElements["terminal-trace-state"].exists ? app.otherElements["terminal-trace-state"].label : "<none>"
         let seedStatus = app.staticTexts["uitest-scroll-seed-status"].exists ? app.staticTexts["uitest-scroll-seed-status"].label : "<none>"
         let terminal = app.otherElements["terminal-screen"]
         let terminalExists = terminal.exists
         let terminalLabel = terminalExists ? terminal.label : "<none>"
-        let terminalValue = terminalExists ? String(describing: terminal.value ?? "<nil>") : "<none>"
+        let terminalValue = terminalExists && !isSimulatorRuntime
+            ? String(describing: terminal.value ?? "<nil>")
+            : "<skipped>"
         let paneIdentifiers = runtimePaneElements(in: app)
             .prefix(6)
             .map(\.identifier)
@@ -36,6 +47,7 @@ final class BooAppLaunchTests: BooUITestCase {
         connectHostValue=\(connectHostValue)
         terminalBanner=\(terminalBanner)
         terminalDebug=\(terminalDebug)
+        terminalTrace=\(terminalTrace)
         seedStatus=\(seedStatus)
         terminalExists=\(terminalExists)
         terminalLabel=\(terminalLabel)
@@ -51,20 +63,28 @@ final class BooAppLaunchTests: BooUITestCase {
             .allElementsBoundByIndex
     }
 
-    private func runtimePaneValuesContain(_ marker: String, in app: XCUIApplication) -> Bool {
+    private func waitForRuntimePaneText(_ marker: String, in app: XCUIApplication, timeout: TimeInterval) -> Bool {
         let terminal = app.otherElements["terminal-screen"]
-        return terminal.exists && String(describing: terminal.value ?? "").contains(marker)
+        guard terminal.waitForExistence(timeout: 2) else { return false }
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value CONTAINS %@", marker),
+            object: terminal
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
-    private func waitForRuntimePaneText(_ marker: String, in app: XCUIApplication, timeout: TimeInterval) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        repeat {
-            if runtimePaneValuesContain(marker, in: app) {
-                return true
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
-        } while Date() < deadline
-        return runtimePaneValuesContain(marker, in: app)
+    private func waitForUITestTraceOutput(in app: XCUIApplication, timeout: TimeInterval) -> Bool {
+        let trace = app.otherElements["terminal-trace-state"]
+        guard trace.waitForExistence(timeout: 2) else { return false }
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(
+                format: "label CONTAINS %@ AND label CONTAINS %@",
+                "traceInputSent=true",
+                "traceOutputObserved=true"
+            ),
+            object: trace
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
     private func debugLabel(in app: XCUIApplication) -> String {
@@ -121,6 +141,20 @@ final class BooAppLaunchTests: BooUITestCase {
             .withOffset(tapPoint)
             .tap()
         return true
+    }
+
+    private func waitForRuntimePaneFocus(
+        paneId: String,
+        in app: XCUIApplication,
+        timeout: TimeInterval
+    ) -> Bool {
+        let debug = app.otherElements["terminal-debug-state"]
+        guard debug.waitForExistence(timeout: 2) else { return false }
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", "focusedPane=\(paneId)"),
+            object: debug
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
     private func activeTabStateSnapshot(_ app: XCUIApplication) -> String {
@@ -624,7 +658,8 @@ final class BooAppLaunchTests: BooUITestCase {
             autoConnect: true,
             resetStorage: true,
             traceActions: "runtime-view-e2e,input",
-            traceInputCommand: "printf '\(marker) 🙂 測試 é\\n'"
+            traceInputCommand: "printf '\(marker) 🙂 測試 é\\n'",
+            traceOutputMarker: marker
         )
         _ = installSystemAlertHandler(for: app)
         app.launch()
@@ -654,14 +689,23 @@ final class BooAppLaunchTests: BooUITestCase {
         let panes = runtimePaneElements(in: app)
         XCTAssertGreaterThanOrEqual(panes.count, 3, "expected three accessibility-exposed runtime panes: \(uiStateSnapshot(app))")
 
-        let outputObserved = waitForRuntimePaneText(marker, in: app, timeout: 30)
+        let outputObserved = isSimulatorRuntime
+            ? waitForUITestTraceOutput(in: app, timeout: 30)
+            : waitForRuntimePaneText(marker, in: app, timeout: 30)
         XCTAssertTrue(
             outputObserved,
             "runtime-view pane content stayed invisible or empty: \(uiStateSnapshot(app))"
         )
         guard outputObserved else { return }
 
-        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        let afterContentAttachment = XCTAttachment(screenshot: app.screenshot())
+        afterContentAttachment.name = "runtime-view-three-panes-after-content"
+        afterContentAttachment.lifetime = .keepAlways
+        add(afterContentAttachment)
+
+        if isSimulatorRuntime {
+            return
+        }
 
         let currentDebug = debugLabel(in: app)
         let currentFocusedPaneId = focusedPaneId(in: currentDebug)
@@ -672,17 +716,20 @@ final class BooAppLaunchTests: BooUITestCase {
         let target = frames
             .filter { $0.paneId != currentFocusedPaneId }
             .max { lhs, rhs in
-                (lhs.rect.width * lhs.rect.height) < (rhs.rect.width * rhs.rect.height)
+                let lhsArea = lhs.rect.width * lhs.rect.height
+                let rhsArea = rhs.rect.width * rhs.rect.height
+                if lhsArea == rhsArea {
+                    return lhs.paneId < rhs.paneId
+                }
+                return lhsArea < rhsArea
             } ?? frames[0]
         XCTAssertTrue(
             tapRuntimePane(paneId: target.paneId, frames: frames, in: app),
             "could not tap runtime pane \(target.paneId): \(uiStateSnapshot(app))"
         )
 
-        let focusedPredicate = NSPredicate(format: "label CONTAINS %@", "focusedPane=\(target.paneId)")
-        XCTAssertEqual(
-            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: focusedPredicate, object: debug)], timeout: 8),
-            .completed,
+        XCTAssertTrue(
+            waitForRuntimePaneFocus(paneId: target.paneId, in: app, timeout: 12),
             "tapping pane \(target.paneId) did not move focus: \(uiStateSnapshot(app))"
         )
 

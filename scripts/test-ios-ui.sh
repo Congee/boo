@@ -140,16 +140,18 @@ if [[ -z "$PORT" ]]; then
 fi
 
 cleanup() {
-  pkill -f "target/debug/boo server --socket ${SOCKET_PATH}" >/dev/null 2>&1 || true
-  pgrep -f "dns-sd -R boo on .* _boo._udp local" | while read -r pid; do
-    kill "$pid" >/dev/null 2>&1 || true
-  done || true
-  if [[ -n "${SERVER_PID:-}" ]]; then
-    kill "$SERVER_PID" >/dev/null 2>&1 || true
-    wait "$SERVER_PID" >/dev/null 2>&1 || true
+  if [[ "$SKIP_DAEMON" != "1" ]]; then
+    pkill -f "target/debug/boo server --socket ${SOCKET_PATH}" >/dev/null 2>&1 || true
+    pgrep -f "dns-sd -R boo on .* _boo._udp local" | while read -r pid; do
+      kill "$pid" >/dev/null 2>&1 || true
+    done || true
+    if [[ -n "${SERVER_PID:-}" ]]; then
+      kill "$SERVER_PID" >/dev/null 2>&1 || true
+      wait "$SERVER_PID" >/dev/null 2>&1 || true
+    fi
+    rm -f "$SOCKET_PATH"
+    rm -f "$HOST_PORT_FILE"
   fi
-  rm -f "$SOCKET_PATH"
-  rm -f "$HOST_PORT_FILE"
   rm -f "$XCODEBUILD_LOG"
   if [[ -n "$GENERATED_UI_TEST_CONFIG_BACKUP" && -f "$GENERATED_UI_TEST_CONFIG_BACKUP" ]]; then
     cp "$GENERATED_UI_TEST_CONFIG_BACKUP" "$GENERATED_UI_TEST_CONFIG"
@@ -159,10 +161,12 @@ cleanup() {
 trap cleanup EXIT
 
 cd "$ROOT"
-pkill -f "target/debug/boo server --socket ${SOCKET_PATH}" >/dev/null 2>&1 || true
-pgrep -f "dns-sd -R boo on .* _boo._udp local" | while read -r pid; do
-  kill "$pid" >/dev/null 2>&1 || true
-done || true
+if [[ "$SKIP_DAEMON" != "1" ]]; then
+  pkill -f "target/debug/boo server --socket ${SOCKET_PATH}" >/dev/null 2>&1 || true
+  pgrep -f "dns-sd -R boo on .* _boo._udp local" | while read -r pid; do
+    kill "$pid" >/dev/null 2>&1 || true
+  done || true
+fi
 if [[ "$SKIP_DAEMON" != "1" ]]; then
   cat > "$HOST_PORT_FILE" <<EOF
 BOO_UI_TEST_HOST=$HOST
@@ -247,6 +251,8 @@ if [[ "$DESTINATION" == *"platform=iOS Simulator"* ]]; then
     -scheme Boo \
     -destination "$DESTINATION" \
     -derivedDataPath "$DERIVED_DATA" \
+    -parallel-testing-enabled NO \
+    -maximum-concurrent-test-simulator-destinations 1 \
     "${TEST_ARGS[@]}" \
     test
 else
