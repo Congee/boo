@@ -251,7 +251,7 @@ authority.
 ### Pane-aware QoS and backpressure
 
 - [ ] Replace single latest-screen coalescing with pane-aware scheduling.
-- [ ] Prioritize health/control/action ack frames.
+- [x] Prioritize health/control/action ack frames.
 - [ ] Prioritize focused visible pane updates per client.
 - [ ] Coalesce non-focused visible pane updates by pane.
 - [ ] Add starvation guard for non-focused visible panes.

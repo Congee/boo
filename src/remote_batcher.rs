@@ -169,6 +169,10 @@ fn collect_outbound_batch(
             for pending in pending_control.take_all() {
                 frames.push(pending);
             }
+            if priority_frame(&frame) {
+                frames.push(frame);
+                return;
+            }
             if let Some(screen) = pending_screen.take() {
                 frames.push(screen);
                 emitted_screen_frames += 1;
@@ -211,6 +215,24 @@ fn collect_outbound_batch(
         coalesced_screen_updates: screen_updates.saturating_sub(emitted_screen_frames),
         coalesced_control_frames,
     }
+}
+
+fn priority_frame(frame: &[u8]) -> bool {
+    let Some(ty) = frame
+        .get(2)
+        .copied()
+        .and_then(|value| MessageType::try_from(value).ok())
+    else {
+        return false;
+    };
+    matches!(
+        ty,
+        MessageType::AuthOk
+            | MessageType::AuthFail
+            | MessageType::ErrorMsg
+            | MessageType::HeartbeatAck
+            | MessageType::TabCreated
+    )
 }
 
 fn coalescible_frame_kind(frame: &[u8]) -> Option<CoalescibleFrameKind> {
@@ -279,5 +301,20 @@ mod tests {
         assert_eq!(batch.frames, vec![runtime_b, appearance_b, barrier]);
         assert_eq!(batch.message_count, 5);
         assert_eq!(batch.coalesced_control_frames, 2);
+    }
+
+    #[test]
+    fn outbound_batch_prioritizes_health_frames_over_pending_screen_updates() {
+        let (tx, rx) = mpsc::channel();
+        let heartbeat_ack = encode_message(MessageType::HeartbeatAck, &123_u64.to_le_bytes());
+        tx.send(OutboundMessage::ScreenUpdate(vec![1])).unwrap();
+        tx.send(OutboundMessage::ScreenUpdate(vec![2])).unwrap();
+        tx.send(OutboundMessage::Frame(heartbeat_ack.clone())).unwrap();
+
+        let first = rx.recv().unwrap();
+        let batch = collect_outbound_batch(first, &rx, true);
+        assert_eq!(batch.frames, vec![heartbeat_ack, vec![2]]);
+        assert_eq!(batch.message_count, 3);
+        assert_eq!(batch.coalesced_screen_updates, 1);
     }
 }
