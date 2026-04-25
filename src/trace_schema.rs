@@ -15,6 +15,10 @@ pub(crate) mod events {
     pub(crate) const REMOTE_NOOP_ROUNDTRIP: &str = "remote.noop_roundtrip";
     pub(crate) const REMOTE_ACTION_ACK: &str = "remote.action_ack";
     #[allow(dead_code)]
+    pub(crate) const REMOTE_OPTIMISTIC_APPLY: &str = "remote.optimistic_apply";
+    #[allow(dead_code)]
+    pub(crate) const REMOTE_RECONCILE: &str = "remote.reconcile";
+    #[allow(dead_code)]
     pub(crate) const REMOTE_RENDER_APPLY: &str = "remote.render_apply";
 }
 

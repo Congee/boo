@@ -205,6 +205,18 @@ private struct OutboundRuntimeActionEnvelope: Encodable {
     }
 }
 
+private struct PendingOptimisticRuntimeState {
+    let appliedAt: Date
+    let previousRuntimeState: RemoteRuntimeStateSnapshot?
+}
+
+private struct PendingActionAck {
+    let action: String
+    let startedAt: Date
+    let fields: BooTraceFields
+    var optimistic: PendingOptimisticRuntimeState?
+}
+
 struct WireCell {
     var codepoint: UInt32 = 0
     var fg_r: UInt8 = 0
@@ -918,7 +930,7 @@ final class GSPClient: ObservableObject {
     private var tabListRequestedAt: Date?
     private var renderTraceTracker = BooRenderTraceTracker()
     private var nextClientActionIdValue: UInt64 = 0
-    private var pendingActionAcks: [UInt64: (action: String, startedAt: Date, fields: BooTraceFields)] = [:]
+    private var pendingActionAcks: [UInt64: PendingActionAck] = [:]
     private var noopBaselineSentForViewIds: Set<UInt64> = []
 
     private func debugLog(_ message: String) {
@@ -1145,7 +1157,9 @@ final class GSPClient: ObservableObject {
             paneRevision: 0,
             elapsedMs: 0
         ))
-        sendRuntimeAction(.setViewedTab(viewId: currentViewId, tabId: tabId))
+        if let clientActionId = sendRuntimeAction(.setViewedTab(viewId: currentViewId, tabId: tabId)) {
+            applyOptimisticViewedTab(clientActionId: clientActionId, tabId: tabId)
+        }
     }
 
     func focusPane(tabId: UInt32, paneId: UInt64) {
@@ -1162,7 +1176,9 @@ final class GSPClient: ObservableObject {
             paneRevision: paneRevisions[paneId] ?? 0,
             elapsedMs: 0
         ))
-        sendRuntimeAction(.focusPane(viewId: currentViewId, tabId: tabId, paneId: paneId))
+        if let clientActionId = sendRuntimeAction(.focusPane(viewId: currentViewId, tabId: tabId, paneId: paneId)) {
+            applyOptimisticFocusPane(clientActionId: clientActionId, tabId: tabId, paneId: paneId)
+        }
     }
 
     func newTab(cols: UInt16? = nil, rows: UInt16? = nil) {
@@ -1318,9 +1334,10 @@ final class GSPClient: ObservableObject {
         )
     }
 
-    private func sendRuntimeAction(_ action: OutboundRuntimeAction) {
+    @discardableResult
+    private func sendRuntimeAction(_ action: OutboundRuntimeAction) -> UInt64? {
         let clientActionId = nextClientActionId()
-        var fields = BooTraceFields(
+        let fields = BooTraceFields(
             interactionId: clientActionId,
             viewId: action.traceViewId,
             tabId: action.traceTabId,
@@ -1332,15 +1349,62 @@ final class GSPClient: ObservableObject {
             paneRevision: 0,
             elapsedMs: 0
         )
-        pendingActionAcks[clientActionId] = (action.traceAction, Date(), fields)
+        pendingActionAcks[clientActionId] = PendingActionAck(
+            action: action.traceAction,
+            startedAt: Date(),
+            fields: fields,
+            optimistic: nil
+        )
         guard let payload = try? JSONEncoder().encode(
             OutboundRuntimeActionEnvelope(clientActionId: clientActionId, action: action)
         ) else {
             pendingActionAcks.removeValue(forKey: clientActionId)
-            return
+            return nil
         }
         BooTrace.log(.remoteRuntimeAction, fields)
         sendMessage(type: .runtimeAction, payload: payload)
+        return clientActionId
+    }
+
+    private func applyOptimisticFocusPane(clientActionId: UInt64, tabId: UInt32, paneId: UInt64) {
+        guard let currentState = runtimeState,
+              currentState.viewedTabId == tabId,
+              currentState.visiblePaneIds.contains(paneId),
+              currentState.focusedPane != paneId
+        else { return }
+
+        runtimeState = currentState.withOptimisticFocus(tabId: tabId, paneId: paneId)
+        activeTabId = runtimeActiveTabId
+        markOptimisticRuntimeState(clientActionId: clientActionId, previousState: currentState, paneId: paneId)
+    }
+
+    private func applyOptimisticViewedTab(clientActionId: UInt64, tabId: UInt32) {
+        guard let currentState = runtimeState,
+              currentState.tabs.contains(where: { $0.tabId == tabId }),
+              currentState.viewedTabId != tabId
+        else { return }
+
+        runtimeState = currentState.withOptimisticViewedTab(tabId)
+        activeTabId = runtimeActiveTabId
+        markOptimisticRuntimeState(clientActionId: clientActionId, previousState: currentState, paneId: 0)
+    }
+
+    private func markOptimisticRuntimeState(
+        clientActionId: UInt64,
+        previousState: RemoteRuntimeStateSnapshot,
+        paneId: UInt64
+    ) {
+        guard var pending = pendingActionAcks[clientActionId] else { return }
+        pending.optimistic = PendingOptimisticRuntimeState(
+            appliedAt: Date(),
+            previousRuntimeState: previousState
+        )
+        pendingActionAcks[clientActionId] = pending
+
+        var fields = pending.fields
+        fields.paneId = paneId
+        fields.elapsedMs = 0
+        BooTrace.log(.remoteOptimisticApply, fields)
     }
 
     private func prepareForConnectionAttempt() {
@@ -1678,6 +1742,11 @@ final class GSPClient: ObservableObject {
         BooTrace.log(.remoteActionAck, fields)
         if pending.action == "noop" {
             BooTrace.log(.remoteNoopRoundtrip, fields)
+        }
+        if let optimistic = pending.optimistic {
+            var reconcileFields = fields
+            reconcileFields.elapsedMs = Date().timeIntervalSince(optimistic.appliedAt) * 1000
+            BooTrace.log(.remoteReconcile, reconcileFields)
         }
     }
 

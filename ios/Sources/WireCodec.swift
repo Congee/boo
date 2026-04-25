@@ -80,6 +80,82 @@ struct RemoteRuntimePaneSnapshot: Decodable, Equatable {
     let splitRatio: Double?
 }
 
+extension RemoteRuntimeTabSnapshot {
+    func withActive(_ nextActive: Bool, focusedPane nextFocusedPane: UInt64?) -> RemoteRuntimeTabSnapshot {
+        RemoteRuntimeTabSnapshot(
+            tabId: tabId,
+            index: index,
+            active: nextActive,
+            title: title,
+            paneCount: paneCount,
+            focusedPane: nextFocusedPane,
+            paneIds: paneIds
+        )
+    }
+}
+
+extension RemoteRuntimePaneSnapshot {
+    func withFocused(_ nextFocused: Bool) -> RemoteRuntimePaneSnapshot {
+        RemoteRuntimePaneSnapshot(
+            leafIndex: leafIndex,
+            leafId: leafId,
+            paneId: paneId,
+            focused: nextFocused,
+            frame: frame,
+            splitDirection: splitDirection,
+            splitRatio: splitRatio
+        )
+    }
+}
+
+extension RemoteRuntimeStateSnapshot {
+    func withOptimisticFocus(tabId: UInt32, paneId: UInt64) -> RemoteRuntimeStateSnapshot {
+        RemoteRuntimeStateSnapshot(
+            activeTab: activeTab,
+            focusedPane: paneId,
+            tabs: tabs.map { tab in
+                tab.tabId == tabId
+                    ? tab.withActive(tab.active, focusedPane: paneId)
+                    : tab
+            },
+            visiblePanes: visiblePanes.map { pane in
+                pane.withFocused(pane.paneId == paneId)
+            },
+            pwd: pwd,
+            runtimeRevision: runtimeRevision,
+            viewRevision: viewRevision,
+            viewId: viewId,
+            viewedTabId: viewedTabId,
+            viewportCols: viewportCols,
+            viewportRows: viewportRows,
+            visiblePaneIds: visiblePaneIds,
+            ackedClientActionId: ackedClientActionId
+        )
+    }
+
+    func withOptimisticViewedTab(_ tabId: UInt32) -> RemoteRuntimeStateSnapshot {
+        let nextActiveTab = tabs.first(where: { $0.tabId == tabId })?.index ?? activeTab
+        let nextFocusedPane = tabs.first(where: { $0.tabId == tabId })?.focusedPane ?? focusedPane
+        return RemoteRuntimeStateSnapshot(
+            activeTab: nextActiveTab,
+            focusedPane: nextFocusedPane,
+            tabs: tabs.map { tab in
+                tab.withActive(tab.tabId == tabId, focusedPane: tab.focusedPane)
+            },
+            visiblePanes: visiblePanes,
+            pwd: pwd,
+            runtimeRevision: runtimeRevision,
+            viewRevision: viewRevision,
+            viewId: viewId,
+            viewedTabId: tabId,
+            viewportCols: viewportCols,
+            viewportRows: viewportRows,
+            visiblePaneIds: visiblePaneIds,
+            ackedClientActionId: ackedClientActionId
+        )
+    }
+}
+
 struct DecodedPaneUpdate: Equatable {
     let tabId: UInt32
     let paneId: UInt64

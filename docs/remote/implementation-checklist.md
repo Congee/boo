@@ -64,8 +64,8 @@ Canonical design:
 - [x] Add action acknowledgement metadata to runtime-view state.
 - [x] Add `remote.noop_roundtrip`.
 - [x] Add `remote.action_ack`.
-- [ ] Add `remote.optimistic_apply`.
-- [ ] Add `remote.reconcile`.
+- [x] Add `remote.optimistic_apply`.
+- [x] Add `remote.reconcile`.
 - [x] Update simulator+iPad metrics comparison so no-op/action metrics are
       reported separately from `remote.heartbeat_rtt`.
 
@@ -80,13 +80,14 @@ Canonical design:
 
 ### Safe optimistic view-local UI
 
-- [ ] Optimistically apply focus-pane UI state immediately.
-- [ ] Optimistically apply viewed-tab/statusbar selection immediately.
+- [x] Optimistically apply focus-pane UI state immediately.
+- [x] Optimistically apply viewed-tab/statusbar selection immediately.
 - [ ] Optimistically apply split-resize handle geometry while dragging.
-- [ ] Tag optimistic state with `client_action_id`.
-- [ ] Clear optimistic state on matching server ack/revision.
-- [ ] Roll back optimistic state on conflicting authoritative state.
-- [ ] Keep terminal text output server-authored.
+- [x] Tag optimistic focus/viewed-tab state with `client_action_id`.
+- [x] Clear optimistic focus/viewed-tab state on matching server ack/revision.
+- [x] Roll back optimistic focus/viewed-tab state on conflicting
+      authoritative state.
+- [x] Keep terminal text output server-authored.
 
 ### Pane-aware QoS and backpressure
 
@@ -256,12 +257,13 @@ Canonical design:
   - [x] iOS tap pane -> `FocusPane` -> runtime state/pane update -> render
   - [x] iOS statusbar/tab runtime action -> update -> render
   - [x] iOS key/input -> terminal delta/full-state -> render
-- [ ] add no-op/action-ack metrics so minimal protocol roundtrip and
+- [x] add no-op/action-ack metrics so minimal protocol roundtrip and
       user-perceived action latency are reported separately from
       `remote.heartbeat_rtt`
 - [ ] add safe optimistic UI for view-local actions only:
-      focus pane, viewed tab/statusbar selection, and split-resize handle
-      geometry
+  - [x] focus pane
+  - [x] viewed tab/statusbar selection
+  - [ ] split-resize handle geometry
 - [ ] keep terminal text/content prediction deferred until action acks,
       optimistic view-local UI, off-main iOS transport, and pane-aware QoS are
       measured

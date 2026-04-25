@@ -224,8 +224,8 @@ authority.
 - [x] Add action acknowledgement metadata to runtime-view state.
 - [x] Add `remote.noop_roundtrip` metric.
 - [x] Add `remote.action_ack` metric.
-- [ ] Add `remote.optimistic_apply` metric.
-- [ ] Add `remote.reconcile` metric.
+- [x] Add `remote.optimistic_apply` metric.
+- [x] Add `remote.reconcile` metric.
 - [x] Update simulator+iPad comparison output to list no-op/action metrics
       separately from `remote.heartbeat_rtt`.
 
@@ -239,13 +239,14 @@ authority.
 
 ### Safe optimistic UI
 
-- [ ] Optimistically apply focus-pane UI state immediately.
-- [ ] Optimistically apply viewed-tab/statusbar selection immediately.
+- [x] Optimistically apply focus-pane UI state immediately.
+- [x] Optimistically apply viewed-tab/statusbar selection immediately.
 - [ ] Optimistically apply split-resize handle geometry while dragging.
-- [ ] Tag optimistic state with `client_action_id`.
-- [ ] Clear optimistic state on matching server ack/revision.
-- [ ] Roll back optimistic state on conflicting authoritative state.
-- [ ] Keep terminal text output server-authored.
+- [x] Tag optimistic focus/viewed-tab state with `client_action_id`.
+- [x] Clear optimistic focus/viewed-tab state on matching server ack/revision.
+- [x] Roll back optimistic focus/viewed-tab state on conflicting
+      authoritative state.
+- [x] Keep terminal text output server-authored.
 
 ### Pane-aware QoS and backpressure
 
