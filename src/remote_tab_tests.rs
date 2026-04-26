@@ -203,7 +203,7 @@ mod tests {
                 assert_eq!(code, RemoteErrorCode::HeartbeatTimeout);
                 assert_eq!(message, "heartbeat timeout");
             }
-            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+            OutboundMessage::ScreenUpdate(_) | OutboundMessage::PaneUpdate { .. } => panic!("unexpected screen update"),
         }
         assert!(cmd_rx.try_recv().is_err());
         let guard = state.lock().expect("remote server state poisoned");

@@ -19,6 +19,8 @@ pub(crate) mod events {
     #[allow(dead_code)]
     pub(crate) const REMOTE_RECONCILE: &str = "remote.reconcile";
     #[allow(dead_code)]
+    pub(crate) const REMOTE_RENDER_ACK: &str = "remote.render_ack";
+    #[allow(dead_code)]
     pub(crate) const REMOTE_RENDER_APPLY: &str = "remote.render_apply";
 }
 

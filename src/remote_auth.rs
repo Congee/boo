@@ -172,6 +172,18 @@ pub(crate) fn read_loop(
                         action,
                     })
             }
+            MessageType::RenderAck => parse_render_ack(&payload).map(
+                |(view_id, tab_id, pane_id, pane_revision, runtime_revision)| {
+                    RemoteCmd::RenderAck {
+                        client_id,
+                        view_id,
+                        tab_id,
+                        pane_id,
+                        pane_revision,
+                        runtime_revision,
+                    }
+                },
+            ),
             _ => None,
         };
 
@@ -195,6 +207,19 @@ pub(crate) fn read_loop(
         let _ = client;
         log::info!("remote client disconnected: client_id={client_id}");
     }
+}
+
+fn parse_render_ack(payload: &[u8]) -> Option<(u64, u32, u64, u64, u64)> {
+    if payload.len() < 36 {
+        return None;
+    }
+    Some((
+        u64::from_le_bytes(payload[0..8].try_into().ok()?),
+        u32::from_le_bytes(payload[8..12].try_into().ok()?),
+        u64::from_le_bytes(payload[12..20].try_into().ok()?),
+        u64::from_le_bytes(payload[20..28].try_into().ok()?),
+        u64::from_le_bytes(payload[28..36].try_into().ok()?),
+    ))
 }
 
 pub(crate) fn handle_auth_message(
@@ -358,6 +383,44 @@ mod tests {
     }
 
     #[test]
+    fn read_loop_decodes_render_ack() {
+        let (outbound_tx, _outbound_rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(State {
+            clients: HashMap::from([(1, remote_client(outbound_tx, true))]),
+            ..State::test_empty()
+        }));
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&7_u64.to_le_bytes());
+        payload.extend_from_slice(&9_u32.to_le_bytes());
+        payload.extend_from_slice(&11_u64.to_le_bytes());
+        payload.extend_from_slice(&13_u64.to_le_bytes());
+        payload.extend_from_slice(&17_u64.to_le_bytes());
+        let frame = encode_message(MessageType::RenderAck, &payload);
+
+        read_loop(std::io::Cursor::new(frame), 1, state, cmd_tx);
+
+        match cmd_rx.recv().expect("render ack command") {
+            RemoteCmd::RenderAck {
+                client_id,
+                view_id,
+                tab_id,
+                pane_id,
+                pane_revision,
+                runtime_revision,
+            } => {
+                assert_eq!(client_id, 1);
+                assert_eq!(view_id, 7);
+                assert_eq!(tab_id, 9);
+                assert_eq!(pane_id, 11);
+                assert_eq!(pane_revision, 13);
+                assert_eq!(runtime_revision, 17);
+            }
+            other => panic!("unexpected remote command: {other:?}"),
+        }
+    }
+
+    #[test]
     fn read_loop_replies_to_heartbeat_without_runtime_command() {
         let (outbound_tx, outbound_rx) = mpsc::channel();
         let state = Arc::new(Mutex::new(State {
@@ -376,7 +439,7 @@ mod tests {
                 assert_eq!(ty, MessageType::HeartbeatAck);
                 assert_eq!(payload, b"ping");
             }
-            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+            OutboundMessage::ScreenUpdate(_) | OutboundMessage::PaneUpdate { .. } => panic!("unexpected screen update"),
         }
         assert!(cmd_rx.try_recv().is_err());
     }
@@ -407,7 +470,7 @@ mod tests {
                 assert_eq!(ty, MessageType::AuthFail);
                 assert!(payload.is_empty());
             }
-            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+            OutboundMessage::ScreenUpdate(_) | OutboundMessage::PaneUpdate { .. } => panic!("unexpected screen update"),
         }
         assert!(cmd_rx.try_recv().is_err());
         let guard = state.lock().expect("remote server state poisoned");
@@ -447,7 +510,7 @@ mod tests {
                 assert_eq!(code, RemoteErrorCode::HeartbeatTimeout);
                 assert_eq!(message, "heartbeat timeout");
             }
-            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+            OutboundMessage::ScreenUpdate(_) | OutboundMessage::PaneUpdate { .. } => panic!("unexpected screen update"),
         }
         assert!(cmd_rx.try_recv().is_err());
         let guard = state.lock().expect("remote server state poisoned");

@@ -1208,6 +1208,41 @@ impl BooApp {
                 }
                 }
             }
+            server::Command::RemoteRenderAck {
+                client_id,
+                view_id,
+                tab_id,
+                pane_id,
+                pane_revision,
+                runtime_revision,
+            } => {
+                if let Some(server) = self.remote_server_for_client(client_id) {
+                    server.update_client_view(client_id, |view| {
+                        view.last_render_ack_at = Some(Instant::now());
+                        view.last_rendered_pane_id = Some(pane_id);
+                        view.last_rendered_pane_revision = Some(pane_revision);
+                        view.last_rendered_runtime_revision = Some(runtime_revision);
+                    });
+                }
+                tracing::info!(
+                    target: "boo::latency",
+                    interaction_id = 0_u64,
+                    view_id = view_id,
+                    tab_id = tab_id,
+                    pane_id = pane_id,
+                    action = "render_ack",
+                    route = "remote",
+                    runtime_revision = runtime_revision,
+                    view_revision = self
+                        .remote_view_state_for_client(client_id)
+                        .map(|view| view.view_revision)
+                        .unwrap_or_default(),
+                    pane_revision = pane_revision,
+                    elapsed_ms = 0.0_f64,
+                    "{}",
+                    crate::trace_schema::events::REMOTE_RENDER_ACK
+                );
+            }
         }
     }
 
@@ -1344,7 +1379,7 @@ mod tests {
     fn collect_screen_update_types(rx: &mpsc::Receiver<OutboundMessage>) -> Vec<MessageType> {
         let mut message_types = Vec::new();
         while let Ok(message) = rx.try_recv() {
-            let OutboundMessage::ScreenUpdate(frame) = message else {
+            let Some(frame) = outbound_screen_frame(message) else {
                 continue;
             };
             let (ty, _payload) =
@@ -1352,6 +1387,15 @@ mod tests {
             message_types.push(ty);
         }
         message_types
+    }
+
+    fn outbound_screen_frame(message: OutboundMessage) -> Option<Vec<u8>> {
+        match message {
+            OutboundMessage::ScreenUpdate(frame) | OutboundMessage::PaneUpdate { frame, .. } => {
+                Some(frame)
+            }
+            OutboundMessage::Frame(_) => None,
+        }
     }
 
     fn drain_outbound(rx: &mpsc::Receiver<OutboundMessage>) {
@@ -1439,8 +1483,31 @@ mod tests {
                     serde_json::from_slice(&payload).expect("decode runtime state");
                 assert_eq!(state.acked_client_action_id, Some(42));
             }
-            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+            OutboundMessage::ScreenUpdate(_) | OutboundMessage::PaneUpdate { .. } => panic!("unexpected screen update"),
         }
+    }
+
+    #[test]
+    fn remote_render_ack_updates_client_feedback_state() {
+        let mut app = BooApp::new_headless();
+        app.init_surface();
+        install_test_remote_server(&mut app, &[1]);
+        app.sync_remote_client_runtime_view(1, true);
+
+        app.handle_server_cmd(crate::server::Command::RemoteRenderAck {
+            client_id: 1,
+            view_id: 1,
+            tab_id: 7,
+            pane_id: 11,
+            pane_revision: 13,
+            runtime_revision: 17,
+        });
+
+        let server = app.server.remote_server.as_ref().expect("remote server");
+        let view = server.client_runtime_view(1).expect("client view");
+        assert_eq!(view.last_rendered_pane_id, Some(11));
+        assert_eq!(view.last_rendered_pane_revision, Some(13));
+        assert_eq!(view.last_rendered_runtime_revision, Some(17));
     }
 
     #[test]
@@ -1657,7 +1724,7 @@ mod tests {
         let mut client_one_first = None;
         let mut client_one_nonfocused = None;
         while let Ok(message) = rx1.try_recv() {
-            let OutboundMessage::ScreenUpdate(frame) = message else {
+            let Some(frame) = outbound_screen_frame(message) else {
                 continue;
             };
             let (ty, payload) = read_message(&mut Cursor::new(frame)).expect("decode screen update");
@@ -1673,7 +1740,7 @@ mod tests {
         let mut client_two_first = None;
         let mut client_two_nonfocused = None;
         while let Ok(message) = rx2.try_recv() {
-            let OutboundMessage::ScreenUpdate(frame) = message else {
+            let Some(frame) = outbound_screen_frame(message) else {
                 continue;
             };
             let (ty, payload) = read_message(&mut Cursor::new(frame)).expect("decode screen update");
@@ -1745,7 +1812,7 @@ mod tests {
         let rx = receivers.get(&1).expect("receiver");
         let mut first_header = None;
         while let Ok(message) = rx.try_recv() {
-            let OutboundMessage::ScreenUpdate(frame) = message else {
+            let Some(frame) = outbound_screen_frame(message) else {
                 continue;
             };
             let (ty, payload) = read_message(&mut Cursor::new(frame)).expect("decode");
@@ -1769,7 +1836,7 @@ mod tests {
 
         let mut second_header = None;
         while let Ok(message) = rx.try_recv() {
-            let OutboundMessage::ScreenUpdate(frame) = message else {
+            let Some(frame) = outbound_screen_frame(message) else {
                 continue;
             };
             let (ty, payload) = read_message(&mut Cursor::new(frame)).expect("decode");
@@ -1813,7 +1880,7 @@ mod tests {
             }],
         });
         let next_pane_update_type = || {
-            let OutboundMessage::ScreenUpdate(frame) = rx.try_recv().expect("pane update") else {
+            let Some(frame) = outbound_screen_frame(rx.try_recv().expect("pane update")) else {
                 panic!("expected screen update");
             };
             read_message(&mut Cursor::new(frame))

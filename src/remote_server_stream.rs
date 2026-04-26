@@ -83,7 +83,7 @@ pub(crate) fn send_pane_state_to_client(
     runtime_revision: u64,
     next_state: Arc<RemoteFullState>,
 ) {
-    let (outbound, previous_state, view_id, view_revision) = {
+    let (outbound, previous_state, view_id, view_revision, focused) = {
         let guard = state.lock().expect("remote server state poisoned");
         let Some(client) = guard.clients.get(&client_id) else {
             return;
@@ -96,6 +96,7 @@ pub(crate) fn send_pane_state_to_client(
             client.runtime_view.pane_states.get(&pane_id).cloned(),
             client.runtime_view.view_id,
             client.runtime_view.view_revision,
+            client.runtime_view.focused_pane_id == Some(pane_id),
         )
     };
     let (ty, payload) = match previous_state
@@ -149,5 +150,9 @@ pub(crate) fn send_pane_state_to_client(
         &payload,
     );
     let frame = encode_message(ty, &prefixed);
-    let _ = outbound.send(OutboundMessage::ScreenUpdate(frame));
+    let _ = outbound.send(OutboundMessage::PaneUpdate {
+        pane_id,
+        focused,
+        frame,
+    });
 }

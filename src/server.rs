@@ -156,6 +156,14 @@ pub enum Command {
         client_action_id: Option<u64>,
         action: remote::RuntimeAction,
     },
+    RemoteRenderAck {
+        client_id: u64,
+        view_id: u64,
+        tab_id: u32,
+        pane_id: u64,
+        pane_revision: u64,
+        runtime_revision: u64,
+    },
 }
 
 pub struct State {
@@ -350,7 +358,22 @@ impl From<remote::RemoteCmd> for Command {
                 client_id,
                 client_action_id,
                 action,
-            }
+            },
+            remote::RemoteCmd::RenderAck {
+                client_id,
+                view_id,
+                tab_id,
+                pane_id,
+                pane_revision,
+                runtime_revision,
+            } => Self::RemoteRenderAck {
+                client_id,
+                view_id,
+                tab_id,
+                pane_id,
+                pane_revision,
+                runtime_revision,
+            },
         }
     }
 }

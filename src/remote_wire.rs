@@ -62,6 +62,7 @@ pub enum MessageType {
     AppMouseEvent = 0x10,
     Heartbeat = 0x11,
     RuntimeAction = 0x12,
+    RenderAck = 0x13,
 
     AuthOk = 0x80,
     AuthFail = 0x81,
@@ -191,7 +192,8 @@ pub const fn logical_channel_for_message_type(message_type: MessageType) -> Logi
         | MessageType::AppKeyEvent
         | MessageType::AppMouseEvent
         | MessageType::FocusPane
-        | MessageType::RuntimeAction => LogicalChannel::InputControl,
+        | MessageType::RuntimeAction
+        | MessageType::RenderAck => LogicalChannel::InputControl,
         MessageType::Heartbeat | MessageType::HeartbeatAck => LogicalChannel::Health,
         MessageType::Clipboard | MessageType::Image => LogicalChannel::RuntimeStream,
     }
@@ -217,6 +219,7 @@ impl TryFrom<u8> for MessageType {
             0x10 => Self::AppMouseEvent,
             0x11 => Self::Heartbeat,
             0x12 => Self::RuntimeAction,
+            0x13 => Self::RenderAck,
             0x80 => Self::AuthOk,
             0x81 => Self::AuthFail,
             0x82 => Self::TabList,

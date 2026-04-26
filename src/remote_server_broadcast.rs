@@ -70,7 +70,7 @@ mod tests {
                 assert_eq!(&frame[..2], &MAGIC);
                 assert_eq!(frame[2], MessageType::UiRuntimeState as u8);
             }
-            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+            OutboundMessage::ScreenUpdate(_) | OutboundMessage::PaneUpdate { .. } => panic!("unexpected screen update"),
         }
         assert!(idle_rx.try_recv().is_err());
     }
@@ -91,7 +91,7 @@ mod tests {
                 assert_eq!(&frame[..2], &MAGIC);
                 assert_eq!(frame[2], MessageType::UiRuntimeState as u8);
             }
-            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+            OutboundMessage::ScreenUpdate(_) | OutboundMessage::PaneUpdate { .. } => panic!("unexpected screen update"),
         }
         assert!(rx.try_recv().is_err());
     }
@@ -119,7 +119,7 @@ mod tests {
                 assert_eq!(&frame[..2], &MAGIC);
                 assert_eq!(frame[2], crate::remote_wire::MESSAGE_TYPE_TAB_LIST as u8);
             }
-            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+            OutboundMessage::ScreenUpdate(_) | OutboundMessage::PaneUpdate { .. } => panic!("unexpected screen update"),
         }
         assert!(rx.try_recv().is_err());
     }
@@ -153,7 +153,7 @@ mod tests {
                     assert_eq!(&frame[..2], &MAGIC);
                     assert_eq!(frame[2], crate::remote_wire::MESSAGE_TYPE_TAB_LIST as u8);
                 }
-                OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+                OutboundMessage::ScreenUpdate(_) | OutboundMessage::PaneUpdate { .. } => panic!("unexpected screen update"),
             }
         }
         assert!(remote_rx.try_recv().is_err());
@@ -183,7 +183,7 @@ mod tests {
                     assert_eq!(&frame[..2], &MAGIC);
                     assert_eq!(frame[2], crate::remote_wire::MESSAGE_TYPE_TAB_LIST as u8);
                 }
-                OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+                OutboundMessage::ScreenUpdate(_) | OutboundMessage::PaneUpdate { .. } => panic!("unexpected screen update"),
             }
         }
         assert!(rx.try_recv().is_err());
@@ -204,7 +204,7 @@ mod tests {
                 assert_eq!(frame[2], MessageType::TabCreated as u8);
                 assert_eq!(u32::from_le_bytes(frame[7..11].try_into().unwrap()), 42);
             }
-            OutboundMessage::ScreenUpdate(_) => panic!("unexpected screen update"),
+            OutboundMessage::ScreenUpdate(_) | OutboundMessage::PaneUpdate { .. } => panic!("unexpected screen update"),
         }
         assert!(rx.try_recv().is_err());
     }

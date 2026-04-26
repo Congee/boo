@@ -198,6 +198,14 @@ pub enum RemoteCmd {
         client_action_id: Option<u64>,
         action: RuntimeAction,
     },
+    RenderAck {
+        client_id: u64,
+        view_id: u64,
+        tab_id: u32,
+        pane_id: u64,
+        pane_revision: u64,
+        runtime_revision: u64,
+    },
 }
 
 use crate::remote_auth::read_loop;
@@ -752,6 +760,9 @@ pub struct ClientRuntimeViewSnapshot {
     pub visible_pane_ids: Vec<u64>,
     pub ui_attached: bool,
     pub acked_client_action_id: Option<u64>,
+    pub last_rendered_pane_id: Option<u64>,
+    pub last_rendered_pane_revision: Option<u64>,
+    pub last_rendered_runtime_revision: Option<u64>,
 }
 
 impl From<&ClientRuntimeView> for ClientRuntimeViewSnapshot {
@@ -767,6 +778,9 @@ impl From<&ClientRuntimeView> for ClientRuntimeViewSnapshot {
             visible_pane_ids: value.visible_pane_ids.clone(),
             ui_attached: value.ui_attached,
             acked_client_action_id: value.acked_client_action_id,
+            last_rendered_pane_id: value.last_rendered_pane_id,
+            last_rendered_pane_revision: value.last_rendered_pane_revision,
+            last_rendered_runtime_revision: value.last_rendered_runtime_revision,
         }
     }
 }

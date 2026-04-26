@@ -13,12 +13,18 @@
 
 use std::io::Write;
 use std::sync::mpsc;
+use std::collections::HashMap;
 
 use crate::remote_wire::MessageType;
 
 pub(crate) enum OutboundMessage {
     Frame(Vec<u8>),
     ScreenUpdate(Vec<u8>),
+    PaneUpdate {
+        pane_id: u64,
+        focused: bool,
+        frame: Vec<u8>,
+    },
 }
 
 pub(crate) fn writer_loop<W: Write>(
@@ -51,6 +57,11 @@ pub(crate) fn writer_loop<W: Write>(
             batch.coalesced_screen_updates as u64,
         );
         crate::profiling::record_units(
+            "server.stream.batch_write.coalesced_pane_updates",
+            crate::profiling::Kind::Io,
+            batch.coalesced_pane_updates as u64,
+        );
+        crate::profiling::record_units(
             "server.stream.batch_write.coalesced_control_frames",
             crate::profiling::Kind::Io,
             batch.coalesced_control_frames as u64,
@@ -73,11 +84,13 @@ fn collect_single_outbound_message(message: OutboundMessage) -> OutboundBatch {
     let (frames, coalesced_screen_updates, coalesced_control_frames) = match message {
         OutboundMessage::Frame(frame) => (vec![frame], 0, 0),
         OutboundMessage::ScreenUpdate(frame) => (vec![frame], 0, 0),
+        OutboundMessage::PaneUpdate { frame, .. } => (vec![frame], 0, 0),
     };
     OutboundBatch {
         frames,
         message_count: 1,
         coalesced_screen_updates,
+        coalesced_pane_updates: 0,
         coalesced_control_frames,
     }
 }
@@ -86,6 +99,7 @@ struct OutboundBatch {
     frames: Vec<Vec<u8>>,
     message_count: usize,
     coalesced_screen_updates: usize,
+    coalesced_pane_updates: usize,
     coalesced_control_frames: usize,
 }
 
@@ -136,6 +150,33 @@ impl PendingOutboundFrames {
     }
 }
 
+#[derive(Default)]
+struct PendingPaneFrames {
+    order: Vec<u64>,
+    frames: HashMap<u64, Vec<u8>>,
+    coalesced: usize,
+}
+
+impl PendingPaneFrames {
+    fn set(&mut self, pane_id: u64, frame: Vec<u8>) {
+        if self.frames.insert(pane_id, frame).is_some() {
+            self.coalesced += 1;
+        } else {
+            self.order.push(pane_id);
+        }
+    }
+
+    fn take_all(&mut self) -> Vec<Vec<u8>> {
+        let mut frames = Vec::with_capacity(self.frames.len());
+        for pane_id in self.order.drain(..) {
+            if let Some(frame) = self.frames.remove(&pane_id) {
+                frames.push(frame);
+            }
+        }
+        frames
+    }
+}
+
 fn collect_outbound_batch(
     first: OutboundMessage,
     outbound_rx: &mpsc::Receiver<OutboundMessage>,
@@ -143,11 +184,32 @@ fn collect_outbound_batch(
 ) -> OutboundBatch {
     let mut frames = Vec::new();
     let mut pending_screen = None;
+    let mut pending_focused_panes = PendingPaneFrames::default();
+    let mut pending_passive_panes = PendingPaneFrames::default();
     let mut pending_control = PendingOutboundFrames::default();
     let mut message_count = 0usize;
     let mut screen_updates = 0usize;
     let mut emitted_screen_frames = 0usize;
     let mut coalesced_control_frames = 0usize;
+
+    let flush_pane_updates = |
+        frames: &mut Vec<Vec<u8>>,
+        pending_focused_panes: &mut PendingPaneFrames,
+        pending_screen: &mut Option<Vec<u8>>,
+        emitted_screen_frames: &mut usize,
+        pending_passive_panes: &mut PendingPaneFrames,
+    | {
+        for pending in pending_focused_panes.take_all() {
+            frames.push(pending);
+        }
+        if let Some(screen) = pending_screen.take() {
+            frames.push(screen);
+            *emitted_screen_frames += 1;
+        }
+        for pending in pending_passive_panes.take_all() {
+            frames.push(pending);
+        }
+    };
 
     let mut push = |message| match message {
         OutboundMessage::Frame(frame) => {
@@ -173,10 +235,13 @@ fn collect_outbound_batch(
                 frames.push(frame);
                 return;
             }
-            if let Some(screen) = pending_screen.take() {
-                frames.push(screen);
-                emitted_screen_frames += 1;
-            }
+            flush_pane_updates(
+                &mut frames,
+                &mut pending_focused_panes,
+                &mut pending_screen,
+                &mut emitted_screen_frames,
+                &mut pending_passive_panes,
+            );
             frames.push(frame);
         }
         OutboundMessage::ScreenUpdate(frame) => {
@@ -196,6 +261,30 @@ fn collect_outbound_batch(
                 emitted_screen_frames += 1;
             }
         }
+        OutboundMessage::PaneUpdate {
+            pane_id,
+            focused,
+            frame,
+        } => {
+            message_count += 1;
+            if focused {
+                pending_focused_panes.set(pane_id, frame);
+            } else if coalesce_screen_updates {
+                pending_passive_panes.set(pane_id, frame);
+            } else {
+                for pending in pending_control.take_all() {
+                    frames.push(pending);
+                }
+                flush_pane_updates(
+                    &mut frames,
+                    &mut pending_focused_panes,
+                    &mut pending_screen,
+                    &mut emitted_screen_frames,
+                    &mut pending_passive_panes,
+                );
+                frames.push(frame);
+            }
+        }
     };
 
     push(first);
@@ -205,14 +294,21 @@ fn collect_outbound_batch(
     for pending in pending_control.take_all() {
         frames.push(pending);
     }
+    for pending in pending_focused_panes.take_all() {
+        frames.push(pending);
+    }
     if let Some(screen) = pending_screen {
         frames.push(screen);
         emitted_screen_frames += 1;
+    }
+    for pending in pending_passive_panes.take_all() {
+        frames.push(pending);
     }
     OutboundBatch {
         frames,
         message_count,
         coalesced_screen_updates: screen_updates.saturating_sub(emitted_screen_frames),
+        coalesced_pane_updates: pending_focused_panes.coalesced + pending_passive_panes.coalesced,
         coalesced_control_frames,
     }
 }
@@ -316,5 +412,40 @@ mod tests {
         assert_eq!(batch.frames, vec![heartbeat_ack, vec![2]]);
         assert_eq!(batch.message_count, 3);
         assert_eq!(batch.coalesced_screen_updates, 1);
+    }
+
+    #[test]
+    fn outbound_batch_coalesces_passive_panes_by_pane_after_focused_panes() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(OutboundMessage::PaneUpdate {
+            pane_id: 2,
+            focused: false,
+            frame: vec![2, 1],
+        })
+        .unwrap();
+        tx.send(OutboundMessage::PaneUpdate {
+            pane_id: 2,
+            focused: false,
+            frame: vec![2, 2],
+        })
+        .unwrap();
+        tx.send(OutboundMessage::PaneUpdate {
+            pane_id: 1,
+            focused: true,
+            frame: vec![1, 1],
+        })
+        .unwrap();
+        tx.send(OutboundMessage::PaneUpdate {
+            pane_id: 3,
+            focused: false,
+            frame: vec![3, 1],
+        })
+        .unwrap();
+
+        let first = rx.recv().unwrap();
+        let batch = collect_outbound_batch(first, &rx, true);
+        assert_eq!(batch.frames, vec![vec![1, 1], vec![2, 2], vec![3, 1]]);
+        assert_eq!(batch.message_count, 4);
+        assert_eq!(batch.coalesced_pane_updates, 1);
     }
 }
