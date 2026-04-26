@@ -249,6 +249,14 @@ class BooUITestCase: XCTestCase {
         XCTFail("expected connect screen", file: file, line: line)
     }
 
+    func swipeBackFromTerminal(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        let backZone = app.otherElements["terminal-back-swipe-zone"]
+        XCTAssertTrue(backZone.waitForExistence(timeout: 5), file: file, line: line)
+        let start = backZone.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
+        let finish = app.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5))
+        start.press(forDuration: 0.01, thenDragTo: finish)
+    }
+
     func waitForAnyTailscaleResult(in app: XCUIApplication, timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line) {
         let deadline = Date().addingTimeInterval(timeout)
         let peerButtons = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "tailscale-peer-"))

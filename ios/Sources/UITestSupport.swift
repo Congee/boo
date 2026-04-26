@@ -16,7 +16,6 @@ struct UITestLaunchConfiguration {
     let autoConnect: Bool
     let tailscalePort: UInt16?
     let tailscaleToken: String?
-    let showFloatingBackButton: Bool?
     let forcedTerminalErrorKind: String?
     let traceActions: Set<String>
     let traceInputCommand: String?
@@ -101,9 +100,6 @@ struct UITestLaunchConfiguration {
             ?? env["BOO_UI_TEST_TAILSCALE_PORT"].flatMap(UInt16.init)
         let tailscaleToken = argumentValue(prefix: "--boo-ui-test-tailscale-token=", arguments: arguments)
             ?? env["BOO_UI_TEST_TAILSCALE_TOKEN"]
-        let showFloatingBackButton = argumentValue(prefix: "--boo-ui-test-show-floating-back-button=", arguments: arguments)
-            .flatMap { ["1", "true", "yes"].contains($0.lowercased()) ? true : ["0", "false", "no"].contains($0.lowercased()) ? false : nil }
-            ?? env["BOO_UI_TEST_SHOW_FLOATING_BACK_BUTTON"].flatMap { ["1", "true", "yes"].contains($0.lowercased()) ? true : ["0", "false", "no"].contains($0.lowercased()) ? false : nil }
         let forcedTerminalErrorKind = argumentValue(prefix: "--boo-ui-test-terminal-error=", arguments: arguments)
             ?? env["BOO_UI_TEST_TERMINAL_ERROR"]
         let traceActionsRaw = argumentValue(prefix: "--boo-ui-test-trace-actions=", arguments: arguments)
@@ -132,7 +128,6 @@ struct UITestLaunchConfiguration {
             autoConnect: autoConnect,
             tailscalePort: tailscalePort,
             tailscaleToken: tailscaleToken,
-            showFloatingBackButton: showFloatingBackButton,
             forcedTerminalErrorKind: forcedTerminalErrorKind,
             traceActions: traceActions,
             traceInputCommand: traceInputCommand,

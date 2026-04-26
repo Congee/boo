@@ -91,6 +91,10 @@ Concrete plan:
   - focused pane highlight immediately
   - scroll/copy-mode indicator
   - mouse passthrough indicator
+- [x] Keep terminal chrome gesture-first on iPad:
+  - no persistent top Back, Close, or Disconnect buttons over the terminal
+  - left-edge swipe remains the primary way back to the connection screen
+  - disconnect stays outside the terminal overlay chrome
 - [x] Verify with XCUITest gestures and physical iPad screenshots.
   - `compare-ios-simulator-ipad-metrics.sh --simulator-only` passes with render/input traces
   - `compare-ios-simulator-ipad-metrics.sh --ipad-only` passes with physical screenshot attachments and non-focused pane tap/focus coverage

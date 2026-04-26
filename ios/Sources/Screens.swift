@@ -1015,17 +1015,6 @@ struct TerminalTabScreen: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
 
-            HStack {
-                if store.terminalDisplaySettings.showFloatingBackButton {
-                    floatingBackButton
-                }
-                Spacer()
-                floatingDisconnectButton
-            }
-            .padding(.horizontal, KineticSpacing.md)
-            .padding(.top, 14)
-            .zIndex(10)
-
         }
         .onAppear {
             applyUITestForcedErrorIfNeeded()
@@ -1469,97 +1458,11 @@ struct TerminalTabScreen: View {
                     .accessibilityIdentifier("recover-runtime-view-button")
                 }
 
-                Button("Disconnect") {
-                    monitor.disconnect()
-                    goBack()
-                }
-                .buttonStyle(KineticSecondaryButtonStyle())
-                .accessibilityIdentifier("disconnect-tab-button")
             }
         }
         .padding(KineticSpacing.md)
         .background(color.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
-    }
-
-    private var floatingBackButton: some View {
-        Button {
-            goBack()
-        } label: {
-            Image(systemName: "chevron.left")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(KineticColor.onSurface)
-                .frame(width: 38, height: 38)
-                .background(
-                    ZStack {
-                        Circle()
-                            .fill(.ultraThinMaterial)
-                        Circle()
-                            .fill(
-                                RadialGradient(
-                                    colors: [
-                                        Color.gray.opacity(0.30),
-                                        Color.gray.opacity(0.18),
-                                        Color.clear
-                                    ],
-                                    center: .center,
-                                    startRadius: 6,
-                                    endRadius: 38
-                                )
-                            )
-                            .scaleEffect(1.75)
-                    }
-                )
-                .overlay(
-                    Circle()
-                        .stroke(Color.white.opacity(0.30), lineWidth: 0.8)
-                )
-                .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 8)
-        }
-        .buttonStyle(.plain)
-        .contentShape(Circle())
-        .accessibilityIdentifier("floating-back-button")
-        .accessibilityLabel("Back")
-    }
-
-    private var floatingDisconnectButton: some View {
-        Button {
-            disconnectFromHost()
-        } label: {
-            Image(systemName: "xmark")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(KineticColor.onSurface)
-                .frame(width: 38, height: 38)
-                .background(
-                    ZStack {
-                        Circle()
-                            .fill(.ultraThinMaterial)
-                        Circle()
-                            .fill(
-                                RadialGradient(
-                                    colors: [
-                                        Color.red.opacity(0.22),
-                                        Color.red.opacity(0.12),
-                                        Color.clear
-                                    ],
-                                    center: .center,
-                                    startRadius: 6,
-                                    endRadius: 38
-                                )
-                            )
-                            .scaleEffect(1.75)
-                    }
-                )
-                .overlay(
-                    Circle()
-                        .stroke(Color.white.opacity(0.30), lineWidth: 0.8)
-                )
-                .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 8)
-        }
-        .buttonStyle(.plain)
-        .contentShape(Circle())
-        .accessibilityIdentifier("floating-disconnect-button")
-        .accessibilityLabel("Disconnect")
     }
 
     private func goBack() {
@@ -2118,6 +2021,12 @@ private struct EdgeBackSwipeCapture: UIViewRepresentable {
         )
         recognizer.edges = .left
         view.addGestureRecognizer(recognizer)
+
+        let panRecognizer = UIPanGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handlePan(_:))
+        )
+        view.addGestureRecognizer(panRecognizer)
         return view
     }
 
@@ -2133,7 +2042,7 @@ private struct EdgeBackSwipeCapture: UIViewRepresentable {
             self.onBack = onBack
         }
 
-        @objc func handlePan(_ recognizer: UIScreenEdgePanGestureRecognizer) {
+        @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
             let translation = recognizer.translation(in: recognizer.view)
             switch recognizer.state {
             case .changed:
@@ -2293,22 +2202,6 @@ struct SettingsScreen: View {
 
                     VStack(alignment: .leading, spacing: KineticSpacing.sm) {
                         KineticSectionLabel(text: "Terminal Display")
-                        Toggle(isOn: Binding(
-                            get: { store.terminalDisplaySettings.showFloatingBackButton },
-                            set: { store.updateTerminalDisplay(showFloatingBackButton: $0) }
-                        )) {
-                            VStack(alignment: .leading, spacing: KineticSpacing.xs) {
-                                Text("Show floating Back button")
-                                    .font(KineticFont.bodySmall)
-                                    .foregroundStyle(KineticColor.onSurface)
-                                Text("Overlay a compact Back button over the terminal. Turn this off to rely on the native back gesture only.")
-                                    .font(KineticFont.caption)
-                                    .foregroundStyle(KineticColor.onSurfaceVariant)
-                            }
-                        }
-                        .tint(KineticColor.primary)
-                        .accessibilityIdentifier("settings-show-floating-back-button-toggle")
-
                         Toggle(isOn: Binding(
                             get: { store.terminalDisplaySettings.showConnectionHealthHUD },
                             set: { store.updateTerminalDisplay(showConnectionHealthHUD: $0) }

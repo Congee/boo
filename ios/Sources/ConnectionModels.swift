@@ -53,7 +53,6 @@ struct TailscaleDiscoverySettings: Codable, Equatable {
 }
 
 struct TerminalDisplaySettings: Codable, Equatable {
-    var showFloatingBackButton = true
     var showConnectionHealthHUD = true
 }
 
@@ -252,10 +251,7 @@ final class ConnectionStore: ObservableObject {
         saveTailscaleSettings()
     }
 
-    func updateTerminalDisplay(showFloatingBackButton: Bool? = nil, showConnectionHealthHUD: Bool? = nil) {
-        if let showFloatingBackButton {
-            terminalDisplaySettings.showFloatingBackButton = showFloatingBackButton
-        }
+    func updateTerminalDisplay(showConnectionHealthHUD: Bool? = nil) {
         if let showConnectionHealthHUD {
             terminalDisplaySettings.showConnectionHealthHUD = showConnectionHealthHUD
         }
@@ -376,11 +372,6 @@ final class ConnectionStore: ObservableObject {
         if let tailscalePort = config.tailscalePort {
             tailscaleDiscoverySettings.defaultPort = tailscalePort
             saveTailscaleSettings()
-        }
-
-        if let showFloatingBackButton = config.showFloatingBackButton {
-            terminalDisplaySettings.showFloatingBackButton = showFloatingBackButton
-            saveTerminalDisplaySettings()
         }
 
         if let tailscaleToken = config.tailscaleToken?.trimmingCharacters(in: .whitespacesAndNewlines),

@@ -527,30 +527,24 @@ final class BooAppLaunchTests: BooUITestCase {
         assertTerminalCanType(app, marker: "BOO_DISCOVERED_TYPED")
     }
 
-    func testFloatingDisconnectButtonClosesHostTab() {
-        let app = makeApp(autoConnect: false, resetStorage: true, includeConfiguredHost: false)
+    func testTerminalTopControlsAreHidden() {
+        let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
         app.launch()
         app.tap()
 
-        navigateToConnectScreen(app)
+        guard openLiveTerminal(app) else { return }
 
-        let discoveredRows = discoveredDaemonRows(in: app)
-        let firstRow = discoveredRows.firstMatch
-        XCTAssertTrue(firstRow.waitForExistence(timeout: 12))
-        firstRow.tap()
+        XCTAssertFalse(app.buttons["floating-back-button"].exists)
+        XCTAssertFalse(app.buttons["floating-disconnect-button"].exists)
+        XCTAssertFalse(app.buttons["disconnect-tab-button"].exists)
 
-        waitForTerminalScreen(app)
-
-        let disconnectButton = app.buttons["floating-disconnect-button"]
-        XCTAssertTrue(disconnectButton.waitForExistence(timeout: 5))
-        disconnectButton.tap()
-
+        swipeBackFromTerminal(app)
         waitForConnectScreen(app)
         XCTAssertFalse(app.otherElements["terminal-screen"].exists)
     }
 
-    func testClosingHostTabAllowsFreshDiscoveredReconnect() {
+    func testSwipeBackAllowsFreshDiscoveredReconnect() {
         let app = makeApp(autoConnect: false, resetStorage: true, includeConfiguredHost: false)
         _ = installSystemAlertHandler(for: app)
         app.launch()
@@ -566,10 +560,7 @@ final class BooAppLaunchTests: BooUITestCase {
         waitForTerminalScreen(app)
         assertTerminalCanType(app, marker: "BOO_HOST_SESSION_ONE")
 
-        let disconnectButton = app.buttons["floating-disconnect-button"]
-        XCTAssertTrue(disconnectButton.waitForExistence(timeout: 5))
-        disconnectButton.tap()
-
+        swipeBackFromTerminal(app)
         waitForConnectScreen(app)
         XCTAssertTrue(firstRow.waitForExistence(timeout: 12))
         firstRow.tap()
@@ -865,10 +856,7 @@ final class BooAppLaunchTests: BooUITestCase {
 
         guard openLiveTerminal(app) else { return }
 
-        let floatingBackButton = app.buttons["floating-back-button"]
-        XCTAssertTrue(floatingBackButton.waitForExistence(timeout: 5))
-        floatingBackButton.tap()
-
+        swipeBackFromTerminal(app)
         waitForConnectScreen(app)
 
         let discoveredRows = discoveredDaemonRows(in: app)
@@ -1013,7 +1001,7 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTFail("expected swipe-back to return to the connect screen")
     }
 
-    func testFloatingBackButtonReturnsToConnectScreen() {
+    func testSwipeBackReturnsToConnectScreen() {
         let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
         app.launch()
@@ -1021,9 +1009,7 @@ final class BooAppLaunchTests: BooUITestCase {
 
         guard openLiveTerminal(app) else { return }
 
-        let floatingBackButton = app.buttons["floating-back-button"]
-        XCTAssertTrue(floatingBackButton.waitForExistence(timeout: 5))
-        floatingBackButton.tap()
+        swipeBackFromTerminal(app)
 
         let deadline = Date().addingTimeInterval(10)
         while Date() < deadline {
@@ -1033,7 +1019,7 @@ final class BooAppLaunchTests: BooUITestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         }
 
-        XCTFail("expected floating back button to return to the connect screen")
+        XCTFail("expected swipe-back to return to the connect screen")
     }
 
     func testReconnectAndTypeAgainAfterBackNavigation() {
@@ -1045,10 +1031,7 @@ final class BooAppLaunchTests: BooUITestCase {
         guard openLiveTerminal(app) else { return }
         assertTerminalCanType(app, marker: "BOO_UI_TYPED_1")
 
-        let floatingBackButton = app.buttons["floating-back-button"]
-        XCTAssertTrue(floatingBackButton.waitForExistence(timeout: 5))
-        floatingBackButton.tap()
-
+        swipeBackFromTerminal(app)
         waitForConnectScreen(app)
 
         guard openLiveTerminal(app) else { return }
@@ -1071,11 +1054,7 @@ final class BooAppLaunchTests: BooUITestCase {
 
             let terminal = app.otherElements["terminal-screen"]
             XCTAssertTrue(terminal.waitForExistence(timeout: 10))
-            let backZone = app.otherElements["terminal-back-swipe-zone"]
-            XCTAssertTrue(backZone.waitForExistence(timeout: 5))
-            let start = backZone.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
-            let finish = app.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5))
-            start.press(forDuration: 0.01, thenDragTo: finish)
+            swipeBackFromTerminal(app)
 
             waitForConnectScreen(app)
 
@@ -1138,7 +1117,7 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTAssertTrue(app.staticTexts["terminal-banner-label"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["new-tab-button"].exists)
         XCTAssertFalse(app.buttons["close-tab-button"].exists)
-        XCTAssertTrue(app.buttons["disconnect-tab-button"].exists)
+        XCTAssertFalse(app.buttons["disconnect-tab-button"].exists)
     }
 
     func testDisconnectErrorBannerReturnsToConnectScreen() {
@@ -1153,9 +1132,8 @@ final class BooAppLaunchTests: BooUITestCase {
 
         guard openLiveTerminal(app) else { return }
 
-        let disconnectButton = app.buttons["disconnect-tab-button"]
-        XCTAssertTrue(disconnectButton.waitForExistence(timeout: 5))
-        disconnectButton.tap()
+        XCTAssertFalse(app.buttons["disconnect-tab-button"].exists)
+        swipeBackFromTerminal(app)
         waitForConnectScreen(app)
     }
 
