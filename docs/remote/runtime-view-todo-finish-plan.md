@@ -14,10 +14,20 @@ as completed in `implementation-checklist.md`.
 
 ## Remaining TODOs
 
-### 1. Real-device iOS smoke coverage
+### 1. Mobile remote terminal UX
 
-- Keep real-device smoke lanes current for both iPad and iPhone using existing
-  argv-style script flags.
+Canonical plan: [mobile-user-experience-plan.md](./mobile-user-experience-plan.md).
+
+- [x] Fix nondeterministic iOS pane render state where typed text can disappear
+      and later reappear.
+- [x] Finish iOS touch-first terminal gesture grammar beyond current pinch/scroll/tap foundation.
+- [x] Add mobile keybar with sticky modifiers, F1-F12 access, and compose/draft input.
+- [x] Add a connection health and remote debug HUD for RTT/action/render state.
+- [x] Refine reattach/resume UX by pulling current server-owned terminal state
+      from server memory; do not add client-side terminal persistence.
+
+### 2. Real-device iOS smoke coverage
+
 - 2026-04-26 physical iPad validation passed after restoring full Apple tooling
   access:
   - device discovery sees `Changsheng's iPad`
@@ -26,6 +36,9 @@ as completed in `implementation-checklist.md`.
   - simulator-vs-iPad metrics comparison passes with signpost export
   - macOS+iPad two-client runtime-view scenario passes with one local client on
     tab 1 and the iPad client on tab 2 with three visible panes
+- Refresh the physical iPhone runtime-view smoke lane when an iPhone is
+  attached and online, using the same argv-style script flags.
+- Keep repeating real-device smoke lanes as hardware/OS/Xcode changes.
 - Keep physical-device artifacts useful for debugging:
   - screenshot attachments
   - signpost exports
@@ -146,6 +159,10 @@ Completed in the canonical checklist:
 
 Latest 2026-04-26 physical iPad artifacts:
 
+- mobile gesture simulator metrics:
+  `/tmp/boo-ios-sim-mobile-gestures/simulator/metrics.json`
+- mobile gesture iPad metrics and screenshots:
+  `/tmp/boo-ios-ipad-mobile-gestures/ipad/metrics.json`
 - simulator-vs-iPad metrics:
   `/tmp/boo-ios-sim-vs-ipad-current/comparison.md`
 - macOS+iPad two-client runtime-view metrics:

@@ -60,6 +60,7 @@ XCODE_LOG="$DERIVED_DIR/xcodebuild.log"
 VALIDATOR_BIN="$DERIVED_DIR/remote-validator"
 SELFTEST_BIN="$DERIVED_DIR/protocol-codec-selftest"
 TRACE_SELFTEST_BIN="$DERIVED_DIR/trace-render-apply-selftest"
+PANE_STATE_SELFTEST_BIN="$DERIVED_DIR/pane-state-ordering-selftest"
 if [[ -n "$DEVELOPER_DIR_ARG" ]]; then
   XCODE_DEVELOPER_DIR="$DEVELOPER_DIR_ARG"
 elif [[ -d /Applications/Xcode.app/Contents/Developer ]]; then
@@ -125,6 +126,14 @@ run_swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
   -emit-executable \
   -o "$SELFTEST_BIN"
 "$SELFTEST_BIN"
+
+run_swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
+  ios/Sources/WireCodec.swift \
+  ios/Validation/PaneStateOrderingSelfTest.swift \
+  ios/Validation/PaneStateOrderingSelfTestMain.swift \
+  -emit-executable \
+  -o "$PANE_STATE_SELFTEST_BIN"
+"$PANE_STATE_SELFTEST_BIN"
 
 run_swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
   ios/Sources/BooTrace.swift \

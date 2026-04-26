@@ -21,6 +21,9 @@ enum RemoteTerminalGestureAction {
     case arrowLeft
     case arrowRight
     case scrollLines(Int)
+    case tap(CGPoint)
+    case longPress(CGPoint)
+    case twoFingerTap
 }
 
 struct KineticTopBar: View {
@@ -302,12 +305,15 @@ struct RemoteTerminalView: View {
     var onResize: ((UInt16, UInt16) -> Void)?
     var onGestureAction: ((RemoteTerminalGestureAction) -> Void)?
 
-    private let font = Font.system(size: 14, design: .monospaced)
-    private let cellWidth: CGFloat = 8.4
-    private let cellHeight: CGFloat = 17
-    private let gestureThreshold: CGFloat = 28
-    @State private var accumulatedScrollDrag: CGFloat = 0
-    @State private var lastDragTranslation: CGSize = .zero
+    private let baseFontSize: CGFloat = 14
+    private let baseCellWidth: CGFloat = 8.4
+    private let baseCellHeight: CGFloat = 17
+    @State private var fontScale: CGFloat = 1
+    @State private var pinchStartScale: CGFloat?
+
+    private var font: Font { Font.system(size: baseFontSize * fontScale, design: .monospaced) }
+    private var cellWidth: CGFloat { baseCellWidth * fontScale }
+    private var cellHeight: CGFloat { baseCellHeight * fontScale }
 
     var body: some View {
         GeometryReader { geo in
@@ -359,35 +365,18 @@ struct RemoteTerminalView: View {
                 onResize?(max(1, UInt16(newSize.width / cellWidth)), max(1, UInt16(newSize.height / cellHeight)))
             }
             .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 4)
-                    .onChanged { drag in
-                        guard let onGestureAction else { return }
-                        let dx = drag.translation.width
-                        let dy = drag.translation.height
-                        if abs(dy) > abs(dx) {
-                            let step = dy - lastDragTranslation.height
-                            accumulatedScrollDrag += step
-                            let lines = Int(accumulatedScrollDrag / cellHeight)
-                            if lines != 0 {
-                                onGestureAction(.scrollLines(lines))
-                                accumulatedScrollDrag -= CGFloat(lines) * cellHeight
-                            }
-                        }
-                        lastDragTranslation = drag.translation
+            .overlay {
+                TerminalTouchGestureOverlay(cellHeight: cellHeight, onAction: onGestureAction)
+            }
+            .simultaneousGesture(
+                MagnificationGesture()
+                    .onChanged { value in
+                        let start = pinchStartScale ?? fontScale
+                        pinchStartScale = start
+                        fontScale = min(max(start * value, 0.75), 2.25)
                     }
-                    .onEnded { drag in
-                        guard let onGestureAction else { return }
-                        let dx = drag.translation.width
-                        if abs(dx) >= abs(drag.translation.height) {
-                            if dx <= -gestureThreshold {
-                                onGestureAction(.arrowRight)
-                            } else if dx >= gestureThreshold {
-                                onGestureAction(.arrowLeft)
-                            }
-                        }
-                        accumulatedScrollDrag = 0
-                        lastDragTranslation = .zero
+                    .onEnded { _ in
+                        pinchStartScale = nil
                     }
             )
         }
@@ -399,12 +388,15 @@ struct RemoteTerminalCanvasView: View {
     let state: DecodedWireScreenState?
     var onGestureAction: ((RemoteTerminalGestureAction) -> Void)? = nil
 
-    private let font = Font.system(size: 14, design: .monospaced)
-    private let cellWidth: CGFloat = 8.4
-    private let cellHeight: CGFloat = 17
-    private let gestureThreshold: CGFloat = 28
-    @State private var accumulatedScrollDrag: CGFloat = 0
-    @State private var lastDragTranslation: CGSize = .zero
+    private let baseFontSize: CGFloat = 14
+    private let baseCellWidth: CGFloat = 8.4
+    private let baseCellHeight: CGFloat = 17
+    @State private var fontScale: CGFloat = 1
+    @State private var pinchStartScale: CGFloat?
+
+    private var font: Font { Font.system(size: baseFontSize * fontScale, design: .monospaced) }
+    private var cellWidth: CGFloat { baseCellWidth * fontScale }
+    private var cellHeight: CGFloat { baseCellHeight * fontScale }
 
     var body: some View {
         Canvas { context, size in
@@ -452,37 +444,126 @@ struct RemoteTerminalCanvasView: View {
         }
         .background(.black)
         .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 4)
-                .onChanged { drag in
-                    guard let onGestureAction else { return }
-                    let dx = drag.translation.width
-                    let dy = drag.translation.height
-                    if abs(dy) > abs(dx) {
-                        let step = dy - lastDragTranslation.height
-                        accumulatedScrollDrag += step
-                        let lines = Int(accumulatedScrollDrag / cellHeight)
-                        if lines != 0 {
-                            onGestureAction(.scrollLines(lines))
-                            accumulatedScrollDrag -= CGFloat(lines) * cellHeight
-                        }
-                    }
-                    lastDragTranslation = drag.translation
+        .overlay {
+            TerminalTouchGestureOverlay(cellHeight: cellHeight, onAction: onGestureAction)
+        }
+        .simultaneousGesture(
+            MagnificationGesture()
+                .onChanged { value in
+                    let start = pinchStartScale ?? fontScale
+                    pinchStartScale = start
+                    fontScale = min(max(start * value, 0.75), 2.25)
                 }
-                .onEnded { drag in
-                    guard let onGestureAction else { return }
-                    let dx = drag.translation.width
-                    if abs(dx) >= abs(drag.translation.height) {
-                        if dx <= -gestureThreshold {
-                            onGestureAction(.arrowRight)
-                        } else if dx >= gestureThreshold {
-                            onGestureAction(.arrowLeft)
-                        }
-                    }
-                    accumulatedScrollDrag = 0
-                    lastDragTranslation = .zero
+                .onEnded { _ in
+                    pinchStartScale = nil
                 }
         )
+    }
+}
+
+
+private struct TerminalTouchGestureOverlay: UIViewRepresentable {
+    let cellHeight: CGFloat
+    let onAction: ((RemoteTerminalGestureAction) -> Void)?
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(cellHeight: cellHeight, onAction: onAction)
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(frame: .zero)
+        view.backgroundColor = .clear
+        view.isMultipleTouchEnabled = true
+
+        let oneFingerTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleOneFingerTap(_:)))
+        oneFingerTap.numberOfTouchesRequired = 1
+        oneFingerTap.numberOfTapsRequired = 1
+        oneFingerTap.cancelsTouchesInView = false
+
+        let twoFingerTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTwoFingerTap(_:)))
+        twoFingerTap.numberOfTouchesRequired = 2
+        twoFingerTap.numberOfTapsRequired = 1
+        twoFingerTap.cancelsTouchesInView = false
+
+        let twoFingerPan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTwoFingerPan(_:)))
+        twoFingerPan.minimumNumberOfTouches = 2
+        twoFingerPan.maximumNumberOfTouches = 2
+        twoFingerPan.cancelsTouchesInView = false
+
+        let longPress = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
+        longPress.minimumPressDuration = 0.45
+        longPress.numberOfTouchesRequired = 1
+        longPress.cancelsTouchesInView = false
+
+        oneFingerTap.require(toFail: twoFingerTap)
+        oneFingerTap.require(toFail: longPress)
+        longPress.require(toFail: twoFingerPan)
+
+        view.addGestureRecognizer(oneFingerTap)
+        view.addGestureRecognizer(twoFingerTap)
+        view.addGestureRecognizer(twoFingerPan)
+        view.addGestureRecognizer(longPress)
+        context.coordinator.installRecognizers(on: view)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.cellHeight = cellHeight
+        context.coordinator.onAction = onAction
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var cellHeight: CGFloat
+        var onAction: ((RemoteTerminalGestureAction) -> Void)?
+        private var accumulatedPanY: CGFloat = 0
+
+        init(cellHeight: CGFloat, onAction: ((RemoteTerminalGestureAction) -> Void)?) {
+            self.cellHeight = cellHeight
+            self.onAction = onAction
+        }
+
+        func installRecognizers(on view: UIView) {
+            view.gestureRecognizers?.forEach { $0.delegate = self }
+        }
+
+        @objc func handleOneFingerTap(_ recognizer: UITapGestureRecognizer) {
+            guard recognizer.state == .ended, let view = recognizer.view else { return }
+            onAction?(.tap(recognizer.location(in: view)))
+        }
+
+        @objc func handleTwoFingerTap(_ recognizer: UITapGestureRecognizer) {
+            guard recognizer.state == .ended else { return }
+            onAction?(.twoFingerTap)
+        }
+
+        @objc func handleLongPress(_ recognizer: UILongPressGestureRecognizer) {
+            guard recognizer.state == .began, let view = recognizer.view else { return }
+            onAction?(.longPress(recognizer.location(in: view)))
+        }
+
+        @objc func handleTwoFingerPan(_ recognizer: UIPanGestureRecognizer) {
+            switch recognizer.state {
+            case .began:
+                accumulatedPanY = 0
+                recognizer.setTranslation(.zero, in: recognizer.view)
+            case .changed:
+                let translation = recognizer.translation(in: recognizer.view)
+                accumulatedPanY += translation.y
+                recognizer.setTranslation(.zero, in: recognizer.view)
+                let effectiveCellHeight = max(1, cellHeight)
+                let lines = Int(accumulatedPanY / effectiveCellHeight)
+                if lines != 0 {
+                    onAction?(.scrollLines(lines))
+                    accumulatedPanY -= CGFloat(lines) * effectiveCellHeight
+                }
+            default:
+                accumulatedPanY = 0
+            }
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            true
+        }
     }
 }
 
@@ -565,9 +646,11 @@ struct TerminalKeyboardAccessoryState {
     var metaActive: Bool
     let onInsertText: (String) -> Void
     let onEscape: () -> Void
+    let onCompose: () -> Void
     let onCtrlModifierEvent: (TerminalAssistantModifierEvent) -> Void
     let onAltModifierEvent: (TerminalAssistantModifierEvent) -> Void
     let onMetaModifierEvent: (TerminalAssistantModifierEvent) -> Void
+    let onFunctionKey: (Int) -> Void
     let onTab: () -> Void
     let onArrowUp: () -> Void
     let onArrowDown: () -> Void
@@ -707,21 +790,29 @@ final class TerminalProxyTextView: UITextView {
     
     private func configureAssistantBar() {
         let leftItems = [
+            assistantItem(title: "Esc", identifier: "terminal-key-escape", repeatable: true, role: .regular),
             assistantItem(title: "⌃", identifier: "terminal-key-ctrl", repeatable: false, role: .modifier),
             assistantItem(title: "⌥", identifier: "terminal-key-alt", repeatable: false, role: .modifier),
+            assistantItem(title: "⌘", identifier: "terminal-key-meta", repeatable: false, role: .modifier),
             assistantItem(title: "⇥", identifier: "terminal-key-tab", repeatable: true, role: .regular),
+            assistantItem(title: "✎", identifier: "terminal-key-compose", repeatable: false, role: .regular),
             assistantItem(title: "~", identifier: "terminal-key-tilde", repeatable: true, role: .regular),
-            assistantItem(title: "$", identifier: "terminal-key-dollar", repeatable: true, role: .regular),
-            assistantItem(title: "\\", identifier: "terminal-key-backslash", repeatable: true, role: .regular)
+            assistantItem(title: "/", identifier: "terminal-key-slash", repeatable: true, role: .regular),
+            assistantItem(title: "-", identifier: "terminal-key-dash", repeatable: true, role: .regular),
+            assistantItem(title: "|", identifier: "terminal-key-pipe", repeatable: true, role: .regular)
         ]
-        let rightItems = [
+        let functionItems = (1...12).map { index in
+            assistantItem(title: "F\(index)", identifier: "terminal-key-f\(index)", repeatable: true, role: .regular)
+        }
+        let rightItems = functionItems + [
             assistantItem(title: "[", identifier: "terminal-key-left-bracket", repeatable: true, role: .regular),
             assistantItem(title: "]", identifier: "terminal-key-right-bracket", repeatable: true, role: .regular),
             assistantItem(title: "<", identifier: "terminal-key-less-than", repeatable: true, role: .regular),
             assistantItem(title: ">", identifier: "terminal-key-greater-than", repeatable: true, role: .regular),
+            assistantItem(title: "↑", identifier: "terminal-key-up", repeatable: true, role: .regular),
+            assistantItem(title: "↓", identifier: "terminal-key-down", repeatable: true, role: .regular),
             assistantItem(title: "←", identifier: "terminal-key-left", repeatable: true, role: .regular),
-            assistantItem(title: "→", identifier: "terminal-key-right", repeatable: true, role: .regular),
-            assistantItem(title: "⌘", identifier: "terminal-key-meta", repeatable: false, role: .modifier)
+            assistantItem(title: "→", identifier: "terminal-key-right", repeatable: true, role: .regular)
         ]
 
         inputAssistantItem.leadingBarButtonGroups = [
@@ -738,6 +829,7 @@ final class TerminalProxyTextView: UITextView {
             return
         }
 
+        assistantControls["terminal-key-escape"]?.update(action: state.onEscape, modifierHandler: nil, isActive: false)
         assistantControls["terminal-key-ctrl"]?.update(
             action: nil,
             modifierHandler: { state.onCtrlModifierEvent($0) },
@@ -748,21 +840,27 @@ final class TerminalProxyTextView: UITextView {
             modifierHandler: { state.onAltModifierEvent($0) },
             isActive: state.altActive
         )
+        for index in 1...12 {
+            assistantControls["terminal-key-f\(index)"]?.update(
+                action: { state.onFunctionKey(index) },
+                modifierHandler: nil,
+                isActive: false
+            )
+        }
         assistantControls["terminal-key-tab"]?.update(action: state.onTab, modifierHandler: nil, isActive: false)
+        assistantControls["terminal-key-compose"]?.update(action: state.onCompose, modifierHandler: nil, isActive: false)
         assistantControls["terminal-key-tilde"]?.update(action: { state.onInsertText("~") }, modifierHandler: nil, isActive: false)
-        assistantControls["terminal-key-dollar"]?.update(action: { state.onInsertText("$") }, modifierHandler: nil, isActive: false)
-        assistantControls["terminal-key-backslash"]?.update(action: { state.onInsertText("\\") }, modifierHandler: nil, isActive: false)
+        assistantControls["terminal-key-slash"]?.update(action: { state.onInsertText("/") }, modifierHandler: nil, isActive: false)
+        assistantControls["terminal-key-dash"]?.update(action: { state.onInsertText("-") }, modifierHandler: nil, isActive: false)
+        assistantControls["terminal-key-pipe"]?.update(action: { state.onInsertText("|") }, modifierHandler: nil, isActive: false)
         assistantControls["terminal-key-left-bracket"]?.update(action: { state.onInsertText("[") }, modifierHandler: nil, isActive: false)
         assistantControls["terminal-key-right-bracket"]?.update(action: { state.onInsertText("]") }, modifierHandler: nil, isActive: false)
         assistantControls["terminal-key-less-than"]?.update(action: { state.onInsertText("<") }, modifierHandler: nil, isActive: false)
         assistantControls["terminal-key-greater-than"]?.update(action: { state.onInsertText(">") }, modifierHandler: nil, isActive: false)
+        assistantControls["terminal-key-up"]?.update(action: state.onArrowUp, modifierHandler: nil, isActive: false)
+        assistantControls["terminal-key-down"]?.update(action: state.onArrowDown, modifierHandler: nil, isActive: false)
         assistantControls["terminal-key-left"]?.update(action: state.onArrowLeft, modifierHandler: nil, isActive: false)
         assistantControls["terminal-key-right"]?.update(action: state.onArrowRight, modifierHandler: nil, isActive: false)
-        assistantControls["terminal-key-meta"]?.update(
-            action: nil,
-            modifierHandler: { state.onMetaModifierEvent($0) },
-            isActive: state.metaActive
-        )
     }
 
     private enum AssistantKeyRole {

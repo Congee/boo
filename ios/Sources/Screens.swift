@@ -978,6 +978,9 @@ struct TerminalTabScreen: View {
     @State private var metaModifierConsumedWhileHeld = false
     @State private var didApplyUITestForcedError = false
     @State private var didSendUITestTraceInput = false
+    @State private var showingComposeInput = false
+    @State private var composeText = ""
+    @State private var terminalGestureStatus: String?
     @State private var uiTestTraceAutomationStep: UITestTraceAutomationStep = .idle
 
     private var tabHealth: ActiveTabHealth {
@@ -1061,6 +1064,9 @@ struct TerminalTabScreen: View {
                 keyboardFocused = false
             }
         }
+        .sheet(isPresented: $showingComposeInput) {
+            composeInputSheet
+        }
         .onDisappear {
             keyboardFocused = false
             client.detachView()
@@ -1070,7 +1076,11 @@ struct TerminalTabScreen: View {
     private var terminalTabBody: some View {
         VStack(spacing: 0) {
             terminalBanner
+            connectionHealthHUD
             terminalView
+                .overlay(alignment: .topTrailing) {
+                    terminalGestureHUD
+                }
             if UITestLaunchConfiguration.current() != nil {
                 Color.clear
                     .frame(width: 1, height: 1)
@@ -1092,6 +1102,70 @@ struct TerminalTabScreen: View {
             "traceInputSent=\(didSendUITestTraceInput)",
             "traceOutputObserved=\(outputObserved)",
         ].joined(separator: " ")
+    }
+
+
+    @ViewBuilder
+    private var connectionHealthHUD: some View {
+        if store.terminalDisplaySettings.showConnectionHealthHUD {
+            HStack(spacing: KineticSpacing.sm) {
+                Image(systemName: client.connected ? "antenna.radiowaves.left.and.right" : "wifi.slash")
+                    .font(.system(size: 11, weight: .semibold))
+                Text(client.connectionHealthSummary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
+            .font(KineticFont.caption)
+            .foregroundStyle(KineticColor.onSurfaceVariant)
+            .padding(.horizontal, KineticSpacing.md)
+            .padding(.vertical, 4)
+            .background(KineticColor.surfaceContainer.opacity(0.55))
+            .accessibilityIdentifier("terminal-connection-health-hud")
+            .accessibilityLabel(client.connectionHealthSummary)
+        }
+    }
+
+    private var composeInputSheet: some View {
+        NavigationStack {
+            VStack(spacing: KineticSpacing.md) {
+                TextEditor(text: $composeText)
+                    .font(.system(size: 17, design: .monospaced))
+                    .autocorrectionDisabled(false)
+                    .textInputAutocapitalization(.never)
+                    .scrollContentBackground(.hidden)
+                    .padding(KineticSpacing.sm)
+                    .background(KineticColor.surfaceContainer.opacity(0.45))
+                    .clipShape(RoundedRectangle(cornerRadius: KineticRadius.container))
+                    .accessibilityIdentifier("terminal-compose-editor")
+
+                Text("Draft text with iOS input methods, then send it to the server-owned terminal state explicitly.")
+                    .font(KineticFont.caption)
+                    .foregroundStyle(KineticColor.onSurfaceVariant)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(KineticSpacing.lg)
+            .background(KineticColor.surface.ignoresSafeArea())
+            .navigationTitle("Compose Input")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        showingComposeInput = false
+                    }
+                    .accessibilityIdentifier("terminal-compose-cancel")
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Send") {
+                        let text = composeText
+                        composeText = ""
+                        showingComposeInput = false
+                        sendTypedText(text)
+                    }
+                    .disabled(composeText.isEmpty)
+                    .accessibilityIdentifier("terminal-compose-send")
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -1129,6 +1203,24 @@ struct TerminalTabScreen: View {
         }
     }
 
+
+    @ViewBuilder
+    private var terminalGestureHUD: some View {
+        if let terminalGestureStatus {
+            Text(terminalGestureStatus)
+                .font(KineticFont.caption)
+                .fontWeight(.semibold)
+                .padding(.horizontal, KineticSpacing.sm)
+                .padding(.vertical, KineticSpacing.xs)
+                .background(KineticColor.surfaceContainerHigh.opacity(0.88))
+                .foregroundStyle(KineticColor.onSurface)
+                .clipShape(Capsule())
+                .padding(.top, KineticSpacing.sm)
+                .padding(.trailing, KineticSpacing.sm)
+                .accessibilityIdentifier("terminal-gesture-status")
+        }
+    }
+
     private var terminalView: some View {
         let bridge = terminalKeyboardBridge
 
@@ -1140,7 +1232,14 @@ struct TerminalTabScreen: View {
                             ZStack {
                                 RemoteTerminalCanvasView(
                                     state: client.paneScreens[pane.paneId],
-                                    onGestureAction: pane.paneId == runtimeState.focusedPane ? handleTerminalGesture : nil
+                                    onGestureAction: { action in
+                                        handleTerminalGesture(
+                                            action,
+                                            paneId: pane.paneId,
+                                            viewedTabId: runtimeState.viewedTabId,
+                                            isFocused: pane.paneId == runtimeState.focusedPane
+                                        )
+                                    }
                                 )
                                 .id("terminal-pane-canvas-\(pane.paneId)-\(client.paneRevisions[pane.paneId] ?? 0)")
                             }
@@ -1160,9 +1259,6 @@ struct TerminalTabScreen: View {
                                 y: pane.frame.y + pane.frame.height / 2
                             )
                             .contentShape(Rectangle())
-                            .onTapGesture {
-                                focusRuntimePane(pane.paneId, viewedTabId: runtimeState.viewedTabId)
-                            }
                             .accessibilityElement(children: .ignore)
                             .accessibilityIdentifier("terminal-pane-\(pane.paneId)")
                             .accessibilityLabel("pane \(pane.paneId)\(pane.paneId == runtimeState.focusedPane ? " focused" : "")")
@@ -1194,19 +1290,6 @@ struct TerminalTabScreen: View {
                     }
                     .background(.black)
                     .contentShape(Rectangle())
-                    .simultaneousGesture(
-                        DragGesture(minimumDistance: 0)
-                            .onEnded { value in
-                                guard abs(value.translation.width) < 4,
-                                      abs(value.translation.height) < 4,
-                                      let paneId = runtimePaneId(
-                                        at: value.location,
-                                        in: runtimeState.visiblePanes
-                                      )
-                                else { return }
-                                focusRuntimePane(paneId, viewedTabId: runtimeState.viewedTabId)
-                            }
-                    )
                     .onAppear {
                         client.sendResize(
                             cols: max(1, UInt16(geo.size.width / 8.4)),
@@ -1317,9 +1400,11 @@ struct TerminalTabScreen: View {
             metaActive: metaModifierState.isActive,
             onInsertText: sendTypedText,
             onEscape: { sendSpecialKey([0x1b]) },
+            onCompose: { showingComposeInput = true },
             onCtrlModifierEvent: { handleModifierEvent($0, modifier: .ctrl) },
             onAltModifierEvent: { handleModifierEvent($0, modifier: .alt) },
             onMetaModifierEvent: { handleModifierEvent($0, modifier: .meta) },
+            onFunctionKey: sendFunctionKey,
             onTab: { sendSpecialKey([0x09]) },
             onArrowUp: { sendSpecialKey([0x1b, 0x5b, 0x41]) },
             onArrowDown: { sendSpecialKey([0x1b, 0x5b, 0x42]) },
@@ -1758,8 +1843,33 @@ struct TerminalTabScreen: View {
         client.sendInput(text)
     }
 
-    private func handleTerminalGesture(_ action: RemoteTerminalGestureAction) {
+    private func handleTerminalGesture(
+        _ action: RemoteTerminalGestureAction,
+        paneId: UInt64? = nil,
+        viewedTabId: UInt32? = nil,
+        isFocused: Bool = true
+    ) {
+        func focusPaneForGesture(showKeyboard: Bool) {
+            if let paneId, let viewedTabId {
+                focusRuntimePane(paneId, viewedTabId: viewedTabId)
+                terminalGestureStatus = "Focused pane \(paneId)"
+            }
+            if showKeyboard, !isDisconnected, client.activeTabId != nil {
+                keyboardFocused = true
+            }
+        }
+
         switch action {
+        case .tap:
+            focusPaneForGesture(showKeyboard: true)
+        case .longPress:
+            focusPaneForGesture(showKeyboard: true)
+            terminalGestureStatus = "Compose input"
+            showingComposeInput = true
+        case .twoFingerTap:
+            focusPaneForGesture(showKeyboard: true)
+            terminalGestureStatus = "Compose input"
+            showingComposeInput = true
         case .pageUp:
             sendSpecialKey([0x1b, 0x5b, 0x35, 0x7e])
         case .pageDown:
@@ -1769,8 +1879,35 @@ struct TerminalTabScreen: View {
         case .arrowRight:
             sendSpecialKey([0x1b, 0x5b, 0x43])
         case .scrollLines(let lines):
-            client.sendMouseWheelLines(y: Double(lines))
+            if isFocused {
+                terminalGestureStatus = "Two-finger scroll \(lines)"
+                client.sendMouseWheelLines(y: Double(lines))
+            } else {
+                terminalGestureStatus = "Focus before scroll"
+                focusPaneForGesture(showKeyboard: false)
+            }
         }
+    }
+
+
+    private func sendFunctionKey(_ index: Int) {
+        let bytes: [UInt8]
+        switch index {
+        case 1: bytes = [0x1b, 0x4f, 0x50]
+        case 2: bytes = [0x1b, 0x4f, 0x51]
+        case 3: bytes = [0x1b, 0x4f, 0x52]
+        case 4: bytes = [0x1b, 0x4f, 0x53]
+        case 5: bytes = [0x1b, 0x5b, 0x31, 0x35, 0x7e]
+        case 6: bytes = [0x1b, 0x5b, 0x31, 0x37, 0x7e]
+        case 7: bytes = [0x1b, 0x5b, 0x31, 0x38, 0x7e]
+        case 8: bytes = [0x1b, 0x5b, 0x31, 0x39, 0x7e]
+        case 9: bytes = [0x1b, 0x5b, 0x32, 0x30, 0x7e]
+        case 10: bytes = [0x1b, 0x5b, 0x32, 0x31, 0x7e]
+        case 11: bytes = [0x1b, 0x5b, 0x32, 0x33, 0x7e]
+        case 12: bytes = [0x1b, 0x5b, 0x32, 0x34, 0x7e]
+        default: return
+        }
+        sendSpecialKey(bytes)
     }
 
     private func sendSpecialKey(_ bytes: [UInt8]) {
@@ -2171,6 +2308,22 @@ struct SettingsScreen: View {
                         }
                         .tint(KineticColor.primary)
                         .accessibilityIdentifier("settings-show-floating-back-button-toggle")
+
+                        Toggle(isOn: Binding(
+                            get: { store.terminalDisplaySettings.showConnectionHealthHUD },
+                            set: { store.updateTerminalDisplay(showConnectionHealthHUD: $0) }
+                        )) {
+                            VStack(alignment: .leading, spacing: KineticSpacing.xs) {
+                                Text("Show connection health HUD")
+                                    .font(KineticFont.bodySmall)
+                                    .foregroundStyle(KineticColor.onSurface)
+                                Text("Display RTT, view, pane revision, and pane-state issue counters above the terminal.")
+                                    .font(KineticFont.caption)
+                                    .foregroundStyle(KineticColor.onSurfaceVariant)
+                            }
+                        }
+                        .tint(KineticColor.primary)
+                        .accessibilityIdentifier("settings-show-connection-health-hud-toggle")
                     }
 
                     if !store.savedNodes.isEmpty {

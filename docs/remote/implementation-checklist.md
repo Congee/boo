@@ -26,6 +26,12 @@ deferred section at the bottom of this file.
 
 ## Current TODO (updated 2026-04-26)
 
+- [x] Execute the mobile remote terminal UX plan.
+      See [mobile-user-experience-plan.md](./mobile-user-experience-plan.md).
+      iOS now keeps accepted pane text stable, routes pane-local touch gestures
+      through a UIKit gesture overlay, exposes mobile keybar/compose controls,
+      shows connection/gesture health HUDs, and reattaches from server-owned
+      runtime memory without client-side terminal persistence.
 - [x] Define scroll/search/copy-mode semantics across per-screen runtime views.
       Server state and runtime actions now treat scroll/search/copy as
       per-`view_id` state, with pure two-client coverage proving those modes do
@@ -39,11 +45,15 @@ deferred section at the bottom of this file.
       and reachable runtime-tab health; banners expose Reconnect for detached
       views and Connect/new-tab recovery for expired empty-runtime views. Remote
       diagnostics report `runtime_view_status` and `ui_attached`.
-- [ ] Keep real-device iOS UI smoke tests current for both iPad and iPhone.
+- [x] Refresh the physical iPad runtime-view smoke lane.
       2026-04-26 iPad lane is current again after restoring full Apple tooling
       access: physical iPad discovery, device-state preflight, simulator-vs-iPad
       metrics, signpost export, and the macOS+iPad two-client runtime-view
-      scenario all pass. Keep repeating this lane as hardware/OS/Xcode changes.
+      scenario all pass.
+- [ ] Refresh the physical iPhone runtime-view smoke lane when an iPhone is
+      attached and online.
+- [ ] Keep repeating real-device iOS UI smoke tests as hardware/OS/Xcode
+      changes.
 
 Recently closed:
 

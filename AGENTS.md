@@ -33,6 +33,10 @@ xcodebuild \
 ## Architecture Snapshot
 
 - `libghostty-vt` is the shared terminal runtime on macOS and Linux
+- Terminal state has one authoritative owner: the Boo server/runtime in memory.
+  Clients may cache, optimistically display safe view-local intent, and pull
+  refreshed state from the server, but must not become terminal-state authors or
+  persist independent terminal truth.
 - `boo --headless` runs the same VT/runtime stack without starting the GUI
 - `iced` owns window chrome, terminal rendering, overlays, and pane layout
 - macOS host code handles native view focus, text input/IME, clipboard, and notifications

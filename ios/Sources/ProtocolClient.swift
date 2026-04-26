@@ -930,7 +930,12 @@ final class GSPClient: ObservableObject {
     @Published var screen = ScreenState()
     @Published var paneScreens: [UInt64: DecodedWireScreenState] = [:]
     @Published private(set) var paneRevisions: [UInt64: UInt64] = [:]
+    @Published private(set) var paneStateIssueCount: UInt64 = 0
+    @Published private(set) var lastPaneStateIssue: String?
     private var paneServerRevisions: [UInt64: UInt64] = [:]
+    private var paneServerRuntimeRevisions: [UInt64: UInt64] = [:]
+    private var paneFullStateSeen: Set<UInt64> = []
+    private var paneRefreshRequestedRevisions: [UInt64: UInt64] = [:]
     @Published var activeTabId: UInt32?
     @Published var lastErrorKind: ClientWireErrorKind?
     @Published var lastError: String?
@@ -1035,9 +1040,21 @@ final class GSPClient: ObservableObject {
             "paneFrames=[\(paneFrameSummary)]",
             "paneStateIds=[\(paneStateIds)]",
             "paneRevisions=[\(paneRevisionSummary)]",
+            "paneStateIssues=\(paneStateIssueCount)",
+            "lastPaneStateIssue=\(lastPaneStateIssue ?? "<none>")",
+            "health=\(connectionHealthSummary)",
             "heartbeatRttMs=\(lastHeartbeatRttMs.map { String(format: "%.1f", $0) } ?? "nil")",
             "lastError=\(lastError ?? "<none>")",
         ].joined(separator: " ")
+    }
+
+    var connectionHealthSummary: String {
+        let heartbeat = lastHeartbeatRttMs.map { String(format: "hb %.0fms", $0) } ?? "hb n/a"
+        let state = connected ? (authenticated ? "ready" : "auth") : "down"
+        let view = runtimeState.map { "view \($0.viewId) rev \($0.viewRevision)" } ?? "view n/a"
+        let pane = runtimeState.map { "pane \($0.focusedPane) rev \(paneServerRevisions[$0.focusedPane] ?? 0)" } ?? "pane n/a"
+        let issues = paneStateIssueCount > 0 ? "issues \(paneStateIssueCount)" : "clean"
+        return [state, heartbeat, view, pane, issues].joined(separator: " · ")
     }
 
     var runtimeAccessibilityTextSnapshot: String {
@@ -1090,6 +1107,11 @@ final class GSPClient: ObservableObject {
         paneScreens = [:]
         paneRevisions = [:]
         paneServerRevisions = [:]
+        paneServerRuntimeRevisions = [:]
+        paneFullStateSeen = []
+        paneRefreshRequestedRevisions = [:]
+        paneStateIssueCount = 0
+        lastPaneStateIssue = nil
         renderTraceTracker = BooRenderTraceTracker()
         bootstrapRuntimeOnNextEmptyState = false
         pendingBootstrapRuntimeViewId = nil
@@ -1757,6 +1779,9 @@ final class GSPClient: ObservableObject {
             paneScreens = paneScreens.filter { visible.contains($0.key) }
             paneRevisions = paneRevisions.filter { visible.contains($0.key) }
             paneServerRevisions = paneServerRevisions.filter { visible.contains($0.key) }
+            paneServerRuntimeRevisions = paneServerRuntimeRevisions.filter { visible.contains($0.key) }
+            paneFullStateSeen = paneFullStateSeen.intersection(visible)
+            paneRefreshRequestedRevisions = paneRefreshRequestedRevisions.filter { visible.contains($0.key) }
             activeTabId = runtimeActiveTabId
             bootstrapInteractiveRuntimeIfNeeded(decodedRuntimeState)
             sendNoopBaselineIfNeeded(for: decodedRuntimeState)
@@ -1877,12 +1902,59 @@ final class GSPClient: ObservableObject {
 
     private func applyPaneFullState(update: DecodedPaneUpdate, state: DecodedWireScreenState) {
         guard paneUpdateTargetsCurrentView(update) else { return }
-        let lastRevision = paneServerRevisions[update.paneId] ?? 0
-        guard update.paneRevision >= lastRevision else { return }
+        guard paneUpdateIsNotOlder(update) else {
+            recordPaneStateIssue("reject stale full pane=\(update.paneId) rev=\(update.paneRevision)/rt=\(update.runtimeRevision) last=\(lastPaneUpdateRevisionSummary(update.paneId))")
+            return
+        }
+        acceptPaneScreen(update: update, state: state, kind: "full")
+    }
+
+    private func applyPaneDelta(update: DecodedPaneUpdate, deltaPayload: Data) {
+        guard paneUpdateTargetsCurrentView(update) else { return }
+        guard paneUpdateIsNewer(update) else {
+            BooTrace.debug("ignore duplicate/stale delta pane=\(update.paneId) rev=\(update.paneRevision)/rt=\(update.runtimeRevision) last=\(lastPaneUpdateRevisionSummary(update.paneId))")
+            return
+        }
+        guard paneFullStateSeen.contains(update.paneId), var state = paneScreens[update.paneId] else {
+            recordPaneStateIssue("reject delta without base pane=\(update.paneId) rev=\(update.paneRevision)")
+            requestPaneFullStateRefreshIfNeeded(update: update)
+            return
+        }
+        guard WireCodec.applyPaneDelta(deltaPayload, to: &state) else {
+            recordPaneStateIssue("reject invalid delta pane=\(update.paneId) rev=\(update.paneRevision)")
+            requestPaneFullStateRefreshIfNeeded(update: update)
+            return
+        }
+        acceptPaneScreen(update: update, state: state, kind: "delta")
+    }
+
+
+    private func paneUpdateIsNotOlder(_ update: DecodedPaneUpdate) -> Bool {
+        let lastPaneRevision = paneServerRevisions[update.paneId] ?? 0
+        let lastRuntimeRevision = paneServerRuntimeRevisions[update.paneId] ?? 0
+        return update.paneRevision > lastPaneRevision
+            || (update.paneRevision == lastPaneRevision && update.runtimeRevision >= lastRuntimeRevision)
+    }
+
+    private func paneUpdateIsNewer(_ update: DecodedPaneUpdate) -> Bool {
+        let lastPaneRevision = paneServerRevisions[update.paneId] ?? 0
+        let lastRuntimeRevision = paneServerRuntimeRevisions[update.paneId] ?? 0
+        return update.paneRevision > lastPaneRevision
+            || (update.paneRevision == lastPaneRevision && update.runtimeRevision > lastRuntimeRevision)
+    }
+
+    private func lastPaneUpdateRevisionSummary(_ paneId: UInt64) -> String {
+        "\(paneServerRevisions[paneId] ?? 0)/rt=\(paneServerRuntimeRevisions[paneId] ?? 0)"
+    }
+
+    private func acceptPaneScreen(update: DecodedPaneUpdate, state: DecodedWireScreenState, kind: String) {
         paneServerRevisions[update.paneId] = update.paneRevision
+        paneServerRuntimeRevisions[update.paneId] = update.runtimeRevision
+        paneFullStateSeen.insert(update.paneId)
+        paneRefreshRequestedRevisions.removeValue(forKey: update.paneId)
         setPaneScreen(update.paneId, state)
         bumpPaneRenderRevision(update.paneId)
-        tracePaneUpdate(update, action: "pane_update")
+        tracePaneUpdate(update, action: "pane_update_\(kind)")
         if paneUpdateIsFocusedVisiblePane(update) {
             applyDecodedScreen(state)
             screen.objectWillChange.send()
@@ -1890,21 +1962,17 @@ final class GSPClient: ObservableObject {
         }
     }
 
-    private func applyPaneDelta(update: DecodedPaneUpdate, deltaPayload: Data) {
-        guard paneUpdateTargetsCurrentView(update) else { return }
-        let lastRevision = paneServerRevisions[update.paneId] ?? 0
-        guard update.paneRevision >= lastRevision else { return }
-        guard var state = paneScreens[update.paneId] else { return }
-        guard WireCodec.applyPaneDelta(deltaPayload, to: &state) else { return }
-        paneServerRevisions[update.paneId] = update.paneRevision
-        setPaneScreen(update.paneId, state)
-        bumpPaneRenderRevision(update.paneId)
-        tracePaneUpdate(update, action: "pane_update")
-        if paneUpdateIsFocusedVisiblePane(update) {
-            applyDecodedScreen(state)
-            screen.objectWillChange.send()
-            completeRenderTraceIfNeeded(update: update)
-        }
+    private func requestPaneFullStateRefreshIfNeeded(update: DecodedPaneUpdate) {
+        guard let runtimeState, runtimeState.viewId != 0 else { return }
+        if paneRefreshRequestedRevisions[update.paneId] == update.paneRevision { return }
+        paneRefreshRequestedRevisions[update.paneId] = update.paneRevision
+        sendRuntimeAction(.attachView(viewId: runtimeState.viewId))
+    }
+
+    private func recordPaneStateIssue(_ message: String) {
+        paneStateIssueCount &+= 1
+        lastPaneStateIssue = message
+        BooTrace.debug("pane_state_issue \(message)")
     }
 
     private func setPaneScreen(_ paneId: UInt64, _ state: DecodedWireScreenState) {
@@ -1917,8 +1985,11 @@ final class GSPClient: ObservableObject {
         guard let runtimeState,
               runtimeState.visiblePaneIds.contains(runtimeState.focusedPane)
         else { return }
-        setPaneScreen(runtimeState.focusedPane, decoded)
-        bumpPaneRenderRevision(runtimeState.focusedPane)
+        let focusedPane = runtimeState.focusedPane
+        setPaneScreen(focusedPane, decoded)
+        paneFullStateSeen.insert(focusedPane)
+        paneServerRuntimeRevisions[focusedPane] = runtimeState.runtimeRevision
+        bumpPaneRenderRevision(focusedPane)
     }
 
     private func tracePaneUpdate(_ update: DecodedPaneUpdate, action: String) {
@@ -2063,6 +2134,11 @@ final class GSPClient: ObservableObject {
         paneScreens = [:]
         paneRevisions = [:]
         paneServerRevisions = [:]
+        paneServerRuntimeRevisions = [:]
+        paneFullStateSeen = []
+        paneRefreshRequestedRevisions = [:]
+        paneStateIssueCount = 0
+        lastPaneStateIssue = nil
         if message == "Remote heartbeat timed out" {
             heartbeatTimeoutCount &+= 1
         }

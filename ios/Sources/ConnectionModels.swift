@@ -54,6 +54,7 @@ struct TailscaleDiscoverySettings: Codable, Equatable {
 
 struct TerminalDisplaySettings: Codable, Equatable {
     var showFloatingBackButton = true
+    var showConnectionHealthHUD = true
 }
 
 private enum KeychainStringStore {
@@ -251,8 +252,13 @@ final class ConnectionStore: ObservableObject {
         saveTailscaleSettings()
     }
 
-    func updateTerminalDisplay(showFloatingBackButton: Bool) {
-        terminalDisplaySettings.showFloatingBackButton = showFloatingBackButton
+    func updateTerminalDisplay(showFloatingBackButton: Bool? = nil, showConnectionHealthHUD: Bool? = nil) {
+        if let showFloatingBackButton {
+            terminalDisplaySettings.showFloatingBackButton = showFloatingBackButton
+        }
+        if let showConnectionHealthHUD {
+            terminalDisplaySettings.showConnectionHealthHUD = showConnectionHealthHUD
+        }
         saveTerminalDisplaySettings()
     }
 
