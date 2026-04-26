@@ -18,6 +18,14 @@ as completed in `implementation-checklist.md`.
 
 - Keep real-device smoke lanes current for both iPad and iPhone using existing
   argv-style script flags.
+- 2026-04-26 physical iPad validation passed after restoring full Apple tooling
+  access:
+  - device discovery sees `Changsheng's iPad`
+    (`00008110-00043032360A801E`)
+  - device-state preflight reports developer mode enabled and unlocked
+  - simulator-vs-iPad metrics comparison passes with signpost export
+  - macOS+iPad two-client runtime-view scenario passes with one local client on
+    tab 1 and the iPad client on tab 2 with three visible panes
 - Keep physical-device artifacts useful for debugging:
   - screenshot attachments
   - signpost exports
@@ -135,6 +143,13 @@ Completed in the canonical checklist:
 - `bash scripts/verify-ios-signposts.sh --device-id <device-id> --team-id <team-id> --scenario runtime-view-e2e`
 - `bash scripts/test-ios-ui.sh --destination 'id=<iphone-id>' --team-id <team-id>`
 - `bash scripts/test-ios-ui.sh --destination 'id=<ipad-id>' --team-id <team-id>`
+
+Latest 2026-04-26 physical iPad artifacts:
+
+- simulator-vs-iPad metrics:
+  `/tmp/boo-ios-sim-vs-ipad-current/comparison.md`
+- macOS+iPad two-client runtime-view metrics:
+  `/tmp/boo-runtime-view-two-client-ipad-current/comparison.md`
 
 ### Hygiene
 

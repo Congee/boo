@@ -40,6 +40,10 @@ deferred section at the bottom of this file.
       views and Connect/new-tab recovery for expired empty-runtime views. Remote
       diagnostics report `runtime_view_status` and `ui_attached`.
 - [ ] Keep real-device iOS UI smoke tests current for both iPad and iPhone.
+      2026-04-26 iPad lane is current again after restoring full Apple tooling
+      access: physical iPad discovery, device-state preflight, simulator-vs-iPad
+      metrics, signpost export, and the macOS+iPad two-client runtime-view
+      scenario all pass. Keep repeating this lane as hardware/OS/Xcode changes.
 
 Recently closed:
 
