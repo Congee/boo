@@ -24,14 +24,21 @@ Implemented outcomes:
 Remaining follow-up work is intentionally post-v1 and is documented in the
 deferred section at the bottom of this file.
 
-## Current TODO (updated 2026-04-25)
+## Current TODO (updated 2026-04-26)
 
-- [ ] Define scroll/search/copy-mode semantics across per-screen runtime views.
+- [x] Define scroll/search/copy-mode semantics across per-screen runtime views.
+      Server state and runtime actions now treat scroll/search/copy as
+      per-`view_id` state, with pure two-client coverage proving those modes do
+      not leak across clients viewing the same tab.
 - [x] Implement the latency-tolerant remote UI plan:
       action acknowledgements, no-op baseline metrics, off-main iOS transport,
       safe optimistic view-local UI, and pane-aware QoS/backpressure.
       See [latency-tolerant-remote-ui.md](./latency-tolerant-remote-ui.md).
-- [ ] Refine canonical host/runtime reconnect UX and view timeout affordances.
+- [x] Refine canonical host/runtime reconnect UX and view timeout affordances.
+      iOS now distinguishes opening, detached, expired, unreachable, exited,
+      and reachable runtime-tab health; banners expose Reconnect for detached
+      views and Connect/new-tab recovery for expired empty-runtime views. Remote
+      diagnostics report `runtime_view_status` and `ui_attached`.
 - [ ] Keep real-device iOS UI smoke tests current for both iPad and iPhone.
 
 Recently closed:
@@ -209,7 +216,13 @@ Canonical design:
 
 ### Deferred / TODO
 
-- [ ] define scroll/search/copy-mode semantics across per-screen views
+- [x] define scroll/search/copy-mode semantics across per-screen views
+      - added view-local runtime-action variants for scrolling the focused pane,
+        entering/exiting copy mode, updating search query, and navigating search
+      - added per-client runtime-view state for scroll offset, copy-mode active
+        state, search active state, and search query
+      - added pure coverage for two clients sharing one tab while keeping
+        independent scroll/search/copy state
 - [x] implement latency-tolerant remote UI architecture:
       action acknowledgements, no-op roundtrip baseline, safe optimistic
       view-local UI, iOS transport off MainActor, pane-aware QoS, and
@@ -236,7 +249,11 @@ Canonical design:
 - [x] move remaining macOS/iOS toolchain cleanup into `flake.nix` so scripts no
       longer need ad hoc `env -u SDKROOT` wrappers or local library-path
       discovery to work around dev-shell leakage
-- [ ] refine canonical host/runtime reconnect UX and view timeout affordances
+- [x] refine canonical host/runtime reconnect UX and view timeout affordances
+      - iOS separates opening/detached/expired runtime-view states
+      - detached views can explicitly reattach
+      - expired empty-runtime views explicitly request recovery through `NewTab`
+      - remote diagnostics expose active/detached/expired status
 - [ ] keep real-device iOS UI smoke tests current for both iPad and iPhone
 
 ### Latency tracing and local prediction follow-up

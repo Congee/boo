@@ -119,17 +119,19 @@ These should not be confused with remote runtime-view architecture.
 
 ## Post-v1 Follow-up
 
-- scroll, search, and copy-mode behavior still need a dedicated design pass for
-  multiple screens and different viewport sizes
-- latency-tolerant remote UI is intentionally post-v1; start with action
-  acknowledgements, no-op/action metrics, iOS transport off MainActor, safe
-  optimistic view-local UI, and pane-aware QoS/backpressure as documented in
+- scroll, search, and copy-mode now have a server-side per-view state and
+  runtime-action surface. The active semantic rule is that those modes belong to
+  each `view_id`, not to the shared tab/pane runtime. Follow-up rendering work
+  may make that state visually richer, but it must not regress to a
+  process-global search/copy/scroll owner for remote clients.
+- latency-tolerant remote UI is implemented for action acknowledgements,
+  no-op/action metrics, iOS transport off MainActor, safe optimistic view-local
+  UI, and pane-aware QoS/backpressure as documented in
   [latency-tolerant-remote-ui.md](./latency-tolerant-remote-ui.md)
-- terminal text prediction remains deferred until the latency-tolerant UI slices
-  are measured
-- host-scoped reconnect UX needs continued refinement so a detached mobile view,
-  a disconnected transport, and a closed shared runtime tab are clearly
-  different user actions
+- terminal text prediction remains deferred until measurements justify it
+- host-scoped reconnect UX now distinguishes detached mobile views, expired
+  empty-runtime views, disconnected transport, unreachable tabs, exited tabs,
+  and reachable tabs; keep those states covered as UI and diagnostics evolve
 
 ## Acceptance Criteria
 

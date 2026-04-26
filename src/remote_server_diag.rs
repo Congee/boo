@@ -71,6 +71,21 @@ fn client_info_for_client(
     } else {
         None
     };
+    let runtime_view_status = if client.runtime_view.ui_attached
+        && client.runtime_view.subscribed_to_runtime
+        && client.runtime_view.viewed_tab_id.is_some()
+    {
+        "active"
+    } else if !client.runtime_view.ui_attached && client.runtime_view.viewed_tab_id.is_some() {
+        "detached"
+    } else if client.runtime_view.view_id != 0
+        && client.runtime_view.viewed_tab_id.is_none()
+        && client.runtime_view.visible_pane_ids.is_empty()
+    {
+        "expired"
+    } else {
+        "opening"
+    };
     RemoteClientInfo {
         client_id: *client_id,
         authenticated: client.authenticated,
@@ -83,12 +98,18 @@ fn client_info_for_client(
         server_socket_path: local_socket_path.map(|path| path.display().to_string()),
         challenge_pending: false,
         subscribed_to_runtime: client.runtime_view.subscribed_to_runtime,
+        runtime_view_status: runtime_view_status.to_string(),
+        ui_attached: client.runtime_view.ui_attached,
         view_id: client.runtime_view.view_id,
         viewed_tab_id: client.runtime_view.viewed_tab_id,
         focused_pane_id: client.runtime_view.focused_pane_id,
         visible_pane_count: client.runtime_view.visible_pane_ids.len(),
         has_cached_state: client.runtime_view.last_state.is_some(),
         pane_state_count: client.runtime_view.pane_states.len(),
+        scroll_offset_rows: client.runtime_view.scroll_offset_rows,
+        copy_mode_active: client.runtime_view.copy_mode_active,
+        search_active: client.runtime_view.search_active,
+        search_query: client.runtime_view.search_query.clone(),
         latest_input_seq: client.runtime_view.latest_input_seq,
         connection_age_ms: elapsed_ms(now, client.connected_at),
         authenticated_age_ms: client
@@ -169,6 +190,10 @@ mod tests {
                             cells: vec![],
                         }),
                     )]),
+                    scroll_offset_rows: 5,
+                    copy_mode_active: true,
+                    search_active: true,
+                    search_query: "panic".to_string(),
                     latest_input_seq: Some(9),
                     ..ClientRuntimeView::idle()
                 },
@@ -200,12 +225,18 @@ mod tests {
         assert_eq!(client.server_socket_path, None);
         assert!(!client.challenge_pending);
         assert!(client.subscribed_to_runtime);
+        assert_eq!(client.runtime_view_status, "active");
+        assert!(client.ui_attached);
         assert_eq!(client.view_id, 17);
         assert_eq!(client.viewed_tab_id, Some(2));
         assert_eq!(client.focused_pane_id, Some(22));
         assert_eq!(client.visible_pane_count, 2);
         assert!(client.has_cached_state);
         assert_eq!(client.pane_state_count, 1);
+        assert_eq!(client.scroll_offset_rows, 5);
+        assert!(client.copy_mode_active);
+        assert!(client.search_active);
+        assert_eq!(client.search_query, "panic");
         assert_eq!(client.latest_input_seq, Some(9));
         assert!(client.connection_age_ms <= 250);
         assert!(client.authenticated_age_ms.is_some_and(|age| age <= 250));
@@ -217,6 +248,59 @@ mod tests {
         );
         assert!(!client.heartbeat_overdue);
         assert_eq!(client.challenge_expires_in_ms, None);
+    }
+
+    #[test]
+    fn client_info_reports_runtime_view_statuses() {
+        let (tx1, _rx1) = mpsc::channel();
+        let (tx2, _rx2) = mpsc::channel();
+        let (tx3, _rx3) = mpsc::channel();
+        let mut state = empty_state();
+        state.clients.insert(
+            1,
+            ClientState {
+                runtime_view: ClientRuntimeView {
+                    view_id: 1,
+                    subscribed_to_runtime: true,
+                    viewed_tab_id: Some(10),
+                    visible_pane_ids: vec![100],
+                    ..ClientRuntimeView::idle()
+                },
+                ..remote_client(tx1)
+            },
+        );
+        state.clients.insert(
+            2,
+            ClientState {
+                runtime_view: ClientRuntimeView {
+                    view_id: 2,
+                    subscribed_to_runtime: false,
+                    ui_attached: false,
+                    viewed_tab_id: Some(10),
+                    visible_pane_ids: vec![100],
+                    ..ClientRuntimeView::idle()
+                },
+                ..remote_client(tx2)
+            },
+        );
+        state.clients.insert(
+            3,
+            ClientState {
+                runtime_view: ClientRuntimeView {
+                    view_id: 3,
+                    subscribed_to_runtime: false,
+                    viewed_tab_id: None,
+                    visible_pane_ids: vec![],
+                    ..ClientRuntimeView::idle()
+                },
+                ..remote_client(tx3)
+            },
+        );
+
+        let snapshot = clients_snapshot(&state, None, None, None);
+        assert_eq!(snapshot.clients[0].runtime_view_status, "active");
+        assert_eq!(snapshot.clients[1].runtime_view_status, "detached");
+        assert_eq!(snapshot.clients[2].runtime_view_status, "expired");
     }
 
     #[test]

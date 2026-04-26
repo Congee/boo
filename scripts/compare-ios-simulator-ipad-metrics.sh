@@ -23,6 +23,8 @@ Options:
   --port PORT                remote daemon port; reused sequentially if supplied
   --time-limit DURATION      iPad xctrace duration (default: 24s)
   --headed-simulator         try to open Simulator.app before the simulator lane
+  --simulator-live-session   boot/install/launch the simulator app and keep the server running
+  --simulator-live-seconds N keep the live simulator session open for N seconds (default: 300)
   --export-simulator-attachments
                               export XCUITest attachments from result.xcresult (default)
   --no-export-simulator-attachments
@@ -42,8 +44,8 @@ require_arg() {
   fi
 }
 
-IOS_DEVICE_ID="${BOO_IOS_DEVICE_ID:-}"
-TEAM_ID="${BOO_IOS_TEAM_ID:-}"
+IOS_DEVICE_ID=""
+TEAM_ID=""
 SIM_DESTINATION="platform=iOS Simulator,name=iPad mini (A17 Pro),OS=26.3.1"
 DERIVED_DATA="/tmp/boo-ios-compare-derived"
 OUTPUT_DIR=""
@@ -51,6 +53,8 @@ HOST=""
 PORT=""
 TIME_LIMIT="24s"
 HEADED_SIMULATOR=0
+SIMULATOR_LIVE_SESSION=0
+SIMULATOR_LIVE_SECONDS=300
 EXPORT_SIMULATOR_ATTACHMENTS=1
 SIMULATOR_ONLY=0
 IPAD_ONLY=0
@@ -78,6 +82,10 @@ while [[ $# -gt 0 ]]; do
       require_arg "$@"; TIME_LIMIT="$2"; shift 2 ;;
     --headed-simulator)
       HEADED_SIMULATOR=1; shift ;;
+    --simulator-live-session)
+      SIMULATOR_LIVE_SESSION=1; SIMULATOR_ONLY=1; shift ;;
+    --simulator-live-seconds)
+      require_arg "$@"; SIMULATOR_LIVE_SECONDS="$2"; shift 2 ;;
     --export-simulator-attachments)
       EXPORT_SIMULATOR_ATTACHMENTS=1; shift ;;
     --no-export-simulator-attachments)
@@ -165,7 +173,15 @@ start_server() {
       >"$log_path" 2>&1
   ) &
   SERVER_PID=$!
-  python3 "$ROOT/scripts/ui-test-client.py" --socket "$SOCKET_PATH" wait-ready --timeout 30 >"${log_path%.log}-ready.json"
+}
+
+wait_server_ready() {
+  local log_path="$1"
+  if ! python3 "$ROOT/scripts/ui-test-client.py" --socket "$SOCKET_PATH" wait-ready --timeout 30 >"${log_path%.log}-ready.json"; then
+    echo "Boo server did not become ready; server log follows:" >&2
+    cat "$log_path" >&2 || true
+    return 1
+  fi
 }
 
 stop_server() {
@@ -206,6 +222,72 @@ if wanted:
 if devices:
     print(devices[0].get('udid', ''))
 PY
+}
+
+preflight_simulator() {
+  local output_dir="$1"
+  local stdout_path="$output_dir/simctl-list-devices.json"
+  local stderr_path="$output_dir/simctl-list-devices.stderr"
+
+  if python3 - "$stdout_path" "$stderr_path" <<'PY'
+from pathlib import Path
+import subprocess
+import sys
+
+stdout_path = Path(sys.argv[1])
+stderr_path = Path(sys.argv[2])
+try:
+    result = subprocess.run(
+        ["xcrun", "simctl", "list", "devices", "-j"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+        check=False,
+    )
+except subprocess.TimeoutExpired as exc:
+    stdout_path.write_bytes(exc.stdout or b"")
+    stderr_path.write_bytes((exc.stderr or b"") + b"\nsimctl preflight timed out after 30s\n")
+    raise SystemExit(124)
+
+stdout_path.write_bytes(result.stdout)
+stderr_path.write_bytes(result.stderr)
+raise SystemExit(result.returncode)
+PY
+  then
+    return 0
+  fi
+
+  cat >&2 <<EOF_PREFLIGHT
+CoreSimulator is unhealthy before the Boo simulator lane starts.
+
+'xcrun simctl list devices -j' failed, so xcodebuild/ibtool cannot discover
+simulator runtimes either. This is not caused by the Boo server: the server is
+not required for this preflight.
+
+Artifacts:
+  stdout: $stdout_path
+  stderr: $stderr_path
+
+Manual-only local repair from a normal Terminal with Full Disk Access.
+This script prints these commands for diagnosis; it does not run them:
+  killall Xcode Simulator 2>/dev/null || true
+  xcrun simctl list devices
+
+If simctl still reports CoreSimulatorService/simdiskimaged failures, repair the
+system CoreSimulator runtime image state from a normal Terminal. Common repairs
+for current Xcode/CoreSimulator image-state corruption are:
+  xcodebuild -runFirstLaunch -checkForNewerComponents
+  sudo rm /Library/Developer/CoreSimulator/Images/images.plist
+  sudo rm -rf /Library/Developer/CoreSimulator/Cryptex
+  reboot
+
+After reboot, verify:
+  xcrun simctl list devices
+  xcrun simctl list runtimes
+
+EOF_PREFLIGHT
+  cat "$stderr_path" >&2 || true
+  return 1
 }
 
 open_simulator_headed() {
@@ -250,6 +332,48 @@ export_result_attachments() {
   echo "warning: failed to export simulator XCUITest attachments from $result_bundle" >&2
   cat "$attachments_dir/export.log" >&2 || true
   return 0
+}
+
+run_simulator_live_session() {
+  local sim_udid="$1"
+  local sim_port="$2"
+  local sim_dir="$3"
+  local server_log="$4"
+  local app_path="$DERIVED_DATA/simulator/Build/Products/Debug-iphonesimulator/Boo.app"
+
+  xcodebuild \
+    -project ios/Boo.xcodeproj \
+    -scheme Boo \
+    -destination "$SIM_DESTINATION" \
+    -derivedDataPath "$DERIVED_DATA/simulator" \
+    -parallel-testing-enabled NO \
+    build \
+    >"$sim_dir/xcodebuild-live.log" 2>&1
+
+  xcrun simctl install "$sim_udid" "$app_path"
+  wait_server_ready "$server_log"
+  xcrun simctl launch --terminate-running-process "$sim_udid" me.congee.boo \
+    -ApplePersistenceIgnoreState YES \
+    --boo-ui-test-mode \
+    --boo-ui-test-reset-storage \
+    --boo-ui-test-node-name="Local Boo" \
+    --boo-ui-test-host=127.0.0.1 \
+    --boo-ui-test-port="$sim_port" \
+    --boo-ui-test-auto-connect \
+    >"$sim_dir/simctl-launch.log" 2>&1
+
+  cat <<EOF_LIVE
+iOS simulator Boo live session is running:
+  server socket: $SOCKET_PATH
+  remote target: 127.0.0.1:$sim_port
+  app: me.congee.boo
+  server log: $sim_dir/boo-server.log
+  app launch log: $sim_dir/simctl-launch.log
+  duration: ${SIMULATOR_LIVE_SECONDS}s
+
+Press Ctrl-C in this terminal to stop early and clean up.
+EOF_LIVE
+  sleep "$SIMULATOR_LIVE_SECONDS"
 }
 
 write_metrics() {
@@ -395,6 +519,7 @@ if [[ "$IPAD_ONLY" != "1" ]]; then
   mkdir -p "$SIM_DIR"
   SIM_PORT="$(choose_port 127.0.0.1)"
   start_server 127.0.0.1 "$SIM_PORT" "$SIM_DIR/boo-server.log"
+  preflight_simulator "$SIM_DIR"
   SIM_NAME="$(simulator_name_from_destination)"
   SIM_UDID="$(simulator_udid_from_destination "$SIM_NAME")"
   if [[ -z "$SIM_UDID" ]]; then
@@ -406,7 +531,11 @@ if [[ "$IPAD_ONLY" != "1" ]]; then
   if [[ "$HEADED_SIMULATOR" == "1" ]]; then
     open_simulator_headed "$SIM_UDID" || true
   fi
+  if [[ "$SIMULATOR_LIVE_SESSION" == "1" ]]; then
+    run_simulator_live_session "$SIM_UDID" "$SIM_PORT" "$SIM_DIR" "$SIM_DIR/boo-server.log"
+  fi
   SIM_START="$(date '+%Y-%m-%d %H:%M:%S')"
+  wait_server_ready "$SIM_DIR/boo-server.log"
   set +e
   bash "$ROOT/scripts/test-ios-ui.sh" \
     --socket "$SOCKET_PATH" \
@@ -464,6 +593,7 @@ if [[ "$SIMULATOR_ONLY" != "1" ]]; then
   if [[ -n "$VT_LIB_DIR" ]]; then
     IPAD_ARGS+=(--vt-lib-dir "$VT_LIB_DIR")
   fi
+  wait_server_ready "$IPAD_DIR/boo-server.log"
   set +e
   bash "$ROOT/scripts/verify-ios-signposts.sh" "${IPAD_ARGS[@]}" >"$IPAD_DIR/verify-ios-signposts.log" 2>&1
   IPAD_STATUS=$?

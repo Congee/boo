@@ -29,12 +29,18 @@ pub struct RemoteClientInfo {
     pub server_socket_path: Option<String>,
     pub challenge_pending: bool,
     pub subscribed_to_runtime: bool,
+    pub runtime_view_status: String,
+    pub ui_attached: bool,
     pub view_id: u64,
     pub viewed_tab_id: Option<u32>,
     pub focused_pane_id: Option<u64>,
     pub visible_pane_count: usize,
     pub has_cached_state: bool,
     pub pane_state_count: usize,
+    pub scroll_offset_rows: i64,
+    pub copy_mode_active: bool,
+    pub search_active: bool,
+    pub search_query: String,
     pub latest_input_seq: Option<u64>,
     pub connection_age_ms: u64,
     pub authenticated_age_ms: Option<u64>,
@@ -135,12 +141,18 @@ mod tests {
             server_socket_path: None,
             challenge_pending: false,
             subscribed_to_runtime: true,
+            runtime_view_status: "active".into(),
+            ui_attached: true,
             view_id: 3,
             viewed_tab_id: Some(42),
             focused_pane_id: Some(99),
             visible_pane_count: 2,
             has_cached_state: true,
             pane_state_count: 2,
+            scroll_offset_rows: 0,
+            copy_mode_active: false,
+            search_active: false,
+            search_query: String::new(),
             latest_input_seq: Some(11),
             connection_age_ms: 100,
             authenticated_age_ms: Some(80),
@@ -155,6 +167,14 @@ mod tests {
             value.get("subscribed_to_runtime").and_then(|v| v.as_bool()),
             Some(true)
         );
+        assert_eq!(
+            value.get("runtime_view_status").and_then(|v| v.as_str()),
+            Some("active")
+        );
+        assert_eq!(
+            value.get("ui_attached").and_then(|v| v.as_bool()),
+            Some(true)
+        );
         assert_eq!(value.get("view_id").and_then(|v| v.as_u64()), Some(3));
         assert_eq!(
             value.get("viewed_tab_id").and_then(|v| v.as_u64()),
@@ -167,6 +187,22 @@ mod tests {
         assert_eq!(
             value.get("visible_pane_count").and_then(|v| v.as_u64()),
             Some(2)
+        );
+        assert_eq!(
+            value.get("scroll_offset_rows").and_then(|v| v.as_i64()),
+            Some(0)
+        );
+        assert_eq!(
+            value.get("copy_mode_active").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            value.get("search_active").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            value.get("search_query").and_then(|v| v.as_str()),
+            Some("")
         );
         assert!(value.get("current_tab").is_none());
         assert!(value.get("attached_tab").is_none());

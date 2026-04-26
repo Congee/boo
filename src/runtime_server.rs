@@ -293,6 +293,23 @@ impl BooApp {
         }
     }
 
+    fn update_remote_view_local_state(
+        &mut self,
+        client_id: u64,
+        mut update: impl FnMut(&mut crate::remote_state::ClientRuntimeView),
+    ) {
+        if let Some(server) = self.remote_server_for_client(client_id) {
+            server.update_client_view(client_id, |view| {
+                update(view);
+                view.touch_view();
+            });
+        }
+        let ui_runtime_state = self.ui_runtime_state_for_client(client_id);
+        if let Some(server) = self.remote_server_for_delivery(client_id) {
+            server.send_ui_runtime_state(client_id, &ui_runtime_state);
+        }
+    }
+
     pub(crate) fn broadcast_runtime_view_to_all_viewers(&mut self) -> Option<u32> {
         let focused_tab_id = self.active_runtime_tab_id();
         let tabs = self.current_remote_tabs();
@@ -985,6 +1002,67 @@ impl BooApp {
                     crate::trace_schema::events::REMOTE_RUNTIME_ACTION
                 );
                 match action {
+                remote::RuntimeAction::ScrollFocusedPane { view_id, rows } => {
+                    self.update_remote_view_local_state(client_id, |view| {
+                        if view.view_id == 0 {
+                            view.view_id = view_id;
+                        }
+                        view.scroll_offset_rows = view.scroll_offset_rows.saturating_add(rows).max(0);
+                    });
+                    tracing::info!(
+                        target: "boo::latency",
+                        interaction_id = client_action_id.unwrap_or_default(),
+                        view_id = view_id,
+                        tab_id = self
+                            .remote_view_state_for_client(client_id)
+                            .and_then(|view| view.viewed_tab_id)
+                            .unwrap_or_default(),
+                        pane_id = self
+                            .remote_view_state_for_client(client_id)
+                            .and_then(|view| view.focused_pane_id)
+                            .unwrap_or_default(),
+                        action = action_name,
+                        route = "remote",
+                        runtime_revision = self.runtime_revision,
+                        view_revision = self
+                            .remote_view_state_for_client(client_id)
+                            .map(|view| view.view_revision)
+                            .unwrap_or_default(),
+                        pane_revision = 0_u64,
+                        elapsed_ms = started_at.elapsed().as_secs_f64() * 1000.0,
+                        "{}",
+                        crate::trace_schema::events::REMOTE_ACTION_ACK
+                    );
+                }
+                remote::RuntimeAction::SetCopyMode { view_id, active } => {
+                    self.update_remote_view_local_state(client_id, |view| {
+                        if view.view_id == 0 {
+                            view.view_id = view_id;
+                        }
+                        view.copy_mode_active = active;
+                        if !active {
+                            view.search_active = false;
+                            view.search_query.clear();
+                        }
+                    });
+                }
+                remote::RuntimeAction::SetSearchQuery { view_id, query } => {
+                    self.update_remote_view_local_state(client_id, |view| {
+                        if view.view_id == 0 {
+                            view.view_id = view_id;
+                        }
+                        view.search_active = true;
+                        view.search_query = query.clone();
+                    });
+                }
+                remote::RuntimeAction::NavigateSearch { view_id, direction: _ } => {
+                    self.update_remote_view_local_state(client_id, |view| {
+                        if view.view_id == 0 {
+                            view.view_id = view_id;
+                        }
+                        view.search_active = true;
+                    });
+                }
                 remote::RuntimeAction::Noop { view_id } => {
                     if let Some(server) = self.remote_server_for_delivery(client_id) {
                         let ui_runtime_state = self.ui_runtime_state_for_client(client_id);
@@ -1374,6 +1452,16 @@ mod tests {
         }
         app.server.remote_server = Some(RemoteServer::for_test(Arc::new(Mutex::new(state))));
         receivers
+    }
+
+    fn close_all_runtime_tabs(app: &mut BooApp) {
+        while !app.server.tabs.is_empty() {
+            let panes = app.server.tabs.remove_tab(0);
+            for pane in panes {
+                app.free_pane_backend(pane);
+            }
+        }
+        app.invalidate_remote_tabs_cache();
     }
 
     fn collect_screen_update_types(rx: &mpsc::Receiver<OutboundMessage>) -> Vec<MessageType> {
@@ -1784,6 +1872,107 @@ mod tests {
         assert_eq!(client_one_state.tabs.len(), tabs_before + 1);
         assert_eq!(client_two_state.tabs.len(), tabs_before + 1);
         assert_eq!(client_one_state.tabs.len(), client_two_state.tabs.len());
+    }
+
+    #[test]
+    fn view_local_scroll_search_copy_state_is_independent_per_client() {
+        let mut app = BooApp::new_headless();
+        app.init_surface();
+        let tab_id = app.active_runtime_tab_id().expect("initial tab");
+        install_test_remote_server(&mut app, &[1, 2]);
+        app.sync_remote_client_runtime_view(1, true);
+        app.sync_remote_client_runtime_view(2, true);
+        {
+            let focus = app.default_focused_pane_for_tab(tab_id);
+            let visible = app.pane_ids_for_tab(tab_id);
+            let server = app.server.remote_server.as_ref().expect("remote server");
+            for client_id in [1, 2] {
+                server.update_client_view(client_id, |view| {
+                    view.viewed_tab_id = Some(tab_id);
+                    view.focused_pane_id = focus;
+                    view.visible_pane_ids = visible.clone();
+                    view.touch_view();
+                });
+            }
+        }
+
+        app.handle_server_cmd(crate::server::Command::RemoteRuntimeAction {
+            client_id: 1,
+            client_action_id: Some(101),
+            action: crate::remote::RuntimeAction::ScrollFocusedPane {
+                view_id: 1,
+                rows: 7,
+            },
+        });
+        app.handle_server_cmd(crate::server::Command::RemoteRuntimeAction {
+            client_id: 1,
+            client_action_id: Some(102),
+            action: crate::remote::RuntimeAction::SetCopyMode {
+                view_id: 1,
+                active: true,
+            },
+        });
+        app.handle_server_cmd(crate::server::Command::RemoteRuntimeAction {
+            client_id: 1,
+            client_action_id: Some(103),
+            action: crate::remote::RuntimeAction::SetSearchQuery {
+                view_id: 1,
+                query: "panic".to_string(),
+            },
+        });
+
+        let server = app.server.remote_server.as_ref().expect("remote server");
+        let client_one = server.client_runtime_view(1).expect("client 1 view");
+        let client_two = server.client_runtime_view(2).expect("client 2 view");
+        assert_eq!(client_one.viewed_tab_id, Some(tab_id));
+        assert_eq!(client_two.viewed_tab_id, Some(tab_id));
+        assert_eq!(client_one.scroll_offset_rows, 7);
+        assert!(client_one.copy_mode_active);
+        assert!(client_one.search_active);
+        assert_eq!(client_one.search_query, "panic");
+        assert_eq!(client_two.scroll_offset_rows, 0);
+        assert!(!client_two.copy_mode_active);
+        assert!(!client_two.search_active);
+        assert_eq!(client_two.search_query, "");
+    }
+
+    #[test]
+    fn remote_connected_does_not_create_tab_for_empty_runtime() {
+        let mut app = BooApp::new_headless();
+        app.init_surface();
+        close_all_runtime_tabs(&mut app);
+        install_test_remote_server(&mut app, &[1]);
+
+        app.handle_server_cmd(crate::server::Command::RemoteConnected { client_id: 1 });
+
+        let state = app.ui_runtime_state_for_client(1);
+        assert!(state.tabs.is_empty());
+        assert!(state.viewed_tab_id.is_none());
+        assert!(state.visible_panes.is_empty());
+    }
+
+    #[test]
+    fn explicit_new_tab_recovers_empty_runtime() {
+        let mut app = BooApp::new_headless();
+        app.init_surface();
+        close_all_runtime_tabs(&mut app);
+        install_test_remote_server(&mut app, &[1]);
+        app.sync_remote_client_runtime_view(1, true);
+
+        app.handle_server_cmd(crate::server::Command::RemoteRuntimeAction {
+            client_id: 1,
+            client_action_id: None,
+            action: crate::remote::RuntimeAction::NewTab {
+                view_id: 1,
+                cols: Some(120),
+                rows: Some(36),
+            },
+        });
+
+        let state = app.ui_runtime_state_for_client(1);
+        assert_eq!(state.tabs.len(), 1);
+        assert!(state.viewed_tab_id.is_some());
+        assert!(!state.visible_panes.is_empty());
     }
 
     #[test]

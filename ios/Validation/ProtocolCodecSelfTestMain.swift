@@ -257,8 +257,42 @@ struct ProtocolCodecSelfTestMain {
         ]
         assertEqual(
             resolveActiveTabHealth(activeTabId: nil, tabs: reachableTabs),
-            .inactive,
-            "missing active tab is unhealthy"
+            .opening,
+            "missing active tab is opening before runtime state"
+        )
+        assertEqual(
+            resolveActiveTabHealth(
+                activeTabId: nil,
+                tabs: reachableTabs,
+                authenticated: true,
+                runtimeViewId: 11,
+                runtimeTabCount: 1
+            ),
+            .detached,
+            "authenticated runtime view without viewed tab is detached"
+        )
+        assertEqual(
+            resolveActiveTabHealth(
+                activeTabId: nil,
+                tabs: [],
+                authenticated: true,
+                runtimeViewId: 11,
+                runtimeTabCount: 0
+            ),
+            .expired,
+            "authenticated runtime view without runtime tabs is expired"
+        )
+        assertEqual(
+            resolveActiveTabHealth(
+                activeTabId: nil,
+                tabs: reachableTabs,
+                authenticated: true,
+                runtimeViewId: 11,
+                runtimeTabCount: 1,
+                lastErrorKind: .noActiveTab
+            ),
+            .expired,
+            "no active tab error marks runtime view expired"
         )
         assertEqual(
             resolveActiveTabHealth(activeTabId: 7, tabs: reachableTabs),

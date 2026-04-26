@@ -90,6 +90,22 @@ pub enum RuntimeAction {
         amount: u16,
         ratio: Option<f64>,
     },
+    ScrollFocusedPane {
+        view_id: u64,
+        rows: i64,
+    },
+    SetCopyMode {
+        view_id: u64,
+        active: bool,
+    },
+    SetSearchQuery {
+        view_id: u64,
+        query: String,
+    },
+    NavigateSearch {
+        view_id: u64,
+        direction: String,
+    },
     Noop {
         view_id: u64,
     },
@@ -114,6 +130,10 @@ impl RuntimeAction {
             Self::DetachView { .. } => crate::trace_schema::RuntimeActionKind::DetachView,
             Self::NewSplit { .. } => crate::trace_schema::RuntimeActionKind::NewSplit,
             Self::ResizeSplit { .. } => crate::trace_schema::RuntimeActionKind::ResizeSplit,
+            Self::ScrollFocusedPane { .. } => crate::trace_schema::RuntimeActionKind::ScrollFocusedPane,
+            Self::SetCopyMode { .. } => crate::trace_schema::RuntimeActionKind::SetCopyMode,
+            Self::SetSearchQuery { .. } => crate::trace_schema::RuntimeActionKind::SetSearchQuery,
+            Self::NavigateSearch { .. } => crate::trace_schema::RuntimeActionKind::NavigateSearch,
             Self::Noop { .. } => crate::trace_schema::RuntimeActionKind::Noop,
         }
     }
@@ -419,6 +439,7 @@ impl RemoteServer {
             .any(|client| client.runtime_view.subscribed_to_runtime)
     }
 
+    #[allow(dead_code)]
     pub fn has_local_runtime_viewers(&self) -> bool {
         let state = self.state.lock().expect("remote server state poisoned");
         state
@@ -605,6 +626,7 @@ impl RemoteServer {
         send_ui_runtime_state_to_local_viewers_inner(&self.state, state);
     }
 
+    #[allow(dead_code)]
     pub fn send_ui_runtime_state_to_viewers(&self, state: &crate::control::UiRuntimeState) {
         let client_ids = {
             let state_guard = self.state.lock().expect("remote server state poisoned");
@@ -658,6 +680,7 @@ impl RemoteServer {
         }
     }
 
+    #[allow(dead_code)]
     pub fn send_full_state_to_viewers(&self, tab_id: u32, state: Arc<RemoteFullState>) {
         let client_ids = self.viewer_client_ids();
         for client_id in client_ids {
@@ -669,6 +692,7 @@ impl RemoteServer {
         publish_state_to_client(&self.state, client_id, tab_id, state);
     }
 
+    #[allow(dead_code)]
     pub fn send_pane_state_to_local_viewers(
         &self,
         tab_id: u32,
@@ -714,6 +738,7 @@ impl RemoteServer {
         );
     }
 
+    #[allow(dead_code)]
     pub fn retain_local_viewer_pane_states(&self, visible_pane_ids: &[u64]) {
         let mut guard = self.state.lock().expect("remote server state poisoned");
         retain_local_viewer_pane_states_inner(&mut guard, visible_pane_ids);
@@ -727,6 +752,7 @@ impl RemoteServer {
         });
     }
 
+    #[allow(dead_code)]
     fn viewer_client_ids(&self) -> Vec<u64> {
         let state = self.state.lock().expect("remote server state poisoned");
         viewer_client_ids(&state)
@@ -763,6 +789,10 @@ pub struct ClientRuntimeViewSnapshot {
     pub last_rendered_pane_id: Option<u64>,
     pub last_rendered_pane_revision: Option<u64>,
     pub last_rendered_runtime_revision: Option<u64>,
+    pub scroll_offset_rows: i64,
+    pub copy_mode_active: bool,
+    pub search_active: bool,
+    pub search_query: String,
 }
 
 impl From<&ClientRuntimeView> for ClientRuntimeViewSnapshot {
@@ -781,6 +811,10 @@ impl From<&ClientRuntimeView> for ClientRuntimeViewSnapshot {
             last_rendered_pane_id: value.last_rendered_pane_id,
             last_rendered_pane_revision: value.last_rendered_pane_revision,
             last_rendered_runtime_revision: value.last_rendered_runtime_revision,
+            scroll_offset_rows: value.scroll_offset_rows,
+            copy_mode_active: value.copy_mode_active,
+            search_active: value.search_active,
+            search_query: value.search_query.clone(),
         }
     }
 }

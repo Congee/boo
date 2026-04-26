@@ -138,14 +138,16 @@ Additional 2026-04-23 real-device verification result:
 
 ## Post-v1 Future Work
 
-- define how search, copy mode, and server-owned scrollback should behave when
-  multiple screens view the same runtime with different viewport sizes
-- implement latency-tolerant remote UI slices from
-  [./latency-tolerant-remote-ui.md](./latency-tolerant-remote-ui.md): action
-  acknowledgements, no-op baseline metrics, iOS transport off MainActor, safe
-  optimistic view-local UI, and pane-aware QoS/backpressure
-- refine host-scoped reconnect UX so closing a mobile view, disconnecting, and
-  closing a shared runtime tab remain visually distinct
+- continue visual/UI follow-through for per-view search, copy mode, and
+  scrollback state. The protocol/server semantics are now per `view_id`; future
+  rendering work should consume that state without making it shared runtime
+  state again.
+- keep latency-tolerant remote UI measurements current as the implemented action
+  acknowledgements, no-op baseline metrics, off-main iOS transport, optimistic
+  view-local UI, and pane-aware QoS/backpressure evolve
+- keep host-scoped reconnect UX regression-tested: closing a mobile view,
+  disconnecting transport, and closing/expiring the shared runtime tab now have
+  distinct opening/detached/expired/reachable UI states and diagnostics
 - continue to keep Tailscale discovery clearly separated from Boo service
   reachability and from Tailscale-native path telemetry
 

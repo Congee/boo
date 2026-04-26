@@ -36,6 +36,10 @@ pub(crate) enum RuntimeActionKind {
     DetachView,
     NewSplit,
     ResizeSplit,
+    ScrollFocusedPane,
+    SetCopyMode,
+    SetSearchQuery,
+    NavigateSearch,
     Noop,
 }
 
@@ -52,6 +56,10 @@ impl RuntimeActionKind {
             Self::DetachView => "detach_view",
             Self::NewSplit => "new_split",
             Self::ResizeSplit => "resize_split",
+            Self::ScrollFocusedPane => "scroll_focused_pane",
+            Self::SetCopyMode => "set_copy_mode",
+            Self::SetSearchQuery => "set_search_query",
+            Self::NavigateSearch => "navigate_search",
             Self::Noop => "noop",
         }
     }

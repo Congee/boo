@@ -950,6 +950,8 @@ final class GSPClient: ObservableObject {
     private var nextClientActionIdValue: UInt64 = 0
     private var pendingActionAcks: [UInt64: PendingActionAck] = [:]
     private var noopBaselineSentForViewIds: Set<UInt64> = []
+    private var bootstrapRuntimeOnNextEmptyState = false
+    private var pendingBootstrapRuntimeViewId: UInt64?
 
     private func debugLog(_ message: String) {
         BooTrace.debug(message)
@@ -968,14 +970,13 @@ final class GSPClient: ObservableObject {
     private nonisolated static let headerLen = 7
 
     private var runtimeActiveTabId: UInt32? {
-        runtimeState?.viewedTabId
-            ?? {
-                guard let runtimeState,
-                      runtimeState.tabs.indices.contains(runtimeState.activeTab) else {
-                    return nil
-                }
-                return runtimeState.tabs[runtimeState.activeTab].tabId
-            }()
+        if let runtimeState {
+            return runtimeState.viewedTabId
+        }
+        guard let active = tabs.first(where: { $0.active }) else {
+            return nil
+        }
+        return active.id
     }
 
     var handshakeSummary: String? {
@@ -1090,6 +1091,8 @@ final class GSPClient: ObservableObject {
         paneRevisions = [:]
         paneServerRevisions = [:]
         renderTraceTracker = BooRenderTraceTracker()
+        bootstrapRuntimeOnNextEmptyState = false
+        pendingBootstrapRuntimeViewId = nil
         stopHeartbeatLoop()
         connectStartedAt = nil
         authRequestedAt = nil
@@ -1268,6 +1271,8 @@ final class GSPClient: ObservableObject {
 
     func attachView() {
         guard currentViewId != 0 else { return }
+        bootstrapRuntimeOnNextEmptyState = true
+        pendingBootstrapRuntimeViewId = nil
         sendRuntimeAction(.attachView(viewId: currentViewId))
     }
 
@@ -1481,6 +1486,8 @@ final class GSPClient: ObservableObject {
         pendingHeartbeatToken = nil
         pendingActionAcks.removeAll()
         noopBaselineSentForViewIds.removeAll()
+        bootstrapRuntimeOnNextEmptyState = true
+        pendingBootstrapRuntimeViewId = nil
         connectionGeneration &+= 1
         connectionDebugGeneration = connectionGeneration
         connectionAttemptCount &+= 1
@@ -1751,12 +1758,40 @@ final class GSPClient: ObservableObject {
             paneRevisions = paneRevisions.filter { visible.contains($0.key) }
             paneServerRevisions = paneServerRevisions.filter { visible.contains($0.key) }
             activeTabId = runtimeActiveTabId
+            bootstrapInteractiveRuntimeIfNeeded(decodedRuntimeState)
             sendNoopBaselineIfNeeded(for: decodedRuntimeState)
         case .uiPaneFullState(let update, let state):
             applyPaneFullState(update: update, state: state)
         case .uiPaneDelta(let update, let deltaPayload):
             applyPaneDelta(update: update, deltaPayload: deltaPayload)
         }
+    }
+
+    private func bootstrapInteractiveRuntimeIfNeeded(_ state: RemoteRuntimeStateSnapshot) {
+        if hasLiveRuntimeTarget(state) {
+            bootstrapRuntimeOnNextEmptyState = false
+            pendingBootstrapRuntimeViewId = nil
+            if lastErrorKind == .noActiveTab {
+                lastErrorKind = nil
+                lastError = nil
+            }
+            return
+        }
+
+        guard bootstrapRuntimeOnNextEmptyState,
+              state.viewId != 0,
+              pendingBootstrapRuntimeViewId != state.viewId
+        else { return }
+
+        pendingBootstrapRuntimeViewId = state.viewId
+        sendRuntimeAction(
+            .newTab(viewId: state.viewId, cols: state.viewportCols, rows: state.viewportRows)
+        )
+    }
+
+    private func hasLiveRuntimeTarget(_ state: RemoteRuntimeStateSnapshot) -> Bool {
+        guard let viewedTabId = state.viewedTabId else { return false }
+        return state.tabs.contains { $0.tabId == viewedTabId }
     }
 
     private func handleRawMessage(_ message: GSPMessageType, payload: Data) {
@@ -2031,6 +2066,8 @@ final class GSPClient: ObservableObject {
         if message == "Remote heartbeat timed out" {
             heartbeatTimeoutCount &+= 1
         }
+        bootstrapRuntimeOnNextEmptyState = false
+        pendingBootstrapRuntimeViewId = nil
         lastError = message
         lastErrorKind = .remote(message)
         stopHeartbeatLoop()

@@ -21,6 +21,7 @@ pub(crate) fn local_client_ids(state: &State) -> Vec<u64> {
         .collect()
 }
 
+#[allow(dead_code)]
 pub(crate) fn viewer_client_ids(state: &State) -> Vec<u64> {
     state
         .clients
@@ -34,6 +35,7 @@ pub(crate) fn viewer_client_ids(state: &State) -> Vec<u64> {
         .collect()
 }
 
+#[allow(dead_code)]
 pub(crate) fn retain_local_viewer_pane_states(state: &mut State, visible_pane_ids: &[u64]) {
     let visible = visible_pane_ids.iter().copied().collect::<HashSet<_>>();
     for client in state.clients.values_mut() {

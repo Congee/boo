@@ -1,15 +1,21 @@
 import Foundation
 
 enum ActiveTabHealth: Equatable {
-    case inactive
+    case opening
+    case detached
+    case expired
     case unreachable(tabId: UInt32)
     case exited(tabId: UInt32)
     case reachable(tabId: UInt32)
 
     var issue: String? {
         switch self {
-        case .inactive:
-            return "No active tab"
+        case .opening:
+            return nil
+        case .detached:
+            return "Runtime view is detached; tap Reconnect to reattach"
+        case .expired:
+            return "Runtime view expired; tap Connect to request a new tab"
         case .unreachable(let tabId):
             return "Tab \(tabId) is unreachable"
         case .exited(let tabId):
@@ -21,8 +27,12 @@ enum ActiveTabHealth: Equatable {
 
     var statusSummary: String? {
         switch self {
-        case .inactive:
-            return nil
+        case .opening:
+            return "opening runtime view"
+        case .detached:
+            return "runtime view detached"
+        case .expired:
+            return "runtime view expired"
         case .unreachable(let tabId):
             return "tab \(tabId) unreachable"
         case .exited(let tabId):
@@ -34,9 +44,9 @@ enum ActiveTabHealth: Equatable {
 
     var isDisconnected: Bool {
         switch self {
-        case .reachable:
+        case .reachable, .opening, .detached:
             return false
-        case .inactive, .unreachable, .exited:
+        case .expired, .unreachable, .exited:
             return true
         }
     }
@@ -46,13 +56,32 @@ enum ActiveTabHealth: Equatable {
     }
 }
 
-func resolveActiveTabHealth(activeTabId: UInt32?, tabs: [RemoteTabInfo]) -> ActiveTabHealth {
-    guard let tabId = activeTabId else { return .inactive }
-    guard let tab = tabs.first(where: { $0.id == tabId }) else {
-        return .unreachable(tabId: tabId)
+func resolveActiveTabHealth(
+    activeTabId: UInt32?,
+    tabs: [RemoteTabInfo],
+    authenticated: Bool = true,
+    runtimeViewId: UInt64? = nil,
+    runtimeTabCount: Int? = nil,
+    lastErrorKind: ClientWireErrorKind? = nil
+) -> ActiveTabHealth {
+    if let tabId = activeTabId {
+        guard let tab = tabs.first(where: { $0.id == tabId }) else {
+            return .unreachable(tabId: tabId)
+        }
+        if tab.childExited {
+            return .exited(tabId: tabId)
+        }
+        return .reachable(tabId: tabId)
     }
-    if tab.childExited {
-        return .exited(tabId: tabId)
+
+    if lastErrorKind == .noActiveTab {
+        return .expired
     }
-    return .reachable(tabId: tabId)
+    if authenticated, runtimeViewId != nil {
+        if runtimeTabCount == 0 || tabs.isEmpty {
+            return .expired
+        }
+        return .detached
+    }
+    return .opening
 }

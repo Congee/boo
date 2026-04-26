@@ -981,7 +981,14 @@ struct TerminalTabScreen: View {
     @State private var uiTestTraceAutomationStep: UITestTraceAutomationStep = .idle
 
     private var tabHealth: ActiveTabHealth {
-        resolveActiveTabHealth(activeTabId: client.activeTabId, tabs: client.tabs)
+        resolveActiveTabHealth(
+            activeTabId: client.activeTabId,
+            tabs: client.tabs,
+            authenticated: client.authenticated,
+            runtimeViewId: client.runtimeState?.viewId,
+            runtimeTabCount: client.runtimeState?.tabs.count,
+            lastErrorKind: client.lastErrorKind
+        )
     }
 
     private var tabHealthIssue: String? {
@@ -1089,7 +1096,7 @@ struct TerminalTabScreen: View {
 
     @ViewBuilder
     private var runtimeOpeningOverlay: some View {
-        if !isDisconnected, client.activeTabId == nil {
+        if tabHealth == .opening {
             VStack(spacing: KineticSpacing.sm) {
                 ProgressView()
                     .tint(KineticColor.primary)
@@ -1109,7 +1116,10 @@ struct TerminalTabScreen: View {
         if let serverIdentityWarning {
             transportBanner(reason: serverIdentityWarning, color: KineticColor.error)
         } else if let tabHealthIssue {
-            transportBanner(reason: tabHealthIssue, color: KineticColor.error)
+            transportBanner(
+                reason: tabHealthIssue,
+                color: tabHealth == .detached ? KineticColor.tertiary : KineticColor.error
+            )
         } else if let lastError = client.lastError, !lastError.isEmpty {
             transportBanner(reason: monitor.contextualErrorMessage(lastError), color: KineticColor.error)
         } else if let disconnectReason {
@@ -1330,7 +1340,7 @@ struct TerminalTabScreen: View {
     }
 
     private var disconnectReason: String? {
-        if let tabHealthIssue {
+        if tabHealth == .expired, let tabHealthIssue {
             return tabHealthIssue
         }
         if case .connectionLost(let reason) = monitor.status {
@@ -1344,7 +1354,7 @@ struct TerminalTabScreen: View {
 
     private var activeErrorMessage: String? {
         if let serverIdentityWarning { return serverIdentityWarning }
-        if let tabHealthIssue { return tabHealthIssue }
+        if tabHealth != .opening, let tabHealthIssue { return tabHealthIssue }
         if let lastError = client.lastError, !lastError.isEmpty { return monitor.contextualErrorMessage(lastError) }
         if let disconnectReason { return monitor.contextualErrorMessage(disconnectReason) }
         return nil
@@ -1359,6 +1369,21 @@ struct TerminalTabScreen: View {
                 .accessibilityIdentifier("terminal-banner-label")
 
             HStack(spacing: KineticSpacing.sm) {
+                if tabHealth == .detached {
+                    Button("Reconnect") {
+                        client.attachView()
+                    }
+                    .buttonStyle(KineticPrimaryButtonStyle())
+                    .accessibilityIdentifier("reattach-runtime-view-button")
+                } else if tabHealth == .expired {
+                    Button("Connect") {
+                        client.clearErrorState()
+                        client.newTab()
+                    }
+                    .buttonStyle(KineticPrimaryButtonStyle())
+                    .accessibilityIdentifier("recover-runtime-view-button")
+                }
+
                 Button("Disconnect") {
                     monitor.disconnect()
                     goBack()
