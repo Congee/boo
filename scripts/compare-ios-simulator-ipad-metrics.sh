@@ -22,6 +22,11 @@ Options:
   --host HOST                host/IP advertised to the iPad lane (default: en0 IPv4)
   --port PORT                remote daemon port; reused sequentially if supplied
   --time-limit DURATION      iPad xctrace duration (default: 24s)
+  --headed-simulator         try to open Simulator.app before the simulator lane
+  --export-simulator-attachments
+                              export XCUITest attachments from result.xcresult (default)
+  --no-export-simulator-attachments
+                              skip XCUITest attachment export
   --simulator-only           skip the physical-device lane
   --ipad-only                skip the simulator lane
   --vt-lib-dir PATH
@@ -45,6 +50,8 @@ OUTPUT_DIR=""
 HOST=""
 PORT=""
 TIME_LIMIT="24s"
+HEADED_SIMULATOR=0
+EXPORT_SIMULATOR_ATTACHMENTS=1
 SIMULATOR_ONLY=0
 IPAD_ONLY=0
 VT_LIB_DIR="${BOO_VT_LIB_DIR:-${VT_LIB_DIR:-}}"
@@ -69,6 +76,12 @@ while [[ $# -gt 0 ]]; do
       require_arg "$@"; PORT="$2"; shift 2 ;;
     --time-limit)
       require_arg "$@"; TIME_LIMIT="$2"; shift 2 ;;
+    --headed-simulator)
+      HEADED_SIMULATOR=1; shift ;;
+    --export-simulator-attachments)
+      EXPORT_SIMULATOR_ATTACHMENTS=1; shift ;;
+    --no-export-simulator-attachments)
+      EXPORT_SIMULATOR_ATTACHMENTS=0; shift ;;
     --simulator-only)
       SIMULATOR_ONLY=1; shift ;;
     --ipad-only)
@@ -193,6 +206,50 @@ if wanted:
 if devices:
     print(devices[0].get('udid', ''))
 PY
+}
+
+open_simulator_headed() {
+  local udid="$1"
+  local app_path
+  app_path="$(xcode-select -p)/Applications/Simulator.app"
+
+  if open -b com.apple.iphonesimulator --args -CurrentDeviceUDID "$udid" >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ -d "$app_path" ]] && open "$app_path" --args -CurrentDeviceUDID "$udid" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  cat >&2 <<EOF_WARN
+warning: could not open Simulator.app for headed mode; continuing with xcodebuild.
+warning: visual evidence will still be exported from the UI test result bundle when available.
+EOF_WARN
+  return 1
+}
+
+export_result_attachments() {
+  local result_bundle="$1"
+  local attachments_dir="$2"
+
+  if [[ "$EXPORT_SIMULATOR_ATTACHMENTS" != "1" ]]; then
+    return 0
+  fi
+  if [[ ! -d "$result_bundle" ]]; then
+    return 0
+  fi
+
+  rm -rf "$attachments_dir"
+  mkdir -p "$attachments_dir"
+  if xcrun xcresulttool export attachments \
+    --path "$result_bundle" \
+    --output-path "$attachments_dir" \
+    >"$attachments_dir/export.log" 2>&1; then
+    return 0
+  fi
+
+  echo "warning: failed to export simulator XCUITest attachments from $result_bundle" >&2
+  cat "$attachments_dir/export.log" >&2 || true
+  return 0
 }
 
 write_metrics() {
@@ -346,6 +403,9 @@ if [[ "$IPAD_ONLY" != "1" ]]; then
   fi
   xcrun simctl boot "$SIM_UDID" >/dev/null 2>&1 || true
   xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null
+  if [[ "$HEADED_SIMULATOR" == "1" ]]; then
+    open_simulator_headed "$SIM_UDID" || true
+  fi
   SIM_START="$(date '+%Y-%m-%d %H:%M:%S')"
   set +e
   bash "$ROOT/scripts/test-ios-ui.sh" \
@@ -360,6 +420,7 @@ if [[ "$IPAD_ONLY" != "1" ]]; then
     >"$SIM_DIR/xcodebuild.log" 2>&1
   SIM_STATUS=$?
   set -e
+  export_result_attachments "$SIM_DIR/result.xcresult" "$SIM_DIR/attachments"
   SIM_END="$(date '+%Y-%m-%d %H:%M:%S')"
   xcrun simctl boot "$SIM_UDID" >/dev/null 2>&1 || true
   xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null
@@ -428,6 +489,9 @@ iOS simulator vs iPad metrics artifacts:
 EOF_SUMMARY
 if [[ -n "$SIM_METRICS" ]]; then
   echo "  simulator metrics: $SIM_METRICS"
+  if [[ -d "$OUTPUT_DIR/simulator/attachments" ]]; then
+    echo "  simulator attachments: $OUTPUT_DIR/simulator/attachments"
+  fi
 fi
 if [[ -n "$IPAD_METRICS" ]]; then
   echo "  iPad metrics: $IPAD_METRICS"
