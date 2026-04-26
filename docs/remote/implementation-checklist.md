@@ -27,7 +27,7 @@ deferred section at the bottom of this file.
 ## Current TODO (updated 2026-04-25)
 
 - [ ] Define scroll/search/copy-mode semantics across per-screen runtime views.
-- [ ] Implement the latency-tolerant remote UI plan:
+- [x] Implement the latency-tolerant remote UI plan:
       action acknowledgements, no-op baseline metrics, off-main iOS transport,
       safe optimistic view-local UI, and pane-aware QoS/backpressure.
       See [latency-tolerant-remote-ui.md](./latency-tolerant-remote-ui.md).
@@ -71,10 +71,10 @@ Canonical design:
 
 ### iOS transport isolation
 
-- [ ] Move `NWConnection`, heartbeat, frame IO, and decode off MainActor.
-- [ ] Keep MainActor responsible only for reduced state publication into
+- [x] Move `NWConnection`, heartbeat, frame IO, and decode off MainActor.
+- [x] Keep MainActor responsible only for reduced state publication into
       SwiftUI.
-- [ ] Verify heartbeat/no-op ack can progress while UI/AX work is busy.
+- [x] Verify heartbeat/no-op ack can progress while UI/AX work is busy.
 - [x] Replace sleep-based readiness checks with deterministic protocol-state
       waits.
 
@@ -91,21 +91,21 @@ Canonical design:
 
 ### Pane-aware QoS and backpressure
 
-- [ ] Replace single latest-screen coalescing with pane-aware scheduling.
+- [x] Replace single latest-screen coalescing with pane-aware scheduling.
 - [x] Prioritize health/control/action acknowledgement frames.
-- [ ] Prioritize focused visible pane updates per client.
-- [ ] Coalesce non-focused visible pane updates by pane.
-- [ ] Add starvation guard for non-focused visible panes.
-- [ ] Add queue-depth/render-ack feedback for passive pane throttling.
-- [ ] Preserve per-client priority differences when clients view/focus
+- [x] Prioritize focused visible pane updates per client.
+- [x] Coalesce non-focused visible pane updates by pane.
+- [x] Add starvation guard for non-focused visible panes.
+- [x] Add queue-depth/render-ack feedback for passive pane throttling.
+- [x] Preserve per-client priority differences when clients view/focus
       different tabs or panes.
 
 ### Future transport separation
 
-- [ ] Evaluate multi-stream QUIC only after action ack, off-main iOS transport,
+- [x] Evaluate multi-stream QUIC only after action ack, off-main iOS transport,
       optimistic UI, and QoS metrics are available.
-- [ ] Evaluate unreliable delivery only for staleable transient UI state.
-- [ ] Keep authoritative terminal state on reliable state/delta paths.
+- [x] Evaluate unreliable delivery only for staleable transient UI state.
+- [x] Keep authoritative terminal state on reliable state/delta paths.
 
 ## Post-completion verification notes
 
@@ -210,7 +210,7 @@ Canonical design:
 ### Deferred / TODO
 
 - [ ] define scroll/search/copy-mode semantics across per-screen views
-- [ ] implement latency-tolerant remote UI architecture:
+- [x] implement latency-tolerant remote UI architecture:
       action acknowledgements, no-op roundtrip baseline, safe optimistic
       view-local UI, iOS transport off MainActor, pane-aware QoS, and
       backpressure. Keep terminal text prediction deferred until those slices
@@ -264,7 +264,7 @@ Canonical design:
   - [x] focus pane
   - [x] viewed tab/statusbar selection
   - [x] split-resize handle geometry
-- [ ] keep terminal text/content prediction deferred until action acks,
+- [x] keep terminal text/content prediction deferred until action acks,
       optimistic view-local UI, off-main iOS transport, and pane-aware QoS are
       measured
 - [x] bridge Rust traces to Apple OSLog with `tracing-oslog`

@@ -222,6 +222,7 @@ events = [
     'remote.input',
     'remote.pane_update',
     'remote.render_apply',
+    'remote.render_ack',
     'remote.heartbeat_rtt',
 ]
 
@@ -296,6 +297,7 @@ events = [
     'remote.input',
     'remote.pane_update',
     'remote.render_apply',
+    'remote.render_ack',
     'remote.focus_pane',
     'remote.set_viewed_tab',
 ]

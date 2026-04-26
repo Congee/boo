@@ -12,6 +12,7 @@ enum GSPMessageType: UInt8 {
     case appMouseEvent = 0x10
     case heartbeat = 0x11
     case runtimeAction = 0x12
+    case renderAck = 0x13
 
     case authOk = 0x80
     case authFail = 0x81
@@ -195,6 +196,14 @@ private enum OutboundRuntimeAction: Encodable {
     }
 }
 
+private enum DecodedInboundMessage {
+    case raw(GSPMessageType, Data)
+    case heartbeatAck(UInt64?)
+    case uiRuntimeState(RemoteRuntimeStateSnapshot)
+    case uiPaneFullState(DecodedPaneUpdate, DecodedWireScreenState)
+    case uiPaneDelta(DecodedPaneUpdate, Data)
+}
+
 private struct OutboundRuntimeActionEnvelope: Encodable {
     let clientActionId: UInt64
     let action: OutboundRuntimeAction
@@ -215,6 +224,15 @@ private struct PendingActionAck {
     let startedAt: Date
     let fields: BooTraceFields
     var optimistic: PendingOptimisticRuntimeState?
+}
+
+private extension Data {
+    mutating func appendLittleEndian<T: FixedWidthInteger>(_ value: T) {
+        var littleEndian = value.littleEndian
+        Swift.withUnsafeBytes(of: &littleEndian) { bytes in
+            append(contentsOf: bytes)
+        }
+    }
 }
 
 struct WireCell {
@@ -1580,31 +1598,115 @@ final class GSPClient: ObservableObject {
         }
     }
 
+    private enum HeaderDecodeResult {
+        case failure(String)
+        case closed
+        case incomplete
+        case invalidMagic
+        case frame(type: UInt8, payloadLen: UInt32)
+    }
+
+    private enum PayloadDecodeResult {
+        case failure(String)
+        case closed
+        case incomplete
+        case message(DecodedInboundMessage)
+    }
+
+    nonisolated private static func decodeHeader(
+        content: Data?,
+        isComplete: Bool,
+        error: NWError?
+    ) -> HeaderDecodeResult {
+        if let error {
+            BooTrace.error("readHeader error = \(error)")
+            return .failure("Receive failed: \(error)")
+        }
+        guard let data = content, data.count == headerLen else {
+            return isComplete ? .closed : .incomplete
+        }
+        guard data[0] == magic[0], data[1] == magic[1] else {
+            return .invalidMagic
+        }
+        let payloadLen = data.withUnsafeBytes {
+            UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 3, as: UInt32.self))
+        }
+        return .frame(type: data[2], payloadLen: payloadLen)
+    }
+
+    nonisolated private static func decodePayload(
+        type: UInt8,
+        content: Data?,
+        isComplete: Bool,
+        error: NWError?
+    ) -> PayloadDecodeResult {
+        if let error {
+            BooTrace.error("readPayload error = \(error)")
+            return .failure("Receive failed: \(error)")
+        }
+        guard let data = content else {
+            return isComplete ? .closed : .incomplete
+        }
+        return .message(decodeInboundMessage(type: type, payload: data))
+    }
+
+    nonisolated private static func decodeInboundMessage(
+        type: UInt8,
+        payload: Data
+    ) -> DecodedInboundMessage {
+        guard let message = GSPMessageType(rawValue: type) else {
+            return .raw(.errorMsg, Data())
+        }
+        switch message {
+        case .heartbeatAck:
+            let token = payload.count >= 8
+                ? payload.withUnsafeBytes {
+                    UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt64.self))
+                }
+                : nil
+            return .heartbeatAck(token)
+        case .uiRuntimeState:
+            if let state = decodeRemoteRuntimeState(payload) {
+                return .uiRuntimeState(state)
+            }
+            return .raw(message, payload)
+        case .uiPaneFullState:
+            if let (update, state) = WireCodec.decodePaneFullState(payload) {
+                return .uiPaneFullState(update, state)
+            }
+            return .raw(message, payload)
+        case .uiPaneDelta:
+            if let (update, deltaPayload) = WireCodec.decodePaneDelta(payload) {
+                return .uiPaneDelta(update, deltaPayload)
+            }
+            return .raw(message, payload)
+        default:
+            return .raw(message, payload)
+        }
+    }
+
     private func readHeader(generation: UInt64) {
         connection?.receive(minimumIncompleteLength: Self.headerLen, maximumLength: Self.headerLen) { [weak self] content, _, isComplete, error in
+            let headerResult = Self.decodeHeader(content: content, isComplete: isComplete, error: error)
             Task { @MainActor in
                 guard let self, self.connectionGeneration == generation else { return }
-                if let error {
-                    BooTrace.error("readHeader error = \(error)")
-                    self.protocolError("Receive failed: \(error)")
+                switch headerResult {
+                case .failure(let message):
+                    self.protocolError(message)
+                case .closed:
+                    self.protocolError("Connection closed")
+                case .incomplete:
                     return
-                }
-                guard let data = content, data.count == Self.headerLen else {
-                    if isComplete { self.protocolError("Connection closed") }
-                    return
-                }
-                guard data[0] == Self.magic[0], data[1] == Self.magic[1] else {
+                case .invalidMagic:
                     self.lastError = "Invalid protocol header"
                     self.disconnect()
-                    return
-                }
-                let type = data[2]
-                let payloadLen = data.withUnsafeBytes { UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 3, as: UInt32.self)) }
-                if payloadLen == 0 {
-                    self.handleMessage(type: type, payload: Data())
-                    self.readHeader(generation: generation)
-                } else {
-                    self.readPayload(type: type, length: Int(payloadLen), generation: generation)
+                case .frame(let type, let payloadLen):
+                    if payloadLen == 0 {
+                        self.handleDecodedMessage(Self.decodeInboundMessage(type: type, payload: Data()))
+                        self.readHeader(generation: generation)
+                    } else {
+                        self.readPayload(type: type, length: Int(payloadLen), generation: generation)
+                    }
                 }
             }
         }
@@ -1612,25 +1714,52 @@ final class GSPClient: ObservableObject {
 
     private func readPayload(type: UInt8, length: Int, generation: UInt64) {
         connection?.receive(minimumIncompleteLength: length, maximumLength: length) { [weak self] content, _, isComplete, error in
+            let payloadResult = Self.decodePayload(type: type, content: content, isComplete: isComplete, error: error)
             Task { @MainActor in
                 guard let self, self.connectionGeneration == generation else { return }
-                if let error {
-                    BooTrace.error("readPayload error = \(error)")
-                    self.protocolError("Receive failed: \(error)")
+                switch payloadResult {
+                case .failure(let message):
+                    self.protocolError(message)
+                case .closed:
+                    self.protocolError("Connection closed")
+                case .incomplete:
                     return
+                case .message(let decoded):
+                    self.handleDecodedMessage(decoded)
+                    self.readHeader(generation: generation)
                 }
-                guard let data = content else {
-                    if isComplete { self.protocolError("Connection closed") }
-                    return
-                }
-                self.handleMessage(type: type, payload: data)
-                self.readHeader(generation: generation)
             }
         }
     }
 
     private func handleMessage(type: UInt8, payload: Data) {
         guard let message = GSPMessageType(rawValue: type) else { return }
+        handleDecodedMessage(Self.decodeInboundMessage(type: message.rawValue, payload: payload))
+    }
+
+    private func handleDecodedMessage(_ decoded: DecodedInboundMessage) {
+        switch decoded {
+        case .raw(let message, let payload):
+            handleRawMessage(message, payload: payload)
+        case .heartbeatAck(let token):
+            handleHeartbeatAck(token: token)
+        case .uiRuntimeState(let decodedRuntimeState):
+            runtimeState = decodedRuntimeState
+            completeActionAckIfNeeded(decodedRuntimeState)
+            let visible = Set(decodedRuntimeState.visiblePaneIds)
+            paneScreens = paneScreens.filter { visible.contains($0.key) }
+            paneRevisions = paneRevisions.filter { visible.contains($0.key) }
+            paneServerRevisions = paneServerRevisions.filter { visible.contains($0.key) }
+            activeTabId = runtimeActiveTabId
+            sendNoopBaselineIfNeeded(for: decodedRuntimeState)
+        case .uiPaneFullState(let update, let state):
+            applyPaneFullState(update: update, state: state)
+        case .uiPaneDelta(let update, let deltaPayload):
+            applyPaneDelta(update: update, deltaPayload: deltaPayload)
+        }
+    }
+
+    private func handleRawMessage(_ message: GSPMessageType, payload: Data) {
         debugLog("recv \(message)")
         switch message {
         case .authOk:
@@ -1662,74 +1791,19 @@ final class GSPClient: ObservableObject {
         case .errorMsg:
             applyReducedMessage(.errorMsg, payload: payload)
         case .heartbeatAck:
-            lastHeartbeatAck = Date()
-            if payload.count >= 8 {
-                let token = payload.withUnsafeBytes {
-                    UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt64.self))
-                }
-                if let pendingHeartbeatToken, token == pendingHeartbeatToken, let lastHeartbeatSent {
-                    let rttMs = Date().timeIntervalSince(lastHeartbeatSent) * 1000
-                    lastHeartbeatRttMs = rttMs
-                    heartbeatAckCount &+= 1
-                    self.pendingHeartbeatToken = nil
-                    BooTrace.log(.remoteHeartbeatRtt, BooTraceFields(
-                        interactionId: token,
-                        viewId: currentViewId,
-                        tabId: runtimeState?.viewedTabId ?? 0,
-                        paneId: runtimeState?.focusedPane ?? 0,
-                        action: "heartbeat_ack",
-                        route: "remote",
-                        runtimeRevision: runtimeState?.runtimeRevision ?? 0,
-                        viewRevision: runtimeState?.viewRevision ?? 0,
-                        paneRevision: runtimeState.map { paneRevisions[$0.focusedPane] ?? 0 } ?? 0,
-                        elapsedMs: rttMs
-                    ))
-                }
-            }
+            handleHeartbeatAck(token: payload.count >= 8 ? payload.withUnsafeBytes {
+                UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt64.self))
+            } : nil)
         case .clipboard:
             handleClipboard(payload)
         case .uiRuntimeState:
-            guard let decodedRuntimeState = decodeRemoteRuntimeState(payload) else { return }
-            runtimeState = decodedRuntimeState
-            completeActionAckIfNeeded(decodedRuntimeState)
-            let visible = Set(decodedRuntimeState.visiblePaneIds)
-            paneScreens = paneScreens.filter { visible.contains($0.key) }
-            paneRevisions = paneRevisions.filter { visible.contains($0.key) }
-            paneServerRevisions = paneServerRevisions.filter { visible.contains($0.key) }
-            activeTabId = runtimeActiveTabId
-            sendNoopBaselineIfNeeded(for: decodedRuntimeState)
+            break
         case .uiAppearance:
             break
         case .uiPaneFullState:
-            guard let (update, state) = WireCodec.decodePaneFullState(payload) else { return }
-            guard paneUpdateTargetsCurrentView(update) else { return }
-            let lastRevision = paneServerRevisions[update.paneId] ?? 0
-            guard update.paneRevision >= lastRevision else { return }
-            paneServerRevisions[update.paneId] = update.paneRevision
-            setPaneScreen(update.paneId, state)
-            bumpPaneRenderRevision(update.paneId)
-            tracePaneUpdate(update, action: "pane_update")
-            if paneUpdateIsFocusedVisiblePane(update) {
-                applyDecodedScreen(state)
-                screen.objectWillChange.send()
-                completeRenderTraceIfNeeded(update: update)
-            }
+            break
         case .uiPaneDelta:
-            guard let (update, deltaPayload) = WireCodec.decodePaneDelta(payload) else { return }
-            guard paneUpdateTargetsCurrentView(update) else { return }
-            let lastRevision = paneServerRevisions[update.paneId] ?? 0
-            guard update.paneRevision >= lastRevision else { return }
-            guard var state = paneScreens[update.paneId] else { return }
-            guard WireCodec.applyPaneDelta(deltaPayload, to: &state) else { return }
-            paneServerRevisions[update.paneId] = update.paneRevision
-            setPaneScreen(update.paneId, state)
-            bumpPaneRenderRevision(update.paneId)
-            tracePaneUpdate(update, action: "pane_update")
-            if paneUpdateIsFocusedVisiblePane(update) {
-                applyDecodedScreen(state)
-                screen.objectWillChange.send()
-                completeRenderTraceIfNeeded(update: update)
-            }
+            break
         default:
             break
         }
@@ -1739,6 +1813,63 @@ final class GSPClient: ObservableObject {
         var updated = paneRevisions
         updated[paneId] = (updated[paneId] ?? 0) &+ 1
         paneRevisions = updated
+    }
+
+    private func handleHeartbeatAck(token: UInt64?) {
+        lastHeartbeatAck = Date()
+        guard let token,
+              let pendingHeartbeatToken,
+              token == pendingHeartbeatToken,
+              let lastHeartbeatSent
+        else { return }
+        let rttMs = Date().timeIntervalSince(lastHeartbeatSent) * 1000
+        lastHeartbeatRttMs = rttMs
+        heartbeatAckCount &+= 1
+        self.pendingHeartbeatToken = nil
+        BooTrace.log(.remoteHeartbeatRtt, BooTraceFields(
+            interactionId: token,
+            viewId: currentViewId,
+            tabId: runtimeState?.viewedTabId ?? 0,
+            paneId: runtimeState?.focusedPane ?? 0,
+            action: "heartbeat_ack",
+            route: "remote",
+            runtimeRevision: runtimeState?.runtimeRevision ?? 0,
+            viewRevision: runtimeState?.viewRevision ?? 0,
+            paneRevision: runtimeState.map { paneRevisions[$0.focusedPane] ?? 0 } ?? 0,
+            elapsedMs: rttMs
+        ))
+    }
+
+    private func applyPaneFullState(update: DecodedPaneUpdate, state: DecodedWireScreenState) {
+        guard paneUpdateTargetsCurrentView(update) else { return }
+        let lastRevision = paneServerRevisions[update.paneId] ?? 0
+        guard update.paneRevision >= lastRevision else { return }
+        paneServerRevisions[update.paneId] = update.paneRevision
+        setPaneScreen(update.paneId, state)
+        bumpPaneRenderRevision(update.paneId)
+        tracePaneUpdate(update, action: "pane_update")
+        if paneUpdateIsFocusedVisiblePane(update) {
+            applyDecodedScreen(state)
+            screen.objectWillChange.send()
+            completeRenderTraceIfNeeded(update: update)
+        }
+    }
+
+    private func applyPaneDelta(update: DecodedPaneUpdate, deltaPayload: Data) {
+        guard paneUpdateTargetsCurrentView(update) else { return }
+        let lastRevision = paneServerRevisions[update.paneId] ?? 0
+        guard update.paneRevision >= lastRevision else { return }
+        guard var state = paneScreens[update.paneId] else { return }
+        guard WireCodec.applyPaneDelta(deltaPayload, to: &state) else { return }
+        paneServerRevisions[update.paneId] = update.paneRevision
+        setPaneScreen(update.paneId, state)
+        bumpPaneRenderRevision(update.paneId)
+        tracePaneUpdate(update, action: "pane_update")
+        if paneUpdateIsFocusedVisiblePane(update) {
+            applyDecodedScreen(state)
+            screen.objectWillChange.send()
+            completeRenderTraceIfNeeded(update: update)
+        }
     }
 
     private func setPaneScreen(_ paneId: UInt64, _ state: DecodedWireScreenState) {
@@ -1819,6 +1950,29 @@ final class GSPClient: ObservableObject {
             elapsedMs: 0
         )
         renderTraceTracker.completeRenderApply(fields: fields, tabId: update.tabId)
+        sendRenderAck(update: update)
+    }
+
+    private func sendRenderAck(update: DecodedPaneUpdate) {
+        var payload = Data()
+        payload.appendLittleEndian(runtimeState?.viewId ?? currentViewId)
+        payload.appendLittleEndian(update.tabId)
+        payload.appendLittleEndian(update.paneId)
+        payload.appendLittleEndian(update.paneRevision)
+        payload.appendLittleEndian(update.runtimeRevision)
+        sendMessage(type: .renderAck, payload: payload)
+        BooTrace.log(.remoteRenderAck, BooTraceFields(
+            interactionId: 0,
+            viewId: runtimeState?.viewId ?? currentViewId,
+            tabId: update.tabId,
+            paneId: update.paneId,
+            action: "render_ack",
+            route: "remote",
+            runtimeRevision: update.runtimeRevision,
+            viewRevision: runtimeState?.viewRevision ?? 0,
+            paneRevision: update.paneRevision,
+            elapsedMs: 0
+        ))
     }
 
     private func completeFocusedScreenRenderTraceIfNeeded() {

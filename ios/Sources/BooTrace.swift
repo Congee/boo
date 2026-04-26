@@ -15,6 +15,7 @@ enum BooTraceEvent: String {
     case remoteActionAck = "remote.action_ack"
     case remoteOptimisticApply = "remote.optimistic_apply"
     case remoteReconcile = "remote.reconcile"
+    case remoteRenderAck = "remote.render_ack"
 
     var signpostName: StaticString {
         switch self {
@@ -31,6 +32,7 @@ enum BooTraceEvent: String {
         case .remoteActionAck: return "remote.action_ack"
         case .remoteOptimisticApply: return "remote.optimistic_apply"
         case .remoteReconcile: return "remote.reconcile"
+        case .remoteRenderAck: return "remote.render_ack"
         }
     }
 }

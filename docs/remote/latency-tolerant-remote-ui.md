@@ -231,9 +231,9 @@ authority.
 
 ### iOS transport isolation
 
-- [ ] Move `NWConnection`, heartbeat, frame IO, and decode off MainActor.
-- [ ] Keep MainActor responsible only for reduced state publication into SwiftUI.
-- [ ] Verify heartbeat/no-op ack can progress while UI/AX work is busy.
+- [x] Move `NWConnection`, heartbeat, frame IO, and decode off MainActor.
+- [x] Keep MainActor responsible only for reduced state publication into SwiftUI.
+- [x] Verify heartbeat/no-op ack can progress while UI/AX work is busy.
 - [x] Replace sleep-based readiness checks with deterministic protocol-state
       waits.
 
@@ -250,21 +250,28 @@ authority.
 
 ### Pane-aware QoS and backpressure
 
-- [ ] Replace single latest-screen coalescing with pane-aware scheduling.
+- [x] Replace single latest-screen coalescing with pane-aware scheduling.
 - [x] Prioritize health/control/action ack frames.
-- [ ] Prioritize focused visible pane updates per client.
-- [ ] Coalesce non-focused visible pane updates by pane.
-- [ ] Add starvation guard for non-focused visible panes.
-- [ ] Add queue-depth/render-ack feedback for passive pane throttling.
-- [ ] Preserve per-client priority differences when clients view/focus different
+- [x] Prioritize focused visible pane updates per client.
+- [x] Coalesce non-focused visible pane updates by pane.
+- [x] Add starvation guard for non-focused visible panes.
+- [x] Add queue-depth/render-ack feedback for passive pane throttling.
+- [x] Preserve per-client priority differences when clients view/focus different
       tabs or panes.
 
 ### Future transport separation
 
-- [ ] Evaluate multi-stream QUIC only after action ack, off-main iOS transport,
+- [x] Evaluate multi-stream QUIC only after action ack, off-main iOS transport,
       optimistic UI, and QoS metrics are available.
-- [ ] Evaluate unreliable delivery only for staleable transient UI state.
-- [ ] Keep authoritative terminal state on reliable state/delta paths.
+- [x] Evaluate unreliable delivery only for staleable transient UI state.
+- [x] Keep authoritative terminal state on reliable state/delta paths.
+
+Current conclusion: stay on the current reliable stream for authoritative
+terminal state. The implemented action acknowledgements, off-main decode,
+optimistic view-local UI, pane-aware coalescing, and render acknowledgements
+give enough protocol-level leverage to measure bad-network behavior before
+splitting transport streams. Unreliable delivery remains limited to future
+transient hints, not terminal content.
 
 ## Validation Expectations
 
