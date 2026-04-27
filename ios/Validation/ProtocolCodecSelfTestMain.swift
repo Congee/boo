@@ -295,6 +295,18 @@ struct ProtocolCodecSelfTestMain {
             "no active tab error marks runtime view expired"
         )
         assertEqual(
+            resolveActiveTabHealth(
+                activeTabId: nil,
+                tabs: reachableTabs,
+                authenticated: true,
+                runtimeViewId: 11,
+                runtimeTabCount: 1,
+                lastErrorKind: .noActiveTab
+            ).issue,
+            "No active terminal tab; tap New Tab to start a shell",
+            "no active tab error uses user-facing new-tab recovery copy"
+        )
+        assertEqual(
             resolveActiveTabHealth(activeTabId: 7, tabs: reachableTabs),
             .unreachable(tabId: 7),
             "missing active tab is unreachable"
@@ -320,6 +332,23 @@ struct ProtocolCodecSelfTestMain {
             ),
             .exited(tabId: 9),
             "exited tab is not treated as reachable"
+        )
+        assertEqual(
+            resolveActiveTabHealth(
+                activeTabId: 9,
+                tabs: [
+                    RemoteTabInfo(
+                        id: 9,
+                        name: "Tab 9",
+                        title: "shell",
+                        pwd: "/tmp",
+                        active: false,
+                        childExited: true
+                    )
+                ]
+            ).issue,
+            "Tab 9 exited; tap New Tab to start a shell",
+            "exited tab uses user-facing new-tab recovery copy"
         )
 
         print("iOS wire codec self-test passed")

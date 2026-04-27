@@ -1446,6 +1446,15 @@ struct TerminalTabScreen: View {
         return nil
     }
 
+    private var offersNewTabRecovery: Bool {
+        switch tabHealth {
+        case .expired, .exited:
+            return true
+        case .opening, .detached, .unreachable, .reachable:
+            return false
+        }
+    }
+
     private func transportBanner(reason: String, color: Color) -> some View {
         VStack(alignment: .leading, spacing: KineticSpacing.sm) {
             Text(reason)
@@ -1461,8 +1470,8 @@ struct TerminalTabScreen: View {
                     }
                     .buttonStyle(KineticPrimaryButtonStyle())
                     .accessibilityIdentifier("reattach-runtime-view-button")
-                } else if tabHealth == .expired {
-                    Button("Connect") {
+                } else if offersNewTabRecovery {
+                    Button("New Tab") {
                         client.clearErrorState()
                         client.newTab()
                     }

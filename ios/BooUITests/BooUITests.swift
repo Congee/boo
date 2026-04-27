@@ -1138,6 +1138,34 @@ final class BooAppLaunchTests: BooUITestCase {
         assertTerminalCanType(app, marker: "BOO_UI_TYPED_REFOCUS")
     }
 
+    func testExitedTerminalShowsNewTabRecoveryBanner() {
+        let app = makeApp(autoConnect: false, resetStorage: true)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        guard openLiveTerminal(app) else { return }
+
+        let terminal = app.otherElements["terminal-screen"]
+        let proxy = app.textViews["terminal-text-proxy"]
+        XCTAssertTrue(proxy.waitForExistence(timeout: 5))
+        terminal.tap()
+        proxy.typeText("exit\r")
+
+        let banner = app.staticTexts["terminal-banner-label"]
+        XCTAssertTrue(banner.waitForExistence(timeout: 10), "expected a recovery banner after shell exit")
+        XCTAssertFalse(
+            banner.label.localizedCaseInsensitiveContains("runtime view expired"),
+            "shell exit should not be described as an internal runtime-view expiration: \(banner.label)"
+        )
+        XCTAssertTrue(
+            banner.label.localizedCaseInsensitiveContains("new tab") || banner.label.localizedCaseInsensitiveContains("exited"),
+            "shell exit should explain new-tab recovery or exited state: \(banner.label)"
+        )
+        XCTAssertTrue(app.buttons["recover-runtime-view-button"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons["recover-runtime-view-button"].label, "New Tab")
+    }
+
     func testTerminalErrorBannerDoesNotOfferClientOwnedTabs() {
         let app = makeApp(
             autoConnect: false,

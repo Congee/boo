@@ -15,11 +15,11 @@ enum ActiveTabHealth: Equatable {
         case .detached:
             return "Runtime view is detached; tap Reconnect to reattach"
         case .expired:
-            return "Runtime view expired; tap Connect to request a new tab"
+            return "No active terminal tab; tap New Tab to start a shell"
         case .unreachable(let tabId):
             return "Tab \(tabId) is unreachable"
         case .exited(let tabId):
-            return "Tab \(tabId) has exited"
+            return "Tab \(tabId) exited; tap New Tab to start a shell"
         case .reachable:
             return nil
         }
@@ -32,7 +32,7 @@ enum ActiveTabHealth: Equatable {
         case .detached:
             return "runtime view detached"
         case .expired:
-            return "runtime view expired"
+            return "no active terminal tab"
         case .unreachable(let tabId):
             return "tab \(tabId) unreachable"
         case .exited(let tabId):
