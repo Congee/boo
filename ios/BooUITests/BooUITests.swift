@@ -128,6 +128,14 @@ final class BooAppLaunchTests: BooUITestCase {
         frames: [RuntimePaneDebugFrame],
         in app: XCUIApplication
     ) -> Bool {
+        let paneElement = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == %@", "terminal-pane-\(paneId)"))
+            .firstMatch
+        if paneElement.waitForExistence(timeout: 2), paneElement.isHittable {
+            paneElement.tap()
+            return true
+        }
+
         guard let frame = frames.first(where: { $0.paneId == paneId })?.rect else { return false }
         let terminal = app.otherElements["terminal-screen"]
         guard terminal.waitForExistence(timeout: 2) else { return false }
@@ -212,7 +220,7 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTFail("expected terminal screen, got:\n\(uiStateSnapshot(app))", file: file, line: line)
     }
 
-    private func assertTerminalCanType(_ app: XCUIApplication, marker: String, file: StaticString = #filePath, line: UInt = #line) {
+    private func focusTerminalForTyping(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) -> XCUIElement {
         let terminal = app.otherElements["terminal-screen"]
         XCTAssertTrue(terminal.waitForExistence(timeout: 10), file: file, line: line)
 
@@ -231,14 +239,28 @@ final class BooAppLaunchTests: BooUITestCase {
 
         let proxy = app.textViews["terminal-text-proxy"]
         XCTAssertTrue(proxy.waitForExistence(timeout: 5), file: file, line: line)
-        terminal.tap()
+
         let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 5), file: file, line: line)
+        var keyboardVisible = keyboard.exists
+        for _ in 0..<3 where !keyboardVisible {
+            terminal.tap()
+            keyboardVisible = keyboard.waitForExistence(timeout: 3)
+        }
+        XCTAssertTrue(keyboardVisible, "terminal keyboard never became visible: \(uiStateSnapshot(app))", file: file, line: line)
+        return proxy
+    }
+
+    private func assertTerminalCanType(_ app: XCUIApplication, marker: String, file: StaticString = #filePath, line: UInt = #line) {
+        let terminal = app.otherElements["terminal-screen"]
+        let proxy = focusTerminalForTyping(app, file: file, line: line)
+        let keyboard = app.keyboards.firstMatch
 
         var typedSuccessfully = false
         for _ in 0..<2 {
-            terminal.tap()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            if !keyboard.exists {
+                terminal.tap()
+                guard keyboard.waitForExistence(timeout: 3) else { continue }
+            }
             proxy.typeText("echo \(marker)\r")
 
             let outputExpectation = XCTNSPredicateExpectation(
@@ -257,7 +279,7 @@ final class BooAppLaunchTests: BooUITestCase {
             file: file,
             line: line
         )
-        XCTAssertTrue(activeExpectation.predicate.evaluate(with: terminal), "terminal lost active tab after typing: \(activeTabStateSnapshot(app))", file: file, line: line)
+        XCTAssertTrue(terminal.label.hasPrefix("active-"), "terminal lost active tab after typing: \(activeTabStateSnapshot(app))", file: file, line: line)
     }
 
     private func dragTerminal(_ terminal: XCUIElement, upward: Bool) {
@@ -706,13 +728,14 @@ final class BooAppLaunchTests: BooUITestCase {
 
         let target = frames
             .filter { $0.paneId != currentFocusedPaneId }
-            .max { lhs, rhs in
-                let lhsArea = lhs.rect.width * lhs.rect.height
-                let rhsArea = rhs.rect.width * rhs.rect.height
-                if lhsArea == rhsArea {
-                    return lhs.paneId < rhs.paneId
+            .min { lhs, rhs in
+                if lhs.rect.minY == rhs.rect.minY {
+                    if lhs.rect.minX == rhs.rect.minX {
+                        return lhs.paneId < rhs.paneId
+                    }
+                    return lhs.rect.minX < rhs.rect.minX
                 }
-                return lhsArea < rhsArea
+                return lhs.rect.minY < rhs.rect.minY
             } ?? frames[0]
         XCTAssertTrue(
             tapRuntimePane(paneId: target.paneId, frames: frames, in: app),
@@ -1125,8 +1148,7 @@ final class BooAppLaunchTests: BooUITestCase {
 
         guard openLiveTerminal(app) else { return }
 
-        let terminal = app.otherElements["terminal-screen"]
-        terminal.tap()
+        assertTerminalCanType(app, marker: "BOO_UI_TYPED_BEFORE_REFOCUS")
 
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
@@ -1138,7 +1160,7 @@ final class BooAppLaunchTests: BooUITestCase {
         assertTerminalCanType(app, marker: "BOO_UI_TYPED_REFOCUS")
     }
 
-    func testExitedTerminalShowsNewTabRecoveryBanner() {
+    func testExitedTerminalReturnsToConnectScreenWithoutRecoveryBanner() {
         let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
         app.launch()
@@ -1146,27 +1168,15 @@ final class BooAppLaunchTests: BooUITestCase {
 
         guard openLiveTerminal(app) else { return }
 
-        let terminal = app.otherElements["terminal-screen"]
-        let proxy = app.textViews["terminal-text-proxy"]
-        XCTAssertTrue(proxy.waitForExistence(timeout: 5))
-        terminal.tap()
+        let proxy = focusTerminalForTyping(app)
         proxy.typeText("exit\r")
 
-        let banner = app.staticTexts["terminal-banner-label"]
-        XCTAssertTrue(banner.waitForExistence(timeout: 10), "expected a recovery banner after shell exit")
-        XCTAssertFalse(
-            banner.label.localizedCaseInsensitiveContains("runtime view expired"),
-            "shell exit should not be described as an internal runtime-view expiration: \(banner.label)"
-        )
-        XCTAssertTrue(
-            banner.label.localizedCaseInsensitiveContains("new tab") || banner.label.localizedCaseInsensitiveContains("exited"),
-            "shell exit should explain new-tab recovery or exited state: \(banner.label)"
-        )
-        XCTAssertTrue(app.buttons["recover-runtime-view-button"].waitForExistence(timeout: 5))
-        XCTAssertEqual(app.buttons["recover-runtime-view-button"].label, "New Tab")
+        waitForConnectScreen(app)
+        XCTAssertFalse(app.staticTexts["terminal-banner-label"].exists)
+        XCTAssertFalse(app.buttons["recover-runtime-view-button"].exists)
     }
 
-    func testTerminalErrorBannerDoesNotOfferClientOwnedTabs() {
+    func testTerminalErrorDoesNotShowTerminalBannerOrClientOwnedTabs() {
         let app = makeApp(
             autoConnect: false,
             resetStorage: true,
@@ -1178,7 +1188,9 @@ final class BooAppLaunchTests: BooUITestCase {
 
         guard openLiveTerminal(app) else { return }
 
-        XCTAssertTrue(app.staticTexts["terminal-banner-label"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["terminal-banner-label"].exists)
+        XCTAssertFalse(app.buttons["recover-runtime-view-button"].exists)
+        XCTAssertFalse(app.buttons["reattach-runtime-view-button"].exists)
         XCTAssertFalse(app.buttons["new-tab-button"].exists)
         XCTAssertFalse(app.buttons["close-tab-button"].exists)
         XCTAssertFalse(app.buttons["disconnect-tab-button"].exists)

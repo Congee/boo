@@ -53,8 +53,6 @@ ONLY_TEST="${BOO_IOS_UI_TEST_ONLY:-}"
 HOST_PORT_FILE="/tmp/boo-ios-ui-tests.env"
 SKIP_DAEMON="${BOO_IOS_UI_TEST_SKIP_DAEMON:-0}"
 XCODEBUILD_LOG="/tmp/boo-ios-ui-tests.xcodebuild.log"
-GENERATED_UI_TEST_CONFIG="$ROOT/ios/BooUITests/GeneratedUITestConfig.swift"
-GENERATED_UI_TEST_CONFIG_BACKUP=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -153,10 +151,6 @@ cleanup() {
     rm -f "$HOST_PORT_FILE"
   fi
   rm -f "$XCODEBUILD_LOG"
-  if [[ -n "$GENERATED_UI_TEST_CONFIG_BACKUP" && -f "$GENERATED_UI_TEST_CONFIG_BACKUP" ]]; then
-    cp "$GENERATED_UI_TEST_CONFIG_BACKUP" "$GENERATED_UI_TEST_CONFIG"
-    rm -f "$GENERATED_UI_TEST_CONFIG_BACKUP"
-  fi
 }
 trap cleanup EXIT
 
@@ -174,24 +168,6 @@ BOO_UI_TEST_PORT=$PORT
 EOF
 fi
 
-GENERATED_UI_TEST_CONFIG_BACKUP="$(mktemp -t boo-ui-test-config.XXXXXX)"
-cp "$GENERATED_UI_TEST_CONFIG" "$GENERATED_UI_TEST_CONFIG_BACKUP"
-python3 - "$GENERATED_UI_TEST_CONFIG" "$HOST" "$PORT" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-host = sys.argv[2]
-port = int(sys.argv[3])
-path.write_text(
-    "enum GeneratedUITestConfig {\n"
-    f"    static let host: String? = {json.dumps(host)}\n"
-    f"    static let port: UInt16 = {port}\n"
-    "}\n",
-    encoding="utf-8",
-)
-PY
 cargo build >/dev/null
 if [[ "$SKIP_DAEMON" != "1" ]]; then
   rm -f "$SOCKET_PATH"
@@ -252,6 +228,8 @@ if [[ "$DESTINATION" == *"platform=iOS Simulator"* ]]; then
     -derivedDataPath "$DERIVED_DATA" \
     -parallel-testing-enabled NO \
     -maximum-concurrent-test-simulator-destinations 1 \
+    INFOPLIST_KEY_BOO_UI_TEST_HOST="$HOST" \
+    INFOPLIST_KEY_BOO_UI_TEST_PORT="$PORT" \
     "${TEST_ARGS[@]}" \
     test
 else

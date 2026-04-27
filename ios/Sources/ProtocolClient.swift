@@ -955,6 +955,7 @@ final class GSPClient: ObservableObject {
     private var nextClientActionIdValue: UInt64 = 0
     private var pendingActionAcks: [UInt64: PendingActionAck] = [:]
     private var noopBaselineSentForViewIds: Set<UInt64> = []
+    private var runtimeViewsWithLiveTarget: Set<UInt64> = []
     private var bootstrapRuntimeOnNextEmptyState = false
     private var pendingBootstrapRuntimeViewId: UInt64?
 
@@ -1508,6 +1509,7 @@ final class GSPClient: ObservableObject {
         pendingHeartbeatToken = nil
         pendingActionAcks.removeAll()
         noopBaselineSentForViewIds.removeAll()
+        runtimeViewsWithLiveTarget.removeAll()
         bootstrapRuntimeOnNextEmptyState = true
         pendingBootstrapRuntimeViewId = nil
         connectionGeneration &+= 1
@@ -1794,12 +1796,22 @@ final class GSPClient: ObservableObject {
 
     private func bootstrapInteractiveRuntimeIfNeeded(_ state: RemoteRuntimeStateSnapshot) {
         if hasLiveRuntimeTarget(state) {
+            runtimeViewsWithLiveTarget.insert(state.viewId)
             bootstrapRuntimeOnNextEmptyState = false
             pendingBootstrapRuntimeViewId = nil
             if lastErrorKind == .noActiveTab {
                 lastErrorKind = nil
                 lastError = nil
             }
+            return
+        }
+
+        if runtimeViewsWithLiveTarget.contains(state.viewId) {
+            bootstrapRuntimeOnNextEmptyState = false
+            pendingBootstrapRuntimeViewId = nil
+            activeTabId = nil
+            lastErrorKind = .noActiveTab
+            lastError = nil
             return
         }
 
@@ -1829,6 +1841,18 @@ final class GSPClient: ObservableObject {
             }
             if let error = validateAuthOkPayload(payload) {
                 protocolError(error)
+                return
+            }
+            if let metadata = decodeAuthOkMetadata(payload),
+               serverIdentityMismatch(
+                    expectedIdentityId: expectedServerIdentityId,
+                    actualIdentityId: metadata.serverIdentityId
+               )
+            {
+                if let serverIdentityId = metadata.serverIdentityId, !serverIdentityId.isEmpty {
+                    lastSeenServerIdentityId = serverIdentityId
+                }
+                protocolError("Server identity changed; connection rejected")
                 return
             }
             applyReducedMessage(.authOk, payload: payload)
@@ -2256,23 +2280,7 @@ final class GSPClient: ObservableObject {
             }
             screen.objectWillChange.send()
         }
-        if message == .authOk,
-           serverIdentityMismatch(
-                expectedIdentityId: expectedServerIdentityId,
-                actualIdentityId: serverIdentityId
-           ) {
-            protocolError("Server identity changed; connection rejected")
-            return
-        }
-
         if message == .authOk {
-            if serverIdentityMismatch(
-                expectedIdentityId: expectedServerIdentityId,
-                actualIdentityId: serverIdentityId
-            ) {
-                lastError = "Server identity changed; refusing automatic resume"
-                return
-            }
             return
         }
 

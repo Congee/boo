@@ -54,6 +54,11 @@ deferred section at the bottom of this file.
       attached and online.
 - [ ] Keep repeating real-device iOS UI smoke tests as hardware/OS/Xcode
       changes.
+- [ ] Parameterize iOS UI test host/port without rewriting tracked sources.
+      `scripts/test-ios-ui.sh --host/--port` should feed the test run through
+      launch arguments, Info.plist overrides, or a generated file under
+      DerivedData/`/tmp`; running UI tests must leave
+      `ios/BooUITests/GeneratedUITestConfig.swift` unchanged.
 
 Recently closed:
 

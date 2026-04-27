@@ -245,7 +245,6 @@ struct BooRootView: View {
                                 client: client,
                                 monitor: activeMonitor,
                                 store: store,
-                                serverIdentityWarning: serverIdentityWarning,
                                 onBack: {
                                     showingConnectedTerminal = false
                                 }
@@ -280,6 +279,15 @@ struct BooRootView: View {
         }
         .onChange(of: activeMonitor.status) { oldValue, newValue in
             handleStatusChange(from: oldValue, to: newValue)
+        }
+        .onChange(of: client.activeTabId) { _, _ in
+            returnToConnectionsIfCurrentTerminalClosed()
+        }
+        .onChange(of: client.runtimeState) { _, _ in
+            returnToConnectionsIfCurrentTerminalClosed()
+        }
+        .onChange(of: client.lastErrorKind) { _, _ in
+            returnToConnectionsIfCurrentTerminalClosed()
         }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else { return }
@@ -332,6 +340,29 @@ struct BooRootView: View {
                 activeMonitor.clearTrackedConnection()
             }
         default:
+            break
+        }
+    }
+
+    private var currentTerminalHealth: ActiveTabHealth {
+        resolveActiveTabHealth(
+            activeTabId: client.activeTabId,
+            tabs: client.tabs,
+            authenticated: client.authenticated,
+            runtimeViewId: client.runtimeState?.viewId,
+            runtimeTabCount: client.runtimeState?.tabs.count,
+            runtimeTabs: client.runtimeState?.tabs ?? [],
+            lastErrorKind: client.lastErrorKind
+        )
+    }
+
+    private func returnToConnectionsIfCurrentTerminalClosed() {
+        guard showingConnectedTerminal else { return }
+        switch currentTerminalHealth {
+        case .expired, .exited:
+            showingConnectedTerminal = false
+            client.clearErrorState()
+        case .opening, .detached, .unreachable, .reachable:
             break
         }
     }
@@ -423,6 +454,16 @@ struct ConnectScreen: View {
         }
     }
 
+    private var pendingServerIdentityTrust: (host: String, port: UInt16, current: String, trusted: String?)? {
+        guard ConnectionErrorPolicy.suppressAutomaticReconnect(for: client.lastError),
+              let host = monitor.lastHost,
+              let port = monitor.lastPort,
+              let current = client.serverIdentityId ?? client.lastSeenServerIdentityId,
+              !current.isEmpty
+        else { return nil }
+        return (host, port, current, store.trustedServerIdentity(host: host, port: port))
+    }
+
     var body: some View {
         ScrollView {
             scrollContent
@@ -502,14 +543,26 @@ struct ConnectScreen: View {
     @ViewBuilder
     private var errorSection: some View {
         if let error = displayedConnectError {
-            Text(error)
-                .font(KineticFont.caption)
-                .foregroundStyle(KineticColor.error)
-                .accessibilityIdentifier("connect-error-label")
-                .padding(KineticSpacing.md)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(KineticColor.error.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
+            VStack(alignment: .leading, spacing: KineticSpacing.sm) {
+                Text(error)
+                    .font(KineticFont.caption)
+                    .foregroundStyle(KineticColor.error)
+                    .accessibilityIdentifier("connect-error-label")
+                if let pendingServerIdentityTrust {
+                    Text(serverIdentityRecoveryMessage(pendingServerIdentityTrust))
+                        .font(KineticFont.caption)
+                        .foregroundStyle(KineticColor.onSurfaceVariant)
+                    Button("Trust Current Server Identity") {
+                        trustCurrentServerIdentity(pendingServerIdentityTrust)
+                    }
+                    .buttonStyle(KineticPrimaryButtonStyle())
+                    .accessibilityIdentifier("trust-current-server-identity-button")
+                }
+            }
+            .padding(KineticSpacing.md)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(KineticColor.error.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
         }
         if let browserError = browser.lastError {
             VStack(alignment: .leading, spacing: KineticSpacing.sm) {
@@ -727,6 +780,23 @@ struct ConnectScreen: View {
             host: formatConnectionTarget(host: host, port: port)
         )
         monitor.connect(host: host, port: port, routeKind: routeKind, displayName: nodeName, historyId: historyId)
+    }
+
+    private func serverIdentityRecoveryMessage(
+        _ trust: (host: String, port: UInt16, current: String, trusted: String?)
+    ) -> String {
+        if let trusted = trust.trusted, trusted != trust.current {
+            return "The saved server identity for \(trust.host):\(trust.port) changed. Only trust the current identity if you intentionally restarted or replaced this Boo server."
+        }
+        return "Trust this Boo server identity before reconnecting."
+    }
+
+    private func trustCurrentServerIdentity(
+        _ trust: (host: String, port: UInt16, current: String, trusted: String?)
+    ) {
+        store.trustServerIdentity(host: trust.host, port: trust.port, identityId: trust.current)
+        client.clearErrorState()
+        monitor.reconnect()
     }
 
     private func dismissConnectScreenKeyboard() {
@@ -978,7 +1048,6 @@ struct TerminalTabScreen: View {
     @ObservedObject var client: GSPClient
     @ObservedObject var monitor: ConnectionMonitor
     @ObservedObject var store: ConnectionStore
-    let serverIdentityWarning: String?
     let onBack: () -> Void
 
     @State private var keyboardFocused = false
@@ -993,7 +1062,9 @@ struct TerminalTabScreen: View {
     @State private var showingComposeInput = false
     @State private var composeText = ""
     @State private var terminalGestureStatus: String?
+    @State private var terminalGestureStatusGeneration: UInt64 = 0
     @State private var uiTestTraceAutomationStep: UITestTraceAutomationStep = .idle
+    @State private var didReturnToConnectionsForClosedTab = false
 
     private var tabHealth: ActiveTabHealth {
         resolveActiveTabHealth(
@@ -1002,12 +1073,9 @@ struct TerminalTabScreen: View {
             authenticated: client.authenticated,
             runtimeViewId: client.runtimeState?.viewId,
             runtimeTabCount: client.runtimeState?.tabs.count,
+            runtimeTabs: client.runtimeState?.tabs ?? [],
             lastErrorKind: client.lastErrorKind
         )
-    }
-
-    private var tabHealthIssue: String? {
-        tabHealth.issue
     }
 
     var body: some View {
@@ -1031,10 +1099,11 @@ struct TerminalTabScreen: View {
         .onAppear {
             applyUITestForcedErrorIfNeeded()
             client.attachView()
+            returnToConnectionsIfTerminalClosed(tabHealth)
             guard !isDisconnected, client.activeTabId != nil else { return }
             if !suppressesAutomaticKeyboardFocusForUITest {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    keyboardFocused = true
+                    requestKeyboardFocus()
                 }
             }
             advanceUITestTraceAutomationIfNeeded()
@@ -1046,19 +1115,29 @@ struct TerminalTabScreen: View {
         .onReceive(client.$runtimeState) { _ in
             applyUITestForcedErrorIfNeeded()
             advanceUITestTraceAutomationIfNeeded()
+            DispatchQueue.main.async {
+                returnToConnectionsIfTerminalClosed(tabHealth)
+            }
         }
         .onChange(of: client.activeTabId) { _, activeTabId in
             if activeTabId != nil {
                 client.attachView()
                 keyboardFocused = false
+                terminalGestureStatus = nil
+                didReturnToConnectionsForClosedTab = false
                 if !suppressesAutomaticKeyboardFocusForUITest {
                     DispatchQueue.main.async {
-                        keyboardFocused = true
+                        requestKeyboardFocus()
                     }
                 }
                 applyUITestForcedErrorIfNeeded()
                 advanceUITestTraceAutomationIfNeeded()
+            } else {
+                returnToConnectionsIfTerminalClosed(tabHealth)
             }
+        }
+        .onChange(of: tabHealth) { _, newValue in
+            returnToConnectionsIfTerminalClosed(newValue)
         }
         .onChange(of: isDisconnected) { _, disconnected in
             if disconnected {
@@ -1076,7 +1155,6 @@ struct TerminalTabScreen: View {
 
     private var terminalTabBody: some View {
         VStack(spacing: 0) {
-            terminalBanner
             connectionHealthHUD
             terminalView
                 .overlay(alignment: .topTrailing) {
@@ -1187,25 +1265,6 @@ struct TerminalTabScreen: View {
     }
 
     @ViewBuilder
-    private var terminalBanner: some View {
-        if let serverIdentityWarning {
-            transportBanner(reason: serverIdentityWarning, color: KineticColor.error)
-        } else if let tabHealthIssue {
-            transportBanner(
-                reason: tabHealthIssue,
-                color: tabHealth == .detached ? KineticColor.tertiary : KineticColor.error
-            )
-        } else if let lastError = client.lastError, !lastError.isEmpty {
-            transportBanner(reason: monitor.contextualErrorMessage(lastError), color: KineticColor.error)
-        } else if let disconnectReason {
-            transportBanner(reason: monitor.contextualErrorMessage(disconnectReason), color: KineticColor.error)
-        } else if case .degraded(let reason) = monitor.transportHealth {
-            transportBanner(reason: monitor.contextualErrorMessage(reason), color: KineticColor.tertiary)
-        }
-    }
-
-
-    @ViewBuilder
     private var terminalGestureHUD: some View {
         if let terminalGestureStatus {
             Text(terminalGestureStatus)
@@ -1226,11 +1285,18 @@ struct TerminalTabScreen: View {
         let bridge = terminalKeyboardBridge
 
         return ZStack {
+            bridge
+                .id("terminal-keyboard-\(client.connectionDebugGeneration)-\(client.activeTabId ?? 0)")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .allowsHitTesting(false)
+
             if let runtimeState = client.runtimeState, !runtimeState.visiblePanes.isEmpty {
                 GeometryReader { geo in
                     ZStack(alignment: .topLeading) {
                         ForEach(runtimeState.visiblePanes, id: \.paneId) { pane in
                             ZStack {
+                                Color.black.opacity(0.001)
                                 RemoteTerminalCanvasView(
                                     state: client.paneScreens[pane.paneId],
                                     onGestureAction: { action in
@@ -1244,22 +1310,32 @@ struct TerminalTabScreen: View {
                                 )
                                 .id("terminal-pane-canvas-\(pane.paneId)-\(client.paneRevisions[pane.paneId] ?? 0)")
                             }
-                            .overlay(
+                            .frame(
+                                width: max(1, pane.frame.width),
+                                height: max(1, pane.frame.height)
+                            )
+                            .overlay {
                                 RoundedRectangle(cornerRadius: 8)
                                     .stroke(
                                         pane.paneId == runtimeState.focusedPane ? KineticColor.primary : KineticColor.onSurfaceVariant,
                                         lineWidth: pane.paneId == runtimeState.focusedPane ? 2 : 1
                                     )
-                            )
-                            .frame(
-                                width: max(1, pane.frame.width),
-                                height: max(1, pane.frame.height)
-                            )
+                            }
+                            .overlay {
+                                PaneTapGestureOverlay {
+                                    focusRuntimePane(pane.paneId, viewedTabId: runtimeState.viewedTabId)
+                                }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .accessibilityHidden(true)
+                            }
                             .position(
                                 x: pane.frame.x + pane.frame.width / 2,
                                 y: pane.frame.y + pane.frame.height / 2
                             )
                             .contentShape(Rectangle())
+                            .onTapGesture {
+                                focusRuntimePane(pane.paneId, viewedTabId: runtimeState.viewedTabId)
+                            }
                             .accessibilityElement(children: .ignore)
                             .accessibilityIdentifier("terminal-pane-\(pane.paneId)")
                             .accessibilityLabel("pane \(pane.paneId)\(pane.paneId == runtimeState.focusedPane ? " focused" : "")")
@@ -1289,6 +1365,7 @@ struct TerminalTabScreen: View {
                                 )
                         }
                     }
+                    .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
                     .background(.black)
                     .contentShape(Rectangle())
                     .onAppear {
@@ -1303,6 +1380,19 @@ struct TerminalTabScreen: View {
                             rows: max(1, UInt16(newSize.height / 17))
                         )
                     }
+                    .overlay(alignment: .topLeading) {
+                        RuntimeTapGestureOverlay { location in
+                            focusRuntimePane(at: location, in: runtimeState)
+                        }
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .accessibilityHidden(true)
+                    }
+                    .highPriorityGesture(
+                        SpatialTapGesture()
+                            .onEnded { value in
+                                focusRuntimePane(at: value.location, in: runtimeState)
+                            }
+                    )
                 }
             } else {
                 RemoteTerminalView(screen: client.screen) { cols, rows in
@@ -1312,22 +1402,19 @@ struct TerminalTabScreen: View {
                 }
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    guard !isDisconnected, client.activeTabId != nil else { return }
-                    keyboardFocused = true
+                    requestKeyboardFocus()
                 }
             }
         }
         .opacity(isDisconnected || client.activeTabId == nil ? 0.5 : 1.0)
         .contentShape(Rectangle())
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                requestKeyboardFocus()
+            }
+        )
         .overlay {
             terminalAccessibilityOverlay
-        }
-        .overlay {
-            bridge
-            .id("terminal-keyboard-\(client.connectionDebugGeneration)-\(client.activeTabId ?? 0)")
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .allowsHitTesting(false)
         }
         .overlay {
             runtimeOpeningOverlay
@@ -1373,9 +1460,36 @@ struct TerminalTabScreen: View {
     }
 
     private func focusRuntimePane(_ paneId: UInt64, viewedTabId: UInt32?) {
-        guard let viewedTabId else { return }
+        guard let viewedTabId,
+              let runtimeState = client.runtimeState,
+              runtimeState.viewedTabId == viewedTabId,
+              runtimeState.visiblePaneIds.contains(paneId)
+        else { return }
         client.focusPane(tabId: viewedTabId, paneId: paneId)
-        keyboardFocused = true
+        requestKeyboardFocus()
+    }
+
+    private func focusRuntimePane(at location: CGPoint, in runtimeState: RemoteRuntimeStateSnapshot) {
+        guard let pane = runtimeState.visiblePanes.last(where: { pane in
+            Double(location.x) >= pane.frame.x &&
+                Double(location.x) <= pane.frame.x + pane.frame.width &&
+                Double(location.y) >= pane.frame.y &&
+                Double(location.y) <= pane.frame.y + pane.frame.height
+        }) else {
+            requestKeyboardFocus()
+            return
+        }
+        focusRuntimePane(pane.paneId, viewedTabId: runtimeState.viewedTabId)
+    }
+
+    private func focusRuntimePaneForGesture(_ paneId: UInt64, viewedTabId: UInt32?) -> Bool {
+        guard let viewedTabId,
+              let runtimeState = client.runtimeState,
+              runtimeState.viewedTabId == viewedTabId,
+              runtimeState.visiblePaneIds.contains(paneId)
+        else { return false }
+        client.focusPane(tabId: viewedTabId, paneId: paneId)
+        return true
     }
 
     private var suppressesAutomaticKeyboardFocusForUITest: Bool {
@@ -1392,6 +1506,19 @@ struct TerminalTabScreen: View {
             onKeyCommand: handleKeyCommand(input:modifiers:),
             accessoryState: terminalAccessoryState
         )
+    }
+
+    private func requestKeyboardFocus() {
+        guard !isDisconnected, client.activeTabId != nil else { return }
+        if keyboardFocused {
+            keyboardFocused = false
+            DispatchQueue.main.async {
+                guard !isDisconnected, client.activeTabId != nil else { return }
+                keyboardFocused = true
+            }
+        } else {
+            keyboardFocused = true
+        }
     }
 
     private var terminalAccessoryState: TerminalKeyboardAccessoryState {
@@ -1425,80 +1552,27 @@ struct TerminalTabScreen: View {
         return false
     }
 
-    private var disconnectReason: String? {
-        if tabHealth == .expired, let tabHealthIssue {
-            return tabHealthIssue
-        }
-        if case .connectionLost(let reason) = monitor.status {
-            return reason
-        }
-        if case .lost(let reason) = monitor.transportHealth {
-            return reason
-        }
-        return nil
-    }
-
-    private var activeErrorMessage: String? {
-        if let serverIdentityWarning { return serverIdentityWarning }
-        if tabHealth != .opening, let tabHealthIssue { return tabHealthIssue }
-        if let lastError = client.lastError, !lastError.isEmpty { return monitor.contextualErrorMessage(lastError) }
-        if let disconnectReason { return monitor.contextualErrorMessage(disconnectReason) }
-        return nil
-    }
-
-    private var offersNewTabRecovery: Bool {
-        switch tabHealth {
+    private func returnToConnectionsIfTerminalClosed(_ health: ActiveTabHealth) {
+        switch health {
         case .expired, .exited:
-            return true
-        case .opening, .detached, .unreachable, .reachable:
-            return false
-        }
-    }
-
-    private func transportBanner(reason: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: KineticSpacing.sm) {
-            Text(reason)
-                .font(KineticFont.caption)
-                .foregroundStyle(color)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityIdentifier("terminal-banner-label")
-
-            HStack(spacing: KineticSpacing.sm) {
-                if tabHealth == .detached {
-                    Button("Reconnect") {
-                        client.attachView()
-                    }
-                    .buttonStyle(KineticPrimaryButtonStyle())
-                    .accessibilityIdentifier("reattach-runtime-view-button")
-                } else if offersNewTabRecovery {
-                    Button("New Tab") {
-                        client.clearErrorState()
-                        client.newTab()
-                    }
-                    .buttonStyle(KineticPrimaryButtonStyle())
-                    .accessibilityIdentifier("recover-runtime-view-button")
-                }
-
+            guard !didReturnToConnectionsForClosedTab else { return }
+            didReturnToConnectionsForClosedTab = true
+            keyboardFocused = false
+            terminalGestureStatus = nil
+            resetModifierStates()
+            client.clearErrorState()
+            DispatchQueue.main.async {
+                onBack()
             }
+        case .opening, .detached, .unreachable, .reachable:
+            break
         }
-        .padding(KineticSpacing.md)
-        .background(color.opacity(0.1))
-        .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
     }
 
     private func goBack() {
         keyboardFocused = false
+        terminalGestureStatus = nil
         resetModifierStates()
-        DispatchQueue.main.async {
-            onBack()
-        }
-    }
-
-    private func disconnectFromHost() {
-        keyboardFocused = false
-        resetModifierStates()
-        client.clearErrorState()
-        monitor.disconnect()
         DispatchQueue.main.async {
             onBack()
         }
@@ -1775,11 +1849,12 @@ struct TerminalTabScreen: View {
     ) {
         func focusPaneForGesture(showKeyboard: Bool) {
             if let paneId, let viewedTabId {
-                focusRuntimePane(paneId, viewedTabId: viewedTabId)
-                terminalGestureStatus = "Focused pane \(paneId)"
+                if focusRuntimePaneForGesture(paneId, viewedTabId: viewedTabId) {
+                    showTerminalGestureStatus("Focused pane \(paneId)")
+                }
             }
             if showKeyboard, !isDisconnected, client.activeTabId != nil {
-                keyboardFocused = true
+                requestKeyboardFocus()
             }
         }
 
@@ -1788,11 +1863,11 @@ struct TerminalTabScreen: View {
             focusPaneForGesture(showKeyboard: true)
         case .longPress:
             focusPaneForGesture(showKeyboard: true)
-            terminalGestureStatus = "Compose input"
+            showTerminalGestureStatus("Compose input")
             showingComposeInput = true
         case .twoFingerTap:
             focusPaneForGesture(showKeyboard: true)
-            terminalGestureStatus = "Compose input"
+            showTerminalGestureStatus("Compose input")
             showingComposeInput = true
         case .pageUp:
             sendSpecialKey([0x1b, 0x5b, 0x35, 0x7e])
@@ -1804,12 +1879,22 @@ struct TerminalTabScreen: View {
             sendSpecialKey([0x1b, 0x5b, 0x43])
         case .scrollLines(let lines):
             if isFocused {
-                terminalGestureStatus = "Two-finger scroll \(lines)"
+                showTerminalGestureStatus("Two-finger scroll \(lines)")
                 client.sendMouseWheelLines(y: Double(lines))
             } else {
-                terminalGestureStatus = "Focus before scroll"
+                showTerminalGestureStatus("Focus before scroll")
                 focusPaneForGesture(showKeyboard: false)
             }
+        }
+    }
+
+    private func showTerminalGestureStatus(_ message: String) {
+        terminalGestureStatusGeneration &+= 1
+        let generation = terminalGestureStatusGeneration
+        terminalGestureStatus = message
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            guard terminalGestureStatusGeneration == generation else { return }
+            terminalGestureStatus = nil
         }
     }
 

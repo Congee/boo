@@ -3,6 +3,8 @@ import Foundation
 import Darwin
 
 class BooUITestCase: XCTestCase {
+    private let defaultRemotePort: UInt16 = 7337
+
     func isConnectScreen(_ app: XCUIApplication) -> Bool {
         let screen = app.otherElements["connect-screen"]
         let hostField = app.textFields["connect-host-input"]
@@ -37,7 +39,6 @@ class BooUITestCase: XCTestCase {
         ProcessInfo.processInfo.environment["BOO_UI_TEST_HOST"]
             ?? (Bundle.main.infoDictionary?["BOO_UI_TEST_HOST"] as? String)
             ?? fileConfiguredHostAndPort?.host
-            ?? GeneratedUITestConfig.host
     }
 
     var port: UInt16 {
@@ -45,7 +46,7 @@ class BooUITestCase: XCTestCase {
             ?? (Bundle.main.infoDictionary?["BOO_UI_TEST_PORT"] as? String).flatMap(UInt16.init)
             ?? (Bundle.main.infoDictionary?["BOO_UI_TEST_PORT"] as? NSNumber).map(\.uint16Value)
             ?? fileConfiguredHostAndPort?.port
-            ?? GeneratedUITestConfig.port
+            ?? defaultRemotePort
     }
 
     func assertDaemonReachableIfConfigured(file: StaticString = #filePath, line: UInt = #line) {

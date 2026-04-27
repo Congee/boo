@@ -118,6 +118,7 @@ run_swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
 
 run_swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
   ios/Sources/ClientWireState.swift \
+  ios/Sources/ConnectionErrorPolicy.swift \
   ios/Sources/TabModels.swift \
   ios/Sources/TabHealth.swift \
   ios/Sources/WireCodec.swift \

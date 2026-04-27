@@ -15,11 +15,11 @@ enum ActiveTabHealth: Equatable {
         case .detached:
             return "Runtime view is detached; tap Reconnect to reattach"
         case .expired:
-            return "No active terminal tab; tap New Tab to start a shell"
+            return "No active terminal tab"
         case .unreachable(let tabId):
             return "Tab \(tabId) is unreachable"
         case .exited(let tabId):
-            return "Tab \(tabId) exited; tap New Tab to start a shell"
+            return "Tab \(tabId) exited"
         case .reachable:
             return nil
         }
@@ -62,9 +62,17 @@ func resolveActiveTabHealth(
     authenticated: Bool = true,
     runtimeViewId: UInt64? = nil,
     runtimeTabCount: Int? = nil,
+    runtimeTabs: [RemoteRuntimeTabSnapshot] = [],
     lastErrorKind: ClientWireErrorKind? = nil
 ) -> ActiveTabHealth {
+    if authenticated, runtimeViewId != nil, runtimeTabCount == 0 {
+        return .expired
+    }
+
     if let tabId = activeTabId {
+        if runtimeViewId != nil, runtimeTabs.contains(where: { $0.tabId == tabId }) {
+            return .reachable(tabId: tabId)
+        }
         guard let tab = tabs.first(where: { $0.id == tabId }) else {
             return .unreachable(tabId: tabId)
         }
@@ -78,7 +86,7 @@ func resolveActiveTabHealth(
         return .expired
     }
     if authenticated, runtimeViewId != nil {
-        if runtimeTabCount == 0 || tabs.isEmpty {
+        if tabs.isEmpty {
             return .expired
         }
         return .detached

@@ -661,6 +661,12 @@ final class ConnectionMonitor: ObservableObject {
     }
 
     func reconnect() {
+        if ConnectionErrorPolicy.suppressAutomaticReconnect(for: client.lastError) {
+            reconnectAllowed = false
+            cancelReconnect()
+            reconnectState = .failed(reason: client.lastError ?? "Server identity changed")
+            return
+        }
         if let endpoint = lastEndpoint, let host = lastHost, let port = lastPort {
             connect(endpoint: endpoint, displayHost: host, displayPort: port)
             return
@@ -736,7 +742,17 @@ final class ConnectionMonitor: ObservableObject {
             reconnectState = .idle
             return
         }
-        guard reconnectAllowed, lastHost != nil, lastPort != nil else {
+        guard lastHost != nil, lastPort != nil else {
+            reconnectState = .idle
+            return
+        }
+        if ConnectionErrorPolicy.suppressAutomaticReconnect(for: error) {
+            reconnectAllowed = false
+            cancelReconnect()
+            reconnectState = .failed(reason: error ?? "Server identity changed")
+            return
+        }
+        guard reconnectAllowed else {
             reconnectState = .idle
             return
         }

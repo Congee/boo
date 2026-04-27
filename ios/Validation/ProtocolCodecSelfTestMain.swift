@@ -234,6 +234,16 @@ struct ProtocolCodecSelfTestMain {
             false,
             "server identity mismatch ignores unknown trusted identity"
         )
+        assertEqual(
+            authOkServerIdentityMismatch(expectedIdentityId: "daemon-a", payload: authOkPayload),
+            true,
+            "auth ok identity mismatch is detectable before mutating client auth state"
+        )
+        assertEqual(
+            authOkServerIdentityMismatch(expectedIdentityId: serverIdentityId, payload: authOkPayload),
+            false,
+            "matching auth ok identity is accepted"
+        )
 
         ClientWireReducer.reduce(message: .tabList, payload: makeTabListPayload(), state: &clientState)
         assertEqual(clientState.tabs, tabs, "tab list reducer decode")
@@ -259,6 +269,17 @@ struct ProtocolCodecSelfTestMain {
             resolveActiveTabHealth(activeTabId: nil, tabs: reachableTabs),
             .opening,
             "missing active tab is opening before runtime state"
+        )
+        assertEqual(
+            resolveActiveTabHealth(
+                activeTabId: 42,
+                tabs: reachableTabs,
+                authenticated: true,
+                runtimeViewId: 11,
+                runtimeTabCount: 0
+            ),
+            .expired,
+            "empty runtime state overrides stale active tab after the last shell exits"
         )
         assertEqual(
             resolveActiveTabHealth(
@@ -303,8 +324,8 @@ struct ProtocolCodecSelfTestMain {
                 runtimeTabCount: 1,
                 lastErrorKind: .noActiveTab
             ).issue,
-            "No active terminal tab; tap New Tab to start a shell",
-            "no active tab error uses user-facing new-tab recovery copy"
+            "No active terminal tab",
+            "no active tab error uses user-facing copy"
         )
         assertEqual(
             resolveActiveTabHealth(activeTabId: 7, tabs: reachableTabs),
@@ -315,6 +336,28 @@ struct ProtocolCodecSelfTestMain {
             resolveActiveTabHealth(activeTabId: 42, tabs: reachableTabs),
             .reachable(tabId: 42),
             "live active tab is reachable"
+        )
+        assertEqual(
+            resolveActiveTabHealth(
+                activeTabId: 2,
+                tabs: [],
+                authenticated: true,
+                runtimeViewId: 11,
+                runtimeTabCount: 1,
+                runtimeTabs: [
+                    RemoteRuntimeTabSnapshot(
+                        tabId: 2,
+                        index: 0,
+                        active: true,
+                        title: "shell",
+                        paneCount: 1,
+                        focusedPane: 2,
+                        paneIds: [2]
+                    )
+                ]
+            ),
+            .reachable(tabId: 2),
+            "runtime tab metadata keeps active terminal reachable when legacy tab metadata is stale"
         )
         assertEqual(
             resolveActiveTabHealth(
@@ -347,8 +390,28 @@ struct ProtocolCodecSelfTestMain {
                     )
                 ]
             ).issue,
-            "Tab 9 exited; tap New Tab to start a shell",
-            "exited tab uses user-facing new-tab recovery copy"
+            "Tab 9 exited",
+            "exited tab uses user-facing copy"
+        )
+        assertEqual(
+            ConnectionErrorPolicy.suppressAutomaticReconnect(for: nil),
+            false,
+            "nil error allows automatic reconnect"
+        )
+        assertEqual(
+            ConnectionErrorPolicy.suppressAutomaticReconnect(for: "Connection timed out"),
+            false,
+            "transient transport error allows automatic reconnect"
+        )
+        assertEqual(
+            ConnectionErrorPolicy.suppressAutomaticReconnect(for: "Server identity changed; connection rejected"),
+            true,
+            "identity mismatch suppresses automatic reconnect"
+        )
+        assertEqual(
+            ConnectionErrorPolicy.suppressAutomaticReconnect(for: "Server identity changed for host:7337. Expected old, got new."),
+            true,
+            "stored identity mismatch suppresses automatic reconnect"
         )
 
         print("iOS wire codec self-test passed")

@@ -228,6 +228,14 @@ func serverIdentityMismatch(expectedIdentityId: String?, actualIdentityId: Strin
     return expectedIdentityId != actualIdentityId
 }
 
+func authOkServerIdentityMismatch(expectedIdentityId: String?, payload: Data) -> Bool {
+    guard let metadata = decodeAuthOkMetadata(payload) else { return false }
+    return serverIdentityMismatch(
+        expectedIdentityId: expectedIdentityId,
+        actualIdentityId: metadata.serverIdentityId
+    )
+}
+
 enum ClientWireReducer {
     static func reduce(message: ClientWireMessageType, payload: Data, state: inout ClientWireState) {
         switch message {
