@@ -630,21 +630,23 @@ struct ConnectScreen: View {
                     .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
             }
             ForEach(tailscaleBrowser.peers) { peer in
-                let detail = tailscalePeerDetail(peer)
+                let metrics = tailscaleBrowser.probeMetrics[peer.id]
+                let canConnect = tailscalePeerCanConnect(peer, metrics: metrics)
+                let detail = tailscalePeerDetail(peer, metrics: metrics)
                 KineticCardRow(
                     icon: "network",
                     title: peer.name,
                     subtitle: rowSubtitle(base: detail, host: peer.host, port: peer.port, nodeName: peer.name),
                     trailingText: liveMetrics(host: peer.host, port: peer.port, nodeName: peer.name),
                     trailingAccessibilityIdentifier: rowMetricAccessibilityIdentifier(nodeName: peer.name),
-                    subtitleAccessoryText: tailscalePortStatusText(peer),
-                    subtitleAccessoryColor: tailscalePortStatusColor(peer),
-                    onTap: peer.online ? {
+                    subtitleAccessoryText: tailscalePortStatusText(peer, metrics: metrics),
+                    subtitleAccessoryColor: tailscalePortStatusColor(metrics),
+                    onTap: canConnect ? {
                         connectToHost(peer.host, port: peer.port, nodeName: peer.name, routeKind: .tailscale)
                     } : nil,
                     accessibilityIdentifier: "tailscale-peer-\(peer.name)"
                 )
-                .opacity(peer.online ? 1.0 : 0.6)
+                .opacity(canConnect ? 1.0 : 0.6)
             }
         }
     }
@@ -770,12 +772,14 @@ struct ConnectScreen: View {
         return (raw, BooDefaultRemotePort)
     }
 
-    private func tailscalePeerDetail(_ peer: TailscalePeer) -> String {
+    private func tailscalePeerDetail(_ peer: TailscalePeer, metrics: TailscalePeerProbeMetrics?) -> String {
         var parts: [String] = []
         if let os = peer.os { parts.append(os) }
         parts.append(peer.stateDescription)
         if let address = peer.address { parts.append(address) }
-        parts.append("boo:\(peer.port)")
+        if metrics == nil {
+            parts.append("boo:\(peer.port)")
+        }
         if client.lastError == "Connection timed out",
            let host = monitor.lastHost,
            (peer.host == host || peer.address == host)
@@ -828,13 +832,21 @@ struct ConnectScreen: View {
         return nil
     }
 
-    private func tailscalePortStatusText(_ peer: TailscalePeer) -> String? {
-        guard tailscaleBrowser.probeMetrics[peer.id] != nil else { return nil }
+    private func tailscalePeerCanConnect(_ peer: TailscalePeer, metrics: TailscalePeerProbeMetrics?) -> Bool {
+        guard peer.online else { return false }
+        guard let metrics else { return true }
+        guard metrics.hostStatus != .unreachable else { return false }
+        guard metrics.portStatus != .closed else { return false }
+        return true
+    }
+
+    private func tailscalePortStatusText(_ peer: TailscalePeer, metrics: TailscalePeerProbeMetrics?) -> String? {
+        guard metrics != nil else { return nil }
         return ":\(peer.port)"
     }
 
-    private func tailscalePortStatusColor(_ peer: TailscalePeer) -> Color {
-        guard let metrics = tailscaleBrowser.probeMetrics[peer.id] else {
+    private func tailscalePortStatusColor(_ metrics: TailscalePeerProbeMetrics?) -> Color {
+        guard let metrics else {
             return KineticColor.tertiary
         }
         switch metrics.portStatus {

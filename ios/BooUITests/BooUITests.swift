@@ -315,7 +315,7 @@ final class BooAppLaunchTests: BooUITestCase {
         let tailscaleSection = app.staticTexts["TAILSCALE DEVICES"]
         scrollUntilExists(tailscaleSection, in: app)
 
-        let macMini = app.buttons["tailscale-peer-Mac mini"]
+        let macMini = app.descendants(matching: .any).matching(identifier: "tailscale-peer-Mac mini").firstMatch
         let offlineBox = app.descendants(matching: .any).matching(identifier: "tailscale-peer-Offline box").firstMatch
         scrollUntilExists(macMini, in: app)
         scrollUntilExists(offlineBox, in: app)
@@ -935,14 +935,14 @@ final class BooAppLaunchTests: BooUITestCase {
 
         navigateToConnectScreen(app)
 
-        let onlineRow = app.buttons["tailscale-peer-Online Mac"]
+        let onlineAnyRow = app.descendants(matching: .any).matching(identifier: "tailscale-peer-Online Mac").firstMatch
         let offlineButtonRow = app.buttons["tailscale-peer-Offline box"]
         let offlineAnyRow = app.descendants(matching: .any).matching(identifier: "tailscale-peer-Offline box").firstMatch
 
-        scrollUntilExists(onlineRow, in: app)
+        scrollUntilExists(onlineAnyRow, in: app)
         scrollUntilExists(offlineAnyRow, in: app)
 
-        XCTAssertTrue(onlineRow.exists)
+        XCTAssertTrue(onlineAnyRow.exists)
         XCTAssertFalse(offlineButtonRow.exists, "offline Tailscale row should not be rendered as a tappable button")
         XCTAssertTrue(offlineAnyRow.exists, "offline Tailscale row should still be visible")
 
@@ -950,6 +950,42 @@ final class BooAppLaunchTests: BooUITestCase {
         screenshotAttachment.name = "offline-tailscale-row"
         screenshotAttachment.lifetime = .keepAlways
         add(screenshotAttachment)
+    }
+
+    func testUnreachableTailscalePortRowIsNotTappableAndDoesNotDuplicatePort() {
+        let mockDevices = "Dead port|192.0.2.1|192.0.2.1|Linux|1"
+        let app = makeApp(autoConnect: false, resetStorage: true, mockTailscaleDevices: mockDevices)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        navigateToConnectScreen(app)
+
+        let row = app.descendants(matching: .any).matching(identifier: "tailscale-peer-Dead port").firstMatch
+        scrollUntilExists(row, in: app)
+        XCTAssertTrue(row.exists)
+
+        let metricBadge = app.staticTexts.matching(identifier: "host-metric-Dead port").firstMatch
+        XCTAssertTrue(metricBadge.waitForExistence(timeout: 10), "expected visible metric badge for unreachable port row")
+        let unreachable = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label == %@", "unreachable"),
+            object: metricBadge
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [unreachable], timeout: 10),
+            .completed,
+            "expected port probe to mark the row unreachable, got '\(metricBadge.label)'"
+        )
+
+        XCTAssertFalse(
+            app.buttons["tailscale-peer-Dead port"].exists,
+            "online Tailscale rows with an unreachable Boo port should not be rendered as tappable buttons"
+        )
+        let updatedRow = app.descendants(matching: .any).matching(identifier: "tailscale-peer-Dead port").firstMatch
+        XCTAssertFalse(
+            updatedRow.label.contains("boo:7337"),
+            "row should show the probed port once as the colored port badge, not duplicate it in the subtitle: \(updatedRow.label)"
+        )
     }
 
     func testLiveDashboardScreenshot() {
