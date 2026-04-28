@@ -54,11 +54,18 @@ deferred section at the bottom of this file.
       attached and online.
 - [ ] Keep repeating real-device iOS UI smoke tests as hardware/OS/Xcode
       changes.
-- [ ] Parameterize iOS UI test host/port without rewriting tracked sources.
-      `scripts/test-ios-ui.sh --host/--port` should feed the test run through
-      launch arguments, Info.plist overrides, or a generated file under
-      DerivedData/`/tmp`; running UI tests must leave
-      `ios/BooUITests/GeneratedUITestConfig.swift` unchanged.
+- [x] Parameterize iOS UI test host/port without rewriting tracked sources.
+      `scripts/test-ios-ui.sh --host/--port` now feeds the app and UI-test
+      bundle through Info.plist overrides and launch arguments; the tracked
+      `ios/BooUITests/GeneratedUITestConfig.swift` file was removed.
+- [x] Bound the iOS `Opening tab…` state.
+      A stuck authenticated connection with no runtime state/tab now returns to
+      the connection screen with an actionable timeout instead of spinning
+      indefinitely; UI tests cover the watchdog with a shortened test timeout.
+- [x] Removed native iOS terminal-screen navigation chrome.
+      The terminal screen no longer renders client-owned HUD/navigation controls
+      above the server-owned runtime view; UI tests cover the absence of the
+      old `Disconnect`/`Prev`/`Next`/`New`/`Close` controls.
 
 Recently closed:
 

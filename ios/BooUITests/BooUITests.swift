@@ -220,6 +220,24 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTFail("expected terminal screen, got:\n\(uiStateSnapshot(app))", file: file, line: line)
     }
 
+    private func assertNoClientOwnedTerminalNavigationChrome(
+        _ app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertFalse(app.otherElements["terminal-connection-health-hud"].exists, file: file, line: line)
+        XCTAssertFalse(app.buttons["Disconnect"].exists, file: file, line: line)
+        XCTAssertFalse(app.buttons["Prev"].exists, file: file, line: line)
+        XCTAssertFalse(app.buttons["Next"].exists, file: file, line: line)
+        XCTAssertFalse(app.buttons["New"].exists, file: file, line: line)
+        XCTAssertFalse(app.buttons["Close"].exists, file: file, line: line)
+        XCTAssertFalse(app.staticTexts["Disconnect"].exists, file: file, line: line)
+        XCTAssertFalse(app.staticTexts["Prev"].exists, file: file, line: line)
+        XCTAssertFalse(app.staticTexts["Next"].exists, file: file, line: line)
+        XCTAssertFalse(app.staticTexts["New"].exists, file: file, line: line)
+        XCTAssertFalse(app.staticTexts["Close"].exists, file: file, line: line)
+    }
+
     private func focusTerminalForTyping(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) -> XCUIElement {
         let terminal = app.otherElements["terminal-screen"]
         XCTAssertTrue(terminal.waitForExistence(timeout: 10), file: file, line: line)
@@ -1176,6 +1194,30 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTAssertFalse(app.buttons["recover-runtime-view-button"].exists)
     }
 
+    func testOpeningTerminalTimeoutReturnsToConnectScreen() {
+        let app = makeApp(
+            autoConnect: false,
+            resetStorage: true,
+            includeConfiguredHost: false,
+            forceOpeningTerminal: true,
+            terminalOpeningTimeoutSeconds: 1
+        )
+        app.launchArguments.append("--boo-ui-test-host=opening-timeout.local")
+        app.launchArguments.append("--boo-ui-test-port=7337")
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+
+        waitForConnectScreen(app, timeout: 8)
+        XCTAssertFalse(app.otherElements["terminal-opening-overlay"].exists)
+
+        let error = app.staticTexts["connect-error-label"]
+        XCTAssertTrue(error.exists)
+        XCTAssertTrue(
+            error.label.contains("Timed out opening a terminal tab"),
+            "unexpected timeout error: \(error.label)"
+        )
+    }
+
     func testTerminalErrorDoesNotShowTerminalBannerOrClientOwnedTabs() {
         let app = makeApp(
             autoConnect: false,
@@ -1194,6 +1236,30 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTAssertFalse(app.buttons["new-tab-button"].exists)
         XCTAssertFalse(app.buttons["close-tab-button"].exists)
         XCTAssertFalse(app.buttons["disconnect-tab-button"].exists)
+    }
+
+    func testTerminalScreenHasNoClientOwnedNavigationChrome() {
+        let app = makeApp(
+            autoConnect: false,
+            resetStorage: true,
+            forceActiveTerminal: true
+        )
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        waitForTerminalScreen(app)
+
+        assertNoClientOwnedTerminalNavigationChrome(app)
+    }
+
+    func testLiveTerminalScreenHasNoClientOwnedNavigationChrome() {
+        let app = makeApp(autoConnect: false, resetStorage: true)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        guard openLiveTerminal(app) else { return }
+
+        assertNoClientOwnedTerminalNavigationChrome(app)
     }
 
     func testDisconnectErrorBannerReturnsToConnectScreen() {

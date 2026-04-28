@@ -97,7 +97,10 @@ class BooUITestCase: XCTestCase {
         traceActions: String? = nil,
         traceInputCommand: String? = nil,
         traceOutputMarker: String? = nil,
-        targetViewedTabIndex: Int? = nil
+        targetViewedTabIndex: Int? = nil,
+        forceActiveTerminal: Bool = false,
+        forceOpeningTerminal: Bool = false,
+        terminalOpeningTimeoutSeconds: TimeInterval? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-ApplePersistenceIgnoreState", "YES", "--boo-ui-test-mode"]
@@ -140,6 +143,15 @@ class BooUITestCase: XCTestCase {
         }
         if let targetViewedTabIndex {
             app.launchArguments.append("--boo-ui-test-target-viewed-tab-index=\(targetViewedTabIndex)")
+        }
+        if forceActiveTerminal {
+            app.launchArguments.append("--boo-ui-test-force-active-terminal")
+        }
+        if forceOpeningTerminal {
+            app.launchArguments.append("--boo-ui-test-force-opening-terminal")
+        }
+        if let terminalOpeningTimeoutSeconds {
+            app.launchArguments.append("--boo-ui-test-terminal-opening-timeout=\(terminalOpeningTimeoutSeconds)")
         }
         app.launchEnvironment["BOO_UI_TEST_AUTO_CONNECT"] = autoConnect ? "1" : "0"
         return app

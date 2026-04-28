@@ -371,9 +371,93 @@ struct BooRootView: View {
         guard !didApplyUITestLaunchConfiguration else { return }
         didApplyUITestLaunchConfiguration = true
         guard let config = UITestLaunchConfiguration.current(),
-              config.autoConnect,
-              let host = config.host
+              (config.forceActiveTerminal || config.forceOpeningTerminal || config.autoConnect)
         else { return }
+
+        if config.forceActiveTerminal {
+            client.disconnect()
+            client.connected = true
+            client.authenticated = true
+            client.activeTabId = 1
+            client.tabs = [
+                RemoteTabInfo(
+                    id: 1,
+                    name: "Tab 1",
+                    title: "Tab 1",
+                    pwd: "~",
+                    active: true,
+                    childExited: false
+                )
+            ]
+            client.runtimeState = RemoteRuntimeStateSnapshot(
+                activeTab: 0,
+                focusedPane: 1,
+                tabs: [
+                    RemoteRuntimeTabSnapshot(
+                        tabId: 1,
+                        index: 0,
+                        active: true,
+                        title: "Tab 1",
+                        paneCount: 1,
+                        focusedPane: 1,
+                        paneIds: [1]
+                    )
+                ],
+                visiblePanes: [
+                    RemoteRuntimePaneSnapshot(
+                        leafIndex: 0,
+                        leafId: 1,
+                        paneId: 1,
+                        focused: true,
+                        frame: RemoteRuntimeRectSnapshot(x: 0, y: 0, width: 320, height: 240),
+                        splitDirection: nil,
+                        splitRatio: nil
+                    )
+                ],
+                pwd: "~",
+                runtimeRevision: 1,
+                viewRevision: 1,
+                viewId: 1,
+                viewedTabId: 1,
+                viewportCols: 80,
+                viewportRows: 24,
+                visiblePaneIds: [1],
+                ackedClientActionId: nil
+            )
+            client.paneScreens = [
+                1: DecodedWireScreenState(
+                    rows: 1,
+                    cols: 1,
+                    cells: [DecodedWireCell()],
+                    cursorX: 0,
+                    cursorY: 0,
+                    cursorVisible: true,
+                    cursorBlinking: false,
+                    cursorStyle: 0
+                )
+            ]
+            client.lastError = nil
+            client.lastErrorKind = nil
+            showingConnectedTerminal = true
+            return
+        }
+
+        if config.forceOpeningTerminal {
+            client.disconnect()
+            client.connected = true
+            client.authenticated = true
+            client.activeTabId = nil
+            client.tabs = []
+            client.runtimeState = nil
+            client.screen = ScreenState()
+            client.paneScreens = [:]
+            client.lastError = nil
+            client.lastErrorKind = nil
+            showingConnectedTerminal = true
+            return
+        }
+
+        guard let host = config.host else { return }
 
         let matchingNodeId = store.savedNodes.first {
             $0.host == host && $0.port == config.port
@@ -1065,6 +1149,8 @@ struct TerminalTabScreen: View {
     @State private var terminalGestureStatusGeneration: UInt64 = 0
     @State private var uiTestTraceAutomationStep: UITestTraceAutomationStep = .idle
     @State private var didReturnToConnectionsForClosedTab = false
+    @State private var openingTimeoutGeneration: UInt64 = 0
+    @State private var openingTimeoutArmed = false
 
     private var tabHealth: ActiveTabHealth {
         resolveActiveTabHealth(
@@ -1100,6 +1186,7 @@ struct TerminalTabScreen: View {
             applyUITestForcedErrorIfNeeded()
             client.attachView()
             returnToConnectionsIfTerminalClosed(tabHealth)
+            updateOpeningTimeout(for: tabHealth)
             guard !isDisconnected, client.activeTabId != nil else { return }
             if !suppressesAutomaticKeyboardFocusForUITest {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -1111,16 +1198,19 @@ struct TerminalTabScreen: View {
         .onReceive(client.$tabs) { _ in
             applyUITestForcedErrorIfNeeded()
             advanceUITestTraceAutomationIfNeeded()
+            updateOpeningTimeout(for: tabHealth)
         }
         .onReceive(client.$runtimeState) { _ in
             applyUITestForcedErrorIfNeeded()
             advanceUITestTraceAutomationIfNeeded()
             DispatchQueue.main.async {
                 returnToConnectionsIfTerminalClosed(tabHealth)
+                updateOpeningTimeout(for: tabHealth)
             }
         }
         .onChange(of: client.activeTabId) { _, activeTabId in
             if activeTabId != nil {
+                invalidateOpeningTimeout()
                 client.attachView()
                 keyboardFocused = false
                 terminalGestureStatus = nil
@@ -1134,10 +1224,12 @@ struct TerminalTabScreen: View {
                 advanceUITestTraceAutomationIfNeeded()
             } else {
                 returnToConnectionsIfTerminalClosed(tabHealth)
+                updateOpeningTimeout(for: tabHealth)
             }
         }
         .onChange(of: tabHealth) { _, newValue in
             returnToConnectionsIfTerminalClosed(newValue)
+            updateOpeningTimeout(for: newValue)
         }
         .onChange(of: isDisconnected) { _, disconnected in
             if disconnected {
@@ -1148,6 +1240,7 @@ struct TerminalTabScreen: View {
             composeInputSheet
         }
         .onDisappear {
+            invalidateOpeningTimeout()
             keyboardFocused = false
             client.detachView()
         }
@@ -1155,7 +1248,6 @@ struct TerminalTabScreen: View {
 
     private var terminalTabBody: some View {
         VStack(spacing: 0) {
-            connectionHealthHUD
             terminalView
                 .overlay(alignment: .topTrailing) {
                     terminalGestureHUD
@@ -1496,6 +1588,16 @@ struct TerminalTabScreen: View {
         UITestLaunchConfiguration.current()?.traceActions.contains("runtime-view-e2e") ?? false
     }
 
+    private var openingTabTimeout: TimeInterval {
+        if let override = UITestLaunchConfiguration.current()?.terminalOpeningTimeoutSeconds {
+            return override
+        }
+        if UITestLaunchConfiguration.current()?.traceActions.contains("runtime-view-e2e") == true {
+            return 60
+        }
+        return 12
+    }
+
     private var terminalKeyboardBridge: some View {
         TerminalKeyboardBridge(
             isFocused: $keyboardFocused,
@@ -1557,6 +1659,7 @@ struct TerminalTabScreen: View {
         case .expired, .exited:
             guard !didReturnToConnectionsForClosedTab else { return }
             didReturnToConnectionsForClosedTab = true
+            invalidateOpeningTimeout()
             keyboardFocused = false
             terminalGestureStatus = nil
             resetModifierStates()
@@ -1570,12 +1673,59 @@ struct TerminalTabScreen: View {
     }
 
     private func goBack() {
+        invalidateOpeningTimeout()
         keyboardFocused = false
         terminalGestureStatus = nil
         resetModifierStates()
         DispatchQueue.main.async {
             onBack()
         }
+    }
+
+    private func updateOpeningTimeout(for health: ActiveTabHealth) {
+        guard health == .opening else {
+            invalidateOpeningTimeout()
+            return
+        }
+        guard !openingTimeoutArmed else { return }
+
+        openingTimeoutArmed = true
+        openingTimeoutGeneration &+= 1
+        let generation = openingTimeoutGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + openingTabTimeout) {
+            guard openingTimeoutArmed,
+                  openingTimeoutGeneration == generation,
+                  tabHealth == .opening
+            else { return }
+            handleOpeningTimeout()
+        }
+    }
+
+    private func invalidateOpeningTimeout() {
+        guard openingTimeoutArmed else { return }
+        openingTimeoutArmed = false
+        openingTimeoutGeneration &+= 1
+    }
+
+    private func handleOpeningTimeout() {
+        guard tabHealth == .opening else {
+            invalidateOpeningTimeout()
+            return
+        }
+        invalidateOpeningTimeout()
+        keyboardFocused = false
+        terminalGestureStatus = nil
+        resetModifierStates()
+        client.lastErrorKind = .remote(openingTabTimeoutMessage)
+        client.lastError = openingTabTimeoutMessage
+        DispatchQueue.main.async {
+            onBack()
+        }
+    }
+
+    private var openingTabTimeoutMessage: String {
+        let target = monitor.lastDisplayName ?? monitor.lastHost ?? "remote Boo server"
+        return "Timed out opening a terminal tab on \(target). Make sure the Boo server is current and can start a shell."
     }
 
     private func applyUITestForcedErrorIfNeeded() {

@@ -22,6 +22,9 @@ struct UITestLaunchConfiguration {
     let traceOutputMarker: String?
     let targetViewedTabIndex: Int?
     let targetViewedTabId: UInt32?
+    let forceActiveTerminal: Bool
+    let forceOpeningTerminal: Bool
+    let terminalOpeningTimeoutSeconds: TimeInterval?
     let mockTailscaleDevices: [MockTailscaleDevice]
 
     private static func fileConfiguredHostAndPort() -> (host: String, port: UInt16)? {
@@ -120,6 +123,10 @@ struct UITestLaunchConfiguration {
         let targetViewedTabId = argumentValue(prefix: "--boo-ui-test-target-viewed-tab-id=", arguments: arguments)
             .flatMap(UInt32.init)
             ?? env["BOO_UI_TEST_TARGET_VIEWED_TAB_ID"].flatMap(UInt32.init)
+        let forceActiveTerminal = arguments.contains("--boo-ui-test-force-active-terminal")
+        let forceOpeningTerminal = arguments.contains("--boo-ui-test-force-opening-terminal")
+        let terminalOpeningTimeoutSeconds = argumentValue(prefix: "--boo-ui-test-terminal-opening-timeout=", arguments: arguments)
+            .flatMap(TimeInterval.init)
         return UITestLaunchConfiguration(
             resetStorage: resetStorage,
             nodeName: nodeName,
@@ -134,6 +141,9 @@ struct UITestLaunchConfiguration {
             traceOutputMarker: traceOutputMarker,
             targetViewedTabIndex: targetViewedTabIndex,
             targetViewedTabId: targetViewedTabId,
+            forceActiveTerminal: forceActiveTerminal,
+            forceOpeningTerminal: forceOpeningTerminal,
+            terminalOpeningTimeoutSeconds: terminalOpeningTimeoutSeconds,
             mockTailscaleDevices: parseMockTailscaleDevices(arguments: arguments, env: env)
         )
     }
