@@ -501,6 +501,7 @@ final class ConnectionMonitor: ObservableObject {
 
     private var reconnectAllowed = false
     private var reconnectAttempt = 0
+    private var reconnectEligible = false
     private var connectionIntentGeneration: UInt64 = 0
     private var lastDisconnectAt: Date?
 
@@ -610,6 +611,7 @@ final class ConnectionMonitor: ObservableObject {
         status = .connecting
         transportHealth = .idle
         reconnectAllowed = true
+        reconnectEligible = false
         cancelReconnect()
         beginConnection(intentGeneration: intentGeneration) {
             self.startClientConnection(host: host, port: port)
@@ -629,6 +631,7 @@ final class ConnectionMonitor: ObservableObject {
         status = .connecting
         transportHealth = .idle
         reconnectAllowed = true
+        reconnectEligible = false
         cancelReconnect()
         beginConnection(intentGeneration: intentGeneration) {
             self.startClientConnection(endpoint: endpoint, host: displayHost, port: displayPort)
@@ -661,18 +664,34 @@ final class ConnectionMonitor: ObservableObject {
     }
 
     func reconnect() {
+        guard reconnectEligible else {
+            reconnectAllowed = false
+            cancelReconnect()
+            reconnectState = .idle
+            return
+        }
         if ConnectionErrorPolicy.suppressAutomaticReconnect(for: client.lastError) {
             reconnectAllowed = false
             cancelReconnect()
             reconnectState = .failed(reason: client.lastError ?? "Server identity changed")
             return
         }
+        guard lastHost != nil, lastPort != nil else { return }
+        connectionIntentGeneration &+= 1
+        let intentGeneration = connectionIntentGeneration
+        status = .connecting
+        transportHealth = .idle
+        reconnectAllowed = true
+        cancelReconnect()
         if let endpoint = lastEndpoint, let host = lastHost, let port = lastPort {
-            connect(endpoint: endpoint, displayHost: host, displayPort: port)
-            return
+            beginConnection(intentGeneration: intentGeneration) {
+                self.startClientConnection(endpoint: endpoint, host: host, port: port)
+            }
+        } else if let host = lastHost, let port = lastPort {
+            beginConnection(intentGeneration: intentGeneration) {
+                self.startClientConnection(host: host, port: port)
+            }
         }
-        guard let host = lastHost, let port = lastPort else { return }
-        connect(host: host, port: port)
     }
 
     func disconnect() {
@@ -684,6 +703,7 @@ final class ConnectionMonitor: ObservableObject {
         status = .disconnected
         transportHealth = .idle
         reconnectState = .idle
+        reconnectEligible = false
         lastEndpoint = nil
         lastHost = nil
         lastPort = nil
@@ -738,6 +758,7 @@ final class ConnectionMonitor: ObservableObject {
         error: String?
     ) {
         if connected, (authenticated || tabId != nil) {
+            reconnectEligible = true
             cancelReconnect()
             reconnectState = .idle
             return
@@ -753,6 +774,12 @@ final class ConnectionMonitor: ObservableObject {
             return
         }
         guard reconnectAllowed else {
+            reconnectState = .idle
+            return
+        }
+        guard reconnectEligible else {
+            reconnectAllowed = false
+            cancelReconnect()
             reconnectState = .idle
             return
         }
