@@ -119,7 +119,6 @@ struct BooRootView: View {
                                     showingConnectedTerminal = false
                                 }
                             )
-                            .ignoresSafeArea(.container)
                             .zIndex(1)
                         }
                     }
@@ -859,8 +858,7 @@ struct TerminalTabScreen: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             terminalTabBody
-                .background(KineticColor.surface)
-                .ignoresSafeArea(.container)
+                .background(KineticColor.surface.ignoresSafeArea())
                 .navigationBarBackButtonHidden(true)
                 .toolbar(.hidden, for: .navigationBar)
 

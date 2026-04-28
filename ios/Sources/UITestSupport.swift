@@ -81,11 +81,7 @@ struct UITestLaunchConfiguration {
         let rawPortFromInfoString = resolvedInfoString(info?["BOO_UI_TEST_PORT"] as? String)
         let modeEnabled =
             env["BOO_UI_TEST_MODE"] == "1" ||
-            arguments.contains("--boo-ui-test-mode") ||
-            hostFromInfo != nil ||
-            rawPortFromInfoString != nil ||
-            (info?["BOO_UI_TEST_PORT"] as? NSNumber) != nil ||
-            fileConfigured != nil
+            arguments.contains("--boo-ui-test-mode")
         guard modeEnabled else { return nil }
 
         let hostFromArgs = argumentValue(prefix: "--boo-ui-test-host=", arguments: arguments)
