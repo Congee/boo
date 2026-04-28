@@ -222,8 +222,8 @@ if [[ "$DESTINATION" == *"platform=iOS Simulator"* ]]; then
     -derivedDataPath "$DERIVED_DATA" \
     -parallel-testing-enabled NO \
     -maximum-concurrent-test-simulator-destinations 1 \
-    INFOPLIST_KEY_BOO_UI_TEST_HOST="$HOST" \
-    INFOPLIST_KEY_BOO_UI_TEST_PORT="$PORT" \
+    BOO_UI_TEST_HOST="$HOST" \
+    BOO_UI_TEST_PORT="$PORT" \
     "${TEST_ARGS[@]}" \
     test
 else
@@ -242,8 +242,8 @@ else
     -derivedDataPath "$DERIVED_DATA" \
     -allowProvisioningUpdates \
     DEVELOPMENT_TEAM="$TEAM_ID" \
-    INFOPLIST_KEY_BOO_UI_TEST_HOST="$HOST" \
-    INFOPLIST_KEY_BOO_UI_TEST_PORT="$PORT" \
+    BOO_UI_TEST_HOST="$HOST" \
+    BOO_UI_TEST_PORT="$PORT" \
     "${TEST_ARGS[@]}" \
     test
 fi

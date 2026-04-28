@@ -77,22 +77,24 @@ struct UITestLaunchConfiguration {
         let arguments = ProcessInfo.processInfo.arguments
         let info = Bundle.main.infoDictionary
         let fileConfigured = fileConfiguredHostAndPort()
+        let hostFromInfo = resolvedInfoString(info?["BOO_UI_TEST_HOST"] as? String)
+        let rawPortFromInfoString = resolvedInfoString(info?["BOO_UI_TEST_PORT"] as? String)
         let modeEnabled =
             env["BOO_UI_TEST_MODE"] == "1" ||
             arguments.contains("--boo-ui-test-mode") ||
-            (info?["BOO_UI_TEST_HOST"] as? String) != nil ||
-            (info?["BOO_UI_TEST_PORT"] != nil) ||
+            hostFromInfo != nil ||
+            rawPortFromInfoString != nil ||
+            (info?["BOO_UI_TEST_PORT"] as? NSNumber) != nil ||
             fileConfigured != nil
         guard modeEnabled else { return nil }
 
         let hostFromArgs = argumentValue(prefix: "--boo-ui-test-host=", arguments: arguments)
         let hostFromEnv = env["BOO_UI_TEST_HOST"]
-        let hostFromInfo = info?["BOO_UI_TEST_HOST"] as? String
         let host = hostFromArgs ?? hostFromEnv ?? hostFromInfo ?? fileConfigured?.host
 
         let portFromArgs = argumentValue(prefix: "--boo-ui-test-port=", arguments: arguments).flatMap(UInt16.init)
         let portFromEnv = env["BOO_UI_TEST_PORT"].flatMap(UInt16.init)
-        let portFromInfoString = (info?["BOO_UI_TEST_PORT"] as? String).flatMap(UInt16.init)
+        let portFromInfoString = rawPortFromInfoString.flatMap(UInt16.init)
         let portFromInfoNumber = (info?["BOO_UI_TEST_PORT"] as? NSNumber)?.uint16Value
         let port = portFromArgs ?? portFromEnv ?? portFromInfoString ?? portFromInfoNumber ?? fileConfigured?.port ?? BooDefaultRemotePort
         let nodeName = argumentValue(prefix: "--boo-ui-test-node-name=", arguments: arguments) ?? env["BOO_UI_TEST_NODE_NAME"]
@@ -146,5 +148,12 @@ struct UITestLaunchConfiguration {
             terminalOpeningTimeoutSeconds: terminalOpeningTimeoutSeconds,
             mockTailscaleDevices: parseMockTailscaleDevices(arguments: arguments, env: env)
         )
+    }
+
+    private static func resolvedInfoString(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains("$(") else { return nil }
+        return trimmed
     }
 }

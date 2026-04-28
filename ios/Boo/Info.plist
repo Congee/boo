@@ -18,6 +18,10 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>BOO_UI_TEST_HOST</key>
+	<string>$(BOO_UI_TEST_HOST)</string>
+	<key>BOO_UI_TEST_PORT</key>
+	<string>$(BOO_UI_TEST_PORT)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>

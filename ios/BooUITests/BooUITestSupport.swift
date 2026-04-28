@@ -184,6 +184,10 @@ class BooUITestCase: XCTestCase {
             app.buttons["saved-node-Local Boo"].tap()
             return
         }
+        if app.buttons["saved-node-UI Test Node"].waitForExistence(timeout: 2) {
+            app.buttons["saved-node-UI Test Node"].tap()
+            return
+        }
         if let explicitHost, app.buttons[explicitHost].waitForExistence(timeout: 1) {
             app.buttons[explicitHost].tap()
             return
@@ -201,6 +205,10 @@ class BooUITestCase: XCTestCase {
         }
         if app.buttons["Local Boo"].waitForExistence(timeout: 1) {
             app.buttons["Local Boo"].tap()
+            return
+        }
+        if app.buttons["UI Test Node"].waitForExistence(timeout: 1) {
+            app.buttons["UI Test Node"].tap()
             return
         }
         guard let explicitHost else {

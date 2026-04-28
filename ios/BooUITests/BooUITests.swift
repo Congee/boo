@@ -1182,6 +1182,7 @@ final class BooAppLaunchTests: BooUITestCase {
         navigateToConnectScreen(app)
         XCTAssertTrue(app.textFields["connect-host-input"].exists)
         XCTAssertTrue(app.buttons["connect-button"].exists)
+        XCTAssertFalse(app.staticTexts["DISCOVERED ON NETWORK"].exists)
     }
 
     func testOpenLiveTerminalCanDismissKeyboard() {
