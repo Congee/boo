@@ -291,14 +291,6 @@ final class ScreenState: ObservableObject {
     }
 }
 
-struct DiscoveredDaemon: Identifiable, Hashable {
-    let id: String
-    let name: String
-    let title: String
-    let subtitle: String
-    let endpoint: NWEndpoint
-}
-
 struct TailscalePeer: Identifiable, Hashable {
     let id: String
     let name: String
@@ -401,195 +393,6 @@ func measureBooQUICHandshakeLatency(host: String, port: UInt16) async -> Double?
     return await measureBooQUICHandshakeLatency(
         endpoint: .hostPort(host: NWEndpoint.Host(host), port: endpointPort)
     )
-}
-
-@MainActor
-final class BonjourBrowser: ObservableObject {
-    @Published var daemons: [DiscoveredDaemon] = []
-    @Published var isSearching = false
-    @Published var lastError: String?
-
-    private var browsers: [NWBrowser] = []
-    private let queue = DispatchQueue(label: "boo-bonjour-browser")
-    private let serviceTypes = ["_boo._udp"]
-
-    private struct RankedDiscoveredDaemon {
-        let daemon: DiscoveredDaemon
-        let advertisedPort: UInt16?
-    }
-
-    private func stripBonjourConflictSuffix(_ name: String) -> String {
-        guard
-            let regex = try? NSRegularExpression(pattern: #"^(.*?)(?: \((\d+)\))$"#),
-            let match = regex.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)),
-            match.numberOfRanges == 3,
-            let baseRange = Range(match.range(at: 1), in: name)
-        else {
-            return name
-        }
-
-        let base = String(name[baseRange])
-        if base == "boo" || base.starts(with: "boo on ") || base.contains(" (") {
-            return base
-        }
-        return name
-    }
-
-    private func normalizedServiceName(for endpoint: NWEndpoint) -> String {
-        switch endpoint {
-        case .service(let name, _, _, _):
-            return stripBonjourConflictSuffix(name)
-        default:
-            return "\(endpoint)"
-        }
-    }
-
-    private func displayTitle(for serviceName: String) -> String {
-        let cleanedName = serviceName
-            .replacingOccurrences(of: "boo on ", with: "")
-            .replacingOccurrences(of: ".local", with: "")
-        return cleanedName
-            .replacingOccurrences(of: #" \((\d+)\)$"#, with: "", options: .regularExpression)
-    }
-
-    private func advertisedPort(for serviceName: String) -> UInt16? {
-        guard
-            let regex = try? NSRegularExpression(pattern: #"^boo on .+ \((\d+)\)$"#),
-            let match = regex.firstMatch(in: serviceName, range: NSRange(serviceName.startIndex..., in: serviceName)),
-            match.numberOfRanges == 2,
-            let portRange = Range(match.range(at: 1), in: serviceName)
-        else {
-            return nil
-        }
-        return UInt16(serviceName[portRange])
-    }
-
-    private enum BrowserErrorDisposition {
-        case ignore
-        case show(String)
-    }
-
-    private func browserErrorDisposition(for error: NWError) -> BrowserErrorDisposition {
-        let raw = "\(error)"
-        if raw.contains("NoAuth") {
-            return .show("Local network access is required for Bonjour discovery. Enable boo in Settings > Privacy & Security > Local Network.")
-        }
-        if raw.contains("DefunctConnection") {
-            return .ignore
-        }
-        return .show("Bonjour browse failed: \(error)")
-    }
-
-    func startBrowsing() {
-        stopBrowsing()
-        isSearching = true
-        lastError = nil
-        for type in serviceTypes {
-            let descriptor = NWBrowser.Descriptor.bonjour(type: type, domain: nil)
-            let params = NWParameters.udp
-            params.includePeerToPeer = true
-            let browser = NWBrowser(for: descriptor, using: params)
-            browser.stateUpdateHandler = { [weak self] state in
-                Task { @MainActor in
-                    switch state {
-                    case .failed(let error):
-                        switch self?.browserErrorDisposition(for: error) {
-                        case .ignore:
-                            self?.lastError = nil
-                        case .show(let message):
-                            self?.isSearching = false
-                            self?.lastError = message
-                        case .none:
-                            break
-                        }
-                    case .waiting(let error):
-                        switch self?.browserErrorDisposition(for: error) {
-                        case .ignore:
-                            self?.lastError = nil
-                        case .show(let message):
-                            self?.lastError = message
-                        case .none:
-                            break
-                        }
-                    case .ready:
-                        self?.lastError = nil
-                    case .cancelled:
-                        self?.isSearching = false
-                    default:
-                        break
-                    }
-                }
-            }
-            browser.browseResultsChangedHandler = { [weak self] _, _ in
-                Task { @MainActor in
-                    self?.refreshDiscoveredDaemons()
-                }
-            }
-            browser.start(queue: queue)
-            browsers.append(browser)
-        }
-    }
-
-    func stopBrowsing() {
-        browsers.forEach { $0.cancel() }
-        browsers.removeAll()
-        daemons.removeAll()
-        isSearching = false
-        lastError = nil
-    }
-
-    private func refreshDiscoveredDaemons() {
-        Task { @MainActor in
-            var entriesByTitle: [String: RankedDiscoveredDaemon] = [:]
-            for browser in browsers {
-                for result in browser.browseResults {
-                    let id = normalizedServiceName(for: result.endpoint)
-                    let name: String
-                    switch result.endpoint {
-                    case .service(let n, _, _, _):
-                        name = stripBonjourConflictSuffix(n)
-                    default:
-                        name = id
-                    }
-                    let title = displayTitle(for: name)
-                    let subtitle: String
-                    switch result.endpoint {
-                    case .service(_, _, _, let interface):
-                        if let interface {
-                            subtitle = "QUIC remote daemon · \(interface.debugDescription)"
-                        } else {
-                            subtitle = "QUIC remote daemon"
-                        }
-                    default:
-                        subtitle = "QUIC remote daemon"
-                    }
-                    let ranked = RankedDiscoveredDaemon(
-                        daemon: DiscoveredDaemon(
-                            id: id,
-                            name: name,
-                            title: title,
-                            subtitle: subtitle,
-                            endpoint: result.endpoint
-                        ),
-                        advertisedPort: advertisedPort(for: name)
-                    )
-                    if let existing = entriesByTitle[title] {
-                        let existingScore = existing.advertisedPort == BooDefaultRemotePort ? 1 : 0
-                        let candidateScore = ranked.advertisedPort == BooDefaultRemotePort ? 1 : 0
-                        if candidateScore > existingScore {
-                            entriesByTitle[title] = ranked
-                        }
-                    } else {
-                        entriesByTitle[title] = ranked
-                    }
-                }
-            }
-            daemons = entriesByTitle.values
-                .map(\.daemon)
-                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-            isSearching = !browsers.isEmpty
-        }
-    }
 }
 
 @MainActor
@@ -911,9 +714,7 @@ final class GSPClient: ObservableObject {
     @Published var transportCapabilities: UInt32 = 0
     @Published var serverBuildId: String?
     @Published var serverInstanceId: String?
-    @Published var serverIdentityId: String?
     @Published var lastSeenServerInstanceId: String?
-    @Published var lastSeenServerIdentityId: String?
     @Published var lastHeartbeatAck: Date?
     @Published var lastHeartbeatRttMs: Double?
     @Published var heartbeatSentCount: UInt64 = 0
@@ -946,7 +747,6 @@ final class GSPClient: ObservableObject {
     private var connectionTimeoutTimer: DispatchSourceTimer?
     private var lastHeartbeatSent: Date?
     private var pendingHeartbeatToken: UInt64?
-    private var expectedServerIdentityId: String?
     private var connectionGeneration: UInt64 = 0
     private var connectStartedAt: Date?
     private var authRequestedAt: Date?
@@ -988,8 +788,7 @@ final class GSPClient: ObservableObject {
     var handshakeSummary: String? {
         guard let protocolVersion,
               let serverBuildId, !serverBuildId.isEmpty,
-              let serverInstanceId, !serverInstanceId.isEmpty,
-              let serverIdentityId, !serverIdentityId.isEmpty else {
+              let serverInstanceId, !serverInstanceId.isEmpty else {
             return nil
         }
         let heartbeat = lastHeartbeatRttMs.map { String(format: "hb %.0fms", $0) }
@@ -1002,7 +801,6 @@ final class GSPClient: ObservableObject {
                      "conn# \(connectionAttemptCount)",
                      reconnectAttemptCount > 0 ? "reconn# \(reconnectAttemptCount)" : nil,
                      serverBuildId,
-                     "id \(serverIdentityId)",
                      "srv \(serverInstanceId)"].compactMap { $0 }.joined(separator: " · ")
         let timings = [connect, auth, listed, heartbeat].compactMap { $0 }
         if !timings.isEmpty {
@@ -1093,7 +891,6 @@ final class GSPClient: ObservableObject {
         transportCapabilities = 0
         serverBuildId = nil
         serverInstanceId = nil
-        serverIdentityId = nil
         lastHeartbeatAck = nil
         lastHeartbeatRttMs = nil
         heartbeatSentCount = 0
@@ -1128,10 +925,6 @@ final class GSPClient: ObservableObject {
         debugLog("send listTabs")
         tabListRequestedAt = Date()
         sendMessage(type: .listTabs, payload: Data())
-    }
-
-    func configureTrustedServerIdentity(_ identityId: String?) {
-        expectedServerIdentityId = identityId
     }
 
     func clearErrorState() {
@@ -1843,18 +1636,6 @@ final class GSPClient: ObservableObject {
                 protocolError(error)
                 return
             }
-            if let metadata = decodeAuthOkMetadata(payload),
-               serverIdentityMismatch(
-                    expectedIdentityId: expectedServerIdentityId,
-                    actualIdentityId: metadata.serverIdentityId
-               )
-            {
-                if let serverIdentityId = metadata.serverIdentityId, !serverIdentityId.isEmpty {
-                    lastSeenServerIdentityId = serverIdentityId
-                }
-                protocolError("Server identity changed; connection rejected")
-                return
-            }
             applyReducedMessage(.authOk, payload: payload)
         case .authFail:
             applyReducedMessage(.authFail, payload: payload)
@@ -2150,7 +1931,6 @@ final class GSPClient: ObservableObject {
         transportCapabilities = 0
         serverBuildId = nil
         serverInstanceId = nil
-        serverIdentityId = nil
         activeTabId = nil
         tabs = []
         runtimeState = nil
@@ -2216,7 +1996,6 @@ final class GSPClient: ObservableObject {
             transportCapabilities: transportCapabilities,
             serverBuildId: serverBuildId,
             serverInstanceId: serverInstanceId,
-            serverIdentityId: serverIdentityId,
             tabs: tabs.map {
                 DecodedWireTabInfo(
                     id: $0.id,
@@ -2262,12 +2041,8 @@ final class GSPClient: ObservableObject {
         transportCapabilities = state.transportCapabilities
         serverBuildId = state.serverBuildId
         serverInstanceId = state.serverInstanceId
-        serverIdentityId = state.serverIdentityId
         if let serverInstanceId = state.serverInstanceId, !serverInstanceId.isEmpty {
             lastSeenServerInstanceId = serverInstanceId
-        }
-        if let serverIdentityId = state.serverIdentityId, !serverIdentityId.isEmpty {
-            lastSeenServerIdentityId = serverIdentityId
         }
         lastErrorKind = state.lastErrorKind
         lastError = state.lastError

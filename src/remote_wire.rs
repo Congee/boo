@@ -22,13 +22,11 @@ pub const REMOTE_CAPABILITY_SCREEN_DELTAS: u32 = 1 << 1;
 pub const REMOTE_CAPABILITY_UI_STATE: u32 = 1 << 2;
 pub const REMOTE_CAPABILITY_IMAGES: u32 = 1 << 3;
 pub const REMOTE_CAPABILITY_HEARTBEAT: u32 = 1 << 4;
-pub const REMOTE_CAPABILITY_DAEMON_IDENTITY: u32 = 1 << 6;
 pub const REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT: u32 = 1 << 7;
 pub const REMOTE_CAPABILITIES: u32 = REMOTE_CAPABILITY_SCREEN_DELTAS
     | REMOTE_CAPABILITY_UI_STATE
     | REMOTE_CAPABILITY_IMAGES
     | REMOTE_CAPABILITY_HEARTBEAT
-    | REMOTE_CAPABILITY_DAEMON_IDENTITY
     | REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT;
 
 pub(crate) const LOCAL_INPUT_SEQ_LEN: usize = 8;
@@ -370,28 +368,20 @@ pub(crate) fn read_message_retrying(
     Ok((ty, payload))
 }
 
-pub(crate) fn encode_auth_ok_payload(
-    server_identity_id: &str,
-    server_instance_id: &str,
-) -> Vec<u8> {
+pub(crate) fn encode_auth_ok_payload(server_instance_id: &str) -> Vec<u8> {
     let build_id = env!("CARGO_PKG_VERSION").as_bytes();
-    let server_identity_id = server_identity_id.as_bytes();
     let server_instance_id = server_instance_id.as_bytes();
-    let mut payload = Vec::with_capacity(
-        12 + build_id.len() + server_identity_id.len() + server_instance_id.len(),
-    );
+    let mut payload = Vec::with_capacity(10 + build_id.len() + server_instance_id.len());
     payload.extend_from_slice(&REMOTE_PROTOCOL_VERSION.to_le_bytes());
     payload.extend_from_slice(&REMOTE_CAPABILITIES.to_le_bytes());
     payload.extend_from_slice(&(build_id.len() as u16).to_le_bytes());
     payload.extend_from_slice(build_id);
     payload.extend_from_slice(&(server_instance_id.len() as u16).to_le_bytes());
     payload.extend_from_slice(server_instance_id);
-    payload.extend_from_slice(&(server_identity_id.len() as u16).to_le_bytes());
-    payload.extend_from_slice(server_identity_id);
     payload
 }
 
-type AuthOkPayloadParts = (u16, u32, Option<String>, Option<String>, Option<String>);
+type AuthOkPayloadParts = (u16, u32, Option<String>, Option<String>);
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn decode_auth_ok_payload(payload: &[u8]) -> Option<AuthOkPayloadParts> {
@@ -404,7 +394,7 @@ pub fn decode_auth_ok_payload(payload: &[u8]) -> Option<AuthOkPayloadParts> {
     let version = u16::from_le_bytes([payload[0], payload[1]]);
     let capabilities = u32::from_le_bytes([payload[2], payload[3], payload[4], payload[5]]);
     if payload.len() < 8 {
-        return Some((version, capabilities, None, None, None));
+        return Some((version, capabilities, None, None));
     }
     let build_len = u16::from_le_bytes([payload[6], payload[7]]) as usize;
     if payload.len() < 8 + build_len {
@@ -412,7 +402,7 @@ pub fn decode_auth_ok_payload(payload: &[u8]) -> Option<AuthOkPayloadParts> {
     }
     let build_id = String::from_utf8(payload[8..8 + build_len].to_vec()).ok();
     if payload.len() < 10 + build_len {
-        return Some((version, capabilities, build_id, None, None));
+        return Some((version, capabilities, build_id, None));
     }
     let instance_offset = 8 + build_len;
     let instance_len =
@@ -424,31 +414,12 @@ pub fn decode_auth_ok_payload(payload: &[u8]) -> Option<AuthOkPayloadParts> {
         payload[instance_offset + 2..instance_offset + 2 + instance_len].to_vec(),
     )
     .ok();
-    let identity_offset = instance_offset + 2 + instance_len;
-    if payload.len() < identity_offset + 2 {
-        return Some((version, capabilities, build_id, server_instance_id, None));
-    }
-    let identity_len =
-        u16::from_le_bytes([payload[identity_offset], payload[identity_offset + 1]]) as usize;
-    if payload.len() < identity_offset + 2 + identity_len {
-        return None;
-    }
-    let server_identity_id = String::from_utf8(
-        payload[identity_offset + 2..identity_offset + 2 + identity_len].to_vec(),
-    )
-    .ok();
-    Some((
-        version,
-        capabilities,
-        build_id,
-        server_instance_id,
-        server_identity_id,
-    ))
+    Some((version, capabilities, build_id, server_instance_id))
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn validate_auth_ok_payload(payload: &[u8]) -> Result<(), String> {
-    let Some((version, capabilities, build_id, server_instance_id, server_identity_id)) =
+    let Some((version, capabilities, build_id, server_instance_id)) =
         decode_auth_ok_payload(payload)
     else {
         return Err("Remote handshake is malformed".to_string());
@@ -459,9 +430,6 @@ pub fn validate_auth_ok_payload(payload: &[u8]) -> Result<(), String> {
     if (capabilities & REMOTE_CAPABILITY_HEARTBEAT) == 0 {
         return Err("Remote server does not advertise heartbeat support".to_string());
     }
-    if (capabilities & REMOTE_CAPABILITY_DAEMON_IDENTITY) == 0 {
-        return Err("Remote server does not advertise daemon identity support".to_string());
-    }
     if (capabilities & REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT) == 0 {
         return Err("Remote server does not advertise QUIC direct transport".to_string());
     }
@@ -470,9 +438,6 @@ pub fn validate_auth_ok_payload(payload: &[u8]) -> Result<(), String> {
     }
     if server_instance_id.as_deref().is_none_or(str::is_empty) {
         return Err("Remote handshake is missing server instance metadata".to_string());
-    }
-    if server_identity_id.as_deref().is_none_or(str::is_empty) {
-        return Err("Remote handshake is missing server identity metadata".to_string());
     }
     Ok(())
 }
@@ -1251,7 +1216,7 @@ mod tests {
     fn auth_ok_payload_round_trips_protocol_version_and_capabilities() {
         let frame = encode_message(
             MessageType::AuthOk,
-            &encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe"),
+            &encode_auth_ok_payload("deadbeefcafebabe"),
         );
         let mut cursor = std::io::Cursor::new(frame);
         let (ty, payload) = read_message(&mut cursor).expect("auth ok frame");
@@ -1263,7 +1228,6 @@ mod tests {
                 REMOTE_CAPABILITIES,
                 Some(env!("CARGO_PKG_VERSION").to_string()),
                 Some("deadbeefcafebabe".to_string()),
-                Some("daemon-identity-01".to_string()),
             ))
         );
     }
@@ -1310,13 +1274,13 @@ mod tests {
 
     #[test]
     fn validate_auth_ok_payload_accepts_current_handshake_contract() {
-        let payload = encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe");
+        let payload = encode_auth_ok_payload("deadbeefcafebabe");
         assert_eq!(validate_auth_ok_payload(&payload), Ok(()));
     }
 
     #[test]
     fn validate_auth_ok_payload_rejects_missing_heartbeat_capability() {
-        let mut payload = encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe");
+        let mut payload = encode_auth_ok_payload("deadbeefcafebabe");
         payload[2..6]
             .copy_from_slice(&(REMOTE_CAPABILITIES & !REMOTE_CAPABILITY_HEARTBEAT).to_le_bytes());
         assert_eq!(
@@ -1326,18 +1290,8 @@ mod tests {
     }
 
     #[test]
-    fn validate_auth_ok_payload_rejects_missing_daemon_identity_metadata() {
-        let mut payload = encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe");
-        payload.truncate(payload.len() - "daemon-identity-01".len());
-        assert_eq!(
-            validate_auth_ok_payload(&payload),
-            Err("Remote handshake is malformed".to_string())
-        );
-    }
-
-    #[test]
     fn validate_auth_ok_payload_rejects_missing_direct_transport_capability() {
-        let mut payload = encode_auth_ok_payload("daemon-identity-01", "deadbeefcafebabe");
+        let mut payload = encode_auth_ok_payload("deadbeefcafebabe");
         payload[2..6].copy_from_slice(
             &(REMOTE_CAPABILITIES & !REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT).to_le_bytes(),
         );
@@ -1353,7 +1307,7 @@ mod tests {
         frames.extend_from_slice(&encode_message(MESSAGE_TYPE_TAB_LIST, b"[]"));
         frames.extend_from_slice(&encode_message(
             MessageType::AuthOk,
-            &encode_auth_ok_payload("test-daemon", "test-instance"),
+            &encode_auth_ok_payload("test-instance"),
         ));
         let (ty, payload) =
             read_probe_auth_reply(&mut std::io::Cursor::new(frames), "127.0.0.1", 7359)

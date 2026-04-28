@@ -1,5 +1,4 @@
-//! Public direct-client RPCs over QUIC. Identity is enforced by the
-//! higher-level Boo handshake and the surrounding network substrate.
+//! Public direct-client RPCs over QUIC.
 
 use crate::remote::DirectTransportClient;
 use crate::remote_direct_transport::DirectReadWrite;
@@ -31,17 +30,12 @@ fn probe_summary_from_transport<S: DirectReadWrite>(
         capabilities: client.capabilities,
         build_id: client.build_id.clone(),
         server_instance_id: client.server_instance_id.clone(),
-        server_identity_id: client.server_identity_id.clone(),
         heartbeat_rtt_ms,
     })
 }
 
-pub fn probe_remote_endpoint(
-    host: &str,
-    port: u16,
-    expected_server_identity: Option<&str>,
-) -> Result<RemoteProbeSummary, String> {
-    let mut client = crate::remote_quic::connect_direct(host, port, expected_server_identity)?;
+pub fn probe_remote_endpoint(host: &str, port: u16) -> Result<RemoteProbeSummary, String> {
+    let mut client = crate::remote_quic::connect_direct(host, port)?;
     probe_summary_from_transport(&mut client, port)
 }
 
@@ -49,12 +43,11 @@ pub fn probe_selected_direct_transport(
     transport: DirectTransportKind,
     host: &str,
     port: u16,
-    expected_server_identity: Option<&str>,
 ) -> Result<RemoteUpgradeProbeSummary, String> {
     match transport {
         DirectTransportKind::QuicDirect => Ok(RemoteUpgradeProbeSummary {
             selected_transport: DirectTransportKind::QuicDirect,
-            probe: probe_remote_endpoint(host, port, expected_server_identity)?,
+            probe: probe_remote_endpoint(host, port)?,
         }),
     }
 }
@@ -72,18 +65,13 @@ fn list_summary_from_transport<S: DirectReadWrite>(
         capabilities: client.capabilities,
         build_id: client.build_id.clone(),
         server_instance_id: client.server_instance_id.clone(),
-        server_identity_id: client.server_identity_id.clone(),
         heartbeat_rtt_ms,
         tabs,
     })
 }
 
-pub fn list_remote_daemon_tabs(
-    host: &str,
-    port: u16,
-    expected_server_identity: Option<&str>,
-) -> Result<RemoteTabListSummary, String> {
-    let mut client = crate::remote_quic::connect_direct(host, port, expected_server_identity)?;
+pub fn list_remote_daemon_tabs(host: &str, port: u16) -> Result<RemoteTabListSummary, String> {
+    let mut client = crate::remote_quic::connect_direct(host, port)?;
     list_summary_from_transport(&mut client, port)
 }
 
@@ -102,7 +90,6 @@ fn create_summary_from_transport<S: DirectReadWrite>(
         capabilities: client.capabilities,
         build_id: client.build_id.clone(),
         server_instance_id: client.server_instance_id.clone(),
-        server_identity_id: client.server_identity_id.clone(),
         heartbeat_rtt_ms,
         tab_id,
     })
@@ -111,11 +98,10 @@ fn create_summary_from_transport<S: DirectReadWrite>(
 pub fn create_remote_daemon_tab(
     host: &str,
     port: u16,
-    expected_server_identity: Option<&str>,
     cols: u16,
     rows: u16,
 ) -> Result<RemoteCreateSummary, String> {
-    let mut client = crate::remote_quic::connect_direct(host, port, expected_server_identity)?;
+    let mut client = crate::remote_quic::connect_direct(host, port)?;
     create_summary_from_transport(&mut client, port, cols, rows)
 }
 
@@ -131,28 +117,23 @@ mod tests {
     };
     use crate::status_components::UiStatusBarSnapshot;
 
-    fn scripted_client(
-        replies: Vec<Vec<u8>>,
-        expected_server_identity: Option<&str>,
-    ) -> DirectTransportClient<ScriptedDirectStream> {
+    fn scripted_client(replies: Vec<Vec<u8>>) -> DirectTransportClient<ScriptedDirectStream> {
         DirectTransportClient::connect_over_stream(
             ScriptedDirectStream::new(replies),
             "127.0.0.1".to_string(),
             43210,
-            expected_server_identity,
         )
         .expect("connect scripted transport")
     }
 
     #[test]
     fn probe_summary_rejects_unsupported_protocol_version() {
-        let mut auth_ok = encode_auth_ok_payload("test-daemon", "test-instance");
+        let mut auth_ok = encode_auth_ok_payload("test-instance");
         auth_ok[0..2].copy_from_slice(&(REMOTE_PROTOCOL_VERSION + 1).to_le_bytes());
         let error = match DirectTransportClient::connect_over_stream(
             ScriptedDirectStream::new(vec![encode_message(MessageType::AuthOk, &auth_ok)]),
             "127.0.0.1".to_string(),
             43210,
-            None,
         ) {
             Ok(_) => panic!("probe should reject"),
             Err(error) => error,
@@ -165,28 +146,24 @@ mod tests {
 
     #[test]
     fn list_summary_reuses_handshake_validation() {
-        let mut client = scripted_client(
-            vec![
-                auth_ok_reply("test-daemon", "test-instance"),
-                encode_message(MessageType::HeartbeatAck, b"boo-remote-list"),
-                encode_message(
-                    MESSAGE_TYPE_TAB_LIST,
-                    &encode_tab_list(&[RemoteTabInfo {
-                        id: 11,
-                        name: "dev".to_string(),
-                        title: "shell".to_string(),
-                        pwd: "/home/example/dev/boo".to_string(),
-                        active: true,
-                        child_exited: false,
-                    }]),
-                ),
-            ],
-            None,
-        );
+        let mut client = scripted_client(vec![
+            auth_ok_reply("test-instance"),
+            encode_message(MessageType::HeartbeatAck, b"boo-remote-list"),
+            encode_message(
+                MESSAGE_TYPE_TAB_LIST,
+                &encode_tab_list(&[RemoteTabInfo {
+                    id: 11,
+                    name: "dev".to_string(),
+                    title: "shell".to_string(),
+                    pwd: "/home/example/dev/boo".to_string(),
+                    active: true,
+                    child_exited: false,
+                }]),
+            ),
+        ]);
 
         let summary = list_summary_from_transport(&mut client, 43210).expect("list tabs summary");
         assert_eq!(summary.protocol_version, REMOTE_PROTOCOL_VERSION);
-        assert_eq!(summary.server_identity_id.as_deref(), Some("test-daemon"));
         assert_eq!(summary.server_instance_id.as_deref(), Some("test-instance"));
         assert_eq!(summary.tabs.len(), 1);
         assert_eq!(summary.tabs[0].id, 11);
@@ -203,65 +180,47 @@ mod tests {
     }
 
     #[test]
-    fn list_remote_daemon_tabs_rejects_unexpected_server_identity() {
-        let error = match DirectTransportClient::connect_over_stream(
-            ScriptedDirectStream::new(vec![auth_ok_reply("actual-daemon", "test-instance")]),
-            "127.0.0.1".to_string(),
-            43210,
-            Some("expected-daemon"),
-        ) {
-            Ok(_) => panic!("unexpected daemon identity should fail"),
-            Err(error) => error,
-        };
-        assert!(error.contains("expected"), "unexpected error text: {error}");
-    }
-
-    #[test]
     fn create_summary_uses_shared_handshake_and_runtime_action_path() {
-        let mut client = scripted_client(
-            vec![
-                auth_ok_reply("test-daemon", "test-instance"),
-                encode_message(MessageType::HeartbeatAck, b"boo-remote-create"),
-                encode_message(
-                    MessageType::UiRuntimeState,
-                    &serde_json::to_vec(&UiRuntimeState {
-                        active_tab: 0,
-                        focused_pane: 1,
-                        tabs: vec![UiTabSnapshot {
-                            tab_id: 77,
-                            index: 0,
-                            active: true,
-                            title: "Tab 1".to_string(),
-                            pane_count: 1,
-                            focused_pane: Some(1),
-                            pane_ids: vec![1],
-                        }],
-                        visible_panes: vec![],
-                        mouse_selection: UiMouseSelectionSnapshot::default(),
-                        status_bar: UiStatusBarSnapshot {
-                            left: vec![],
-                            right: vec![],
-                        },
-                        pwd: "/tmp".to_string(),
-                        runtime_revision: 1,
-                        view_revision: 1,
-                        view_id: 1,
-                        viewed_tab_id: Some(77),
-                        viewport_cols: None,
-                        viewport_rows: None,
-                        visible_pane_ids: vec![1],
-                        acked_client_action_id: None,
-                    })
-                    .expect("encode runtime state"),
-                ),
-            ],
-            Some("test-daemon"),
-        );
+        let mut client = scripted_client(vec![
+            auth_ok_reply("test-instance"),
+            encode_message(MessageType::HeartbeatAck, b"boo-remote-create"),
+            encode_message(
+                MessageType::UiRuntimeState,
+                &serde_json::to_vec(&UiRuntimeState {
+                    active_tab: 0,
+                    focused_pane: 1,
+                    tabs: vec![UiTabSnapshot {
+                        tab_id: 77,
+                        index: 0,
+                        active: true,
+                        title: "Tab 1".to_string(),
+                        pane_count: 1,
+                        focused_pane: Some(1),
+                        pane_ids: vec![1],
+                    }],
+                    visible_panes: vec![],
+                    mouse_selection: UiMouseSelectionSnapshot::default(),
+                    status_bar: UiStatusBarSnapshot {
+                        left: vec![],
+                        right: vec![],
+                    },
+                    pwd: "/tmp".to_string(),
+                    runtime_revision: 1,
+                    view_revision: 1,
+                    view_id: 1,
+                    viewed_tab_id: Some(77),
+                    viewport_cols: None,
+                    viewport_rows: None,
+                    visible_pane_ids: vec![1],
+                    acked_client_action_id: None,
+                })
+                .expect("encode runtime state"),
+            ),
+        ]);
 
         let summary =
             create_summary_from_transport(&mut client, 43210, 132, 48).expect("create summary");
         assert_eq!(summary.protocol_version, REMOTE_PROTOCOL_VERSION);
-        assert_eq!(summary.server_identity_id.as_deref(), Some("test-daemon"));
         assert_eq!(summary.server_instance_id.as_deref(), Some("test-instance"));
         assert_eq!(summary.tab_id, 77);
 

@@ -20,12 +20,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_boo._udp</string>
-	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>boo remote discovers and connects to remote Boo daemons on your local network.</string>
+	<string>boo remote connects to Boo daemons on your local network when you enter a LAN address.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

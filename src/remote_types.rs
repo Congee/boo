@@ -59,7 +59,6 @@ pub struct RemoteServerInfo {
     pub capabilities: u32,
     pub build_id: String,
     pub server_instance_id: String,
-    pub server_identity_id: String,
     pub auth_challenge_window_ms: u64,
     pub heartbeat_window_ms: u64,
     pub connected_clients: usize,
@@ -81,7 +80,6 @@ pub struct RemoteProbeSummary {
     pub capabilities: u32,
     pub build_id: Option<String>,
     pub server_instance_id: Option<String>,
-    pub server_identity_id: Option<String>,
     pub heartbeat_rtt_ms: u64,
 }
 
@@ -103,7 +101,6 @@ pub struct RemoteTabListSummary {
     pub capabilities: u32,
     pub build_id: Option<String>,
     pub server_instance_id: Option<String>,
-    pub server_identity_id: Option<String>,
     pub heartbeat_rtt_ms: u64,
     pub tabs: Vec<RemoteDirectTabInfo>,
 }
@@ -116,7 +113,6 @@ pub struct RemoteCreateSummary {
     pub capabilities: u32,
     pub build_id: Option<String>,
     pub server_instance_id: Option<String>,
-    pub server_identity_id: Option<String>,
     pub heartbeat_rtt_ms: u64,
     pub tab_id: u32,
 }
@@ -217,7 +213,6 @@ mod tests {
             capabilities: 0,
             build_id: Some("debug".into()),
             server_instance_id: Some("instance".into()),
-            server_identity_id: Some("identity".into()),
             heartbeat_rtt_ms: 12,
             tab_id: 42,
         })

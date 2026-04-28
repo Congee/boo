@@ -3,16 +3,6 @@ use crate::remote;
 use crate::tabs;
 use std::sync::mpsc;
 
-fn advertised_remote_service_name(port: u16) -> String {
-    let host = hostname::get()
-        .ok()
-        .and_then(|name| name.into_string().ok())
-        .map(|name| name.trim_end_matches(".local").trim().to_string())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "this host".to_string());
-    format!("boo on {host} ({port})")
-}
-
 #[derive(Debug)]
 #[allow(clippy::enum_variant_names)]
 pub enum Command {
@@ -187,7 +177,6 @@ impl State {
             match remote::RemoteServer::start(remote::RemoteConfig {
                 port,
                 bind_address: remote_bind_address,
-                service_name: advertised_remote_service_name(port),
             }) {
                 Ok((server, rx)) => {
                     log::info!("remote daemon listening on quic/{port}");
@@ -380,7 +369,7 @@ impl From<remote::RemoteCmd> for Command {
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, advertised_remote_service_name};
+    use super::Command;
     use crate::control;
     use crate::remote;
     use std::sync::mpsc;
@@ -435,10 +424,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn advertised_service_name_includes_boo_and_port() {
-        let name = advertised_remote_service_name(crate::config::DEFAULT_REMOTE_PORT);
-        assert!(name.starts_with("boo on "));
-        assert!(name.ends_with(&format!("({})", crate::config::DEFAULT_REMOTE_PORT)));
-    }
 }

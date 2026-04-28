@@ -7,13 +7,6 @@ struct RemoteValidatorMain {
         let validator = RemoteValidator()
 
         do {
-            if args.checkDiscovery {
-                if let endpoint = validator.browse() {
-                    FileHandle.standardError.write(Data("discovered Bonjour endpoint: \(endpoint)\n".utf8))
-                } else {
-                    FileHandle.standardError.write(Data("warning: Bonjour discovery did not resolve within timeout\n".utf8))
-                }
-            }
             try validator.connect(host: args.host, port: args.port)
             try validator.validateRoundTrip()
             validator.disconnect()

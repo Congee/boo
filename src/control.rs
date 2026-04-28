@@ -1221,7 +1221,6 @@ mod tests {
                                 capabilities: crate::remote::REMOTE_CAPABILITIES,
                                 build_id: env!("CARGO_PKG_VERSION").to_string(),
                                 server_instance_id: "test-instance".to_string(),
-                                server_identity_id: "test-daemon".to_string(),
                                 auth_challenge_window_ms: 10_000,
                                 heartbeat_window_ms: 20_000,
                                 connected_clients: 1,

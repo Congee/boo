@@ -29,7 +29,6 @@ struct RemoteUpgradeTargetSummary {
     selected_transport: Option<crate::remote::DirectTransportKind>,
     direct_host: Option<String>,
     port: Option<u16>,
-    server_identity_id: Option<String>,
     server_instance_id: Option<String>,
     build_id: Option<String>,
     capabilities: Option<u32>,
@@ -158,8 +157,6 @@ pub enum Command {
         host: String,
         #[arg(long)]
         port: u16,
-        #[arg(long = "expect-server-identity")]
-        expect_server_identity: Option<String>,
     },
     /// List tabs from a Boo-native QUIC remote daemon directly
     RemoteDaemonTabs {
@@ -167,8 +164,6 @@ pub enum Command {
         host: String,
         #[arg(long)]
         port: u16,
-        #[arg(long = "expect-server-identity")]
-        expect_server_identity: Option<String>,
     },
     /// Create a tab on a Boo-native QUIC remote daemon directly
     RemoteDaemonCreate {
@@ -176,8 +171,6 @@ pub enum Command {
         host: String,
         #[arg(long)]
         port: u16,
-        #[arg(long = "expect-server-identity")]
-        expect_server_identity: Option<String>,
         #[arg(long, default_value_t = 120)]
         cols: u16,
         #[arg(long, default_value_t = 40)]
@@ -217,31 +210,28 @@ impl Cli {
     }
 }
 
-/// Transport choice resolved from advertised daemon capabilities.
+/// Transport choice resolved from daemon capabilities.
 fn probe_remote_daemon_dispatch(
     host: &str,
     port: u16,
-    expected_identity: Option<&str>,
 ) -> Result<crate::remote::RemoteProbeSummary, String> {
-    crate::remote::probe_remote_endpoint(host, port, expected_identity)
+    crate::remote::probe_remote_endpoint(host, port)
 }
 
 fn list_remote_daemon_tabs_dispatch(
     host: &str,
     port: u16,
-    expected_identity: Option<&str>,
 ) -> Result<crate::remote::RemoteTabListSummary, String> {
-    crate::remote::list_remote_daemon_tabs(host, port, expected_identity)
+    crate::remote::list_remote_daemon_tabs(host, port)
 }
 
 fn create_remote_daemon_tab_dispatch(
     host: &str,
     port: u16,
-    expected_identity: Option<&str>,
     cols: u16,
     rows: u16,
 ) -> Result<crate::remote::RemoteCreateSummary, String> {
-    crate::remote::create_remote_daemon_tab(host, port, expected_identity, cols, rows)
+    crate::remote::create_remote_daemon_tab(host, port, cols, rows)
 }
 
 fn print_completions<G: Generator>(generator: G) -> Result<(), String> {
@@ -337,8 +327,7 @@ where
         Command::ProbeRemoteDaemon {
             host,
             port,
-            expect_server_identity,
-        } => match probe_remote_daemon_dispatch(host, *port, expect_server_identity.as_deref()) {
+        } => match probe_remote_daemon_dispatch(host, *port) {
             Ok(summary) => {
                 let mut stdout = std::io::stdout().lock();
                 use std::io::Write;
@@ -358,9 +347,7 @@ where
         Command::RemoteDaemonTabs {
             host,
             port,
-            expect_server_identity,
-        } => match list_remote_daemon_tabs_dispatch(host, *port, expect_server_identity.as_deref())
-        {
+        } => match list_remote_daemon_tabs_dispatch(host, *port) {
             Ok(summary) => {
                 let mut stdout = std::io::stdout().lock();
                 use std::io::Write;
@@ -380,16 +367,9 @@ where
         Command::RemoteDaemonCreate {
             host,
             port,
-            expect_server_identity,
             cols,
             rows,
-        } => match create_remote_daemon_tab_dispatch(
-            host,
-            *port,
-            expect_server_identity.as_deref(),
-            *cols,
-            *rows,
-        ) {
+        } => match create_remote_daemon_tab_dispatch(host, *port, *cols, *rows) {
             Ok(summary) => {
                 let mut stdout = std::io::stdout().lock();
                 use std::io::Write;
@@ -485,7 +465,6 @@ where
                         selected_transport,
                         direct_host,
                         port,
-                        target.server_identity_id.as_deref(),
                     );
                     match probe_result {
                         Ok(probe) => {
@@ -575,7 +554,6 @@ fn resolve_remote_upgrade_target(
             selected_transport: None,
             direct_host: None,
             port: None,
-            server_identity_id: None,
             server_instance_id: None,
             build_id: None,
             capabilities: None,
@@ -591,7 +569,6 @@ fn resolve_remote_upgrade_target(
             selected_transport: None,
             direct_host: None,
             port: None,
-            server_identity_id: Some(server.server_identity_id.clone()),
             server_instance_id: Some(server.server_instance_id.clone()),
             build_id: Some(server.build_id.clone()),
             capabilities: Some(server.capabilities),
@@ -628,7 +605,6 @@ fn resolve_remote_upgrade_target(
         selected_transport: transport_selection,
         direct_host,
         port: Some(port),
-        server_identity_id: Some(server.server_identity_id.clone()),
         server_instance_id: Some(server.server_instance_id.clone()),
         build_id: Some(server.build_id.clone()),
         capabilities: Some(server.capabilities),
@@ -726,18 +702,11 @@ mod tests {
             "127.0.0.1",
             "--port",
             DEFAULT_REMOTE_PORT_STR,
-            "--expect-server-identity",
-            "daemon-01",
         ]);
         match cli.command {
-            Some(super::Command::ProbeRemoteDaemon {
-                host,
-                port,
-                expect_server_identity,
-            }) => {
+            Some(super::Command::ProbeRemoteDaemon { host, port }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, crate::config::DEFAULT_REMOTE_PORT);
-                assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -752,18 +721,11 @@ mod tests {
             "127.0.0.1",
             "--port",
             DEFAULT_REMOTE_PORT_STR,
-            "--expect-server-identity",
-            "daemon-01",
         ]);
         match cli.command {
-            Some(super::Command::RemoteDaemonTabs {
-                host,
-                port,
-                expect_server_identity,
-            }) => {
+            Some(super::Command::RemoteDaemonTabs { host, port }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, crate::config::DEFAULT_REMOTE_PORT);
-                assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -796,8 +758,6 @@ mod tests {
             "127.0.0.1",
             "--port",
             DEFAULT_REMOTE_PORT_STR,
-            "--expect-server-identity",
-            "daemon-01",
             "--cols",
             "132",
             "--rows",
@@ -807,13 +767,11 @@ mod tests {
             Some(super::Command::RemoteDaemonCreate {
                 host,
                 port,
-                expect_server_identity,
                 cols,
                 rows,
             }) => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, crate::config::DEFAULT_REMOTE_PORT);
-                assert_eq!(expect_server_identity.as_deref(), Some("daemon-01"));
                 assert_eq!(cols, 132);
                 assert_eq!(rows, 48);
             }
@@ -887,7 +845,6 @@ mod tests {
                     capabilities: crate::remote::REMOTE_CAPABILITIES,
                     build_id: env!("CARGO_PKG_VERSION").to_string(),
                     server_instance_id: "test-instance".to_string(),
-                    server_identity_id: "test-daemon".to_string(),
                     auth_challenge_window_ms: 10_000,
                     heartbeat_window_ms: 20_000,
                     connected_clients: 0,
@@ -919,7 +876,6 @@ mod tests {
                     capabilities: crate::remote::REMOTE_CAPABILITIES,
                     build_id: env!("CARGO_PKG_VERSION").to_string(),
                     server_instance_id: "test-instance".to_string(),
-                    server_identity_id: "test-daemon".to_string(),
                     auth_challenge_window_ms: 10_000,
                     heartbeat_window_ms: 20_000,
                     connected_clients: 0,

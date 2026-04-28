@@ -146,8 +146,7 @@ struct ProtocolCodecSelfTestMain {
         var clientState = ClientWireState()
         let buildId = "0.1.0"
         let serverInstanceId = "deadbeefcafebabe"
-        let serverIdentityId = "daemon-identity-01"
-        var authOkPayload = Data(count: 12 + buildId.utf8.count + serverInstanceId.utf8.count + serverIdentityId.utf8.count)
+        var authOkPayload = Data(count: 10 + buildId.utf8.count + serverInstanceId.utf8.count)
         authOkPayload.withUnsafeMutableBytes { bytes in
             bytes.storeBytes(of: UInt16(1).littleEndian, as: UInt16.self)
             bytes.storeBytes(of: UInt32(0x7f).littleEndian, toByteOffset: 2, as: UInt32.self)
@@ -162,21 +161,12 @@ struct ProtocolCodecSelfTestMain {
             (instanceLengthOffset + 2)..<(instanceLengthOffset + 2 + serverInstanceId.utf8.count),
             with: serverInstanceId.utf8
         )
-        let identityLengthOffset = instanceLengthOffset + 2 + serverInstanceId.utf8.count
-        authOkPayload.withUnsafeMutableBytes { bytes in
-            bytes.storeBytes(of: UInt16(serverIdentityId.utf8.count).littleEndian, toByteOffset: identityLengthOffset, as: UInt16.self)
-        }
-        authOkPayload.replaceSubrange(
-            (identityLengthOffset + 2)..<(identityLengthOffset + 2 + serverIdentityId.utf8.count),
-            with: serverIdentityId.utf8
-        )
         ClientWireReducer.reduce(message: .authOk, payload: authOkPayload, state: &clientState)
         assertEqual(clientState.authenticated, true, "auth ok sets authenticated")
         assertEqual(clientState.protocolVersion, 1, "auth ok protocol version decode")
         assertEqual(clientState.transportCapabilities, 0x7f, "auth ok capability decode")
         assertEqual(clientState.serverBuildId, buildId, "auth ok build id decode")
         assertEqual(clientState.serverInstanceId, serverInstanceId, "auth ok instance id decode")
-        assertEqual(clientState.serverIdentityId, serverIdentityId, "auth ok identity id decode")
         assertEqual(validateAuthOkMetadata(authOkPayload), nil, "auth ok metadata validation")
 
         var missingBuildPayload = Data(count: 6)
@@ -208,41 +198,6 @@ struct ProtocolCodecSelfTestMain {
             validateAuthOkMetadata(missingHeartbeatPayload),
             "Remote server does not advertise heartbeat support",
             "missing heartbeat capability rejected"
-        )
-
-        var missingIdentityCapabilityPayload = authOkPayload
-        missingIdentityCapabilityPayload.withUnsafeMutableBytes { bytes in
-            bytes.storeBytes(of: UInt32(0x3f).littleEndian, toByteOffset: 2, as: UInt32.self)
-        }
-        assertEqual(
-            validateAuthOkMetadata(missingIdentityCapabilityPayload),
-            "Remote server does not advertise daemon identity support",
-            "missing daemon identity capability rejected"
-        )
-        assertEqual(
-            serverIdentityMismatch(expectedIdentityId: "daemon-a", actualIdentityId: "daemon-b"),
-            true,
-            "server identity mismatch detects changed daemon"
-        )
-        assertEqual(
-            serverIdentityMismatch(expectedIdentityId: "daemon-a", actualIdentityId: "daemon-a"),
-            false,
-            "server identity mismatch accepts same daemon"
-        )
-        assertEqual(
-            serverIdentityMismatch(expectedIdentityId: nil, actualIdentityId: "daemon-a"),
-            false,
-            "server identity mismatch ignores unknown trusted identity"
-        )
-        assertEqual(
-            authOkServerIdentityMismatch(expectedIdentityId: "daemon-a", payload: authOkPayload),
-            true,
-            "auth ok identity mismatch is detectable before mutating client auth state"
-        )
-        assertEqual(
-            authOkServerIdentityMismatch(expectedIdentityId: serverIdentityId, payload: authOkPayload),
-            false,
-            "matching auth ok identity is accepted"
         )
 
         ClientWireReducer.reduce(message: .tabList, payload: makeTabListPayload(), state: &clientState)
@@ -393,27 +348,6 @@ struct ProtocolCodecSelfTestMain {
             "Tab 9 exited",
             "exited tab uses user-facing copy"
         )
-        assertEqual(
-            ConnectionErrorPolicy.suppressAutomaticReconnect(for: nil),
-            false,
-            "nil error allows automatic reconnect"
-        )
-        assertEqual(
-            ConnectionErrorPolicy.suppressAutomaticReconnect(for: "Connection timed out"),
-            false,
-            "transient transport error allows automatic reconnect"
-        )
-        assertEqual(
-            ConnectionErrorPolicy.suppressAutomaticReconnect(for: "Server identity changed; connection rejected"),
-            true,
-            "identity mismatch suppresses automatic reconnect"
-        )
-        assertEqual(
-            ConnectionErrorPolicy.suppressAutomaticReconnect(for: "Server identity changed for host:7337. Expected old, got new."),
-            true,
-            "stored identity mismatch suppresses automatic reconnect"
-        )
-
         print("iOS wire codec self-test passed")
     }
 }

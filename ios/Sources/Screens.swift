@@ -1,128 +1,9 @@
 import SwiftUI
-import Network
 import UIKit
 import Foundation
 
 private func formatConnectionTarget(host: String, port: UInt16) -> String {
     port == BooDefaultRemotePort ? host : "\(host):\(port)"
-}
-
-private func endpointDisplayTarget(_ endpoint: NWEndpoint) -> (nodeName: String, host: String, port: UInt16) {
-    switch endpoint {
-    case .service(let name, _, _, _):
-        if let parsed = parseAdvertisedServiceTarget(name) {
-            return parsed
-        }
-        return (name, name, BooDefaultRemotePort)
-    case .hostPort(let host, let port):
-        let hostString = host.debugDescription
-        return (hostString, hostString, port.rawValue)
-    default:
-        let text = "\(endpoint)"
-        return (text, text, BooDefaultRemotePort)
-    }
-}
-
-private final class BonjourServiceResolver: NSObject, NetServiceDelegate {
-    private var completion: ((Result<(host: String, port: UInt16), Error>) -> Void)?
-    private var service: NetService?
-
-    func resolve(endpoint: NWEndpoint, completion: @escaping (Result<(host: String, port: UInt16), Error>) -> Void) {
-        guard case .service(let name, let type, let domain, _) = endpoint else {
-            completion(.failure(NSError(domain: "BooBonjour", code: -1, userInfo: [NSLocalizedDescriptionKey: "Bonjour resolve requires a service endpoint"])))
-            return
-        }
-
-        let service = NetService(domain: domain.isEmpty ? "local." : domain, type: type, name: name)
-        service.includesPeerToPeer = true
-        service.delegate = self
-        self.service = service
-        self.completion = completion
-        service.resolve(withTimeout: 5)
-    }
-
-    func netServiceDidResolveAddress(_ sender: NetService) {
-        defer {
-            sender.stop()
-            service = nil
-        }
-
-        if let addresses = sender.addresses {
-            if let host = addresses.compactMap({ parseNumericHost(from: $0, preferredFamily: AF_INET) }).first
-                ?? addresses.compactMap({ parseNumericHost(from: $0, preferredFamily: AF_INET6) }).first
-            {
-                completion?(.success((host: host, port: UInt16(sender.port))))
-                completion = nil
-                return
-            }
-        }
-
-        if let hostName = sender.hostName?.trimmingCharacters(in: CharacterSet(charactersIn: ".")),
-           !hostName.isEmpty {
-            completion?(.success((host: hostName, port: UInt16(sender.port))))
-            completion = nil
-            return
-        }
-
-        completion?(.failure(NSError(domain: "BooBonjour", code: -2, userInfo: [NSLocalizedDescriptionKey: "Bonjour resolved without an address"])))
-        completion = nil
-    }
-
-    func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
-        defer {
-            sender.stop()
-            service = nil
-            completion = nil
-        }
-        let code = errorDict[NetService.errorCode]?.intValue ?? -1
-        completion?(.failure(NSError(domain: "BooBonjour", code: code, userInfo: [NSLocalizedDescriptionKey: "Bonjour resolve failed: \(code)"])))
-    }
-
-    private func parseNumericHost(from addressData: Data, preferredFamily: Int32) -> String? {
-        addressData.withUnsafeBytes { rawBuffer in
-            guard let sockaddr = rawBuffer.baseAddress?.assumingMemoryBound(to: sockaddr.self) else {
-                return nil
-            }
-
-            switch Int32(sockaddr.pointee.sa_family) {
-            case AF_INET where preferredFamily == AF_INET:
-                let addr = rawBuffer.baseAddress!.assumingMemoryBound(to: sockaddr_in.self).pointee.sin_addr
-                var storage = addr
-                var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-                guard inet_ntop(AF_INET, &storage, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil else {
-                    return nil
-                }
-                return String(cString: buffer)
-            case AF_INET6 where preferredFamily == AF_INET6:
-                let addr = rawBuffer.baseAddress!.assumingMemoryBound(to: sockaddr_in6.self).pointee.sin6_addr
-                var storage = addr
-                var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
-                guard inet_ntop(AF_INET6, &storage, &buffer, socklen_t(INET6_ADDRSTRLEN)) != nil else {
-                    return nil
-                }
-                return String(cString: buffer)
-            default:
-                return nil
-            }
-        }
-    }
-}
-
-private func parseAdvertisedServiceTarget(_ serviceName: String) -> (nodeName: String, host: String, port: UInt16)? {
-    guard
-        let regex = try? NSRegularExpression(pattern: #"^boo on (.+) \((\d+)\)$"#),
-        let match = regex.firstMatch(in: serviceName, range: NSRange(serviceName.startIndex..., in: serviceName)),
-        match.numberOfRanges == 3,
-        let hostRange = Range(match.range(at: 1), in: serviceName),
-        let portRange = Range(match.range(at: 2), in: serviceName),
-        let port = UInt16(serviceName[portRange])
-    else {
-        return nil
-    }
-
-    let hostLabel = String(serviceName[hostRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !hostLabel.isEmpty else { return nil }
-    return (hostLabel, "\(hostLabel).local", port)
 }
 
 private struct DashboardProbeMetrics: Equatable {
@@ -138,9 +19,8 @@ private final class DashboardProbeMonitor: ObservableObject {
 
     struct Target: Equatable {
         let key: String
-        let host: String?
+        let host: String
         let port: UInt16
-        let endpoint: NWEndpoint?
     }
 
     func updateTargets(_ targets: [Target]) {
@@ -170,13 +50,7 @@ private final class DashboardProbeMonitor: ObservableObject {
         var attempts = 0
         var consecutiveFailures = 0
         while !Task.isCancelled {
-            let latency: Double? = if let endpoint = target.endpoint {
-                await measureBooQUICHandshakeLatency(endpoint: endpoint)
-            } else if let host = target.host {
-                await measureBooQUICHandshakeLatency(host: host, port: target.port)
-            } else {
-                nil
-            }
+            let latency = await measureBooQUICHandshakeLatency(host: target.host, port: target.port)
             if Task.isCancelled { return }
             attempts += 1
             if latency == nil {
@@ -203,13 +77,11 @@ private final class DashboardProbeMonitor: ObservableObject {
 struct BooRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var client = GSPClient()
-    @StateObject private var browser = BonjourBrowser()
     @StateObject private var tailscaleBrowser = TailscalePeerBrowser()
     @StateObject private var store = ConnectionStore()
     @State private var selectedTab: BooTab = .terminal
     @State private var showingConnectedTerminal = false
     @State private var monitor: ConnectionMonitor?
-    @State private var serverIdentityWarning: String?
     @State private var didApplyUITestLaunchConfiguration = false
 
     private var activeMonitor: ConnectionMonitor {
@@ -227,15 +99,13 @@ struct BooRootView: View {
                     ZStack {
                         ConnectScreen(
                             client: client,
-                            browser: browser,
                             tailscaleBrowser: tailscaleBrowser,
                             store: store,
                             monitor: activeMonitor,
                             selectedTab: $selectedTab,
                             onPresentConnectedTerminal: {
                                 showingConnectedTerminal = true
-                            },
-                            serverIdentityWarning: serverIdentityWarning
+                            }
                         )
                         .opacity(showingConnectedTerminal ? 0 : 1)
                         .allowsHitTesting(!showingConnectedTerminal)
@@ -260,8 +130,7 @@ struct BooRootView: View {
                         client: client,
                         store: store,
                         tailscaleBrowser: tailscaleBrowser,
-                        monitor: activeMonitor,
-                        serverIdentityWarning: $serverIdentityWarning
+                        monitor: activeMonitor
                     )
                 }
             }
@@ -317,17 +186,6 @@ struct BooRootView: View {
             }
             if let nodeId = activeMonitor.currentNodeId {
                 store.updateNodeLastConnected(nodeId)
-            }
-            if let host = activeMonitor.lastHost,
-               let port = activeMonitor.lastPort,
-               let serverIdentityId = client.serverIdentityId,
-               !serverIdentityId.isEmpty
-            {
-                serverIdentityWarning = store.recordTrustedServerIdentity(
-                    host: host,
-                    port: port,
-                    identityId: serverIdentityId
-                )
             }
         case .connectionLost:
             if let historyId = activeMonitor.currentHistoryId {
@@ -479,18 +337,14 @@ struct BooRootView: View {
 
 struct ConnectScreen: View {
     @ObservedObject var client: GSPClient
-    @ObservedObject var browser: BonjourBrowser
     @ObservedObject var tailscaleBrowser: TailscalePeerBrowser
     @ObservedObject var store: ConnectionStore
     @ObservedObject var monitor: ConnectionMonitor
     @Binding var selectedTab: BooTab
     let onPresentConnectedTerminal: () -> Void
-    let serverIdentityWarning: String?
 
     @StateObject private var dashboardProbeMonitor = DashboardProbeMonitor()
     @State private var host = ""
-    @State private var serviceResolver: BonjourServiceResolver?
-    @State private var resolvingBonjourService = false
     @State private var didApplyUITestHostPrefill = false
 
     private var displayedConnectError: String? {
@@ -528,24 +382,11 @@ struct ConnectScreen: View {
         case .connectionLost(let reason):
             return (decorateStatusMessage(reason), KineticColor.error)
         default:
-            if resolvingBonjourService {
-                return ("Resolving discovered host…", KineticColor.primary)
-            }
             if !monitor.networkPathState.isSatisfied {
                 return (monitor.networkStatusSummary, KineticColor.tertiary)
             }
             return nil
         }
-    }
-
-    private var pendingServerIdentityTrust: (host: String, port: UInt16, current: String, trusted: String?)? {
-        guard ConnectionErrorPolicy.suppressAutomaticReconnect(for: client.lastError),
-              let host = monitor.lastHost,
-              let port = monitor.lastPort,
-              let current = client.serverIdentityId ?? client.lastSeenServerIdentityId,
-              !current.isEmpty
-        else { return nil }
-        return (host, port, current, store.trustedServerIdentity(host: host, port: port))
     }
 
     var body: some View {
@@ -559,18 +400,11 @@ struct ConnectScreen: View {
         .onAppear {
             applyUITestHostPrefillIfNeeded()
             store.refreshTailscaleTokenStatus()
-            browser.startBrowsing()
             tailscaleBrowser.refresh(store: store)
             refreshDashboardProbes()
-        }
-        .onDisappear {
-            browser.stopBrowsing()
         }
         .onChange(of: store.tailscaleDiscoverySettings) { _, _ in
             tailscaleBrowser.refresh(store: store)
-        }
-        .onChange(of: browser.daemons) { _, _ in
-            refreshDashboardProbes()
         }
         .onReceive(store.$savedNodes) { _ in
             refreshDashboardProbes()
@@ -584,7 +418,6 @@ struct ConnectScreen: View {
             errorSection
             actionSection
             savedNodesSection
-            discoveredSection
             tailscaleSection
             Spacer().frame(height: 120)
         }
@@ -603,15 +436,6 @@ struct ConnectScreen: View {
                 .background(statusBanner.color.opacity(0.1))
                 .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
         }
-        if let serverIdentityWarning {
-            Text(serverIdentityWarning)
-                .font(KineticFont.caption)
-                .foregroundStyle(KineticColor.error)
-                .padding(KineticSpacing.md)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(KineticColor.error.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
-        }
     }
 
     private var addressSection: some View {
@@ -627,42 +451,10 @@ struct ConnectScreen: View {
     @ViewBuilder
     private var errorSection: some View {
         if let error = displayedConnectError {
-            VStack(alignment: .leading, spacing: KineticSpacing.sm) {
-                Text(error)
-                    .font(KineticFont.caption)
-                    .foregroundStyle(KineticColor.error)
-                    .accessibilityIdentifier("connect-error-label")
-                if let pendingServerIdentityTrust {
-                    Text(serverIdentityRecoveryMessage(pendingServerIdentityTrust))
-                        .font(KineticFont.caption)
-                        .foregroundStyle(KineticColor.onSurfaceVariant)
-                    Button("Trust Current Server Identity") {
-                        trustCurrentServerIdentity(pendingServerIdentityTrust)
-                    }
-                    .buttonStyle(KineticPrimaryButtonStyle())
-                    .accessibilityIdentifier("trust-current-server-identity-button")
-                }
-            }
-            .padding(KineticSpacing.md)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(KineticColor.error.opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
-        }
-        if let browserError = browser.lastError {
-            VStack(alignment: .leading, spacing: KineticSpacing.sm) {
-                Text(browserError)
-                    .font(KineticFont.caption)
-                    .foregroundStyle(KineticColor.error)
-                    .accessibilityIdentifier("bonjour-error-label")
-                if browserError.contains("Local network access is required") {
-                    Button("Open iPad Settings") {
-                        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
-                        UIApplication.shared.open(url)
-                    }
-                    .buttonStyle(KineticSecondaryButtonStyle())
-                    .accessibilityIdentifier("open-local-network-settings-button")
-                }
-            }
+            Text(error)
+                .font(KineticFont.caption)
+                .foregroundStyle(KineticColor.error)
+                .accessibilityIdentifier("connect-error-label")
             .padding(KineticSpacing.md)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(KineticColor.error.opacity(0.1))
@@ -705,36 +497,6 @@ struct ConnectScreen: View {
                             )
                         },
                         accessibilityIdentifier: "saved-node-\(node.name)"
-                    )
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var discoveredSection: some View {
-        if !browser.daemons.isEmpty || browser.isSearching {
-            VStack(alignment: .leading, spacing: KineticSpacing.sm) {
-                KineticSectionLabel(text: "Discovered on Network")
-                Text("Bonjour discovery on your current LAN or Wi-Fi network.")
-                    .font(KineticFont.caption)
-                    .foregroundStyle(KineticColor.onSurfaceVariant)
-                if browser.isSearching && browser.daemons.isEmpty {
-                    ProgressView()
-                        .tint(KineticColor.primary)
-                }
-                ForEach(browser.daemons) { daemon in
-                    let display = endpointDisplayTarget(daemon.endpoint)
-                    KineticCardRow(
-                        icon: "terminal",
-                        title: daemon.title,
-                        subtitle: rowSubtitle(base: daemon.subtitle, host: display.host, port: display.port, nodeName: display.nodeName),
-                        trailingText: liveMetrics(host: display.host, port: display.port, nodeName: display.nodeName),
-                        trailingAccessibilityIdentifier: rowMetricAccessibilityIdentifier(nodeName: display.nodeName),
-                        onTap: {
-                            connectToEndpoint(daemon.endpoint)
-                        },
-                        accessibilityIdentifier: "discovered-daemon-\(daemon.name)"
                     )
                 }
             }
@@ -808,49 +570,6 @@ struct ConnectScreen: View {
         host = formatConnectionTarget(host: configuredHost, port: config.port)
     }
 
-    private func connectToEndpoint(_ endpoint: NWEndpoint) {
-        dismissConnectScreenKeyboard()
-        let display = endpointDisplayTarget(endpoint)
-        if shouldReuseActiveConnection(host: display.host, port: display.port, nodeName: display.nodeName) {
-            DispatchQueue.main.async {
-                onPresentConnectedTerminal()
-            }
-            return
-        }
-        if case .service = endpoint {
-            client.lastError = nil
-            resolvingBonjourService = true
-            let resolver = BonjourServiceResolver()
-            serviceResolver = resolver
-            resolver.resolve(endpoint: endpoint) { result in
-                Task { @MainActor in
-                    resolvingBonjourService = false
-                    serviceResolver = nil
-                    switch result {
-                    case .success(let resolved):
-                        BooTrace.debug("resolved Bonjour service \(display.nodeName) -> \(resolved.host):\(resolved.port)")
-                        connectToHost(resolved.host, port: resolved.port, nodeName: display.nodeName, routeKind: .bonjourLAN)
-                    case .failure(let error):
-                        client.lastError = error.localizedDescription
-                    }
-                }
-            }
-            return
-        }
-        let historyId = store.recordConnection(
-            nodeName: display.nodeName,
-            host: formatConnectionTarget(host: display.host, port: display.port)
-        )
-        monitor.connect(
-            endpoint: endpoint,
-            displayHost: display.host,
-            displayPort: display.port,
-            routeKind: .bonjourLAN,
-            displayName: display.nodeName,
-            historyId: historyId
-        )
-    }
-
     private func connectToHost(_ host: String, port: UInt16, nodeName: String, routeKind: ConnectionRouteKind = .manual) {
         dismissConnectScreenKeyboard()
         if shouldReuseActiveConnection(host: host, port: port, nodeName: nodeName) {
@@ -864,23 +583,6 @@ struct ConnectScreen: View {
             host: formatConnectionTarget(host: host, port: port)
         )
         monitor.connect(host: host, port: port, routeKind: routeKind, displayName: nodeName, historyId: historyId)
-    }
-
-    private func serverIdentityRecoveryMessage(
-        _ trust: (host: String, port: UInt16, current: String, trusted: String?)
-    ) -> String {
-        if let trusted = trust.trusted, trusted != trust.current {
-            return "The saved server identity for \(trust.host):\(trust.port) changed. Only trust the current identity if you intentionally restarted or replaced this Boo server."
-        }
-        return "Trust this Boo server identity before reconnecting."
-    }
-
-    private func trustCurrentServerIdentity(
-        _ trust: (host: String, port: UInt16, current: String, trusted: String?)
-    ) {
-        store.trustServerIdentity(host: trust.host, port: trust.port, identityId: trust.current)
-        client.clearErrorState()
-        monitor.reconnect()
     }
 
     private func dismissConnectScreenKeyboard() {
@@ -1032,20 +734,10 @@ struct ConnectScreen: View {
             DashboardProbeMonitor.Target(
                 key: dashboardProbeKey(host: node.host, port: node.port, nodeName: node.name),
                 host: node.host,
-                port: node.port,
-                endpoint: nil
+                port: node.port
             )
         }
-        let discoveredTargets = browser.daemons.map { daemon in
-            let display = endpointDisplayTarget(daemon.endpoint)
-            return DashboardProbeMonitor.Target(
-                key: dashboardProbeKey(host: display.host, port: display.port, nodeName: display.nodeName),
-                host: display.host,
-                port: display.port,
-                endpoint: daemon.endpoint
-            )
-        }
-        dashboardProbeMonitor.updateTargets(savedTargets + discoveredTargets)
+        dashboardProbeMonitor.updateTargets(savedTargets)
     }
 
     private func isCurrentTarget(host: String, port: UInt16, nodeName: String) -> Bool {
@@ -2354,7 +2046,6 @@ struct SettingsScreen: View {
     @ObservedObject var store: ConnectionStore
     @ObservedObject var tailscaleBrowser: TailscalePeerBrowser
     @ObservedObject var monitor: ConnectionMonitor
-    @Binding var serverIdentityWarning: String?
 
     @State private var nodeName = ""
     @State private var nodeHost = ""
@@ -2362,49 +2053,11 @@ struct SettingsScreen: View {
     @State private var tailscalePort = BooDefaultRemotePortText
     @State private var tailscaleToken = ""
 
-    private var trustedIdentityRow: (current: String, trusted: String?)? {
-        guard let host = monitor.lastHost,
-              let port = monitor.lastPort,
-              let current = client.serverIdentityId ?? client.lastSeenServerIdentityId,
-              !current.isEmpty else { return nil }
-        return (current, store.trustedServerIdentity(host: host, port: port))
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             KineticTopBar(title: "Settings", subtitle: "Manage saved nodes and current connection state.")
             ScrollView {
                 VStack(alignment: .leading, spacing: KineticSpacing.xl) {
-                    if let serverIdentityWarning,
-                       let trustedIdentityRow,
-                       let host = monitor.lastHost,
-                       let port = monitor.lastPort
-                    {
-                        VStack(alignment: .leading, spacing: KineticSpacing.sm) {
-                            KineticSectionLabel(text: "Server Identity")
-                            Text(serverIdentityWarning)
-                                .font(KineticFont.caption)
-                                .foregroundStyle(KineticColor.error)
-                                .padding(KineticSpacing.md)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(KineticColor.error.opacity(0.1))
-                                .clipShape(RoundedRectangle(cornerRadius: KineticRadius.button))
-                            Text("Current: \(trustedIdentityRow.current)")
-                                .font(KineticFont.caption)
-                                .foregroundStyle(KineticColor.onSurfaceVariant)
-                            if let trusted = trustedIdentityRow.trusted {
-                                Text("Trusted: \(trusted)")
-                                    .font(KineticFont.caption)
-                                    .foregroundStyle(KineticColor.onSurfaceVariant)
-                            }
-                            Button("Trust Current Server Identity") {
-                                store.trustServerIdentity(host: host, port: port, identityId: trustedIdentityRow.current)
-                                self.serverIdentityWarning = nil
-                            }
-                            .buttonStyle(KineticPrimaryButtonStyle())
-                        }
-                    }
-
                     VStack(alignment: .leading, spacing: KineticSpacing.sm) {
                         KineticSectionLabel(text: "Save Node")
                         KineticInputField(placeholder: "Name", text: $nodeName, accessibilityIdentifier: "settings-node-name-input")

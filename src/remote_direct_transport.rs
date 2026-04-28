@@ -21,7 +21,6 @@ pub(crate) struct DirectTransportClient<S: DirectReadWrite> {
     pub(crate) capabilities: u32,
     pub(crate) build_id: Option<String>,
     pub(crate) server_instance_id: Option<String>,
-    pub(crate) server_identity_id: Option<String>,
 }
 
 impl<S: DirectReadWrite> DirectTransportClient<S> {
@@ -29,7 +28,6 @@ impl<S: DirectReadWrite> DirectTransportClient<S> {
         mut stream: S,
         host: String,
         port: u16,
-        expected_server_identity: Option<&str>,
     ) -> Result<Self, String> {
         stream
             .write_all(&encode_message(MessageType::Auth, &[]))
@@ -50,19 +48,10 @@ impl<S: DirectReadWrite> DirectTransportClient<S> {
         }
 
         validate_auth_ok_payload(&auth_ok_payload)?;
-        let (protocol_version, capabilities, build_id, server_instance_id, server_identity_id) =
+        let (protocol_version, capabilities, build_id, server_instance_id) =
             decode_auth_ok_payload(&auth_ok_payload).ok_or_else(|| {
                 format!("remote endpoint {host}:{port} returned malformed handshake metadata")
             })?;
-        if let Some(expected_server_identity) = expected_server_identity
-            && server_identity_id.as_deref() != Some(expected_server_identity)
-        {
-            return Err(format!(
-                "remote endpoint {host}:{port} reported daemon identity {:?}, expected {:?}",
-                server_identity_id, expected_server_identity
-            ));
-        }
-
         Ok(Self {
             stream,
             host,
@@ -71,7 +60,6 @@ impl<S: DirectReadWrite> DirectTransportClient<S> {
             capabilities,
             build_id,
             server_instance_id,
-            server_identity_id,
         })
     }
 
@@ -239,11 +227,8 @@ pub(crate) mod test_support {
         }
     }
 
-    pub(crate) fn auth_ok_reply(server_identity_id: &str, server_instance_id: &str) -> Vec<u8> {
-        encode_message(
-            MessageType::AuthOk,
-            &encode_auth_ok_payload(server_identity_id, server_instance_id),
-        )
+    pub(crate) fn auth_ok_reply(server_instance_id: &str) -> Vec<u8> {
+        encode_message(MessageType::AuthOk, &encode_auth_ok_payload(server_instance_id))
     }
 }
 
@@ -257,7 +242,7 @@ mod tests {
     #[test]
     fn create_tab_uses_runtime_action_and_viewed_tab_runtime_state() {
         let stream = ScriptedDirectStream::new(vec![
-            auth_ok_reply("test-daemon", "test-instance"),
+            auth_ok_reply("test-instance"),
             encode_message(
                 MessageType::UiRuntimeState,
                 &serde_json::to_vec(&UiRuntimeState {
@@ -288,9 +273,12 @@ mod tests {
                 .expect("encode runtime state"),
             ),
         ]);
-        let mut client =
-            DirectTransportClient::connect_over_stream(stream, "127.0.0.1".into(), 43210, None)
-                .expect("connect transport");
+        let mut client = DirectTransportClient::connect_over_stream(
+            stream,
+            "127.0.0.1".into(),
+            43210,
+        )
+        .expect("connect transport");
         let tab_id = client.create_tab(120, 36).expect("create tab");
         assert_eq!(tab_id, 77);
 

@@ -100,7 +100,6 @@ pub(crate) fn start_quic_listener(
 pub(crate) fn connect_direct(
     host: &str,
     port: u16,
-    expected_server_identity: Option<&str>,
 ) -> Result<DirectTransportClient<QuicDirectStream>, String> {
     let addr = (host, port)
         .to_socket_addrs()
@@ -159,7 +158,6 @@ pub(crate) fn connect_direct(
         },
         host.to_string(),
         port,
-        expected_server_identity,
     )
 }
 

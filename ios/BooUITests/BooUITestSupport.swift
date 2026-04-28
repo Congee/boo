@@ -174,14 +174,6 @@ class BooUITestCase: XCTestCase {
         return app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'keyboard' OR identifier CONTAINS[c] 'keyboard'")).firstMatch
     }
 
-    func discoveredDaemonRows(in app: XCUIApplication) -> XCUIElementQuery {
-        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "discovered-daemon-"))
-    }
-
-    func firstHittableDiscoveredDaemonRow(in app: XCUIApplication) -> XCUIElement? {
-        discoveredDaemonRows(in: app).allElementsBoundByIndex.first(where: \.isHittable)
-    }
-
     func connectToConfiguredBoo(from app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
         let connectButton = app.buttons["connect-button"]
         if connectButton.waitForExistence(timeout: 2), connectButton.isEnabled {
@@ -206,12 +198,6 @@ class BooUITestCase: XCTestCase {
                 manualConnectButton.tap()
                 return
             }
-        }
-        let discoveredRows = discoveredDaemonRows(in: app)
-        if discoveredRows.firstMatch.waitForExistence(timeout: 2),
-           let hittableDiscoveredRow = firstHittableDiscoveredDaemonRow(in: app) {
-            hittableDiscoveredRow.tap()
-            return
         }
         if app.buttons["Local Boo"].waitForExistence(timeout: 1) {
             app.buttons["Local Boo"].tap()

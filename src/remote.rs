@@ -44,7 +44,6 @@ pub use crate::remote_wire::{
 pub struct RemoteConfig {
     pub port: u16,
     pub bind_address: Option<String>,
-    pub service_name: String,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -152,13 +151,6 @@ impl RemoteConfig {
     pub(crate) fn effective_bind_address(&self) -> &str {
         self.bind_address.as_deref().unwrap_or("127.0.0.1")
     }
-
-    pub(crate) fn should_advertise(&self) -> bool {
-        !matches!(
-            self.effective_bind_address(),
-            "127.0.0.1" | "localhost" | "::1"
-        )
-    }
 }
 
 #[derive(Debug)]
@@ -231,7 +223,6 @@ pub enum RemoteCmd {
 use crate::remote_auth::read_loop;
 use crate::remote_listener::NEXT_CLIENT_ID;
 use crate::remote_quic::{QuicServerHandle, start_quic_listener};
-use crate::remote_server_advertise::ServiceAdvertiser;
 use crate::remote_server_control::{
     reply_tab_list as send_reply_tab_list, send_tab_list as send_cached_tab_list,
     send_tab_list_to_local_clients as send_cached_tab_list_to_local_clients,
@@ -255,34 +246,9 @@ pub struct RemoteServer {
     state: Arc<Mutex<State>>,
     _quic_listener: Option<QuicServerHandle>,
     _local_listener: Option<std::thread::JoinHandle<()>>,
-    _advertiser: Option<ServiceAdvertiser>,
     local_socket_path: Option<PathBuf>,
     bind_address: Option<String>,
     port: Option<u16>,
-}
-
-fn persistent_server_identity_id() -> String {
-    if let Ok(identity) = std::env::var("BOO_REMOTE_SERVER_IDENTITY") {
-        let identity = identity.trim();
-        if !identity.is_empty() {
-            return identity.to_string();
-        }
-    }
-
-    let path = crate::config::config_dir().join("remote_identity");
-    if let Ok(identity) = std::fs::read_to_string(&path) {
-        let identity = identity.trim();
-        if !identity.is_empty() {
-            return identity.to_string();
-        }
-    }
-
-    let identity = random_instance_id();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(&path, format!("{identity}\n"));
-    identity
 }
 
 impl RemoteServer {
@@ -290,7 +256,6 @@ impl RemoteServer {
         let bind_address = config.effective_bind_address().to_string();
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::new(),
-            server_identity_id: persistent_server_identity_id(),
             server_instance_id: random_instance_id(),
         }));
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -301,21 +266,15 @@ impl RemoteServer {
             cmd_tx.clone(),
         )?;
 
-        let advertiser = if config.should_advertise() {
-            ServiceAdvertiser::spawn(&config.service_name, config.port)
-        } else {
-            None
-        };
         {
             let state = state.lock().expect("remote server state poisoned");
             log::info!(
-                "remote quic server started: bind_address={} port={} protocol_version={} capabilities={} build_id={} server_identity_id={} server_instance_id={}",
+                "remote quic server started: bind_address={} port={} protocol_version={} capabilities={} build_id={} server_instance_id={}",
                 bind_address,
                 config.port,
                 REMOTE_PROTOCOL_VERSION,
                 REMOTE_CAPABILITIES,
                 env!("CARGO_PKG_VERSION"),
-                state.server_identity_id,
                 state.server_instance_id
             );
         }
@@ -324,7 +283,6 @@ impl RemoteServer {
                 state,
                 _quic_listener: Some(quic_listener),
                 _local_listener: None,
-                _advertiser: advertiser,
                 local_socket_path: None,
                 bind_address: Some(bind_address),
                 port: Some(config.port),
@@ -341,7 +299,6 @@ impl RemoteServer {
         let listener = UnixListener::bind(&socket_path)?;
         let state = Arc::new(Mutex::new(State {
             clients: HashMap::new(),
-            server_identity_id: persistent_server_identity_id(),
             server_instance_id: random_instance_id(),
         }));
         let state_for_listener = Arc::clone(&state);
@@ -408,12 +365,11 @@ impl RemoteServer {
         {
             let state = state.lock().expect("remote server state poisoned");
             log::info!(
-                "remote local-stream server started: socket={} protocol_version={} capabilities={} build_id={} server_identity_id={} server_instance_id={}",
+                "remote local-stream server started: socket={} protocol_version={} capabilities={} build_id={} server_instance_id={}",
                 socket_path.display(),
                 REMOTE_PROTOCOL_VERSION,
                 REMOTE_CAPABILITIES,
                 env!("CARGO_PKG_VERSION"),
-                state.server_identity_id,
                 state.server_instance_id
             );
         }
@@ -422,7 +378,6 @@ impl RemoteServer {
                 state,
                 _quic_listener: None,
                 _local_listener: Some(listener_thread),
-                _advertiser: None,
                 local_socket_path: Some(socket_path),
                 bind_address: None,
                 port: None,
@@ -463,12 +418,11 @@ impl RemoteServer {
 
     #[cfg(test)]
     pub(crate) fn for_test(state: Arc<Mutex<State>>) -> Self {
-        Self {
-            state,
-            _quic_listener: None,
-            _local_listener: Some(std::thread::spawn(|| {})),
-            _advertiser: None,
-            local_socket_path: None,
+            Self {
+                state,
+                _quic_listener: None,
+                _local_listener: Some(std::thread::spawn(|| {})),
+                local_socket_path: None,
             bind_address: None,
             port: None,
         }

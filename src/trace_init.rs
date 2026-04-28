@@ -25,7 +25,11 @@ pub(crate) fn init_with_filter(filter: Option<&str>) {
 
     let subscriber = tracing_subscriber::registry()
         .with(env_filter(filter))
-        .with(tracing_subscriber::fmt::layer().with_target(true));
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_writer(std::io::stderr),
+        );
 
     #[cfg(target_vendor = "apple")]
     let subscriber = subscriber.with(tracing_oslog::OsLogger::new(

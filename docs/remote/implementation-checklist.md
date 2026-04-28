@@ -150,7 +150,7 @@ Canonical design:
   - install
   - UI test runner launch
   - execution of focused XCUITest methods
-  - discovered-daemon connection
+  - direct/saved-host connection
   - terminal screen entry
   - typing into the remote terminal and observing the echoed marker
 - the previous device-build blocker was first isolated as `xcodebuild`
@@ -159,8 +159,8 @@ Canonical design:
   iOS scripts can call `xcodebuild` directly from `nix develop`
 - real-device setup failures seen during verification were provisioning,
   locked-device, developer-disk-image, or UI Automation readiness issues before
-  the app launched; once those were resolved, the discovered-daemon
-  connect-and-type path passed on real hardware
+  the app launched; once those were resolved, the direct-host connect-and-type
+  path passed on real hardware
 
 ## Current Emphasis
 

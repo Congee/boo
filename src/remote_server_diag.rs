@@ -37,7 +37,6 @@ pub(crate) fn clients_snapshot(
         capabilities: REMOTE_CAPABILITIES,
         build_id: env!("CARGO_PKG_VERSION").to_string(),
         server_instance_id: state.server_instance_id.clone(),
-        server_identity_id: state.server_identity_id.clone(),
         auth_challenge_window_ms: AUTH_CHALLENGE_WINDOW.as_millis() as u64,
         heartbeat_window_ms: DIRECT_CLIENT_HEARTBEAT_WINDOW.as_millis() as u64,
         connected_clients,
@@ -208,7 +207,6 @@ mod tests {
         assert_eq!(server_info.capabilities, REMOTE_CAPABILITIES);
         assert_eq!(server_info.build_id, env!("CARGO_PKG_VERSION"));
         assert_eq!(server_info.server_instance_id, "test-instance");
-        assert_eq!(server_info.server_identity_id, "test-daemon");
         assert_eq!(
             server_info.heartbeat_window_ms,
             DIRECT_CLIENT_HEARTBEAT_WINDOW.as_millis() as u64

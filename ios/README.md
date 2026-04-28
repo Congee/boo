@@ -6,14 +6,11 @@ This directory contains the Boo iOS remote viewer app.
 
 - SwiftUI iOS app with bundle identifier `me.congee.boo`
 - Connects to the Boo remote daemon using the existing GSP-compatible wire protocol
-- Discovers Bonjour services on `_boo._udp`
 - Lists Tailscale devices through the Tailscale API when configured in Settings
-- Connects to discovered Bonjour services via the resolved Network framework endpoint instead of degrading them to a guessed `host:port`
 - Supports:
   - manual connect
   - saved nodes
   - connection history
-  - trusted daemon identity pinning per endpoint
   - runtime-first bootstrap from the daemon's current runtime state
   - runtime-state and tab metadata observation
   - terminal accessory keys for:
@@ -33,9 +30,8 @@ This directory contains the Boo iOS remote viewer app.
 
 - The iOS app is Boo-owned code. The older Ghostty iOS app was used only as a reference during implementation.
 - The Boo Rust app now exposes the matching TCP daemon when `remote-port` is configured, for example `boo --headless --remote-port 7337`.
-- iOS local-network discovery requires `NSLocalNetworkUsageDescription` and `NSBonjourServices`; both are configured in the Xcode project.
-- If Bonjour discovery reports that local network access is required, enable `boo` in `Settings > Privacy & Security > Local Network`.
-- Tailscale discovery is separate from Bonjour. It lists devices in the same tailnet through the Tailscale API, then connects to them on the configured Boo port.
+- iOS local-network direct connections require `NSLocalNetworkUsageDescription`; Bonjour browsing is not used.
+- Tailscale discovery lists devices in the same tailnet through the Tailscale API, then connects to them on the configured Boo port.
 - The Tailscale section currently discovers devices, not Boo services. It assumes Boo is listening on the configured remote port, which defaults to `7337`.
 - Tailscale discovery requires a Tailscale API access token configured in the iOS app Settings screen.
 - The token is stored in the iOS Keychain. The Settings screen shows whether one is saved, but it does not re-display the secret value.
@@ -49,7 +45,7 @@ The Swift app client and the validator now share the same wire-codec implementat
 
 It verifies:
 
-- Bonjour discovery on `_boo._udp`
+- manual/saved endpoint connection
 - runtime bootstrap and tab metadata observation
 - runtime-state refresh after server-owned tab changes
 - resize
@@ -57,8 +53,8 @@ It verifies:
 - wire-codec decoding for full-state and delta updates with a standalone Swift self-test
 - client message-state transitions for auth, runtime bootstrap, and delta application
 
-The automated validation lane currently covers Bonjour. Tailscale peer discovery
-is app-integrated, but it is not yet covered by an automated repo-side test
+The automated validation lane covers direct daemon connection. Tailscale peer
+discovery is app-integrated, but it is not yet covered by an automated repo-side test
 because it depends on a real tailnet API token and live peer inventory.
 
 Run it with:
@@ -69,14 +65,14 @@ bash scripts/test-ios-remote-view.sh
 
 The validation script currently completes the Rust daemon checks, the shared Swift protocol self-tests, and the iOS app build path in this repo environment.
 
-The 2026-04-23 real-device smoke baseline also verifies the discovered-daemon
-connect-and-type path on physical iPad and iPhone hardware with:
+The real-device smoke path verifies direct/saved-host connect-and-type on
+physical iPad and iPhone hardware with:
 
 ```bash
 bash scripts/test-ios-ui.sh \
   --destination 'id=<device-id>' \
   --team-id '<your team id>' \
-  --only-testing 'BooUITests/BooAppLaunchTests/testTappingDiscoveredDaemonConnectsAndTypes'
+  --only-testing 'BooUITests/BooAppLaunchTests/testReconnectAndTypeAgainAfterBackNavigation'
 ```
 
 ## Real Device Workflow
@@ -130,17 +126,14 @@ Notes:
 - if `xcodebuild` reports `The developer disk image could not be mounted on this
   device`, open Xcode's Devices and Simulators window and let Xcode finish any
   required support-file / developer-disk-image setup before retrying
-- Bonjour discovery on a real device still depends on the iPad or iPhone granting
-  Local Network access to `boo`; otherwise the app now surfaces a direct error
-  and an `Open iPad Settings` action instead of silently showing an empty list
-- if a discovered-daemon UI test fails before a row appears, first check for
-  stale Bonjour publishers or local-network permission before treating it as a
-  runtime-view protocol failure
+- LAN direct connections may still need the iPad or iPhone to grant Local
+  Network access to `boo`; otherwise manual LAN addresses can fail before the
+  runtime-view protocol is involved
 
 ## Remaining Manual Validation
 
 Automated validation covers the remote protocol, runtime-first bootstrap flow,
-state updates, and the real-device discovered-daemon connect-and-type smoke
+state updates, and the real-device direct-host connect-and-type smoke
 path. Manual validation is still reserved for client UX that depends on the real
 iOS interaction model:
 

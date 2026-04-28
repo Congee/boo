@@ -103,8 +103,16 @@ rm -f "$SOCKET_PATH"
 boo_with_vt_lib_env target/debug/boo server \
   --socket "$SOCKET_PATH" \
   --remote-port "$PORT" \
+  --remote-bind-address 0.0.0.0 \
   >"$LOG_PATH" 2>&1 &
 SERVER_PID=$!
+
+for _ in $(seq 1 40); do
+  if ./target/debug/boo probe-remote-daemon --host 127.0.0.1 --port "$PORT" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.1
+done
 
 for _ in $(seq 1 40); do
   if ./target/debug/boo remote-clients --socket "$SOCKET_PATH" >/dev/null 2>&1; then
@@ -126,14 +134,12 @@ if data.get("ssh_host") != "127.0.0.1":
     raise SystemExit(f"unexpected ssh_host: {data.get('ssh_host')!r}")
 if data.get("upgrade_ready") is not True:
     raise SystemExit(f"expected upgrade_ready true, got {data.get('upgrade_ready')!r}")
-if data.get("selected_transport") != "tcp-direct":
+if data.get("selected_transport") != "quic-direct":
     raise SystemExit(f"unexpected selected_transport: {data.get('selected_transport')!r}")
 if data.get("direct_host") != "127.0.0.1":
     raise SystemExit(f"unexpected direct_host: {data.get('direct_host')!r}")
 if data.get("port") != expected_port:
     raise SystemExit(f"unexpected direct port: {data.get('port')!r}")
-if not data.get("server_identity_id"):
-    raise SystemExit("missing server_identity_id")
 if not data.get("server_instance_id"):
     raise SystemExit("missing server_instance_id")
 if not data.get("build_id"):
@@ -142,28 +148,25 @@ capabilities = data.get("capabilities")
 if not isinstance(capabilities, int) or capabilities <= 0:
     raise SystemExit(f"unexpected capabilities: {capabilities!r}")
 
-print(data["server_identity_id"])
 print(data["server_instance_id"])
 print(data["build_id"])
 PY
 )"
-SERVER_IDENTITY_ID="$(printf '%s\n' "$upgrade_fields" | sed -n '1p')"
-SERVER_INSTANCE_ID="$(printf '%s\n' "$upgrade_fields" | sed -n '2p')"
-SERVER_BUILD_ID="$(printf '%s\n' "$upgrade_fields" | sed -n '3p')"
+SERVER_INSTANCE_ID="$(printf '%s\n' "$upgrade_fields" | sed -n '1p')"
+SERVER_BUILD_ID="$(printf '%s\n' "$upgrade_fields" | sed -n '2p')"
 
 probe_json="$(
   ./target/debug/boo remote-upgrade-probe \
     --host 127.0.0.1 \
     --socket "$SOCKET_PATH"
 )"
-python3 - "$probe_json" "$SERVER_IDENTITY_ID" "$SERVER_INSTANCE_ID" "$SERVER_BUILD_ID" <<'PY'
+python3 - "$probe_json" "$SERVER_INSTANCE_ID" "$SERVER_BUILD_ID" <<'PY'
 import json
 import sys
 
 data = json.loads(sys.argv[1])
-expected_identity = sys.argv[2]
-expected_instance = sys.argv[3]
-expected_build = sys.argv[4]
+expected_instance = sys.argv[2]
+expected_build = sys.argv[3]
 
 target = data.get("target")
 probe = data.get("probe")
@@ -171,9 +174,9 @@ if not isinstance(target, dict):
     raise SystemExit("missing target summary")
 if not isinstance(probe, dict):
     raise SystemExit("missing probe summary")
-if target.get("selected_transport") != "tcp-direct":
+if target.get("selected_transport") != "quic-direct":
     raise SystemExit(f"unexpected target selected_transport: {target.get('selected_transport')!r}")
-if probe.get("selected_transport") != "tcp-direct":
+if probe.get("selected_transport") != "quic-direct":
     raise SystemExit(f"unexpected probe selected_transport: {probe.get('selected_transport')!r}")
 probe_summary = probe.get("probe")
 if not isinstance(probe_summary, dict):
@@ -182,10 +185,6 @@ if probe_summary.get("host") != "127.0.0.1":
     raise SystemExit(f"unexpected probe host: {probe_summary.get('host')!r}")
 if probe_summary.get("protocol_version") != 1:
     raise SystemExit(f"unexpected probe protocol_version: {probe_summary.get('protocol_version')!r}")
-if probe_summary.get("server_identity_id") != expected_identity:
-    raise SystemExit(
-        f"unexpected probe server_identity_id: {probe_summary.get('server_identity_id')!r}"
-    )
 if probe_summary.get("server_instance_id") != expected_instance:
     raise SystemExit(
         f"unexpected probe server_instance_id: {probe_summary.get('server_instance_id')!r}"

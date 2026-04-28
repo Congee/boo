@@ -113,12 +113,10 @@ run_swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
   -o "$VALIDATOR_BIN"
 "$VALIDATOR_BIN" \
   --host 127.0.0.1 \
-  --port "$PORT" \
-  --check-discovery
+  --port "$PORT"
 
 run_swiftc -module-cache-path "$SWIFT_MODULE_CACHE" \
   ios/Sources/ClientWireState.swift \
-  ios/Sources/ConnectionErrorPolicy.swift \
   ios/Sources/TabModels.swift \
   ios/Sources/TabHealth.swift \
   ios/Sources/WireCodec.swift \

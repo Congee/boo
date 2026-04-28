@@ -140,9 +140,6 @@ fi
 cleanup() {
   if [[ "$SKIP_DAEMON" != "1" ]]; then
     pkill -f "target/debug/boo server --socket ${SOCKET_PATH}" >/dev/null 2>&1 || true
-    pgrep -f "dns-sd -R boo on .* _boo._udp local" | while read -r pid; do
-      kill "$pid" >/dev/null 2>&1 || true
-    done || true
     if [[ -n "${SERVER_PID:-}" ]]; then
       kill "$SERVER_PID" >/dev/null 2>&1 || true
       wait "$SERVER_PID" >/dev/null 2>&1 || true
@@ -157,9 +154,6 @@ trap cleanup EXIT
 cd "$ROOT"
 if [[ "$SKIP_DAEMON" != "1" ]]; then
   pkill -f "target/debug/boo server --socket ${SOCKET_PATH}" >/dev/null 2>&1 || true
-  pgrep -f "dns-sd -R boo on .* _boo._udp local" | while read -r pid; do
-    kill "$pid" >/dev/null 2>&1 || true
-  done || true
 fi
 if [[ "$SKIP_DAEMON" != "1" ]]; then
   cat > "$HOST_PORT_FILE" <<EOF

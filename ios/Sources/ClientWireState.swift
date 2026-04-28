@@ -57,12 +57,10 @@ struct AuthOkMetadata: Equatable {
     let transportCapabilities: UInt32
     let serverBuildId: String?
     let serverInstanceId: String?
-    let serverIdentityId: String?
 }
 
 private let expectedRemoteProtocolVersion: UInt16 = 1
 private let remoteCapabilityHeartbeat: UInt32 = 1 << 4
-private let remoteCapabilityDaemonIdentity: UInt32 = 1 << 6
 
 struct ClientWireState: Equatable {
     var authenticated = false
@@ -70,7 +68,6 @@ struct ClientWireState: Equatable {
     var transportCapabilities: UInt32 = 0
     var serverBuildId: String?
     var serverInstanceId: String?
-    var serverIdentityId: String?
     var tabs: [DecodedWireTabInfo] = []
     var screen: DecodedWireScreenState?
     var lastErrorKind: ClientWireErrorKind?
@@ -82,7 +79,6 @@ struct ClientWireState: Equatable {
         transportCapabilities: UInt32 = 0,
         serverBuildId: String? = nil,
         serverInstanceId: String? = nil,
-        serverIdentityId: String? = nil,
         tabs: [DecodedWireTabInfo] = [],
         legacyTabs: [DecodedWireTabInfo]? = nil,
         screen: DecodedWireScreenState? = nil,
@@ -94,7 +90,6 @@ struct ClientWireState: Equatable {
         self.transportCapabilities = transportCapabilities
         self.serverBuildId = serverBuildId
         self.serverInstanceId = serverInstanceId
-        self.serverIdentityId = serverIdentityId
         self.tabs = legacyTabs ?? tabs
         self.screen = screen
         self.lastErrorKind = lastErrorKind
@@ -142,8 +137,7 @@ func decodeAuthOkMetadata(_ payload: Data) -> AuthOkMetadata? {
             protocolVersion: protocolVersion,
             transportCapabilities: transportCapabilities,
             serverBuildId: nil,
-            serverInstanceId: nil,
-            serverIdentityId: nil
+            serverInstanceId: nil
         )
     }
     let buildLength = payload.withUnsafeBytes {
@@ -157,41 +151,22 @@ func decodeAuthOkMetadata(_ payload: Data) -> AuthOkMetadata? {
             protocolVersion: protocolVersion,
             transportCapabilities: transportCapabilities,
             serverBuildId: serverBuildId,
-            serverInstanceId: nil,
-            serverIdentityId: nil
+            serverInstanceId: nil
         )
     }
     let instanceLength = payload.withUnsafeBytes {
         Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: instanceLengthOffset, as: UInt16.self)))
     }
     guard payload.count >= instanceLengthOffset + 2 + instanceLength else { return nil }
-    let identityLengthOffset = instanceLengthOffset + 2 + instanceLength
     let serverInstanceId = String(
         data: payload[(instanceLengthOffset + 2)..<(instanceLengthOffset + 2 + instanceLength)],
         encoding: .utf8
     )
-    guard payload.count >= identityLengthOffset + 2 else {
-        return AuthOkMetadata(
-            protocolVersion: protocolVersion,
-            transportCapabilities: transportCapabilities,
-            serverBuildId: serverBuildId,
-            serverInstanceId: serverInstanceId,
-            serverIdentityId: nil
-        )
-    }
-    let identityLength = payload.withUnsafeBytes {
-        Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: identityLengthOffset, as: UInt16.self)))
-    }
-    guard payload.count >= identityLengthOffset + 2 + identityLength else { return nil }
     return AuthOkMetadata(
         protocolVersion: protocolVersion,
         transportCapabilities: transportCapabilities,
         serverBuildId: serverBuildId,
-        serverInstanceId: serverInstanceId,
-        serverIdentityId: String(
-            data: payload[(identityLengthOffset + 2)..<(identityLengthOffset + 2 + identityLength)],
-            encoding: .utf8
-        )
+        serverInstanceId: serverInstanceId
     )
 }
 
@@ -205,35 +180,13 @@ func validateAuthOkMetadata(_ payload: Data) -> String? {
     if (metadata.transportCapabilities & remoteCapabilityHeartbeat) == 0 {
         return "Remote server does not advertise heartbeat support"
     }
-    if (metadata.transportCapabilities & remoteCapabilityDaemonIdentity) == 0 {
-        return "Remote server does not advertise daemon identity support"
-    }
     if metadata.serverBuildId?.isEmpty != false {
         return "Remote handshake is missing server build metadata"
     }
     if metadata.serverInstanceId?.isEmpty != false {
         return "Remote handshake is missing server instance metadata"
     }
-    if metadata.serverIdentityId?.isEmpty != false {
-        return "Remote handshake is missing server identity metadata"
-    }
     return nil
-}
-
-func serverIdentityMismatch(expectedIdentityId: String?, actualIdentityId: String?) -> Bool {
-    guard let expectedIdentityId, !expectedIdentityId.isEmpty,
-          let actualIdentityId, !actualIdentityId.isEmpty else {
-        return false
-    }
-    return expectedIdentityId != actualIdentityId
-}
-
-func authOkServerIdentityMismatch(expectedIdentityId: String?, payload: Data) -> Bool {
-    guard let metadata = decodeAuthOkMetadata(payload) else { return false }
-    return serverIdentityMismatch(
-        expectedIdentityId: expectedIdentityId,
-        actualIdentityId: metadata.serverIdentityId
-    )
 }
 
 enum ClientWireReducer {
@@ -246,7 +199,6 @@ enum ClientWireReducer {
                 state.transportCapabilities = metadata.transportCapabilities
                 state.serverBuildId = metadata.serverBuildId
                 state.serverInstanceId = metadata.serverInstanceId
-                state.serverIdentityId = metadata.serverIdentityId
             }
             state.lastErrorKind = nil
             state.lastError = nil

@@ -6,11 +6,9 @@ private struct ValidationAuthOkMetadata {
     let transportCapabilities: UInt32
     let serverBuildId: String?
     let serverInstanceId: String?
-    let serverIdentityId: String?
 }
 
 private let validationCapabilityHeartbeat: UInt32 = 1 << 4
-private let validationCapabilityDaemonIdentity: UInt32 = 1 << 6
 
 private func decodeValidationAuthOkMetadata(_ payload: Data) -> ValidationAuthOkMetadata? {
     guard payload.count >= 6 else { return nil }
@@ -25,8 +23,7 @@ private func decodeValidationAuthOkMetadata(_ payload: Data) -> ValidationAuthOk
             protocolVersion: protocolVersion,
             transportCapabilities: transportCapabilities,
             serverBuildId: nil,
-            serverInstanceId: nil,
-            serverIdentityId: nil
+            serverInstanceId: nil
         )
     }
     let buildLength = payload.withUnsafeBytes {
@@ -40,41 +37,22 @@ private func decodeValidationAuthOkMetadata(_ payload: Data) -> ValidationAuthOk
             protocolVersion: protocolVersion,
             transportCapabilities: transportCapabilities,
             serverBuildId: serverBuildId,
-            serverInstanceId: nil,
-            serverIdentityId: nil
+            serverInstanceId: nil
         )
     }
     let instanceLength = payload.withUnsafeBytes {
         Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: instanceLengthOffset, as: UInt16.self)))
     }
     guard payload.count >= instanceLengthOffset + 2 + instanceLength else { return nil }
-    let identityLengthOffset = instanceLengthOffset + 2 + instanceLength
     let serverInstanceId = String(
         data: payload[(instanceLengthOffset + 2)..<(instanceLengthOffset + 2 + instanceLength)],
         encoding: .utf8
     )
-    guard payload.count >= identityLengthOffset + 2 else {
-        return ValidationAuthOkMetadata(
-            protocolVersion: protocolVersion,
-            transportCapabilities: transportCapabilities,
-            serverBuildId: serverBuildId,
-            serverInstanceId: serverInstanceId,
-            serverIdentityId: nil
-        )
-    }
-    let identityLength = payload.withUnsafeBytes {
-        Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: identityLengthOffset, as: UInt16.self)))
-    }
-    guard payload.count >= identityLengthOffset + 2 + identityLength else { return nil }
     return ValidationAuthOkMetadata(
         protocolVersion: protocolVersion,
         transportCapabilities: transportCapabilities,
         serverBuildId: serverBuildId,
-        serverInstanceId: serverInstanceId,
-        serverIdentityId: String(
-            data: payload[(identityLengthOffset + 2)..<(identityLengthOffset + 2 + identityLength)],
-            encoding: .utf8
-        )
+        serverInstanceId: serverInstanceId
     )
 }
 
@@ -88,17 +66,11 @@ private func validateValidationAuthOkMetadata(_ payload: Data) -> String? {
     if (metadata.transportCapabilities & validationCapabilityHeartbeat) == 0 {
         return "Remote server does not advertise heartbeat support"
     }
-    if (metadata.transportCapabilities & validationCapabilityDaemonIdentity) == 0 {
-        return "Remote server does not advertise daemon identity support"
-    }
     if metadata.serverBuildId?.isEmpty != false {
         return "Remote handshake is missing server build metadata"
     }
     if metadata.serverInstanceId?.isEmpty != false {
         return "Remote handshake is missing server instance metadata"
-    }
-    if metadata.serverIdentityId?.isEmpty != false {
-        return "Remote handshake is missing server identity metadata"
     }
     return nil
 }
@@ -138,7 +110,6 @@ final class RemoteValidator {
     private var transportCapabilities: UInt32 = 0
     private var serverBuildId: String?
     private var serverInstanceId: String?
-    private var serverIdentityId: String?
     private var heartbeatAckReceived = false
     private var expectedHeartbeatPayload = Data()
     private var tabListReceived = false
@@ -148,41 +119,12 @@ final class RemoteValidator {
     private var lastScreenText = ""
     private var screenUpdateReceived = false
     private var lastError: String?
-    private var discoveredEndpoint: NWEndpoint?
     private var messageTrace: [String] = []
     private var connectedHost: String?
     private var connectedPort: UInt16?
     private var connectionGeneration: UInt64 = 0
 
     init() {}
-
-    func browse(serviceType: String = "_boo._udp", timeout: TimeInterval = 3.0) -> NWEndpoint? {
-        let semaphore = DispatchSemaphore(value: 0)
-        let browser = NWBrowser(
-            for: .bonjour(type: serviceType, domain: nil),
-            using: NWParameters.udp
-        )
-        browser.stateUpdateHandler = { state in
-            if case .failed = state {
-                semaphore.signal()
-            }
-        }
-        browser.browseResultsChangedHandler = { [weak self] results, _ in
-            if let first = results.first {
-                self?.lock.lock()
-                self?.discoveredEndpoint = first.endpoint
-                self?.lock.unlock()
-                semaphore.signal()
-            }
-        }
-        browser.start(queue: queue)
-        let deadline = DispatchTime.now() + timeout
-        _ = semaphore.wait(timeout: deadline)
-        browser.cancel()
-        lock.lock()
-        defer { lock.unlock() }
-        return discoveredEndpoint
-    }
 
     func connect(host: String, port: UInt16) throws {
         try startConnection(host: host, port: port)
@@ -306,7 +248,6 @@ final class RemoteValidator {
         transportCapabilities = 0
         serverBuildId = nil
         serverInstanceId = nil
-        serverIdentityId = nil
         heartbeatAckReceived = false
         tabListReceived = false
         screenUpdateReceived = false
@@ -405,7 +346,6 @@ final class RemoteValidator {
                 transportCapabilities = metadata.transportCapabilities
                 serverBuildId = metadata.serverBuildId
                 serverInstanceId = metadata.serverInstanceId
-                serverIdentityId = metadata.serverIdentityId
             }
             if let error = validateValidationAuthOkMetadata(payload) {
                 lastError = error
@@ -467,7 +407,7 @@ final class RemoteValidator {
         let screenSnippet = lastScreenText
             .replacingOccurrences(of: "\n", with: "\\n")
             .prefix(160)
-        let stateSummary = "authenticated=\(authenticated) heartbeatAckReceived=\(heartbeatAckReceived) tabListReceived=\(tabListReceived) tabs=\(tabs.count) createdTabId=\(String(describing: createdTabId)) buildId=\(serverBuildId ?? "nil") serverIdentityId=\(serverIdentityId ?? "nil") serverInstanceId=\(serverInstanceId ?? "nil") screenUpdateReceived=\(screenUpdateReceived) screen=\"\(screenSnippet)\" trace=\(messageTrace.joined(separator: ","))"
+        let stateSummary = "authenticated=\(authenticated) heartbeatAckReceived=\(heartbeatAckReceived) tabListReceived=\(tabListReceived) tabs=\(tabs.count) createdTabId=\(String(describing: createdTabId)) buildId=\(serverBuildId ?? "nil") serverInstanceId=\(serverInstanceId ?? "nil") screenUpdateReceived=\(screenUpdateReceived) screen=\"\(screenSnippet)\" trace=\(messageTrace.joined(separator: ","))"
         lock.unlock()
         throw ValidationError("timed out waiting for \(description) (\(stateSummary))")
     }
@@ -513,10 +453,9 @@ struct ValidationError: Error, CustomStringConvertible {
     init(_ description: String) { self.description = description }
 }
 
-func resolveRemoteValidatorArgs() -> (host: String, port: UInt16, checkDiscovery: Bool) {
+func resolveRemoteValidatorArgs() -> (host: String, port: UInt16) {
     var host = "127.0.0.1"
     var port: UInt16 = 7337
-    var checkDiscovery = false
     var index = 1
     while index < CommandLine.arguments.count {
         switch CommandLine.arguments[index] {
@@ -526,12 +465,10 @@ func resolveRemoteValidatorArgs() -> (host: String, port: UInt16, checkDiscovery
         case "--port":
             index += 1
             port = UInt16(CommandLine.arguments[index]) ?? 7337
-        case "--check-discovery":
-            checkDiscovery = true
         default:
             break
         }
         index += 1
     }
-    return (host, port, checkDiscovery)
+    return (host, port)
 }

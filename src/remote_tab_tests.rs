@@ -68,7 +68,7 @@ mod tests {
             server_stream
                 .write_all(&encode_message(
                     MessageType::AuthOk,
-                    &encode_auth_ok_payload("unix-daemon", "unix-instance"),
+                    &encode_auth_ok_payload("unix-instance"),
                 ))
                 .expect("write auth ok");
 
@@ -100,7 +100,6 @@ mod tests {
             client_stream,
             "unix-test".to_string(),
             0,
-            Some("unix-daemon"),
         )
         .expect("connect over unix stream");
         let heartbeat_rtt_ms = client
@@ -111,7 +110,6 @@ mod tests {
         assert_eq!(tabs.len(), 1);
         assert_eq!(tabs[0].id, 21);
         assert_eq!(tabs[0].name, "unix");
-        assert_eq!(client.server_identity_id.as_deref(), Some("unix-daemon"));
         assert_eq!(client.server_instance_id.as_deref(), Some("unix-instance"));
 
         server.join().expect("unix server thread");

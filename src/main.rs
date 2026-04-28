@@ -27,7 +27,6 @@ mod remote_direct_transport;
 mod remote_full_state;
 mod remote_listener;
 mod remote_quic;
-mod remote_server_advertise;
 mod remote_server_broadcast;
 mod remote_server_control;
 mod remote_server_diag;

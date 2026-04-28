@@ -38,7 +38,7 @@ Remote:
 
 Current real-device smoke baseline:
 
-- `bash scripts/test-ios-ui.sh --destination 'id=<device-id>' --team-id '<your team id>' --only-testing 'BooUITests/BooAppLaunchTests/testTappingDiscoveredDaemonConnectsAndTypes'`
+- `bash scripts/test-ios-ui.sh --destination 'id=<device-id>' --team-id '<your team id>' --only-testing 'BooUITests/BooAppLaunchTests/testOpenLiveTabAndType'`
 - this path has passed on physical iPad and iPhone hardware and verifies
   discovered daemon -> terminal screen -> type -> echoed marker
 
@@ -51,9 +51,9 @@ Current real-device smoke baseline:
 - when adding third-party discovery paths such as Tailscale, separate
   peer-list validation from actual Boo service reachability; device discovery
   alone does not prove the remote daemon is listening
-- real-device Bonjour discovery also depends on the iOS Local Network
-  permission; if the app reports local-network authorization failure, that is
-  a device permission issue, not a QUIC daemon failure
+- real-device LAN direct connections can depend on iOS Local Network
+  permission; connection failures before the QUIC handshake may be device
+  permission or routing issues rather than daemon failures
 - if a real-device run fails before Boo launches, check signing/provisioning,
   locked-device state, Developer Mode / UI Automation, and developer-disk-image
   setup before debugging runtime protocol behavior

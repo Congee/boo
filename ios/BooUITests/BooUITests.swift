@@ -19,7 +19,6 @@ final class BooAppLaunchTests: BooUITestCase {
         let connectScreen = app.otherElements["connect-screen"].exists
         let connectStatus = app.staticTexts["connect-status-banner"].exists ? app.staticTexts["connect-status-banner"].label : "<none>"
         let connectError = app.staticTexts["connect-error-label"].exists ? app.staticTexts["connect-error-label"].label : "<none>"
-        let bonjourError = app.staticTexts["bonjour-error-label"].exists ? app.staticTexts["bonjour-error-label"].label : "<none>"
         let connectHostExists = app.textFields["connect-host-input"].exists
         let connectHostValue = connectHostExists ? String(describing: app.textFields["connect-host-input"].value ?? "<nil>") : "<none>"
         let terminalBanner = app.staticTexts["terminal-banner-label"].exists ? app.staticTexts["terminal-banner-label"].label : "<none>"
@@ -42,7 +41,6 @@ final class BooAppLaunchTests: BooUITestCase {
         connectScreen=\(connectScreen)
         connectStatus=\(connectStatus)
         connectError=\(connectError)
-        bonjourError=\(bonjourError)
         connectHostExists=\(connectHostExists)
         connectHostValue=\(connectHostValue)
         terminalBanner=\(terminalBanner)
@@ -179,8 +177,7 @@ final class BooAppLaunchTests: BooUITestCase {
         while Date() < deadline {
             let hasHittableConnectAction =
                 connectButton.isHittable ||
-                savedNode.isHittable ||
-                firstHittableDiscoveredDaemonRow(in: app) != nil
+                savedNode.isHittable
             if isConnectScreen(app), hasHittableConnectAction {
                 return
             }
@@ -498,75 +495,6 @@ final class BooAppLaunchTests: BooUITestCase {
         waitForAnyTailscaleResult(in: app, timeout: 12)
     }
 
-    func testConnectScreenShowsDiscoveredDaemon() {
-        let app = makeApp(autoConnect: false, includeConfiguredHost: false)
-        _ = installSystemAlertHandler(for: app)
-        app.launch()
-        app.tap()
-
-        navigateToConnectScreen(app)
-
-        let discoveredRows = discoveredDaemonRows(in: app)
-        let firstRow = discoveredRows.firstMatch
-        if !firstRow.waitForExistence(timeout: 12) {
-            let browserError = app.staticTexts["bonjour-error-label"].label
-            let attachment = XCTAttachment(screenshot: app.screenshot())
-            attachment.name = "discovery-failure"
-            attachment.lifetime = .keepAlways
-            add(attachment)
-            XCTFail("expected discovered daemon row; browserError='\(browserError)'")
-        }
-
-        sleep(2)
-        XCTAssertEqual(discoveredRows.count, 1, "expected exactly one discovered daemon row after dedupe")
-    }
-
-    func testTappingDiscoveredDaemonConnects() {
-        let app = makeApp(autoConnect: false, resetStorage: true, includeConfiguredHost: false)
-        _ = installSystemAlertHandler(for: app)
-        app.launch()
-        app.tap()
-
-        navigateToConnectScreen(app)
-
-        let discoveredRows = discoveredDaemonRows(in: app)
-        let firstRow = discoveredRows.firstMatch
-        XCTAssertTrue(firstRow.waitForExistence(timeout: 12))
-        firstRow.tap()
-
-        let deadline = Date().addingTimeInterval(12)
-        while Date() < deadline {
-            if app.otherElements["terminal-screen"].exists {
-                return
-            }
-            let errorLabel = app.staticTexts["connect-error-label"]
-            if errorLabel.exists, !errorLabel.label.isEmpty {
-                XCTFail("discovered daemon connect failed: \(errorLabel.label)")
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
-        }
-
-        let banner = app.staticTexts["connect-status-banner"].label
-        XCTFail("discovered daemon tap never left connect screen; status='\(banner)'")
-    }
-
-    func testTappingDiscoveredDaemonConnectsAndTypes() {
-        let app = makeApp(autoConnect: false, resetStorage: true, includeConfiguredHost: false)
-        _ = installSystemAlertHandler(for: app)
-        app.launch()
-        app.tap()
-
-        navigateToConnectScreen(app)
-
-        let discoveredRows = discoveredDaemonRows(in: app)
-        let firstRow = discoveredRows.firstMatch
-        XCTAssertTrue(firstRow.waitForExistence(timeout: 12))
-        firstRow.tap()
-
-        waitForTerminalScreen(app)
-        assertTerminalCanType(app, marker: "BOO_DISCOVERED_TYPED")
-    }
-
     func testTerminalTopControlsAreHidden() {
         let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
@@ -582,31 +510,6 @@ final class BooAppLaunchTests: BooUITestCase {
         swipeBackFromTerminal(app)
         waitForConnectScreen(app)
         XCTAssertFalse(app.otherElements["terminal-screen"].exists)
-    }
-
-    func testSwipeBackAllowsFreshDiscoveredReconnect() {
-        let app = makeApp(autoConnect: false, resetStorage: true, includeConfiguredHost: false)
-        _ = installSystemAlertHandler(for: app)
-        app.launch()
-        app.tap()
-
-        navigateToConnectScreen(app)
-
-        let discoveredRows = discoveredDaemonRows(in: app)
-        let firstRow = discoveredRows.firstMatch
-        XCTAssertTrue(firstRow.waitForExistence(timeout: 12))
-        firstRow.tap()
-
-        waitForTerminalScreen(app)
-        assertTerminalCanType(app, marker: "BOO_HOST_SESSION_ONE")
-
-        swipeBackFromTerminal(app)
-        waitForConnectScreen(app)
-        XCTAssertTrue(firstRow.waitForExistence(timeout: 12))
-        firstRow.tap()
-
-        waitForTerminalScreen(app)
-        assertTerminalCanType(app, marker: "BOO_HOST_SESSION_TWO")
     }
 
     func testTappingTailscaleDeviceConnects() {
@@ -890,7 +793,7 @@ final class BooAppLaunchTests: BooUITestCase {
     }
 
     func testDashboardRowShowsLatencyMetricAfterConnect() {
-        let app = makeApp(autoConnect: false, resetStorage: true, includeConfiguredHost: false)
+        let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
         app.launch()
         app.tap()
@@ -900,12 +803,8 @@ final class BooAppLaunchTests: BooUITestCase {
         swipeBackFromTerminal(app)
         waitForConnectScreen(app)
 
-        let discoveredRows = discoveredDaemonRows(in: app)
-        let firstRow = discoveredRows.firstMatch
-        XCTAssertTrue(firstRow.waitForExistence(timeout: 12))
-
-        let metricBadge = app.staticTexts.matching(identifier: "host-metric-example-mbp").firstMatch
-        XCTAssertTrue(metricBadge.waitForExistence(timeout: 8), "expected visible discovered-host metric badge")
+        let metricBadge = app.staticTexts.matching(identifier: "host-metric-Local Boo").firstMatch
+        XCTAssertTrue(metricBadge.waitForExistence(timeout: 8), "expected visible saved-host metric badge")
 
         let predicate = NSPredicate(format: "label MATCHES %@", "\\b[0-9]+ ms\\b")
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: metricBadge)
@@ -913,7 +812,7 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTAssertEqual(
             result,
             .completed,
-            "expected discovered-host metric badge to contain latency text, got '\(metricBadge.label)'"
+            "expected saved-host metric badge to contain latency text, got '\(metricBadge.label)'"
         )
 
         // Let the dashboard sit long enough to catch transient row-state regressions
@@ -1042,7 +941,7 @@ final class BooAppLaunchTests: BooUITestCase {
 
         navigateToConnectScreen(app)
 
-        // Give live Bonjour/Tailscale rows time to settle before capturing.
+        // Give live Tailscale/dashboard rows time to settle before capturing.
         sleep(8)
 
         let screenshotAttachment = XCTAttachment(screenshot: app.screenshot())
@@ -1117,7 +1016,7 @@ final class BooAppLaunchTests: BooUITestCase {
     }
 
     func testFastSwipeBackAndReconnectStress() {
-        let app = makeApp(autoConnect: false, resetStorage: true, includeConfiguredHost: false)
+        let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
         app.launch()
         app.tap()
@@ -1134,12 +1033,7 @@ final class BooAppLaunchTests: BooUITestCase {
             swipeBackFromTerminal(app)
 
             waitForConnectScreen(app)
-
-            let discoveredRows = discoveredDaemonRows(in: app)
-            let firstRow = discoveredRows.firstMatch
-            XCTAssertTrue(firstRow.waitForExistence(timeout: 12), "missing discovered host row after swipe-back on iteration \(iteration):\n\(uiStateSnapshot(app))")
-            firstRow.tap()
-
+            connectToConfiguredBoo(from: app)
             waitForTerminalScreen(app)
             let activeExpectation = XCTNSPredicateExpectation(
                 predicate: NSPredicate(format: "label BEGINSWITH %@", "active-"),

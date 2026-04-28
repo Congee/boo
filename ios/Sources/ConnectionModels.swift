@@ -158,10 +158,8 @@ final class ConnectionStore: ObservableObject {
 
     private let maxHistory = 50
     private let storageNamespaceSuffix: String
-    private var trustedServerIdentities: [String: String] = [:]
     private var nodesKey: String { "boo.remote.savedNodes\(storageNamespaceSuffix)" }
     private var historyKey: String { "boo.remote.connectionHistory\(storageNamespaceSuffix)" }
-    private var trustedIdentitiesKey: String { "boo.remote.trustedServerIdentities\(storageNamespaceSuffix)" }
     private var tailscaleSettingsKey: String { "boo.remote.tailscale.discovery\(storageNamespaceSuffix)" }
     private var terminalDisplaySettingsKey: String { "boo.remote.terminalDisplay\(storageNamespaceSuffix)" }
     private var tailscaleTokenService: String { "me.congee.boo.tailscale\(storageNamespaceSuffix)" }
@@ -172,7 +170,6 @@ final class ConnectionStore: ObservableObject {
         applyUITestConfiguration()
         loadNodes()
         loadHistory()
-        loadTrustedServerIdentities()
         loadTailscaleSettings()
         loadTerminalDisplaySettings()
         refreshTailscaleTokenStatus()
@@ -213,28 +210,6 @@ final class ConnectionStore: ObservableObject {
     func clearHistory() {
         history.removeAll()
         saveHistory()
-    }
-
-    func recordTrustedServerIdentity(host: String, port: UInt16, identityId: String) -> String? {
-        let key = "\(host):\(port)"
-        if let existing = trustedServerIdentities[key] {
-            guard existing == identityId else {
-                return "Server identity changed for \(key). Expected \(existing), got \(identityId)."
-            }
-            return nil
-        }
-        trustedServerIdentities[key] = identityId
-        saveTrustedServerIdentities()
-        return nil
-    }
-
-    func trustedServerIdentity(host: String, port: UInt16) -> String? {
-        trustedServerIdentities["\(host):\(port)"]
-    }
-
-    func trustServerIdentity(host: String, port: UInt16, identityId: String) {
-        trustedServerIdentities["\(host):\(port)"] = identityId
-        saveTrustedServerIdentities()
     }
 
     var hasTailscaleAPIToken: Bool {
@@ -324,17 +299,6 @@ final class ConnectionStore: ObservableObject {
         UserDefaults.standard.set(data, forKey: historyKey)
     }
 
-    private func loadTrustedServerIdentities() {
-        guard let data = UserDefaults.standard.data(forKey: trustedIdentitiesKey),
-              let instances = try? JSONDecoder().decode([String: String].self, from: data) else { return }
-        trustedServerIdentities = instances
-    }
-
-    private func saveTrustedServerIdentities() {
-        guard let data = try? JSONEncoder().encode(trustedServerIdentities) else { return }
-        UserDefaults.standard.set(data, forKey: trustedIdentitiesKey)
-    }
-
     private func loadTailscaleSettings() {
         guard let data = UserDefaults.standard.data(forKey: tailscaleSettingsKey),
               let settings = try? JSONDecoder().decode(TailscaleDiscoverySettings.self, from: data) else { return }
@@ -363,7 +327,6 @@ final class ConnectionStore: ObservableObject {
         if config.resetStorage {
             UserDefaults.standard.removeObject(forKey: nodesKey)
             UserDefaults.standard.removeObject(forKey: historyKey)
-            UserDefaults.standard.removeObject(forKey: trustedIdentitiesKey)
             UserDefaults.standard.removeObject(forKey: tailscaleSettingsKey)
             UserDefaults.standard.removeObject(forKey: terminalDisplaySettingsKey)
             try? KeychainStringStore.delete(service: tailscaleTokenService, account: tailscaleTokenAccount)
@@ -427,14 +390,11 @@ enum ReconnectState: Equatable {
 }
 
 enum ConnectionRouteKind: Equatable {
-    case bonjourLAN
     case tailscale
     case manual
 
     var networkUnavailableMessage: String {
         switch self {
-        case .bonjourLAN:
-            return "Local network unavailable on this iPad"
         case .tailscale:
             return "Tailscale path unavailable on this iPad"
         case .manual:
@@ -444,8 +404,6 @@ enum ConnectionRouteKind: Equatable {
 
     var hostUnreachableMessage: String {
         switch self {
-        case .bonjourLAN:
-            return "LAN host unreachable from this iPad"
         case .tailscale:
             return "Tailscale host unreachable from this iPad"
         case .manual:
@@ -486,7 +444,6 @@ final class ConnectionMonitor: ObservableObject {
     @Published var estimatedPacketLossRate: Double?
 
     private let client: GSPClient
-    private let store: ConnectionStore
     private var cancellables = Set<AnyCancellable>()
     private var heartbeatTimer: AnyCancellable?
     private var reconnectWorkItem: DispatchWorkItem?
@@ -505,7 +462,6 @@ final class ConnectionMonitor: ObservableObject {
     private var connectionIntentGeneration: UInt64 = 0
     private var lastDisconnectAt: Date?
 
-    private(set) var lastEndpoint: NWEndpoint?
     private(set) var lastHost: String?
     private(set) var lastPort: UInt16?
     private(set) var lastDisplayName: String?
@@ -513,9 +469,8 @@ final class ConnectionMonitor: ObservableObject {
     private(set) var currentHistoryId: UUID?
     private(set) var currentNodeId: UUID?
 
-    init(client: GSPClient, store: ConnectionStore) {
+    init(client: GSPClient, store _: ConnectionStore) {
         self.client = client
-        self.store = store
         observe()
         observePath()
     }
@@ -601,7 +556,6 @@ final class ConnectionMonitor: ObservableObject {
     func connect(host: String, port: UInt16, routeKind: ConnectionRouteKind = .manual, displayName: String? = nil, historyId: UUID? = nil, nodeId: UUID? = nil) {
         connectionIntentGeneration &+= 1
         let intentGeneration = connectionIntentGeneration
-        lastEndpoint = nil
         lastHost = host
         lastPort = port
         lastDisplayName = displayName
@@ -615,26 +569,6 @@ final class ConnectionMonitor: ObservableObject {
         cancelReconnect()
         beginConnection(intentGeneration: intentGeneration) {
             self.startClientConnection(host: host, port: port)
-        }
-    }
-
-    func connect(endpoint: NWEndpoint, displayHost: String, displayPort: UInt16, routeKind: ConnectionRouteKind = .manual, displayName: String? = nil, historyId: UUID? = nil, nodeId: UUID? = nil) {
-        connectionIntentGeneration &+= 1
-        let intentGeneration = connectionIntentGeneration
-        lastEndpoint = endpoint
-        lastHost = displayHost
-        lastPort = displayPort
-        lastDisplayName = displayName
-        lastRouteKind = routeKind
-        currentHistoryId = historyId
-        currentNodeId = nodeId
-        status = .connecting
-        transportHealth = .idle
-        reconnectAllowed = true
-        reconnectEligible = false
-        cancelReconnect()
-        beginConnection(intentGeneration: intentGeneration) {
-            self.startClientConnection(endpoint: endpoint, host: displayHost, port: displayPort)
         }
     }
 
@@ -654,13 +588,7 @@ final class ConnectionMonitor: ObservableObject {
     }
 
     private func startClientConnection(host: String, port: UInt16) {
-        client.configureTrustedServerIdentity(store.trustedServerIdentity(host: host, port: port))
         client.connect(host: host, port: port)
-    }
-
-    private func startClientConnection(endpoint: NWEndpoint, host: String, port: UInt16) {
-        client.configureTrustedServerIdentity(store.trustedServerIdentity(host: host, port: port))
-        client.connect(endpoint: endpoint)
     }
 
     func reconnect() {
@@ -670,12 +598,6 @@ final class ConnectionMonitor: ObservableObject {
             reconnectState = .idle
             return
         }
-        if ConnectionErrorPolicy.suppressAutomaticReconnect(for: client.lastError) {
-            reconnectAllowed = false
-            cancelReconnect()
-            reconnectState = .failed(reason: client.lastError ?? "Server identity changed")
-            return
-        }
         guard lastHost != nil, lastPort != nil else { return }
         connectionIntentGeneration &+= 1
         let intentGeneration = connectionIntentGeneration
@@ -683,11 +605,7 @@ final class ConnectionMonitor: ObservableObject {
         transportHealth = .idle
         reconnectAllowed = true
         cancelReconnect()
-        if let endpoint = lastEndpoint, let host = lastHost, let port = lastPort {
-            beginConnection(intentGeneration: intentGeneration) {
-                self.startClientConnection(endpoint: endpoint, host: host, port: port)
-            }
-        } else if let host = lastHost, let port = lastPort {
+        if let host = lastHost, let port = lastPort {
             beginConnection(intentGeneration: intentGeneration) {
                 self.startClientConnection(host: host, port: port)
             }
@@ -704,7 +622,6 @@ final class ConnectionMonitor: ObservableObject {
         transportHealth = .idle
         reconnectState = .idle
         reconnectEligible = false
-        lastEndpoint = nil
         lastHost = nil
         lastPort = nil
         lastDisplayName = nil
@@ -767,12 +684,6 @@ final class ConnectionMonitor: ObservableObject {
             reconnectState = .idle
             return
         }
-        if ConnectionErrorPolicy.suppressAutomaticReconnect(for: error) {
-            reconnectAllowed = false
-            cancelReconnect()
-            reconnectState = .failed(reason: error ?? "Server identity changed")
-            return
-        }
         guard reconnectAllowed else {
             reconnectState = .idle
             return
@@ -832,14 +743,8 @@ final class ConnectionMonitor: ObservableObject {
                   self.connectionIntentGeneration == intentGeneration,
                   self.reconnectAllowed else { return }
             self.status = .connecting
-            if let endpoint = self.lastEndpoint,
-               let host = self.lastHost,
-               let port = self.lastPort
-            {
-                self.startClientConnection(endpoint: endpoint, host: host, port: port)
-            } else if let host = self.lastHost,
-                      let port = self.lastPort
-            {
+            if let host = self.lastHost,
+               let port = self.lastPort {
                 self.startClientConnection(host: host, port: port)
             }
         }

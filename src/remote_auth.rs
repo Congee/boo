@@ -228,7 +228,6 @@ pub(crate) fn handle_auth_message(
     state: &Arc<Mutex<State>>,
 ) -> AuthHandling {
     let mut state = state.lock().expect("remote server state poisoned");
-    let server_identity_id = state.server_identity_id.clone();
     let server_instance_id = state.server_instance_id.clone();
     let Some(client) = state.clients.get_mut(&client_id) else {
         return AuthHandling::Disconnect;
@@ -238,7 +237,7 @@ pub(crate) fn handle_auth_message(
     log::info!("remote client authenticated: client_id={client_id} mode=tailnet-trust");
     let _ = client.outbound.send(OutboundMessage::Frame(encode_message(
         MessageType::AuthOk,
-        &encode_auth_ok_payload(&server_identity_id, &server_instance_id),
+        &encode_auth_ok_payload(&server_instance_id),
     )));
     AuthHandling::Authenticated
 }

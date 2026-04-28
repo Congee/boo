@@ -7,7 +7,6 @@ Primary files:
 - `src/remote_listener.rs`
 - `src/remote_wire.rs`
 - `src/remote_client.rs`
-- `src/remote_identity.rs`
 - `src/remote_transport.rs`
 - `src/remote_state.rs`
 - `src/remote_server_*`
@@ -40,7 +39,7 @@ files own narrower responsibilities such as:
 
 - supports full-state and delta publishing
 - supports heartbeat and reconnect-oriented metadata
-- supports daemon identity metadata
+- exposes per-process server-instance metadata for diagnostics
 - keeps only thin per-view runtime-view and stream-cache bookkeeping in the transport layer
 - exposed diagnostics through `boo remote-clients`
 - emits shared Rust latency trace events for connection, runtime actions, input,

@@ -21,7 +21,7 @@ desktop remote mode, and a Boo-native remote daemon for iOS.
 - Declarative startup layouts
 - Local control socket and stream socket for GUI/runtime coordination
 - Headless mode and control-socket automation
-- iOS client with Bonjour discovery and runtime-view subscription
+- iOS client with manual/saved/Tailscale endpoint connection and runtime-view subscription
 
 ## Quick Start
 

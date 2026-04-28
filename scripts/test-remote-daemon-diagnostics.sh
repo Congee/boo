@@ -128,8 +128,6 @@ if not server_info.get("build_id"):
     raise SystemExit("missing build_id in server diagnostics")
 if not server_info.get("server_instance_id"):
     raise SystemExit("missing server_instance_id in server diagnostics")
-if not server_info.get("server_identity_id"):
-    raise SystemExit("missing server_identity_id in server diagnostics")
 if server_info.get("auth_challenge_window_ms") != 30_000:
     raise SystemExit(f"unexpected auth_challenge_window_ms: {server_info.get('auth_challenge_window_ms')!r}")
 if server_info.get("heartbeat_window_ms") != 20_000:
@@ -163,8 +161,6 @@ if not data.get("build_id"):
     raise SystemExit("missing build_id in probe summary")
 if not data.get("server_instance_id"):
     raise SystemExit("missing server_instance_id in probe summary")
-if not data.get("server_identity_id"):
-    raise SystemExit("missing server_identity_id in probe summary")
 if not isinstance(data.get("heartbeat_rtt_ms"), int) or data["heartbeat_rtt_ms"] < 0:
     raise SystemExit(f"unexpected heartbeat_rtt_ms: {data.get('heartbeat_rtt_ms')!r}")
 PY

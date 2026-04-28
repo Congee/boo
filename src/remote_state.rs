@@ -148,7 +148,6 @@ pub(crate) struct ClientState {
 
 pub(crate) struct State {
     pub(crate) clients: HashMap<u64, ClientState>,
-    pub(crate) server_identity_id: String,
     pub(crate) server_instance_id: String,
 }
 
@@ -157,7 +156,6 @@ impl State {
     pub(crate) fn test_empty() -> Self {
         Self {
             clients: HashMap::new(),
-            server_identity_id: "test-daemon".to_string(),
             server_instance_id: "test-instance".to_string(),
         }
     }

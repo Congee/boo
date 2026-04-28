@@ -17,31 +17,28 @@ The iOS app is a native SwiftUI client for Boo's native remote daemon.
 
 It handles:
 
-- Bonjour discovery
+- manual and saved-host connection
 - optional Tailscale device discovery through the Tailscale API
 - auth
 - runtime-view bootstrap
 - tab metadata and current viewer state
-- trusted server identity pinning
 - terminal state decoding and presentation
 
 ## Important Current Behavior
 
-- browses `_boo._udp`
 - can list tailnet devices when a Tailscale API access token is configured in Settings
 - does not reuse the installed Tailscale app's authenticated connection state
 - stores the Tailscale API access token in the iOS Keychain rather than plain app settings
 - cannot call true `tailscale ping` through the installed Tailscale iOS app
 - using `libtailscale` / `TailscaleKit` would mean running a second embedded Tailscale node inside Boo, which is a different architecture from reusing the official Tailscale app
 - therefore current Tailscale dashboard metrics are app-level Boo service probes on the configured port, not Tailscale-native peer/path telemetry
-- connects through resolved Network framework endpoints
+- connects through explicit host:port targets
 - supports saved nodes and connection history
 - bootstraps from runtime state rather than selecting a client-owned target
 - does not render separate native runtime tab chrome; the Boo core statusbar is
   the visible tab-list UI
-- if Bonjour browsing returns local-network authorization failure, the app now shows a direct error and an `Open iPad Settings` action instead of silently showing an empty discovery list
-- real-device smoke coverage has verified the discovered-daemon connect-and-type
-  path on both physical iPad and iPhone hardware
+- real-device smoke coverage has verified direct/saved-host connect-and-type
+  paths on physical iPad and iPhone hardware
 - emits native `Logger` rows and `OSSignposter` intervals for shared
   runtime-view latency events, including `remote.input`, `remote.focus_pane`,
   `remote.set_viewed_tab`, `remote.pane_update`, and `remote.render_apply`
@@ -71,7 +68,7 @@ Changes here can affect:
 - auth and handshake behavior
 - runtime-view bootstrap and reconnect UX
 - terminal decode correctness
-- Bonjour discovery and endpoint handling
+- direct endpoint handling
 - Tailscale peer discovery and token handling
 - XCUITest state setup for real-device validation
 
