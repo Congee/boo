@@ -30,34 +30,15 @@ struct KineticTopBar: View {
     let title: String
     let subtitle: String?
     var compact = false
-    var showBrand = true
     var trailingSystemImage: String? = nil
     var trailingAccessibilityLabel: String? = nil
     var trailingAction: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: KineticSpacing.xs) {
-            HStack {
-                if showBrand {
-                    HStack(spacing: KineticSpacing.sm) {
-                        Image("boo-logo-mark")
-                            .resizable()
-                            .interpolation(.high)
-                            .frame(width: 28, height: 28)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .stroke(KineticColor.primary.opacity(0.35), lineWidth: 1)
-                            )
-                            .shadow(color: .black.opacity(0.18), radius: 10, x: 0, y: 3)
-                            .accessibilityHidden(true)
-                        Text("boo")
-                            .font(.system(size: 20, weight: .black, design: .monospaced))
-                            .foregroundStyle(KineticColor.primary)
-                    }
-                }
-                Spacer()
-                if let trailingSystemImage, let trailingAction {
+            if let trailingSystemImage, let trailingAction {
+                HStack {
+                    Spacer()
                     Button(action: trailingAction) {
                         Image(systemName: trailingSystemImage)
                             .font(.system(size: compact ? 18 : 20, weight: .semibold))
