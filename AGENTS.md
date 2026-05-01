@@ -61,6 +61,7 @@ xcodebuild \
 - When verifying Boo visually, use the repo's process-targeted screenshot workflow or helper script for the `boo` app/window.
 - Do not rely on plain `screencapture` of the frontmost window or full screen, because it can capture the Codex window instead of Boo.
 - Treat a mis-targeted screenshot as invalid verification.
+- For iOS physical-device screenshots or screen-recording-style evidence, prefer native XCTest/XCUITest artifacts first; export `.xcresult` attachments and encode frames with `ffmpeg` when a video file is needed.
 
 ## Input Testing
 

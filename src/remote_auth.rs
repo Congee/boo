@@ -22,7 +22,8 @@ use crate::remote_state::{
 };
 use crate::remote_wire::{
     MessageType, RemoteErrorCode, encode_auth_ok_payload, encode_message, parse_input_payload,
-    parse_key_payload, parse_pane_id, parse_resize, parse_tab_id, read_message_retrying,
+    parse_key_payload, parse_pane_id, parse_resize, parse_row_range_request, parse_tab_id,
+    read_message_retrying,
 };
 
 pub(crate) enum AuthHandling {
@@ -184,6 +185,12 @@ pub(crate) fn read_loop(
                     }
                 },
             ),
+            MessageType::RowRangeRequest => {
+                parse_row_range_request(&payload).map(|request| RemoteCmd::RowRangeRequest {
+                    client_id,
+                    request,
+                })
+            }
             _ => None,
         };
 

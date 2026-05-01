@@ -52,6 +52,7 @@ impl BooApp {
     }
 
     fn reset_scrolling_state_for_user_input(&mut self) {
+        self.smooth_scroll_remainder_rows = 0.0;
         if self.scrollbar.total <= self.scrollbar.len {
             return;
         }
@@ -63,6 +64,47 @@ impl BooApp {
             .backend
             .scroll_viewport_bottom(self.server.tabs.focused_pane());
         self.scrollbar.offset = max_offset;
+    }
+
+    pub(crate) fn smooth_scroll_content_offset_y(&self) -> f32 {
+        (self.smooth_scroll_remainder_rows * self.cell_height) as f32
+    }
+
+    pub(crate) fn reset_smooth_scroll_remainder(&mut self) {
+        self.smooth_scroll_remainder_rows = 0.0;
+    }
+
+    pub(crate) fn scroll_focused_viewport_lines(&mut self, line_delta: isize) {
+        self.reset_smooth_scroll_remainder();
+        let _ = self
+            .backend
+            .scroll_viewport_delta(self.server.tabs.focused_pane(), line_delta);
+    }
+
+    pub(crate) fn scroll_focused_viewport_pixels(&mut self, dy_pixels: f64) {
+        let cell_height = self.cell_height.max(1.0);
+        let row_delta = -dy_pixels / cell_height;
+        if row_delta == 0.0 {
+            return;
+        }
+        if self.scrollbar.total > self.scrollbar.len {
+            let max_offset = self.scrollbar.total.saturating_sub(self.scrollbar.len);
+            if (self.scrollbar.offset == 0 && row_delta < 0.0)
+                || (self.scrollbar.offset >= max_offset && row_delta > 0.0)
+            {
+                self.reset_smooth_scroll_remainder();
+                return;
+            }
+        }
+
+        self.smooth_scroll_remainder_rows += row_delta;
+        let whole_rows = self.smooth_scroll_remainder_rows.trunc() as isize;
+        if whole_rows != 0 {
+            let _ = self
+                .backend
+                .scroll_viewport_delta(self.server.tabs.focused_pane(), whole_rows);
+            self.smooth_scroll_remainder_rows -= whole_rows as f64;
+        }
     }
 
     pub(crate) fn write_terminal_input(&mut self, bytes: &[u8]) {
@@ -1591,28 +1633,34 @@ impl BooApp {
                 #[cfg(any(target_os = "linux", target_os = "macos"))]
                 {
                     let surface = self.focused_surface();
-                    let (dx, dy) = match delta {
-                        mouse::ScrollDelta::Lines { x, y } => (x as f64, y as f64),
-                        mouse::ScrollDelta::Pixels { x, y } => (x as f64, y as f64),
-                    };
                     if self.scrollbar.total > self.scrollbar.len {
                         self.scrollbar_opacity = 1.0;
                     }
                     if !surface.is_null() {
+                        let (dx, dy) = match delta {
+                            mouse::ScrollDelta::Lines { x, y } => (x as f64, y as f64),
+                            mouse::ScrollDelta::Pixels { x, y } => (x as f64, y as f64),
+                        };
                         self.forward_surface_mouse_scroll(dx, dy, 0);
                     } else {
-                        let line_delta = if dy.abs() >= 1.0 {
-                            -dy.round() as isize
-                        } else if dy > 0.0 {
-                            -1
-                        } else if dy < 0.0 {
-                            1
-                        } else {
-                            0
-                        };
-                        let _ = self
-                            .backend
-                            .scroll_viewport_delta(self.server.tabs.focused_pane(), line_delta);
+                        match delta {
+                            mouse::ScrollDelta::Lines { y, .. } => {
+                                let dy = y as f64;
+                                let line_delta = if dy.abs() >= 1.0 {
+                                    -dy.round() as isize
+                                } else if dy > 0.0 {
+                                    -1
+                                } else if dy < 0.0 {
+                                    1
+                                } else {
+                                    0
+                                };
+                                self.scroll_focused_viewport_lines(line_delta);
+                            }
+                            mouse::ScrollDelta::Pixels { y, .. } => {
+                                self.scroll_focused_viewport_pixels(y as f64);
+                            }
+                        }
                     }
                 }
             }
@@ -2091,5 +2139,34 @@ mod tests {
         app.write_terminal_input(b"x");
 
         assert_eq!(app.scrollbar.offset, 180);
+    }
+
+    #[test]
+    fn pixel_scroll_keeps_fractional_remainder_for_smooth_touchpad_motion() {
+        let mut app = BooApp::new_headless();
+        app.cell_height = 10.0;
+        app.scrollbar.total = 200;
+        app.scrollbar.len = 20;
+        app.scrollbar.offset = 100;
+
+        app.scroll_focused_viewport_pixels(4.0);
+
+        assert!((app.smooth_scroll_remainder_rows + 0.4).abs() < f64::EPSILON);
+        assert!((app.smooth_scroll_content_offset_y() + 4.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn line_scroll_resets_fractional_touchpad_motion() {
+        let mut app = BooApp::new_headless();
+        app.cell_height = 10.0;
+        app.scrollbar.total = 200;
+        app.scrollbar.len = 20;
+        app.scrollbar.offset = 100;
+        app.scroll_focused_viewport_pixels(4.0);
+
+        app.scroll_focused_viewport_lines(-1);
+
+        assert_eq!(app.smooth_scroll_remainder_rows, 0.0);
+        assert_eq!(app.smooth_scroll_content_offset_y(), 0.0);
     }
 }

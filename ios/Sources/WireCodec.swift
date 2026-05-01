@@ -35,6 +35,23 @@ struct DecodedWireScreenState: Equatable {
     var cursorVisible: Bool
     var cursorBlinking: Bool
     var cursorStyle: Int32
+    var rowReplica: DecodedRowReplicaMetadata? = nil
+}
+
+struct DecodedRowReplicaMetadata: Equatable {
+    var epoch: UInt64
+    var viewportTop: UInt64
+    var scrollbackTotal: UInt64
+    var cursorRowId: UInt64
+    var rowIds: [UInt64]
+}
+
+struct DecodedRowRangeResponse {
+    var paneId: UInt64
+    var epoch: UInt64
+    var cols: UInt16
+    var startRowId: UInt64
+    var rows: [(UInt64, [DecodedWireCell])]
 }
 
 struct RemoteRuntimeTabSnapshot: Decodable, Equatable {
@@ -258,6 +275,8 @@ enum WireCodec {
     private static let remoteFullStateHeaderLen = 14
     private static let remoteDeltaHeaderLen = 13
     private static let remotePaneUpdateHeaderLen = 28
+    private static let rowReplicaTrailerMagic: [UInt8] = Array("BRR1".utf8)
+    private static let rowRangeResponseMagic: [UInt8] = Array("BRR2".utf8)
 
     static func decodeTabList(_ data: Data) -> [DecodedWireTabInfo] {
         guard data.count >= 4 else { return [] }
@@ -352,7 +371,8 @@ enum WireCodec {
             cursorY: cursorY,
             cursorVisible: cursorVisible,
             cursorBlinking: cursorBlinking,
-            cursorStyle: cursorStyle
+            cursorStyle: cursorStyle,
+            rowReplica: decodeRowReplicaTrailer(data, offset: expected)
         )
     }
 
@@ -420,6 +440,7 @@ enum WireCodec {
             }
             offset += rowBytes
         }
+        state.rowReplica = decodeRowReplicaTrailer(data, offset: offset)
         return true
     }
 
@@ -486,6 +507,123 @@ enum WireCodec {
     static func decodePaneDelta(_ data: Data) -> (DecodedPaneUpdate, Data)? {
         guard data.count >= remotePaneUpdateHeaderLen else { return nil }
         return (decodePaneUpdateHeader(data), Data(data.dropFirst(remotePaneUpdateHeaderLen)))
+    }
+
+    static func decodePaneRows(_ data: Data) -> (DecodedPaneUpdate, DecodedRowRangeResponse)? {
+        guard data.count >= remotePaneUpdateHeaderLen else { return nil }
+        let update = decodePaneUpdateHeader(data)
+        let body = Data(data.dropFirst(remotePaneUpdateHeaderLen))
+        guard let response = decodeRowRangeResponse(body) else { return nil }
+        return (update, response)
+    }
+
+    private static func decodeRowReplicaTrailer(_ data: Data, offset: Int) -> DecodedRowReplicaMetadata? {
+        guard data.count >= offset + 38 else { return nil }
+        guard Array(data[offset..<(offset + 4)]) == rowReplicaTrailerMagic else { return nil }
+        var cursor = offset + 4
+        let epoch = data.withUnsafeBytes {
+            UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: cursor, as: UInt64.self))
+        }
+        cursor += 8
+        let viewportTop = data.withUnsafeBytes {
+            UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: cursor, as: UInt64.self))
+        }
+        cursor += 8
+        let scrollbackTotal = data.withUnsafeBytes {
+            UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: cursor, as: UInt64.self))
+        }
+        cursor += 8
+        let cursorRowId = data.withUnsafeBytes {
+            UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: cursor, as: UInt64.self))
+        }
+        cursor += 8
+        let rowCount = data.withUnsafeBytes {
+            Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: cursor, as: UInt16.self)))
+        }
+        cursor += 2
+        guard data.count >= cursor + rowCount * 8 else { return nil }
+        var rowIds: [UInt64] = []
+        rowIds.reserveCapacity(rowCount)
+        for _ in 0..<rowCount {
+            let rowId = data.withUnsafeBytes {
+                UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: cursor, as: UInt64.self))
+            }
+            cursor += 8
+            rowIds.append(rowId)
+        }
+        return DecodedRowReplicaMetadata(
+            epoch: epoch,
+            viewportTop: viewportTop,
+            scrollbackTotal: scrollbackTotal,
+            cursorRowId: cursorRowId,
+            rowIds: rowIds
+        )
+    }
+
+    private static func decodeRowRangeResponse(_ data: Data) -> DecodedRowRangeResponse? {
+        guard data.count >= 34 else { return nil }
+        guard Array(data[0..<4]) == rowRangeResponseMagic else { return nil }
+        var offset = 4
+        let paneId = data.withUnsafeBytes {
+            UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt64.self))
+        }
+        offset += 8
+        let epoch = data.withUnsafeBytes {
+            UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt64.self))
+        }
+        offset += 8
+        let cols = data.withUnsafeBytes {
+            UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt16.self))
+        }
+        offset += 2
+        let startRowId = data.withUnsafeBytes {
+            UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt64.self))
+        }
+        offset += 8
+        let rowCount = data.withUnsafeBytes {
+            Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt16.self)))
+        }
+        offset += 2
+        var rows: [(UInt64, [DecodedWireCell])] = []
+        for _ in 0..<rowCount {
+            guard offset + 10 <= data.count else { return nil }
+            let rowId = data.withUnsafeBytes {
+                UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt64.self))
+            }
+            offset += 8
+            let cellCount = data.withUnsafeBytes {
+                Int(UInt16(littleEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt16.self)))
+            }
+            offset += 2
+            guard offset + cellCount * cellEncodedLen <= data.count else { return nil }
+            var cells: [DecodedWireCell] = []
+            cells.reserveCapacity(cellCount)
+            data.withUnsafeBytes { buf in
+                for index in 0..<cellCount {
+                    let base = offset + index * cellEncodedLen
+                    cells.append(DecodedWireCell(
+                        codepoint: UInt32(littleEndian: buf.loadUnaligned(fromByteOffset: base, as: UInt32.self)),
+                        fg_r: buf[base + 4],
+                        fg_g: buf[base + 5],
+                        fg_b: buf[base + 6],
+                        bg_r: buf[base + 7],
+                        bg_g: buf[base + 8],
+                        bg_b: buf[base + 9],
+                        styleFlags: buf[base + 10],
+                        wide: buf[base + 11]
+                    ))
+                }
+            }
+            offset += cellCount * cellEncodedLen
+            rows.append((rowId, cells))
+        }
+        return DecodedRowRangeResponse(
+            paneId: paneId,
+            epoch: epoch,
+            cols: cols,
+            startRowId: startRowId,
+            rows: rows
+        )
     }
 
     private static func decodePaneUpdateHeader(_ data: Data) -> DecodedPaneUpdate {

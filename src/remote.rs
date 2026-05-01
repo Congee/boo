@@ -27,7 +27,7 @@ pub use crate::remote_client::{
 
 pub use crate::remote_full_state::{full_state_from_terminal, full_state_from_ui};
 
-use crate::remote_wire::{encode_error_payload, random_instance_id};
+use crate::remote_wire::{encode_error_payload, encode_row_range_response, random_instance_id};
 // Re-export wire-level items so external callers that reach through
 // `crate::remote::` keep working.
 use crate::remote_batcher::{OutboundMessage, writer_loop};
@@ -36,8 +36,8 @@ pub use crate::remote_wire::{
     MESSAGE_TYPE_LIST_TABS, MESSAGE_TYPE_TAB_CREATED, MESSAGE_TYPE_TAB_EXITED,
     MESSAGE_TYPE_TAB_LIST, MessageType, REMOTE_CAPABILITIES,
     REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT, REMOTE_PROTOCOL_VERSION, RemoteCell, RemoteErrorCode,
-    RemoteFullState, decode_auth_ok_payload, encode_full_state, encode_message, encode_tab_list,
-    read_message, validate_auth_ok_payload,
+    RemoteFullState, RemoteRowRangeRequest, RemoteRowRangeResponse, decode_auth_ok_payload,
+    encode_full_state, encode_message, encode_tab_list, read_message, validate_auth_ok_payload,
 };
 
 #[derive(Clone, Debug)]
@@ -217,6 +217,10 @@ pub enum RemoteCmd {
         pane_id: u64,
         pane_revision: u64,
         runtime_revision: u64,
+    },
+    RowRangeRequest {
+        client_id: u64,
+        request: crate::remote_wire::RemoteRowRangeRequest,
     },
 }
 
@@ -689,6 +693,28 @@ impl RemoteServer {
             pane_revision,
             runtime_revision,
             state,
+        );
+    }
+
+    pub fn send_pane_rows_to_client(
+        &self,
+        client_id: u64,
+        tab_id: u32,
+        pane_id: u64,
+        pane_revision: u64,
+        runtime_revision: u64,
+        response: &RemoteRowRangeResponse,
+    ) {
+        self.send_to_client(
+            client_id,
+            MessageType::UiPaneRows,
+            crate::remote_wire::encode_ui_pane_update_payload(
+                tab_id,
+                pane_id,
+                pane_revision,
+                runtime_revision,
+                &encode_row_range_response(response),
+            ),
         );
     }
 

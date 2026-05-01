@@ -1,6 +1,6 @@
 # Runtime-View Follow-up Plan
 
-Updated: 2026-04-26
+Updated: 2026-04-28
 
 ## Summary
 
@@ -20,6 +20,9 @@ Canonical plan: [mobile-user-experience-plan.md](./mobile-user-experience-plan.m
 
 - [x] Fix nondeterministic iOS pane render state where typed text can disappear
       and later reappear.
+  - 2026-04-28 follow-up: focused remote deltas no longer infer scrolls from
+    content overlap; full/delta messages carry server row-identity metadata and
+    iOS keeps a touch-only row replica for smooth local scrollback.
 - [x] Finish iOS touch-first terminal gesture grammar beyond current pinch/scroll/tap foundation.
 - [x] Add mobile keybar with sticky modifiers, F1-F12 access, and compose/draft input.
 - [x] Add a connection health and remote debug HUD for RTT/action/render state.

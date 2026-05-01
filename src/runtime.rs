@@ -160,6 +160,7 @@ impl BooApp {
                     scrollbar_opacity: 0.0,
                     cell_width,
                     cell_height,
+                    smooth_scroll_remainder_rows: 0.0,
                     scrollbar: ffi::ghostty_action_scrollbar_s {
                         total: 0,
                         offset: 0,
@@ -210,6 +211,7 @@ impl BooApp {
                     appearance_revision: 1,
                     runtime_revision: 1,
                     pane_terminal_revisions: std::collections::HashMap::new(),
+                    pane_row_caches: std::collections::HashMap::new(),
                     surface_initialized_once: false,
                     app_focused: true,
                     dirty_remote_tabs: initial_dirty_remote_tabs.clone(),
@@ -249,6 +251,7 @@ impl BooApp {
                     scrollbar_opacity: 0.0,
                     cell_width,
                     cell_height,
+                    smooth_scroll_remainder_rows: 0.0,
                     scrollbar: ffi::ghostty_action_scrollbar_s {
                         total: 0,
                         offset: 0,
@@ -299,6 +302,7 @@ impl BooApp {
                     appearance_revision: 1,
                     runtime_revision: 1,
                     pane_terminal_revisions: std::collections::HashMap::new(),
+                    pane_row_caches: std::collections::HashMap::new(),
                     surface_initialized_once: false,
                     app_focused: true,
                     dirty_remote_tabs: initial_dirty_remote_tabs,
@@ -745,18 +749,20 @@ impl BooApp {
                     if self.scrollbar.total > self.scrollbar.len {
                         self.scrollbar_opacity = 1.0;
                     }
-                    let line_delta = if scroll.dy.abs() >= 1.0 {
-                        -scroll.dy.round() as isize
-                    } else if scroll.dy > 0.0 {
-                        -1
-                    } else if scroll.dy < 0.0 {
-                        1
+                    if scroll.precision {
+                        self.scroll_focused_viewport_pixels(scroll.dy);
                     } else {
-                        0
-                    };
-                    let _ = self
-                        .backend
-                        .scroll_viewport_delta(self.server.tabs.focused_pane(), line_delta);
+                        let line_delta = if scroll.dy.abs() >= 1.0 {
+                            -scroll.dy.round() as isize
+                        } else if scroll.dy > 0.0 {
+                            -1
+                        } else if scroll.dy < 0.0 {
+                            1
+                        } else {
+                            0
+                        };
+                        self.scroll_focused_viewport_lines(line_delta);
+                    }
                 }
             }
         }

@@ -53,6 +53,36 @@ ONLY_TEST="${BOO_IOS_UI_TEST_ONLY:-}"
 HOST_PORT_FILE="/tmp/boo-ios-ui-tests.env"
 SKIP_DAEMON="${BOO_IOS_UI_TEST_SKIP_DAEMON:-0}"
 XCODEBUILD_LOG="/tmp/boo-ios-ui-tests.xcodebuild.log"
+GENERATED_UI_TEST_CONFIG="$ROOT/ios/BooUITests/GeneratedUITestConfig.swift"
+
+write_default_ui_test_config() {
+  cat > "$GENERATED_UI_TEST_CONFIG" <<'EOF'
+import Foundation
+
+enum GeneratedUITestConfig {
+    static let host: String? = nil
+    static let port: UInt16? = nil
+}
+EOF
+}
+
+write_ui_test_config() {
+  local host_literal
+  host_literal="$(python3 - "$HOST" <<'PY'
+import json
+import sys
+print(json.dumps(sys.argv[1]))
+PY
+)"
+  cat > "$GENERATED_UI_TEST_CONFIG" <<EOF
+import Foundation
+
+enum GeneratedUITestConfig {
+    static let host: String? = $host_literal
+    static let port: UInt16? = $PORT
+}
+EOF
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -138,8 +168,9 @@ if [[ -z "$PORT" ]]; then
 fi
 
 cleanup() {
+  write_default_ui_test_config
   if [[ "$SKIP_DAEMON" != "1" ]]; then
-    pkill -f "target/debug/boo server --socket ${SOCKET_PATH}" >/dev/null 2>&1 || true
+    pkill -f "target/debug/boo .*server --socket ${SOCKET_PATH}" >/dev/null 2>&1 || true
     if [[ -n "${SERVER_PID:-}" ]]; then
       kill "$SERVER_PID" >/dev/null 2>&1 || true
       wait "$SERVER_PID" >/dev/null 2>&1 || true
@@ -153,7 +184,7 @@ trap cleanup EXIT
 
 cd "$ROOT"
 if [[ "$SKIP_DAEMON" != "1" ]]; then
-  pkill -f "target/debug/boo server --socket ${SOCKET_PATH}" >/dev/null 2>&1 || true
+  pkill -f "target/debug/boo .*server --socket ${SOCKET_PATH}" >/dev/null 2>&1 || true
 fi
 if [[ "$SKIP_DAEMON" != "1" ]]; then
   cat > "$HOST_PORT_FILE" <<EOF
@@ -161,6 +192,7 @@ BOO_UI_TEST_HOST=$HOST
 BOO_UI_TEST_PORT=$PORT
 EOF
 fi
+write_ui_test_config
 
 cargo build >/dev/null
 if [[ "$SKIP_DAEMON" != "1" ]]; then

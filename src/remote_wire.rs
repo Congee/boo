@@ -22,11 +22,13 @@ pub const REMOTE_CAPABILITY_SCREEN_DELTAS: u32 = 1 << 1;
 pub const REMOTE_CAPABILITY_UI_STATE: u32 = 1 << 2;
 pub const REMOTE_CAPABILITY_IMAGES: u32 = 1 << 3;
 pub const REMOTE_CAPABILITY_HEARTBEAT: u32 = 1 << 4;
+pub const REMOTE_CAPABILITY_ROW_REPLICA: u32 = 1 << 5;
 pub const REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT: u32 = 1 << 7;
 pub const REMOTE_CAPABILITIES: u32 = REMOTE_CAPABILITY_SCREEN_DELTAS
     | REMOTE_CAPABILITY_UI_STATE
     | REMOTE_CAPABILITY_IMAGES
     | REMOTE_CAPABILITY_HEARTBEAT
+    | REMOTE_CAPABILITY_ROW_REPLICA
     | REMOTE_CAPABILITY_QUIC_DIRECT_TRANSPORT;
 
 pub(crate) const LOCAL_INPUT_SEQ_LEN: usize = 8;
@@ -35,6 +37,8 @@ pub(crate) const REMOTE_DELTA_HEADER_LEN: usize = 13;
 #[cfg(test)]
 pub(crate) const LOCAL_DELTA_HEADER_LEN: usize = LOCAL_INPUT_SEQ_LEN + REMOTE_DELTA_HEADER_LEN;
 pub(crate) const REMOTE_CELL_ENCODED_LEN: usize = 12;
+pub(crate) const ROW_REPLICA_TRAILER_MAGIC: &[u8; 4] = b"BRR1";
+pub(crate) const ROW_RANGE_RESPONSE_MAGIC: &[u8; 4] = b"BRR2";
 
 pub const STYLE_FLAG_BOLD: u8 = 0x01;
 pub const STYLE_FLAG_ITALIC: u8 = 0x02;
@@ -61,6 +65,7 @@ pub enum MessageType {
     Heartbeat = 0x11,
     RuntimeAction = 0x12,
     RenderAck = 0x13,
+    RowRangeRequest = 0x14,
 
     AuthOk = 0x80,
     AuthFail = 0x81,
@@ -78,6 +83,7 @@ pub enum MessageType {
     UiPaneFullState = 0x90,
     UiPaneDelta = 0x91,
     HeartbeatAck = 0x92,
+    UiPaneRows = 0x93,
 }
 
 pub const MESSAGE_TYPE_LIST_TABS: MessageType = MessageType::ListTabs;
@@ -180,7 +186,8 @@ pub const fn logical_channel_for_message_type(message_type: MessageType) -> Logi
         | MessageType::UiRuntimeState
         | MessageType::UiAppearance
         | MessageType::UiPaneFullState
-        | MessageType::UiPaneDelta => LogicalChannel::RuntimeStream,
+        | MessageType::UiPaneDelta
+        | MessageType::UiPaneRows => LogicalChannel::RuntimeStream,
         MessageType::Input
         | MessageType::Resize
         | MessageType::Scroll
@@ -191,7 +198,8 @@ pub const fn logical_channel_for_message_type(message_type: MessageType) -> Logi
         | MessageType::AppMouseEvent
         | MessageType::FocusPane
         | MessageType::RuntimeAction
-        | MessageType::RenderAck => LogicalChannel::InputControl,
+        | MessageType::RenderAck
+        | MessageType::RowRangeRequest => LogicalChannel::InputControl,
         MessageType::Heartbeat | MessageType::HeartbeatAck => LogicalChannel::Health,
         MessageType::Clipboard | MessageType::Image => LogicalChannel::RuntimeStream,
     }
@@ -218,6 +226,7 @@ impl TryFrom<u8> for MessageType {
             0x11 => Self::Heartbeat,
             0x12 => Self::RuntimeAction,
             0x13 => Self::RenderAck,
+            0x14 => Self::RowRangeRequest,
             0x80 => Self::AuthOk,
             0x81 => Self::AuthFail,
             0x82 => Self::TabList,
@@ -234,6 +243,7 @@ impl TryFrom<u8> for MessageType {
             0x90 => Self::UiPaneFullState,
             0x91 => Self::UiPaneDelta,
             0x92 => Self::HeartbeatAck,
+            0x93 => Self::UiPaneRows,
             _ => return Err(()),
         };
         Ok(message)
@@ -251,6 +261,9 @@ pub struct RemoteCell {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteFullState {
+    pub epoch: u64,
+    pub viewport_top: u64,
+    pub scrollback_total: u64,
     pub rows: u16,
     pub cols: u16,
     pub cursor_x: u16,
@@ -259,6 +272,23 @@ pub struct RemoteFullState {
     pub cursor_blinking: bool,
     pub cursor_style: i32,
     pub cells: Vec<RemoteCell>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteRowRangeRequest {
+    pub pane_id: u64,
+    pub epoch: u64,
+    pub start_row_id: u64,
+    pub end_row_id: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteRowRangeResponse {
+    pub pane_id: u64,
+    pub epoch: u64,
+    pub cols: u16,
+    pub start_row_id: u64,
+    pub rows: Vec<(u64, Vec<RemoteCell>)>,
 }
 
 pub(crate) const UI_PANE_UPDATE_HEADER_LEN: usize = 28;
@@ -475,7 +505,8 @@ pub(crate) fn read_probe_reply(
             | MessageType::UiRuntimeState
             | MessageType::UiAppearance
             | MessageType::UiPaneFullState
-            | MessageType::UiPaneDelta => continue,
+            | MessageType::UiPaneDelta
+            | MessageType::UiPaneRows => continue,
             MessageType::AuthFail => {
                 return Err(format!(
                     "authentication failed for remote endpoint {host}:{port}"
@@ -532,7 +563,8 @@ pub(crate) fn read_probe_auth_reply(
             | MessageType::UiRuntimeState
             | MessageType::UiAppearance
             | MessageType::UiPaneFullState
-            | MessageType::UiPaneDelta => continue,
+            | MessageType::UiPaneDelta
+            | MessageType::UiPaneRows => continue,
             other => {
                 return Err(format!(
                     "unexpected auth reply from {host}:{port}: {other:?}"
@@ -654,7 +686,7 @@ pub(crate) fn decode_remote_full_state_payload(payload: &[u8]) -> Result<RemoteF
     );
     let cell_count = rows as usize * cols as usize;
     let expected_len = REMOTE_FULL_STATE_HEADER_LEN + cell_count * REMOTE_CELL_ENCODED_LEN;
-    if payload.len() != expected_len {
+    if payload.len() < expected_len {
         return Err("payload length does not match grid size".to_string());
     }
     let mut cells = Vec::with_capacity(cell_count);
@@ -687,6 +719,9 @@ pub(crate) fn decode_remote_full_state_payload(payload: &[u8]) -> Result<RemoteF
         offset += REMOTE_CELL_ENCODED_LEN;
     }
     Ok(RemoteFullState {
+        epoch: 0,
+        viewport_top: 0,
+        scrollback_total: 0,
         rows,
         cols,
         cursor_x,
@@ -722,6 +757,18 @@ pub(crate) fn parse_resize(payload: &[u8]) -> Option<(u16, u16)> {
             u16::from_le_bytes([payload[0], payload[1]]),
             u16::from_le_bytes([payload[2], payload[3]]),
         )
+    })
+}
+
+pub(crate) fn parse_row_range_request(payload: &[u8]) -> Option<RemoteRowRangeRequest> {
+    if payload.len() < 32 {
+        return None;
+    }
+    Some(RemoteRowRangeRequest {
+        pane_id: u64::from_le_bytes(payload[0..8].try_into().ok()?),
+        epoch: u64::from_le_bytes(payload[8..16].try_into().ok()?),
+        start_row_id: u64::from_le_bytes(payload[16..24].try_into().ok()?),
+        end_row_id: u64::from_le_bytes(payload[24..32].try_into().ok()?),
     })
 }
 
@@ -789,6 +836,10 @@ pub fn encode_full_state(
         payload.push(cell.style_flags);
         payload.push(u8::from(cell.wide));
     }
+    let row_ids = (0..state.rows as u64)
+        .map(|row| state.viewport_top.saturating_add(row))
+        .collect::<Vec<_>>();
+    append_row_replica_trailer(&mut payload, state, &row_ids);
     crate::profiling::record_bytes_and_units(
         if local {
             "server.stream.encode_full_state.local"
@@ -825,6 +876,7 @@ pub(crate) fn encode_delta(
         payload.push(u8::from(current.cursor_blinking));
         payload.push(0);
         payload.extend_from_slice(&current.cursor_style.to_le_bytes());
+        append_row_replica_trailer(&mut payload, current, &[]);
         return Some(payload);
     }
 
@@ -855,16 +907,14 @@ pub(crate) fn encode_delta(
         payload.push(u8::from(current.cursor_blinking));
         payload.push(0);
         payload.extend_from_slice(&current.cursor_style.to_le_bytes());
+        append_row_replica_trailer(&mut payload, current, &[]);
         return Some(payload);
     }
 
-    let scroll_rows = if local {
-        None
-    } else {
-        detect_scroll_rows(previous, current)
-    };
+    // Do not infer scrolls from row content. Remote/iOS clients maintain row identity from
+    // server-provided row ids, so equal-looking text must not be treated as proof that two
+    // logical scrollback rows are the same row.
     if changed_rows.len() == rows
-        && scroll_rows.is_none()
         && changed_rows
             .iter()
             .all(|(_, (start_col, cells))| *start_col == 0 && cells.len() == cols)
@@ -876,21 +926,7 @@ pub(crate) fn encode_delta(
     if local {
         payload.extend_from_slice(&latest_input_seq.unwrap_or(0).to_le_bytes());
     }
-    let rows_to_encode = if let Some(scroll_rows) = scroll_rows {
-        rows_changed_after_scroll(current.rows as usize, scroll_rows)
-            .into_iter()
-            .map(|row| {
-                let start = row as usize * cols;
-                let end = start + cols;
-                (
-                    row,
-                    changed_segment(&previous.cells[start..end], &current.cells[start..end]),
-                )
-            })
-            .collect::<Vec<_>>()
-    } else {
-        changed_rows
-    };
+    let rows_to_encode = changed_rows;
     let encoded_rows = rows_to_encode.len() as u64;
     let encoded_cells = rows_to_encode
         .iter()
@@ -901,15 +937,12 @@ pub(crate) fn encode_delta(
     payload.extend_from_slice(&current.cursor_y.to_le_bytes());
     payload.push(u8::from(current.cursor_visible));
     payload.push(u8::from(current.cursor_blinking));
-    let mut flags = 0u8;
-    if scroll_rows.is_some() {
-        flags |= 0x01;
-    }
-    payload.push(flags);
+    payload.push(0);
     payload.extend_from_slice(&current.cursor_style.to_le_bytes());
-    if let Some(scroll_rows) = scroll_rows {
-        payload.extend_from_slice(&scroll_rows.to_le_bytes());
-    }
+    let changed_row_ids = rows_to_encode
+        .iter()
+        .map(|(row, _)| current.viewport_top.saturating_add(*row as u64))
+        .collect::<Vec<_>>();
     for (row, (start_col, cells)) in rows_to_encode {
         payload.extend_from_slice(&row.to_le_bytes());
         payload.extend_from_slice(&(start_col as u16).to_le_bytes());
@@ -922,6 +955,7 @@ pub(crate) fn encode_delta(
             payload.push(u8::from(cell.wide));
         }
     }
+    append_row_replica_trailer(&mut payload, current, &changed_row_ids);
     crate::profiling::record_bytes_and_units(
         if local {
             "server.stream.encode_delta.local"
@@ -945,6 +979,48 @@ pub(crate) fn encode_delta(
     Some(payload)
 }
 
+fn append_row_replica_trailer(payload: &mut Vec<u8>, state: &RemoteFullState, row_ids: &[u64]) {
+    payload.extend_from_slice(ROW_REPLICA_TRAILER_MAGIC);
+    payload.extend_from_slice(&state.epoch.to_le_bytes());
+    payload.extend_from_slice(&state.viewport_top.to_le_bytes());
+    payload.extend_from_slice(&state.scrollback_total.to_le_bytes());
+    payload.extend_from_slice(
+        &state
+            .viewport_top
+            .saturating_add(state.cursor_y as u64)
+            .to_le_bytes(),
+    );
+    payload.extend_from_slice(&(row_ids.len().min(u16::MAX as usize) as u16).to_le_bytes());
+    for row_id in row_ids.iter().take(u16::MAX as usize) {
+        payload.extend_from_slice(&row_id.to_le_bytes());
+    }
+}
+
+pub fn encode_row_range_response(
+    response: &RemoteRowRangeResponse,
+) -> Vec<u8> {
+    let row_count = response.rows.len().min(u16::MAX as usize);
+    let mut payload = Vec::new();
+    payload.extend_from_slice(ROW_RANGE_RESPONSE_MAGIC);
+    payload.extend_from_slice(&response.pane_id.to_le_bytes());
+    payload.extend_from_slice(&response.epoch.to_le_bytes());
+    payload.extend_from_slice(&response.cols.to_le_bytes());
+    payload.extend_from_slice(&response.start_row_id.to_le_bytes());
+    payload.extend_from_slice(&(row_count as u16).to_le_bytes());
+    for (row_id, cells) in response.rows.iter().take(row_count) {
+        payload.extend_from_slice(&row_id.to_le_bytes());
+        payload.extend_from_slice(&(cells.len().min(u16::MAX as usize) as u16).to_le_bytes());
+        for cell in cells.iter().take(u16::MAX as usize) {
+            payload.extend_from_slice(&cell.codepoint.to_le_bytes());
+            payload.extend_from_slice(&cell.fg);
+            payload.extend_from_slice(&cell.bg);
+            payload.push(cell.style_flags);
+            payload.push(u8::from(cell.wide));
+        }
+    }
+    payload
+}
+
 fn changed_segment(previous: &[RemoteCell], current: &[RemoteCell]) -> (usize, Vec<RemoteCell>) {
     debug_assert_eq!(previous.len(), current.len());
     let first = previous
@@ -960,104 +1036,6 @@ fn changed_segment(previous: &[RemoteCell], current: &[RemoteCell]) -> (usize, V
         .rposition(|(a, b)| a != b)
         .unwrap_or(first);
     (first, current[first..=last].to_vec())
-}
-
-pub(crate) fn detect_scroll_rows(
-    previous: &RemoteFullState,
-    current: &RemoteFullState,
-) -> Option<i16> {
-    if previous.rows != current.rows || previous.cols != current.cols || current.rows <= 1 {
-        return None;
-    }
-    let rows = current.rows as usize;
-    let cols = current.cols as usize;
-    if previous.cells[cols..rows * cols] == current.cells[..(rows - 1) * cols] {
-        return Some(1);
-    }
-    if previous.cells[..(rows - 1) * cols] == current.cells[cols..rows * cols] {
-        return Some(-1);
-    }
-    let previous_rows = row_fingerprints(previous);
-    let current_rows = row_fingerprints(current);
-
-    let positive_overlap = longest_prefix_suffix_overlap(&current_rows, &previous_rows);
-    if positive_overlap > 0 {
-        let shift = rows - positive_overlap;
-        if previous.cells[shift * cols..rows * cols] == current.cells[..positive_overlap * cols] {
-            return Some(shift as i16);
-        }
-    }
-
-    let negative_overlap = longest_prefix_suffix_overlap(&previous_rows, &current_rows);
-    if negative_overlap > 0 {
-        let shift = rows - negative_overlap;
-        if previous.cells[..negative_overlap * cols] == current.cells[shift * cols..rows * cols] {
-            return Some(-(shift as i16));
-        }
-    }
-    None
-}
-
-pub(crate) fn longest_prefix_suffix_overlap(prefix: &[u64], suffix_source: &[u64]) -> usize {
-    if prefix.is_empty() || suffix_source.is_empty() {
-        return 0;
-    }
-
-    let mut sequence = Vec::with_capacity(prefix.len() + 1 + suffix_source.len());
-    sequence.extend(prefix.iter().copied().map(Some));
-    sequence.push(None);
-    sequence.extend(suffix_source.iter().copied().map(Some));
-
-    let mut prefix_function = vec![0usize; sequence.len()];
-    for index in 1..sequence.len() {
-        let mut matched = prefix_function[index - 1];
-        while matched > 0 && sequence[index] != sequence[matched] {
-            matched = prefix_function[matched - 1];
-        }
-        if sequence[index] == sequence[matched] {
-            matched += 1;
-        }
-        prefix_function[index] = matched;
-    }
-
-    prefix_function
-        .last()
-        .copied()
-        .unwrap_or(0)
-        .min(prefix.len())
-}
-
-fn row_fingerprints(state: &RemoteFullState) -> Vec<u64> {
-    use std::hash::Hasher;
-
-    let cols = state.cols as usize;
-    state
-        .cells
-        .chunks(cols)
-        .map(|row| {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            for cell in row {
-                hasher.write_u32(cell.codepoint);
-                hasher.write(&cell.fg);
-                hasher.write(&cell.bg);
-                hasher.write_u8(cell.style_flags);
-                hasher.write_u8(u8::from(cell.wide));
-            }
-            hasher.finish()
-        })
-        .collect()
-}
-
-fn rows_changed_after_scroll(rows: usize, scroll_rows: i16) -> Vec<u16> {
-    if scroll_rows > 0 {
-        let shift = scroll_rows as usize;
-        ((rows.saturating_sub(shift))..rows)
-            .map(|row| row as u16)
-            .collect()
-    } else {
-        let shift = (-scroll_rows) as usize;
-        (0..shift.min(rows)).map(|row| row as u16).collect()
-    }
 }
 
 pub(crate) fn push_string(payload: &mut Vec<u8>, text: &str) {
@@ -1129,6 +1107,9 @@ mod tests {
     fn full_state_encoding_uses_12_byte_cells() {
         let payload = encode_full_state(
             &RemoteFullState {
+                epoch: 0,
+                viewport_top: 0,
+                scrollback_total: 0,
                 rows: 1,
                 cols: 2,
                 cursor_x: 1,
@@ -1156,10 +1137,9 @@ mod tests {
             None,
             false,
         );
-        assert_eq!(
-            payload.len(),
-            REMOTE_FULL_STATE_HEADER_LEN + 2 * REMOTE_CELL_ENCODED_LEN
-        );
+        let base_len = REMOTE_FULL_STATE_HEADER_LEN + 2 * REMOTE_CELL_ENCODED_LEN;
+        assert!(payload.len() > base_len);
+        assert_eq!(&payload[base_len..base_len + 4], ROW_REPLICA_TRAILER_MAGIC);
         assert_eq!(u16::from_le_bytes(payload[0..2].try_into().unwrap()), 1);
         assert_eq!(u16::from_le_bytes(payload[2..4].try_into().unwrap()), 2);
         assert_eq!(
@@ -1189,6 +1169,9 @@ mod tests {
     fn local_full_state_encoding_prefixes_latest_input_seq() {
         let payload = encode_full_state(
             &RemoteFullState {
+                epoch: 0,
+                viewport_top: 0,
+                scrollback_total: 0,
                 rows: 1,
                 cols: 1,
                 cursor_x: 0,
@@ -1210,6 +1193,40 @@ mod tests {
         assert_eq!(u64::from_le_bytes(payload[0..8].try_into().unwrap()), 42);
         assert_eq!(u16::from_le_bytes(payload[8..10].try_into().unwrap()), 1);
         assert_eq!(u16::from_le_bytes(payload[10..12].try_into().unwrap()), 1);
+    }
+
+    #[test]
+    fn row_range_response_encoding_matches_swift_decoder_layout() {
+        let payload = encode_row_range_response(&RemoteRowRangeResponse {
+            pane_id: 7,
+            epoch: 11,
+            cols: 2,
+            start_row_id: 100,
+            rows: vec![(
+                101,
+                vec![RemoteCell {
+                    codepoint: u32::from('R'),
+                    fg: [1, 2, 3],
+                    bg: [4, 5, 6],
+                    style_flags: 0x20,
+                    wide: false,
+                }],
+            )],
+        });
+
+        assert_eq!(&payload[0..4], ROW_RANGE_RESPONSE_MAGIC);
+        assert_eq!(u64::from_le_bytes(payload[4..12].try_into().unwrap()), 7);
+        assert_eq!(u64::from_le_bytes(payload[12..20].try_into().unwrap()), 11);
+        assert_eq!(u16::from_le_bytes(payload[20..22].try_into().unwrap()), 2);
+        assert_eq!(u64::from_le_bytes(payload[22..30].try_into().unwrap()), 100);
+        assert_eq!(u16::from_le_bytes(payload[30..32].try_into().unwrap()), 1);
+        assert_eq!(u64::from_le_bytes(payload[32..40].try_into().unwrap()), 101);
+        assert_eq!(u16::from_le_bytes(payload[40..42].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(payload[42..46].try_into().unwrap()), u32::from('R'));
+        assert_eq!(&payload[46..49], &[1, 2, 3]);
+        assert_eq!(&payload[49..52], &[4, 5, 6]);
+        assert_eq!(payload[52], 0x20);
+        assert_eq!(payload[53], 0);
     }
 
     #[test]
@@ -1364,6 +1381,9 @@ mod tests {
     #[test]
     fn decode_remote_full_state_payload_round_trips_encoded_state() {
         let state = RemoteFullState {
+            epoch: 0,
+            viewport_top: 0,
+            scrollback_total: 0,
             rows: 1,
             cols: 2,
             cursor_x: 1,
@@ -1394,7 +1414,7 @@ mod tests {
     }
 
     #[test]
-    fn encode_delta_uses_scroll_delta_for_scrolling_output() {
+    fn encode_delta_does_not_infer_scroll_from_content_overlap() {
         let row = |ch: char| -> Vec<RemoteCell> {
             vec![RemoteCell {
                 codepoint: u32::from(ch),
@@ -1405,6 +1425,9 @@ mod tests {
             }]
         };
         let previous = RemoteFullState {
+            epoch: 0,
+            viewport_top: 0,
+            scrollback_total: 0,
             rows: 3,
             cols: 1,
             cursor_x: 0,
@@ -1415,6 +1438,9 @@ mod tests {
             cells: [row('a'), row('b'), row('c')].concat(),
         };
         let current = RemoteFullState {
+            epoch: 0,
+            viewport_top: 0,
+            scrollback_total: 0,
             rows: 3,
             cols: 1,
             cursor_x: 0,
@@ -1425,25 +1451,7 @@ mod tests {
             cells: [row('b'), row('c'), row('d')].concat(),
         };
 
-        let payload = encode_delta(&previous, &current, Some(7), false).expect("delta payload");
-        assert_eq!(u16::from_le_bytes(payload[0..2].try_into().unwrap()), 1);
-        assert_eq!(payload[8] & 0x01, 0x01);
-        assert_eq!(
-            i16::from_le_bytes(
-                payload[REMOTE_DELTA_HEADER_LEN..REMOTE_DELTA_HEADER_LEN + 2]
-                    .try_into()
-                    .unwrap()
-            ),
-            1
-        );
-        assert_eq!(
-            u16::from_le_bytes(
-                payload[REMOTE_DELTA_HEADER_LEN + 2..REMOTE_DELTA_HEADER_LEN + 4]
-                    .try_into()
-                    .unwrap()
-            ),
-            2
-        );
+        assert!(encode_delta(&previous, &current, Some(7), false).is_none());
     }
 
     #[test]
@@ -1458,6 +1466,9 @@ mod tests {
             }]
         };
         let previous = RemoteFullState {
+            epoch: 0,
+            viewport_top: 0,
+            scrollback_total: 0,
             rows: 4,
             cols: 1,
             cursor_x: 0,
@@ -1468,6 +1479,9 @@ mod tests {
             cells: [row('a'), row('b'), row('c'), row('d')].concat(),
         };
         let current = RemoteFullState {
+            epoch: 0,
+            viewport_top: 0,
+            scrollback_total: 0,
             rows: 4,
             cols: 1,
             cursor_x: 0,
@@ -1491,6 +1505,9 @@ mod tests {
             wide: false,
         };
         let previous = RemoteFullState {
+            epoch: 0,
+            viewport_top: 0,
+            scrollback_total: 0,
             rows: 1,
             cols: 5,
             cursor_x: 2,
@@ -1501,6 +1518,9 @@ mod tests {
             cells: vec![cell('a'), cell('b'), cell('c'), cell('d'), cell('e')],
         };
         let current = RemoteFullState {
+            epoch: 0,
+            viewport_top: 0,
+            scrollback_total: 0,
             rows: 1,
             cols: 5,
             cursor_x: 2,
@@ -1531,45 +1551,5 @@ mod tests {
         );
     }
 
-    #[test]
-    fn longest_prefix_suffix_overlap_matches_scroll_overlap() {
-        assert_eq!(longest_prefix_suffix_overlap(&[2, 3, 4], &[1, 2, 3, 4]), 3);
-        assert_eq!(longest_prefix_suffix_overlap(&[1, 2, 3], &[1, 2, 3, 4]), 0);
-        assert_eq!(longest_prefix_suffix_overlap(&[7, 8], &[5, 6, 7, 8]), 2);
-    }
 
-    #[test]
-    fn detect_scroll_rows_handles_multi_row_scroll() {
-        let row = |ch: char| -> Vec<RemoteCell> {
-            vec![RemoteCell {
-                codepoint: u32::from(ch),
-                fg: [1, 2, 3],
-                bg: [0, 0, 0],
-                style_flags: 0,
-                wide: false,
-            }]
-        };
-        let previous = RemoteFullState {
-            rows: 5,
-            cols: 1,
-            cursor_x: 0,
-            cursor_y: 4,
-            cursor_visible: true,
-            cursor_blinking: false,
-            cursor_style: 1,
-            cells: [row('a'), row('b'), row('c'), row('d'), row('e')].concat(),
-        };
-        let current = RemoteFullState {
-            rows: 5,
-            cols: 1,
-            cursor_x: 0,
-            cursor_y: 4,
-            cursor_visible: true,
-            cursor_blinking: false,
-            cursor_style: 1,
-            cells: [row('c'), row('d'), row('e'), row('f'), row('g')].concat(),
-        };
-
-        assert_eq!(detect_scroll_rows(&previous, &current), Some(2));
-    }
 }

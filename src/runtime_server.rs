@@ -335,12 +335,104 @@ impl BooApp {
         focused_tab_id
     }
 
-    fn remote_full_state_for_pane(&self, pane_id: u64) -> Option<Arc<remote::RemoteFullState>> {
-        if let Some(snapshot) = self.backend.render_snapshot(pane_id) {
-            return Some(Arc::new(remote::full_state_from_terminal(&snapshot)));
+    fn remote_full_state_for_pane(&mut self, pane_id: u64) -> Option<Arc<remote::RemoteFullState>> {
+        let mut state = if let Some(snapshot) = self.backend.render_snapshot(pane_id) {
+            remote::full_state_from_terminal(&snapshot)
+        } else {
+            let snapshot = self.backend.ui_terminal_snapshot(pane_id)?;
+            remote::full_state_from_ui(&snapshot)
+        };
+        self.apply_row_cache_metadata(pane_id, &mut state);
+        Some(Arc::new(state))
+    }
+
+    fn apply_row_cache_metadata(&mut self, pane_id: u64, state: &mut remote::RemoteFullState) {
+        const MAX_RETAINED_ROWS: usize = 10_000;
+
+        let cache = self.pane_row_caches.entry(pane_id).or_default();
+        let visible_start = state.viewport_top;
+        let visible_end = state.viewport_top.saturating_add(state.rows as u64);
+        let cols_changed = cache.cols != 0 && cache.cols != state.cols;
+        let row_ids_regressed = cache.retained_end != 0 && visible_end < cache.retained_start;
+        if cols_changed || row_ids_regressed {
+            cache.epoch = cache.epoch.wrapping_add(1).max(1);
+            cache.rows.clear();
+            cache.retained_start = 0;
+            cache.retained_end = 0;
         }
-        let snapshot = self.backend.ui_terminal_snapshot(pane_id)?;
-        Some(Arc::new(remote::full_state_from_ui(&snapshot)))
+        cache.cols = state.cols;
+        if cache.epoch == 0 {
+            cache.epoch = 1;
+        }
+        state.epoch = cache.epoch;
+
+        let cols = state.cols as usize;
+        for (row_index, row_cells) in state.cells.chunks(cols).enumerate() {
+            let row_id = state.viewport_top.saturating_add(row_index as u64);
+            cache.rows.insert(row_id, row_cells.to_vec());
+        }
+        cache.retained_start = cache
+            .rows
+            .keys()
+            .next()
+            .copied()
+            .unwrap_or(visible_start);
+        cache.retained_end = cache
+            .rows
+            .keys()
+            .next_back()
+            .map(|row_id| row_id.saturating_add(1))
+            .unwrap_or(visible_end);
+        while cache.rows.len() > MAX_RETAINED_ROWS {
+            if let Some(first) = cache.rows.keys().next().copied() {
+                cache.rows.remove(&first);
+            } else {
+                break;
+            }
+        }
+        cache.retained_start = cache
+            .rows
+            .keys()
+            .next()
+            .copied()
+            .unwrap_or(visible_start);
+        cache.retained_end = cache
+            .rows
+            .keys()
+            .next_back()
+            .map(|row_id| row_id.saturating_add(1))
+            .unwrap_or(visible_end);
+        state.scrollback_total = state.scrollback_total.max(cache.retained_end);
+    }
+
+    fn remote_row_range_response(
+        &self,
+        request: &remote::RemoteRowRangeRequest,
+    ) -> Option<remote::RemoteRowRangeResponse> {
+        let cache = self.pane_row_caches.get(&request.pane_id)?;
+        if cache.epoch != request.epoch {
+            return Some(remote::RemoteRowRangeResponse {
+                pane_id: request.pane_id,
+                epoch: cache.epoch,
+                cols: cache.cols,
+                start_row_id: request.start_row_id,
+                rows: Vec::new(),
+            });
+        }
+        let start = request.start_row_id.min(request.end_row_id);
+        let end = request.end_row_id.max(request.start_row_id);
+        let rows = cache
+            .rows
+            .range(start..end)
+            .map(|(row_id, cells)| (*row_id, cells.clone()))
+            .collect::<Vec<_>>();
+        Some(remote::RemoteRowRangeResponse {
+            pane_id: request.pane_id,
+            epoch: cache.epoch,
+            cols: cache.cols,
+            start_row_id: start,
+            rows,
+        })
     }
 
     fn create_remote_runtime_tab(
@@ -835,30 +927,6 @@ impl BooApp {
                         view.touch_view();
                     });
                 }
-                let Some(view) = self.ensure_remote_client_view_state(client_id) else {
-                    return;
-                };
-                let Some(active_tab_id) = view.viewed_tab_id else {
-                    if let Some(server) = self
-                        .remote_server_for_client(client_id)
-                        .or(self.server.local_gui_server.as_ref())
-                        .or(self.server.remote_server.as_ref())
-                    {
-                        server.send_error(client_id, RemoteErrorCode::NoActiveTab, "no active tab");
-                    }
-                    return;
-                };
-                let Some(_pane) = self.pane_for_tab(active_tab_id) else {
-                    self.recover_remote_client_runtime_view(client_id);
-                    return;
-                };
-                if !self.focus_runtime_tab(active_tab_id) {
-                    self.recover_remote_client_runtime_view(client_id);
-                    return;
-                }
-                if Some(active_tab_id) == self.active_runtime_tab_id() && self.resize_viewport_cells(cols, rows) {
-                    self.publish_remote_tab(active_tab_id);
-                }
             }
             server::Command::RemoteExecuteCommand { client_id, input } => {
                 self.invalidate_remote_tabs_cache();
@@ -1136,7 +1204,7 @@ impl BooApp {
                     self.create_remote_runtime_tab(
                         client_id,
                         cols.unwrap_or(120),
-                        rows.unwrap_or(36),
+                        rows.unwrap_or(40),
                         false,
                     );
                 }
@@ -1254,16 +1322,7 @@ impl BooApp {
                         _ => crate::splits::Direction::Horizontal,
                     };
                     if let (Some(ratio), Some(target_pane_id)) = (ratio, target_pane_id) {
-                        let frame = match view.viewport_cols.zip(view.viewport_rows) {
-                            Some((cols, rows)) => {
-                                let (width, height) = self.tab_size_pixels(cols, rows);
-                                crate::platform::Rect::new(
-                                    crate::platform::Point::new(0.0, 0.0),
-                                    crate::platform::Size::new(width as f64, height as f64),
-                                )
-                            }
-                            None => self.terminal_frame(),
-                        };
+                        let frame = self.terminal_frame();
                         if let Some(tab_index) = self.server.tabs.find_index_by_tab_id(tab_id)
                             && let Some(tree) = self.server.tabs.tab_tree_mut(tab_index)
                         {
@@ -1284,6 +1343,37 @@ impl BooApp {
                     self.sync_client_view_to_active_runtime(client_id);
                     self.broadcast_runtime_view_to_all_viewers();
                 }
+                }
+            }
+            server::Command::RemoteRowRangeRequest { client_id, request } => {
+                let Some(response) = self.remote_row_range_response(&request) else {
+                    return;
+                };
+                let Some(view) = self.remote_view_state_for_client(client_id) else {
+                    return;
+                };
+                if !view.visible_pane_ids.contains(&request.pane_id)
+                    && view.focused_pane_id != Some(request.pane_id)
+                {
+                    return;
+                }
+                let Some(tab_id) = view.viewed_tab_id else {
+                    return;
+                };
+                let pane_revision = self
+                    .pane_terminal_revisions
+                    .get(&request.pane_id)
+                    .map(|(revision, _)| *revision)
+                    .unwrap_or(0);
+                if let Some(server) = self.remote_server_for_delivery(client_id) {
+                    server.send_pane_rows_to_client(
+                        client_id,
+                        tab_id,
+                        request.pane_id,
+                        pane_revision,
+                        self.runtime_revision,
+                        &response,
+                    );
                 }
             }
             server::Command::RemoteRenderAck {
@@ -2053,6 +2143,9 @@ mod tests {
             view.touch_view();
         });
         let pane_state = Arc::new(remote::RemoteFullState {
+            epoch: 0,
+            viewport_top: 0,
+            scrollback_total: 0,
             rows: 1,
             cols: 1,
             cursor_x: 0,

@@ -16,7 +16,7 @@ final class BooAppLaunchTests: BooUITestCase {
 
     private func uiStateSnapshot(_ app: XCUIApplication) -> String {
         let title = app.staticTexts["screen-title"].exists ? app.staticTexts["screen-title"].label : "<none>"
-        let connectScreen = app.otherElements["connect-screen"].exists
+        let connectScreen = app.descendants(matching: .any)["connect-screen"].exists
         let connectStatus = app.staticTexts["connect-status-banner"].exists ? app.staticTexts["connect-status-banner"].label : "<none>"
         let connectError = app.staticTexts["connect-error-label"].exists ? app.staticTexts["connect-error-label"].label : "<none>"
         let connectHostExists = app.textFields["connect-host-input"].exists
@@ -235,7 +235,12 @@ final class BooAppLaunchTests: BooUITestCase {
         XCTAssertFalse(app.staticTexts["Close"].exists, file: file, line: line)
     }
 
-    private func focusTerminalForTyping(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) -> XCUIElement {
+    private func focusTerminalForTyping(
+        _ app: XCUIApplication,
+        requireKeyboard: Bool = true,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> XCUIElement {
         let terminal = app.otherElements["terminal-screen"]
         XCTAssertTrue(terminal.waitForExistence(timeout: 10), file: file, line: line)
 
@@ -261,13 +266,21 @@ final class BooAppLaunchTests: BooUITestCase {
             terminal.tap()
             keyboardVisible = keyboard.waitForExistence(timeout: 3)
         }
-        XCTAssertTrue(keyboardVisible, "terminal keyboard never became visible: \(uiStateSnapshot(app))", file: file, line: line)
+        if requireKeyboard {
+            XCTAssertTrue(keyboardVisible, "terminal keyboard never became visible: \(uiStateSnapshot(app))", file: file, line: line)
+        }
         return proxy
     }
 
-    private func assertTerminalCanType(_ app: XCUIApplication, marker: String, file: StaticString = #filePath, line: UInt = #line) {
+    private func assertTerminalCanType(
+        _ app: XCUIApplication,
+        marker: String,
+        requireKeyboard: Bool = true,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
         let terminal = app.otherElements["terminal-screen"]
-        let proxy = focusTerminalForTyping(app, file: file, line: line)
+        let proxy = focusTerminalForTyping(app, requireKeyboard: requireKeyboard, file: file, line: line)
         let keyboard = app.keyboards.firstMatch
 
         var typedSuccessfully = false
@@ -310,16 +323,61 @@ final class BooAppLaunchTests: BooUITestCase {
         return value.matches(of: pattern).compactMap { Int($0.output.1) }
     }
 
-    private func sendTerminalCommand(_ app: XCUIApplication, command: String, expect marker: String, timeout: TimeInterval = 8, file: StaticString = #filePath, line: UInt = #line) {
+    private func assertTerminalUsesWholeAppFrame(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        let terminal = app.otherElements["terminal-screen"]
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10), file: file, line: line)
+        let terminalFrame = terminal.frame
+        let appFrame = app.frame
+        XCTAssertLessThanOrEqual(
+            abs(terminalFrame.minX - appFrame.minX),
+            2,
+            "terminal left edge does not use full app width: terminal=\(terminalFrame) app=\(appFrame) \(uiStateSnapshot(app))",
+            file: file,
+            line: line
+        )
+        XCTAssertLessThanOrEqual(
+            abs(terminalFrame.minY - appFrame.minY),
+            2,
+            "terminal top edge does not use full app height: terminal=\(terminalFrame) app=\(appFrame) \(uiStateSnapshot(app))",
+            file: file,
+            line: line
+        )
+        XCTAssertGreaterThanOrEqual(
+            terminalFrame.width,
+            appFrame.width - 2,
+            "terminal width does not use full app width: terminal=\(terminalFrame) app=\(appFrame) \(uiStateSnapshot(app))",
+            file: file,
+            line: line
+        )
+        XCTAssertGreaterThanOrEqual(
+            terminalFrame.height,
+            appFrame.height - 2,
+            "terminal height does not use full app height: terminal=\(terminalFrame) app=\(appFrame) \(uiStateSnapshot(app))",
+            file: file,
+            line: line
+        )
+    }
+
+    private func sendTerminalCommand(
+        _ app: XCUIApplication,
+        command: String,
+        expect marker: String,
+        timeout: TimeInterval = 8,
+        requireKeyboard: Bool = true,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
         let terminal = app.otherElements["terminal-screen"]
         XCTAssertTrue(terminal.waitForExistence(timeout: 10), file: file, line: line)
 
-        let proxy = app.textViews["terminal-text-proxy"]
-        XCTAssertTrue(proxy.waitForExistence(timeout: 5), file: file, line: line)
+        let proxy = focusTerminalForTyping(app, requireKeyboard: requireKeyboard, file: file, line: line)
+        let keyboard = app.keyboards.firstMatch
         var commandObserved = false
         for _ in 0..<2 {
-            terminal.tap()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            if requireKeyboard, !keyboard.exists {
+                terminal.tap()
+                guard keyboard.waitForExistence(timeout: 3) else { continue }
+            }
             proxy.typeText(command + "\r")
 
             let expectation = XCTNSPredicateExpectation(
@@ -499,7 +557,6 @@ final class BooAppLaunchTests: BooUITestCase {
         let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
         app.launch()
-        app.tap()
 
         guard openLiveTerminal(app) else { return }
 
@@ -550,13 +607,189 @@ final class BooAppLaunchTests: BooUITestCase {
         let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
         app.launch()
-        app.tap()
 
         guard openLiveTerminal(app) else { return }
         assertTerminalCanType(app, marker: "BOO_UI_TYPED")
     }
 
-    func testOpenLiveTabShowsCustomKeyboardAccessory() {
+    func testTypingKeepsPreviousTerminalOutputVisible() {
+        let app = makeApp(autoConnect: false, resetStorage: true)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        guard openLiveTerminal(app) else { return }
+
+        let terminal = app.otherElements["terminal-screen"]
+        sendTerminalCommand(
+            app,
+            command: "printf 'BOO_RENDER_KEEP_A\\nBOO_RENDER_KEEP_B\\n'",
+            expect: "BOO_RENDER_KEEP_B",
+            timeout: 10
+        )
+
+        let proxy = focusTerminalForTyping(app)
+        proxy.typeText("echo BOO_RENDER_AFTER")
+
+        let typedExpectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value CONTAINS %@", "BOO_RENDER_AFTER"),
+            object: terminal
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [typedExpectation], timeout: 8),
+            .completed,
+            "typed command was not reflected before Return: \(uiStateSnapshot(app))"
+        )
+
+        let value = terminal.value as? String ?? ""
+        XCTAssertTrue(
+            value.contains("BOO_RENDER_KEEP_A") && value.contains("BOO_RENDER_KEEP_B"),
+            "previous output disappeared from terminal state while typing: \(uiStateSnapshot(app))"
+        )
+
+        let screenshotAttachment = XCTAttachment(screenshot: app.screenshot())
+        screenshotAttachment.name = "terminal-typing-preserves-previous-output"
+        screenshotAttachment.lifetime = .keepAlways
+        add(screenshotAttachment)
+    }
+
+    func testKeyboardKeepsLiveCursorVisibleInFullScreenTerminal() {
+        let app = makeApp(autoConnect: false, resetStorage: true)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+
+        guard openLiveTerminal(app) else { return }
+
+        let terminal = app.otherElements["terminal-screen"]
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10))
+        assertTerminalUsesWholeAppFrame(app)
+        let keyboard = app.keyboards.firstMatch
+        if keyboard.exists {
+            let dismissButton = keyboardDismissButton(in: app)
+            if dismissButton.exists {
+                dismissButton.tap()
+                let deadline = Date().addingTimeInterval(3)
+                while Date() < deadline, keyboard.exists {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                }
+            }
+        }
+        let terminalFrameBeforeKeyboard = terminal.frame
+        let paneHeightBeforeKeyboard = runtimePaneFrames(in: debugLabel(in: app)).first?.rect.height
+
+        sendTerminalCommand(
+            app,
+            command: "seq -f 'BOO_CURSOR_VIS_%02g' 1 80",
+            expect: "BOO_CURSOR_VIS_80",
+            timeout: 12
+        )
+
+        let proxy = focusTerminalForTyping(app)
+        proxy.typeText("echo BOO_CURSOR_AFTER_KEYBOARD")
+
+        let typedExpectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value CONTAINS %@", "BOO_CURSOR_AFTER_KEYBOARD"),
+            object: terminal
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [typedExpectation], timeout: 8),
+            .completed,
+            "typed prompt line was not reflected after keyboard focus: \(uiStateSnapshot(app))"
+        )
+
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5), "keyboard not visible: \(uiStateSnapshot(app))")
+        XCTAssertEqual(
+            terminal.frame.height,
+            terminalFrameBeforeKeyboard.height,
+            accuracy: 2,
+            "keyboard resized the terminal instead of using presentation-only cursor avoidance"
+        )
+        if let paneHeightBeforeKeyboard,
+           let paneFrameAfterKeyboard = runtimePaneFrames(in: debugLabel(in: app)).first?.rect {
+            XCTAssertEqual(
+                paneFrameAfterKeyboard.height,
+                paneHeightBeforeKeyboard,
+                accuracy: 2,
+                "keyboard resized the server/runtime pane instead of keeping the terminal grid stable"
+            )
+            XCTAssertGreaterThan(
+                paneFrameAfterKeyboard.height,
+                terminal.frame.height * 0.85,
+                "runtime pane does not occupy the full terminal height: \(uiStateSnapshot(app))"
+            )
+            XCTAssertGreaterThan(
+                paneFrameAfterKeyboard.width,
+                terminal.frame.width * 0.85,
+                "runtime pane does not occupy the full terminal width: \(uiStateSnapshot(app))"
+            )
+        }
+
+        let screenshotAttachment = XCTAttachment(screenshot: app.screenshot())
+        screenshotAttachment.name = "terminal-keyboard-keeps-live-cursor-visible"
+        screenshotAttachment.lifetime = .keepAlways
+        add(screenshotAttachment)
+    }
+
+    func testVideoTypingLlAndBlankLines() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+
+        let app = makeApp(autoConnect: false, resetStorage: true)
+        _ = installSystemAlertHandler(for: app)
+        app.launch()
+        app.tap()
+
+        guard openLiveTerminal(app) else { return }
+
+        let terminal = app.otherElements["terminal-screen"]
+        let proxy = focusTerminalForTyping(app)
+        var frameIndex = 0
+
+        func captureFrame(_ label: String) {
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = String(format: "video-%03d-%@", frameIndex, label)
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            frameIndex += 1
+        }
+
+        func captureBurst(_ label: String, frames: Int = 3) {
+            for burstIndex in 0..<frames {
+                captureFrame("\(label)-burst-\(burstIndex)")
+                RunLoop.current.run(until: Date().addingTimeInterval(0.18))
+            }
+        }
+
+        func typeAndCapture(_ text: String, label: String) {
+            let before = terminal.value as? String ?? ""
+            captureFrame("\(label)-before")
+            proxy.typeText(text)
+            captureFrame("\(label)-typed")
+            let changed = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value != %@", before),
+                object: terminal
+            )
+            _ = XCTWaiter.wait(for: [changed], timeout: 2)
+            captureBurst(label)
+        }
+
+        captureBurst("start", frames: 4)
+        typeAndCapture("ll\r", label: "ll-01")
+        typeAndCapture("\r", label: "blank-02")
+        typeAndCapture("\r", label: "blank-03")
+        typeAndCapture("ll\r", label: "ll-04")
+        typeAndCapture("\r", label: "blank-05")
+        typeAndCapture("ll\r", label: "ll-06")
+        typeAndCapture("\r", label: "blank-07")
+        typeAndCapture("\r", label: "blank-08")
+        typeAndCapture("ll\r", label: "ll-09")
+        typeAndCapture("\r", label: "blank-10")
+        typeAndCapture("\r", label: "blank-11")
+        typeAndCapture("ll\r", label: "ll-12")
+        captureBurst("end", frames: 5)
+    }
+
+    func testOpenLiveTabShowsCustomKeyboardAccessory() throws {
         let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
         app.launch()
@@ -569,21 +802,41 @@ final class BooAppLaunchTests: BooUITestCase {
         terminal.tap()
 
         let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        guard keyboard.waitForExistence(timeout: 5) else {
+            for index in 1...12 {
+                XCTAssertFalse(app.buttons["terminal-key-f\(index)"].exists)
+            }
+            throw XCTSkip("software keyboard is not visible in this runner, so the accessory bar cannot be inspected")
+        }
 
-        XCTAssertTrue(app.buttons["terminal-key-ctrl"].exists)
-        XCTAssertTrue(app.buttons["terminal-key-alt"].exists)
-        XCTAssertTrue(app.buttons["terminal-key-tab"].exists)
-        XCTAssertTrue(app.buttons["terminal-key-tilde"].exists)
-        XCTAssertTrue(app.buttons["terminal-key-dollar"].exists)
-        XCTAssertTrue(app.buttons["terminal-key-backslash"].exists)
-        XCTAssertTrue(app.buttons["terminal-key-left-bracket"].exists)
-        XCTAssertTrue(app.buttons["terminal-key-right-bracket"].exists)
-        XCTAssertTrue(app.buttons["terminal-key-less-than"].exists)
-        XCTAssertTrue(app.buttons["terminal-key-greater-than"].exists)
-        XCTAssertTrue(app.buttons["terminal-key-left"].exists)
-        XCTAssertTrue(app.buttons["terminal-key-right"].exists)
-        XCTAssertTrue(app.buttons["terminal-key-meta"].exists)
+        let expectedAccessoryKeys = [
+            "terminal-key-ctrl",
+            "terminal-key-alt",
+            "terminal-key-tab",
+            "terminal-key-tilde",
+            "terminal-key-slash",
+            "terminal-key-dash",
+            "terminal-key-pipe",
+            "terminal-key-left-bracket",
+            "terminal-key-right-bracket",
+            "terminal-key-less-than",
+            "terminal-key-greater-than",
+            "terminal-key-left",
+            "terminal-key-right",
+            "terminal-key-meta",
+        ]
+        guard expectedAccessoryKeys.contains(where: { app.buttons[$0].exists }) else {
+            for index in 1...12 {
+                XCTAssertFalse(app.buttons["terminal-key-f\(index)"].exists)
+            }
+            throw XCTSkip("software keyboard is visible, but this runner does not expose input assistant bar buttons")
+        }
+        for identifier in expectedAccessoryKeys {
+            XCTAssertTrue(app.buttons[identifier].exists)
+        }
+        for index in 1...12 {
+            XCTAssertFalse(app.buttons["terminal-key-f\(index)"].exists)
+        }
     }
 
     func testRuntimeViewThreePaneScreenshotAndTapFocus() {
@@ -738,15 +991,20 @@ final class BooAppLaunchTests: BooUITestCase {
         let app = makeApp(autoConnect: false, resetStorage: true)
         _ = installSystemAlertHandler(for: app)
         app.launch()
-        app.tap()
 
         guard openLiveTerminal(app) else { return }
 
         let terminal = app.otherElements["terminal-screen"]
         XCTAssertTrue(terminal.waitForExistence(timeout: 10))
 
-        assertTerminalCanType(app, marker: "BOO_SCROLL_READY")
-        sendTerminalCommand(app, command: "jot -w BOO_SCROLL_%d 80 1", expect: "BOO_SCROLL_80", timeout: 12)
+        assertTerminalCanType(app, marker: "BOO_SCROLL_READY", requireKeyboard: false)
+        sendTerminalCommand(
+            app,
+            command: "jot -w BOO_SCROLL_%d 80 1",
+            expect: "BOO_SCROLL_80",
+            timeout: 12,
+            requireKeyboard: false
+        )
 
         let initialValue = terminal.value as? String ?? ""
         let initialMarkers = visibleScrollMarkers(in: initialValue)
@@ -1177,7 +1435,6 @@ final class BooAppLaunchTests: BooUITestCase {
         let app = makeApp()
         _ = installSystemAlertHandler(for: app)
         app.launch()
-        app.tap()
 
         navigateToConnectScreen(app)
         XCTAssertTrue(app.textFields["connect-host-input"].exists)

@@ -620,6 +620,7 @@ impl ClientApp {
                 y: pane.frame.y as f32,
                 width: pane.frame.width as f32,
                 height: pane.frame.height as f32,
+                content_offset_y: 0.0,
             };
             let preedit_text =
                 (pane.focused && !self.preedit_text.is_empty()).then(|| self.preedit_text.clone());
@@ -2703,6 +2704,9 @@ fn decode_remote_full_state(payload: &[u8]) -> Option<(Option<u64>, remote::Remo
     Some((
         (ack_input_seq != 0).then_some(ack_input_seq),
         remote::RemoteFullState {
+            epoch: 0,
+            viewport_top: 0,
+            scrollback_total: 0,
             rows,
             cols,
             cursor_x,
@@ -3363,6 +3367,9 @@ mod tests {
         app.handle_stream_event(LocalStreamEvent::FullState {
             ack_input_seq: None,
             state: remote::RemoteFullState {
+                epoch: 0,
+                viewport_top: 0,
+                scrollback_total: 0,
                 rows: 1,
                 cols: 2,
                 cursor_x: 1,
@@ -3555,6 +3562,9 @@ mod tests {
         let passive_b = LocalStreamEvent::FullState {
             ack_input_seq: None,
             state: remote::RemoteFullState {
+                epoch: 0,
+                viewport_top: 0,
+                scrollback_total: 0,
                 rows: 1,
                 cols: 1,
                 cursor_x: 0,
@@ -3881,6 +3891,9 @@ mod tests {
     #[test]
     fn decode_remote_pane_full_state_uses_prefixed_tab_and_pane_header() {
         let full_state = remote::RemoteFullState {
+            epoch: 0,
+            viewport_top: 0,
+            scrollback_total: 0,
             rows: 1,
             cols: 1,
             cursor_x: 0,
@@ -4123,6 +4136,9 @@ mod tests {
             pane_id: 7,
             runtime_revision: 3,
             state: remote::RemoteFullState {
+                epoch: 0,
+                viewport_top: 0,
+                scrollback_total: 0,
                 rows: 1,
                 cols: 1,
                 cursor_x: 0,

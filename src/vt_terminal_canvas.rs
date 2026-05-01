@@ -35,6 +35,7 @@ pub struct TerminalCanvas {
     pub url_color: Option<Color>,
     pub preedit_text: Option<String>,
     pub viewport: Option<TerminalViewport>,
+    pub content_offset_y: f32,
     pub paint_base: bool,
     pub paint_text: bool,
     pub paint_selection_overlay: bool,
@@ -83,6 +84,7 @@ pub struct TerminalViewport {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+    pub content_offset_y: f32,
 }
 
 #[allow(dead_code)]
@@ -123,6 +125,7 @@ impl TerminalCanvas {
             url_color,
             preedit_text,
             viewport: None,
+            content_offset_y: 0.0,
             paint_base: true,
             paint_text: true,
             paint_selection_overlay: true,
@@ -132,6 +135,11 @@ impl TerminalCanvas {
 
     pub fn new_with_viewport(mut self, viewport: TerminalViewport) -> Self {
         self.viewport = Some(viewport);
+        self
+    }
+
+    pub fn with_content_offset_y(mut self, content_offset_y: f32) -> Self {
+        self.content_offset_y = content_offset_y;
         self
     }
 
@@ -169,7 +177,7 @@ impl TerminalCanvas {
 
     fn draw_row(&self, frame: &mut Frame<Renderer>, row_index: usize, state: &TerminalCanvasState) {
         let origin = self.viewport_origin();
-        let y = origin.y + row_index as f32 * self.cell_height;
+        let y = origin.y + row_index as f32 * self.cell_height - self.viewport_content_offset_y();
         let (_, viewport_size) = self.viewport_origin_and_size(frame.size());
         let viewport = Rectangle {
             x: origin.x,
@@ -246,9 +254,10 @@ impl TerminalCanvas {
 
     fn draw_selection_overlay(&self, frame: &mut Frame<Renderer>, state: &TerminalCanvasState) {
         let origin = self.viewport_origin();
+        let content_offset_y = self.viewport_content_offset_y();
         for rect in self.selection_rects.iter() {
             frame.fill_rectangle(
-                Point::new(origin.x + rect.x, origin.y + rect.y),
+                Point::new(origin.x + rect.x, origin.y + rect.y - content_offset_y),
                 Size::new(rect.width, rect.height),
                 self.selection_color,
             );
@@ -258,6 +267,7 @@ impl TerminalCanvas {
 
     fn draw_cursor_overlay(&self, frame: &mut Frame<Renderer>) {
         let origin = self.viewport_origin();
+        let content_offset_y = self.viewport_content_offset_y();
         let default_fg = color_from_rgb(self.snapshot.colors.foreground, 1.0);
         let cursor_bg = if self.snapshot.colors.cursor_has_value {
             color_from_rgb(self.snapshot.colors.cursor, 0.95)
@@ -271,7 +281,7 @@ impl TerminalCanvas {
             && self.snapshot.cursor.x < self.snapshot.cols
         {
             let x = origin.x + self.snapshot.cursor.x as f32 * self.cell_width;
-            let y = origin.y + self.snapshot.cursor.y as f32 * self.cell_height;
+            let y = origin.y + self.snapshot.cursor.y as f32 * self.cell_height - content_offset_y;
             match self.snapshot.cursor.style {
                 crate::vt::CursorStyle::Bar => frame.fill_rectangle(
                     Point::new(x, y),
@@ -320,7 +330,7 @@ impl TerminalCanvas {
             .filter(|_| self.snapshot.cursor.y < self.snapshot.rows)
         {
             let x = origin.x + self.snapshot.cursor.x as f32 * self.cell_width;
-            let y = origin.y + self.snapshot.cursor.y as f32 * self.cell_height;
+            let y = origin.y + self.snapshot.cursor.y as f32 * self.cell_height - content_offset_y;
             let width = (preedit.chars().count().max(1) as f32) * self.cell_width;
             let overlay = Color::from_rgba(0.92, 0.82, 0.32, 0.18);
             let underline = Color::from_rgba(0.98, 0.86, 0.35, 0.9);
@@ -421,7 +431,7 @@ impl TerminalCanvas {
         }
         let origin = self.viewport_origin();
         let x = origin.x + run.start_col as f32 * self.cell_width;
-        let y = origin.y + row_index as f32 * self.cell_height;
+        let y = origin.y + row_index as f32 * self.cell_height - self.viewport_content_offset_y();
         let draw_width = run.width_cols as f32 * self.cell_width;
         let viewport = Rectangle {
             x: origin.x,
@@ -592,6 +602,12 @@ impl TerminalTextLayer {
         Point::new(viewport.x, viewport.y)
     }
 
+    fn viewport_content_offset_y(&self) -> f32 {
+        self.viewport
+            .map(|viewport| viewport.content_offset_y)
+            .unwrap_or_default()
+    }
+
     fn build_base_row_entries(&self, viewport: Rectangle, row_index: usize) -> Vec<TextLayerEntry> {
         let row_model = build_terminal_body_row_model(
             &self.snapshot,
@@ -668,7 +684,7 @@ impl TerminalTextLayer {
 
         let origin = self.viewport_origin(viewport);
         let x = origin.x + col_index as f32 * self.cell_width;
-        let y = origin.y + row_index as f32 * self.cell_height;
+        let y = origin.y + row_index as f32 * self.cell_height - self.viewport_content_offset_y();
         let draw_width = width_cols as f32 * self.cell_width;
         let bounds = Size::new(
             available_text_width(viewport, x),
@@ -719,6 +735,7 @@ impl TerminalTextLayer {
         viewport.y.to_bits().hash(&mut hasher);
         viewport.width.to_bits().hash(&mut hasher);
         viewport.height.to_bits().hash(&mut hasher);
+        self.viewport_content_offset_y().to_bits().hash(&mut hasher);
         hasher.finish()
     }
 
@@ -792,6 +809,7 @@ impl TerminalTextLayer {
         viewport.y.to_bits().hash(&mut hasher);
         viewport.width.to_bits().hash(&mut hasher);
         viewport.height.to_bits().hash(&mut hasher);
+        self.viewport_content_offset_y().to_bits().hash(&mut hasher);
         hasher.finish()
     }
 }
@@ -1174,6 +1192,12 @@ impl ModelParagraphTerminalBodyLayer {
         Point::new(viewport.x, viewport.y)
     }
 
+    fn viewport_content_offset_y(&self) -> f32 {
+        self.viewport
+            .map(|viewport| viewport.content_offset_y)
+            .unwrap_or_default()
+    }
+
     fn push_text_entry(
         &self,
         entries: &mut Vec<TextLayerEntry>,
@@ -1192,7 +1216,7 @@ impl ModelParagraphTerminalBodyLayer {
 
         let origin = self.viewport_origin(viewport);
         let x = origin.x + col_index as f32 * self.cell_width;
-        let y = origin.y + row_index as f32 * self.cell_height;
+        let y = origin.y + row_index as f32 * self.cell_height - self.viewport_content_offset_y();
         let draw_width = width_cols as f32 * self.cell_width;
         let bounds = Size::new(
             available_text_width(viewport, x),
@@ -1289,6 +1313,7 @@ impl ModelParagraphTerminalBodyLayer {
         viewport.y.to_bits().hash(&mut hasher);
         viewport.width.to_bits().hash(&mut hasher);
         viewport.height.to_bits().hash(&mut hasher);
+        self.viewport_content_offset_y().to_bits().hash(&mut hasher);
         hasher.finish()
     }
 
@@ -1362,6 +1387,7 @@ impl ModelParagraphTerminalBodyLayer {
         viewport.y.to_bits().hash(&mut hasher);
         viewport.width.to_bits().hash(&mut hasher);
         viewport.height.to_bits().hash(&mut hasher);
+        self.viewport_content_offset_y().to_bits().hash(&mut hasher);
         hasher.finish()
     }
 }
@@ -2884,6 +2910,13 @@ impl TerminalCanvas {
             .unwrap_or(Point::new(0.0, 0.0))
     }
 
+    fn viewport_content_offset_y(&self) -> f32 {
+        self.viewport
+            .map(|viewport| viewport.content_offset_y)
+            .unwrap_or_default()
+            + self.content_offset_y
+    }
+
     fn viewport_origin_and_size(&self, fallback: Size) -> (Point, Size) {
         self.viewport
             .map(|viewport| {
@@ -2901,7 +2934,9 @@ impl TerminalCanvas {
             viewport.y.to_bits().hash(hasher);
             viewport.width.to_bits().hash(hasher);
             viewport.height.to_bits().hash(hasher);
+            viewport.content_offset_y.to_bits().hash(hasher);
         }
+        self.content_offset_y.to_bits().hash(hasher);
     }
 
     #[cfg(test)]

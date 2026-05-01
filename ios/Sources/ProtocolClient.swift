@@ -13,6 +13,7 @@ enum GSPMessageType: UInt8 {
     case heartbeat = 0x11
     case runtimeAction = 0x12
     case renderAck = 0x13
+    case rowRangeRequest = 0x14
 
     case authOk = 0x80
     case authFail = 0x81
@@ -29,6 +30,7 @@ enum GSPMessageType: UInt8 {
     case uiPaneFullState = 0x90
     case uiPaneDelta = 0x91
     case heartbeatAck = 0x92
+    case uiPaneRows = 0x93
 }
 
 private struct OutboundWheelScrolledLinesPayload: Encodable {
@@ -202,6 +204,7 @@ private enum DecodedInboundMessage {
     case uiRuntimeState(RemoteRuntimeStateSnapshot)
     case uiPaneFullState(DecodedPaneUpdate, DecodedWireScreenState)
     case uiPaneDelta(DecodedPaneUpdate, Data)
+    case uiPaneRows(DecodedPaneUpdate, DecodedRowRangeResponse)
 }
 
 private struct OutboundRuntimeActionEnvelope: Encodable {
@@ -212,6 +215,16 @@ private struct OutboundRuntimeActionEnvelope: Encodable {
         case clientActionId = "client_action_id"
         case action
     }
+}
+
+struct PaneReplica: Equatable {
+    var epoch: UInt64
+    var cols: UInt16
+    var scrollbackTotal: UInt64
+    var liveViewportTopRowId: UInt64
+    var cursorRowId: UInt64
+    var touchScrollOffsetRows: Double = 0
+    var rowCache: [UInt64: [DecodedWireCell]] = [:]
 }
 
 private struct PendingOptimisticRuntimeState {
@@ -730,6 +743,7 @@ final class GSPClient: ObservableObject {
     @Published var runtimeState: RemoteRuntimeStateSnapshot?
     @Published var screen = ScreenState()
     @Published var paneScreens: [UInt64: DecodedWireScreenState] = [:]
+    @Published private(set) var paneReplicas: [UInt64: PaneReplica] = [:]
     @Published private(set) var paneRevisions: [UInt64: UInt64] = [:]
     @Published private(set) var paneStateIssueCount: UInt64 = 0
     @Published private(set) var lastPaneStateIssue: String?
@@ -737,6 +751,7 @@ final class GSPClient: ObservableObject {
     private var paneServerRuntimeRevisions: [UInt64: UInt64] = [:]
     private var paneFullStateSeen: Set<UInt64> = []
     private var paneRefreshRequestedRevisions: [UInt64: UInt64] = [:]
+    private var rowRangeRequestsInFlight: Set<String> = []
     @Published var activeTabId: UInt32?
     @Published var lastErrorKind: ClientWireErrorKind?
     @Published var lastError: String?
@@ -758,6 +773,8 @@ final class GSPClient: ObservableObject {
     private var runtimeViewsWithLiveTarget: Set<UInt64> = []
     private var bootstrapRuntimeOnNextEmptyState = false
     private var pendingBootstrapRuntimeViewId: UInt64?
+    private var lastSentResize: (cols: UInt16, rows: UInt16)?
+    private var preferredNewTabSize: (cols: UInt16, rows: UInt16)?
 
     private func debugLog(_ message: String) {
         BooTrace.debug(message)
@@ -825,6 +842,19 @@ final class GSPClient: ObservableObject {
         }.joined(separator: ";") ?? ""
         let paneStateIds = paneScreens.keys.sorted().map(String.init).joined(separator: ",")
         let paneRevisionSummary = paneRevisions.keys.sorted().map { "\($0):\(paneRevisions[$0] ?? 0)" }.joined(separator: ",")
+        let paneReplicaSummary = paneReplicas.keys.sorted().map { paneId in
+            guard let replica = paneReplicas[paneId] else { return "\(paneId):missing" }
+            return String(
+                format: "%llu:epoch=%llu,top=%llu,cursor=%llu,total=%llu,touch=%.2f,cached=%d",
+                paneId,
+                replica.epoch,
+                replica.liveViewportTopRowId,
+                replica.cursorRowId,
+                replica.scrollbackTotal,
+                replica.touchScrollOffsetRows,
+                replica.rowCache.count
+            )
+        }.joined(separator: ";")
         return [
             "connected=\(connected)",
             "authenticated=\(authenticated)",
@@ -839,6 +869,7 @@ final class GSPClient: ObservableObject {
             "paneFrames=[\(paneFrameSummary)]",
             "paneStateIds=[\(paneStateIds)]",
             "paneRevisions=[\(paneRevisionSummary)]",
+            "paneReplicas=[\(paneReplicaSummary)]",
             "paneStateIssues=\(paneStateIssueCount)",
             "lastPaneStateIssue=\(lastPaneStateIssue ?? "<none>")",
             "health=\(connectionHealthSummary)",
@@ -867,8 +898,97 @@ final class GSPClient: ObservableObject {
     }
 
     func paneAccessibilityText(paneId: UInt64) -> String {
-        guard let state = paneScreens[paneId] else { return "" }
+        guard let state = displayedPaneScreen(paneId: paneId) else { return "" }
         return WireCodec.screenText(from: state)
+    }
+
+    func displayedPaneScreen(paneId: UInt64) -> DecodedWireScreenState? {
+        guard let replica = paneReplicas[paneId],
+              replica.touchScrollOffsetRows > 0,
+              let live = paneScreens[paneId]
+        else {
+            return paneScreens[paneId]
+        }
+        let offsetRows = UInt64(replica.touchScrollOffsetRows.rounded(.up))
+        let start = replica.liveViewportTopRowId > offsetRows
+            ? replica.liveViewportTopRowId - offsetRows
+            : 0
+        let displayRows = Int(live.rows)
+        let cacheRows = displayRows + 1
+        let cols = Int(live.cols)
+        guard displayRows > 0, cols > 0 else { return live }
+        var cells: [DecodedWireCell] = []
+        cells.reserveCapacity(cacheRows * cols)
+        for rowOffset in 0..<cacheRows {
+            let rowId = start + UInt64(rowOffset)
+            if let rowCells = replica.rowCache[rowId], rowCells.count >= cols {
+                cells.append(contentsOf: rowCells.prefix(cols))
+            } else {
+                cells.append(contentsOf: Array(repeating: DecodedWireCell(), count: cols))
+            }
+        }
+        var displayed = live
+        displayed.rows = UInt16(cacheRows)
+        displayed.cells = cells
+        displayed.cursorVisible = false
+        displayed.rowReplica = DecodedRowReplicaMetadata(
+            epoch: replica.epoch,
+            viewportTop: start,
+            scrollbackTotal: replica.scrollbackTotal,
+            cursorRowId: replica.cursorRowId,
+            rowIds: (0..<cacheRows).map { start + UInt64($0) }
+        )
+        return displayed
+    }
+
+    func displayedPaneScrollOffsetRows(paneId: UInt64) -> Double {
+        guard let replica = paneReplicas[paneId], replica.touchScrollOffsetRows > 0 else { return 0 }
+        return replica.touchScrollOffsetRows
+    }
+
+    func scrollTouchHistory(paneId: UInt64, rows: Double) {
+        guard rows != 0,
+              let screen = paneScreens[paneId]
+        else { return }
+        guard var replica = paneReplicas[paneId] else {
+            sendMouseWheelLines(y: rows)
+            return
+        }
+        let maxOffset = Double(replica.liveViewportTopRowId)
+        guard maxOffset > 0 else {
+            sendMouseWheelLines(y: rows)
+            return
+        }
+        let nextOffset = max(0, min(maxOffset, replica.touchScrollOffsetRows + rows))
+        replica.touchScrollOffsetRows = nextOffset
+        paneReplicas[paneId] = replica
+        if nextOffset > 0 {
+            let offsetRows = UInt64(nextOffset.rounded(.up))
+            let start = replica.liveViewportTopRowId > offsetRows
+                ? replica.liveViewportTopRowId - offsetRows
+                : 0
+            let prefetch = UInt64(max(Int(screen.rows), 24))
+            let requestStart = start > prefetch ? start - prefetch : 0
+            requestMissingRowsIfNeeded(
+                paneId: paneId,
+                epoch: replica.epoch,
+                start: requestStart,
+                end: start + UInt64(screen.rows) + prefetch + 1
+            )
+        }
+        bumpPaneRenderRevision(paneId)
+    }
+
+    func followLiveTail() {
+        guard paneReplicas.values.contains(where: { $0.touchScrollOffsetRows != 0 }) else { return }
+        for paneId in paneReplicas.keys {
+            paneReplicas[paneId]?.touchScrollOffsetRows = 0
+            bumpPaneRenderRevision(paneId)
+        }
+    }
+
+    func setPreferredNewTabSize(cols: UInt16, rows: UInt16) {
+        preferredNewTabSize = (max(1, cols), max(1, rows))
     }
 
     func connect(host: String, port: UInt16) {
@@ -903,16 +1023,19 @@ final class GSPClient: ObservableObject {
         runtimeState = nil
         screen = ScreenState()
         paneScreens = [:]
+        paneReplicas = [:]
         paneRevisions = [:]
         paneServerRevisions = [:]
         paneServerRuntimeRevisions = [:]
         paneFullStateSeen = []
         paneRefreshRequestedRevisions = [:]
+        rowRangeRequestsInFlight = []
         paneStateIssueCount = 0
         lastPaneStateIssue = nil
         renderTraceTracker = BooRenderTraceTracker()
         bootstrapRuntimeOnNextEmptyState = false
         pendingBootstrapRuntimeViewId = nil
+        preferredNewTabSize = nil
         stopHeartbeatLoop()
         connectStartedAt = nil
         authRequestedAt = nil
@@ -934,11 +1057,13 @@ final class GSPClient: ObservableObject {
 
     func sendInput(_ text: String) {
         guard let data = text.data(using: .utf8) else { return }
+        followLiveTail()
         beginInputTrace()
         sendMessage(type: .input, payload: data)
     }
 
     func sendInputBytes(_ data: Data) {
+        followLiveTail()
         beginInputTrace()
         sendMessage(type: .input, payload: data)
     }
@@ -960,12 +1085,55 @@ final class GSPClient: ObservableObject {
     }
 
     func sendResize(cols: UInt16, rows: UInt16) {
+        let normalized = (cols: max(1, cols), rows: max(1, rows))
+        if let lastSentResize,
+           lastSentResize.cols == normalized.cols,
+           lastSentResize.rows == normalized.rows
+        {
+            return
+        }
+        lastSentResize = normalized
         var payload = Data(count: 4)
         payload.withUnsafeMutableBytes { buf in
-            buf.storeBytes(of: cols.littleEndian, as: UInt16.self)
-            buf.storeBytes(of: rows.littleEndian, toByteOffset: 2, as: UInt16.self)
+            buf.storeBytes(of: normalized.cols.littleEndian, as: UInt16.self)
+            buf.storeBytes(of: normalized.rows.littleEndian, toByteOffset: 2, as: UInt16.self)
         }
         sendMessage(type: .resize, payload: payload)
+    }
+
+    private func requestMissingRowsIfNeeded(paneId: UInt64, epoch: UInt64, start: UInt64, end: UInt64) {
+        guard let replica = paneReplicas[paneId], start < end else { return }
+        var missingStart: UInt64?
+        var missingEnd = start
+        for rowId in start..<end {
+            if replica.rowCache[rowId] == nil {
+                if missingStart == nil {
+                    missingStart = rowId
+                }
+                missingEnd = rowId + 1
+            } else if let missingStart {
+                requestRows(paneId: paneId, epoch: epoch, start: missingStart, end: missingEnd)
+                return
+            }
+        }
+        if let missingStart {
+            requestRows(paneId: paneId, epoch: epoch, start: missingStart, end: missingEnd)
+        }
+    }
+
+    private func requestRows(paneId: UInt64, epoch: UInt64, start: UInt64, end: UInt64) {
+        guard start < end else { return }
+        let key = "\(paneId):\(epoch):\(start):\(end)"
+        if rowRangeRequestsInFlight.contains(key) { return }
+        rowRangeRequestsInFlight.insert(key)
+        var payload = Data(count: 32)
+        payload.withUnsafeMutableBytes { buf in
+            buf.storeBytes(of: paneId.littleEndian, as: UInt64.self)
+            buf.storeBytes(of: epoch.littleEndian, toByteOffset: 8, as: UInt64.self)
+            buf.storeBytes(of: start.littleEndian, toByteOffset: 16, as: UInt64.self)
+            buf.storeBytes(of: end.littleEndian, toByteOffset: 24, as: UInt64.self)
+        }
+        sendMessage(type: .rowRangeRequest, payload: payload)
     }
 
     func sendMouseWheelLines(x: Double = 0, y: Double, mods: Int32 = 0) {
@@ -1020,7 +1188,12 @@ final class GSPClient: ObservableObject {
 
     func newTab(cols: UInt16? = nil, rows: UInt16? = nil) {
         guard currentViewId != 0 else { return }
-        sendRuntimeAction(.newTab(viewId: currentViewId, cols: cols, rows: rows))
+        let preferred = preferredNewTabSize
+        sendRuntimeAction(.newTab(
+            viewId: currentViewId,
+            cols: cols ?? preferred?.cols,
+            rows: rows ?? preferred?.rows
+        ))
     }
 
     func newSplit(direction: String = "right") {
@@ -1504,6 +1677,11 @@ final class GSPClient: ObservableObject {
                 return .uiPaneDelta(update, deltaPayload)
             }
             return .raw(message, payload)
+        case .uiPaneRows:
+            if let (update, rows) = WireCodec.decodePaneRows(payload) {
+                return .uiPaneRows(update, rows)
+            }
+            return .raw(message, payload)
         default:
             return .raw(message, payload)
         }
@@ -1572,6 +1750,7 @@ final class GSPClient: ObservableObject {
             completeActionAckIfNeeded(decodedRuntimeState)
             let visible = Set(decodedRuntimeState.visiblePaneIds)
             paneScreens = paneScreens.filter { visible.contains($0.key) }
+            paneReplicas = paneReplicas.filter { visible.contains($0.key) }
             paneRevisions = paneRevisions.filter { visible.contains($0.key) }
             paneServerRevisions = paneServerRevisions.filter { visible.contains($0.key) }
             paneServerRuntimeRevisions = paneServerRuntimeRevisions.filter { visible.contains($0.key) }
@@ -1584,6 +1763,8 @@ final class GSPClient: ObservableObject {
             applyPaneFullState(update: update, state: state)
         case .uiPaneDelta(let update, let deltaPayload):
             applyPaneDelta(update: update, deltaPayload: deltaPayload)
+        case .uiPaneRows(let update, let response):
+            applyPaneRows(update: update, response: response)
         }
     }
 
@@ -1614,8 +1795,13 @@ final class GSPClient: ObservableObject {
         else { return }
 
         pendingBootstrapRuntimeViewId = state.viewId
+        let preferred = preferredNewTabSize
         sendRuntimeAction(
-            .newTab(viewId: state.viewId, cols: state.viewportCols, rows: state.viewportRows)
+            .newTab(
+                viewId: state.viewId,
+                cols: preferred?.cols ?? state.viewportCols,
+                rows: preferred?.rows ?? state.viewportRows
+            )
         )
     }
 
@@ -1668,6 +1854,8 @@ final class GSPClient: ObservableObject {
         case .uiPaneFullState:
             break
         case .uiPaneDelta:
+            break
+        case .uiPaneRows:
             break
         default:
             break
@@ -1757,13 +1945,92 @@ final class GSPClient: ObservableObject {
         paneServerRuntimeRevisions[update.paneId] = update.runtimeRevision
         paneFullStateSeen.insert(update.paneId)
         paneRefreshRequestedRevisions.removeValue(forKey: update.paneId)
+        updatePaneReplica(paneId: update.paneId, state: state)
         setPaneScreen(update.paneId, state)
         bumpPaneRenderRevision(update.paneId)
         tracePaneUpdate(update, action: "pane_update_\(kind)")
         if paneUpdateIsFocusedVisiblePane(update) {
-            applyDecodedScreen(state)
+            applyDecodedScreen(displayedPaneScreen(paneId: update.paneId) ?? state)
             screen.objectWillChange.send()
             completeRenderTraceIfNeeded(update: update)
+        }
+    }
+
+    private func updatePaneReplica(paneId: UInt64, state: DecodedWireScreenState) {
+        guard let metadata = state.rowReplica else { return }
+        var replica = paneReplicas[paneId] ?? PaneReplica(
+            epoch: metadata.epoch,
+            cols: state.cols,
+            scrollbackTotal: metadata.scrollbackTotal,
+            liveViewportTopRowId: metadata.viewportTop,
+            cursorRowId: metadata.cursorRowId
+        )
+        if replica.epoch != metadata.epoch || replica.cols != state.cols {
+            replica = PaneReplica(
+                epoch: metadata.epoch,
+                cols: state.cols,
+                scrollbackTotal: metadata.scrollbackTotal,
+                liveViewportTopRowId: metadata.viewportTop,
+                cursorRowId: metadata.cursorRowId,
+                touchScrollOffsetRows: 0,
+                rowCache: [:]
+            )
+        }
+        replica.scrollbackTotal = metadata.scrollbackTotal
+        replica.liveViewportTopRowId = metadata.viewportTop
+        replica.cursorRowId = metadata.cursorRowId
+        let cols = Int(state.cols)
+        for (index, rowId) in metadata.rowIds.enumerated() {
+            let start = index * cols
+            let end = start + cols
+            guard start >= 0, end <= state.cells.count else { continue }
+            replica.rowCache[rowId] = Array(state.cells[start..<end])
+        }
+        trimPaneReplica(&replica)
+        paneReplicas[paneId] = replica
+    }
+
+    private func trimPaneReplica(_ replica: inout PaneReplica) {
+        let maxRows = 10_000
+        guard replica.rowCache.count > maxRows else { return }
+        let toRemove = replica.rowCache.keys.sorted().prefix(replica.rowCache.count - maxRows)
+        for rowId in toRemove {
+            replica.rowCache.removeValue(forKey: rowId)
+        }
+    }
+
+    private func applyPaneRows(update: DecodedPaneUpdate, response: DecodedRowRangeResponse) {
+        guard paneUpdateTargetsCurrentView(update) else { return }
+        var replica = paneReplicas[response.paneId] ?? PaneReplica(
+            epoch: response.epoch,
+            cols: response.cols,
+            scrollbackTotal: 0,
+            liveViewportTopRowId: response.startRowId,
+            cursorRowId: response.startRowId
+        )
+        if replica.epoch != response.epoch || replica.cols != response.cols {
+            replica = PaneReplica(
+                epoch: response.epoch,
+                cols: response.cols,
+                scrollbackTotal: replica.scrollbackTotal,
+                liveViewportTopRowId: replica.liveViewportTopRowId,
+                cursorRowId: replica.cursorRowId,
+                touchScrollOffsetRows: 0,
+                rowCache: [:]
+            )
+        }
+        for (rowId, cells) in response.rows {
+            replica.rowCache[rowId] = cells
+        }
+        trimPaneReplica(&replica)
+        paneReplicas[response.paneId] = replica
+        rowRangeRequestsInFlight = rowRangeRequestsInFlight.filter { !$0.hasPrefix("\(response.paneId):\(response.epoch):") }
+        bumpPaneRenderRevision(response.paneId)
+        if runtimeState?.focusedPane == response.paneId,
+           let displayed = displayedPaneScreen(paneId: response.paneId)
+        {
+            applyDecodedScreen(displayed)
+            screen.objectWillChange.send()
         }
     }
 

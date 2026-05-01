@@ -44,6 +44,9 @@ pub fn full_state_from_ui(snapshot: &crate::control::UiTerminalSnapshot) -> Remo
         })
         .collect();
     RemoteFullState {
+        epoch: 0,
+        viewport_top: 0,
+        scrollback_total: snapshot.rows as u64,
         rows: snapshot.rows,
         cols: snapshot.cols,
         cursor_x: snapshot.cursor.x,
@@ -91,6 +94,9 @@ pub fn full_state_from_terminal(
         })
         .collect();
     RemoteFullState {
+        epoch: 0,
+        viewport_top: snapshot.scrollbar.offset,
+        scrollback_total: snapshot.scrollbar.total,
         rows: snapshot.rows,
         cols: snapshot.cols,
         cursor_x: snapshot.cursor.x,

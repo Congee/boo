@@ -161,6 +161,9 @@ mod tests {
                     focused_pane_id: Some(22),
                     visible_pane_ids: vec![22, 23],
                     last_state: Some(Arc::new(RemoteFullState {
+                        epoch: 0,
+                        viewport_top: 0,
+                        scrollback_total: 0,
                         rows: 1,
                         cols: 1,
                         cursor_x: 0,
@@ -179,6 +182,9 @@ mod tests {
                     pane_states: HashMap::from([(
                         22,
                         Arc::new(RemoteFullState {
+                            epoch: 0,
+                            viewport_top: 0,
+                            scrollback_total: 0,
                             rows: 1,
                             cols: 1,
                             cursor_x: 0,

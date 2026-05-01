@@ -238,6 +238,9 @@ mod tests {
             (
                 10,
                 Arc::new(RemoteFullState {
+                    epoch: 0,
+                    viewport_top: 0,
+                    scrollback_total: 0,
                     rows: 1,
                     cols: 1,
                     cursor_x: 0,
@@ -257,6 +260,9 @@ mod tests {
             (
                 20,
                 Arc::new(RemoteFullState {
+                    epoch: 0,
+                    viewport_top: 0,
+                    scrollback_total: 0,
                     rows: 1,
                     cols: 1,
                     cursor_x: 0,

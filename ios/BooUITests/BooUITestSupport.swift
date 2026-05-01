@@ -5,8 +5,13 @@ import Darwin
 class BooUITestCase: XCTestCase {
     private let defaultRemotePort: UInt16 = 7337
 
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        XCUIApplication().terminate()
+    }
+
     func isConnectScreen(_ app: XCUIApplication) -> Bool {
-        let screen = app.otherElements["connect-screen"]
+        let screen = app.descendants(matching: .any)["connect-screen"]
         let hostField = app.textFields["connect-host-input"]
         let connectButton = app.buttons["connect-button"]
         return screen.exists || (hostField.exists && connectButton.exists)
@@ -38,6 +43,7 @@ class BooUITestCase: XCTestCase {
     var explicitHost: String? {
         ProcessInfo.processInfo.environment["BOO_UI_TEST_HOST"]
             ?? (Bundle.main.infoDictionary?["BOO_UI_TEST_HOST"] as? String)
+            ?? GeneratedUITestConfig.host
             ?? fileConfiguredHostAndPort?.host
     }
 
@@ -45,6 +51,7 @@ class BooUITestCase: XCTestCase {
         ProcessInfo.processInfo.environment["BOO_UI_TEST_PORT"].flatMap(UInt16.init)
             ?? (Bundle.main.infoDictionary?["BOO_UI_TEST_PORT"] as? String).flatMap(UInt16.init)
             ?? (Bundle.main.infoDictionary?["BOO_UI_TEST_PORT"] as? NSNumber).map(\.uint16Value)
+            ?? GeneratedUITestConfig.port
             ?? fileConfiguredHostAndPort?.port
             ?? defaultRemotePort
     }
@@ -253,7 +260,11 @@ class BooUITestCase: XCTestCase {
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         }
-        XCTFail("expected connect screen", file: file, line: line)
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "connect-screen-timeout"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTFail("expected connect screen; hierarchy:\n\(app.debugDescription)", file: file, line: line)
     }
 
     func swipeBackFromTerminal(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {

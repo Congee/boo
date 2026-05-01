@@ -20,7 +20,7 @@ enum RemoteTerminalGestureAction {
     case pageDown
     case arrowLeft
     case arrowRight
-    case scrollLines(Int)
+    case scrollRows(Double)
     case tap(CGPoint)
     case longPress(CGPoint)
     case twoFingerTap
@@ -283,6 +283,7 @@ struct KineticCardRow: View {
 
 struct RemoteTerminalView: View {
     @ObservedObject var screen: ScreenState
+    var keyboardAvoidanceInset: CGFloat = 0
     var onResize: ((UInt16, UInt16) -> Void)?
     var onGestureAction: ((RemoteTerminalGestureAction) -> Void)?
 
@@ -298,47 +299,17 @@ struct RemoteTerminalView: View {
 
     var body: some View {
         GeometryReader { geo in
-            Canvas { context, size in
-                let cols = Int(screen.cols)
-                let rows = Int(screen.rows)
-                guard cols > 0, rows > 0, screen.cells.count == cols * rows else { return }
-                context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.black))
-                for row in 0..<rows {
-                    for col in 0..<cols {
-                        let cell = screen.getCell(col: col, row: row)
-                        let x = CGFloat(col) * cellWidth
-                        let y = CGFloat(row) * cellHeight
-                        if cell.hasBg {
-                            let rect = CGRect(x: x, y: y, width: cellWidth, height: cellHeight)
-                            context.fill(
-                                Path(rect),
-                                with: .color(Color(
-                                    red: Double(cell.bg_r) / 255,
-                                    green: Double(cell.bg_g) / 255,
-                                    blue: Double(cell.bg_b) / 255
-                                ))
-                            )
-                        }
-                        guard cell.codepoint > 0x20, let scalar = Unicode.Scalar(cell.codepoint) else { continue }
-                        let color: Color = cell.hasFg
-                            ? Color(red: Double(cell.fg_r)/255, green: Double(cell.fg_g)/255, blue: Double(cell.fg_b)/255)
-                            : .white
-                        var text = Text(String(Character(scalar))).font(font).foregroundColor(color)
-                        if cell.isBold { text = text.bold() }
-                        if cell.isItalic { text = text.italic() }
-                        context.draw(context.resolve(text), at: CGPoint(x: x, y: y), anchor: .topLeading)
-                    }
-                }
-                if screen.cursorVisible {
-                    let rect = CGRect(
-                        x: CGFloat(screen.cursorX) * cellWidth,
-                        y: CGFloat(screen.cursorY) * cellHeight,
-                        width: cellWidth,
-                        height: cellHeight
-                    )
-                    context.fill(Path(rect), with: .color(.white.opacity(0.45)))
-                }
-            }
+            let drawableState = TerminalDrawableState(screen: screen)
+            let keyboardOffset = keyboardAvoidanceOffset(
+                for: drawableState,
+                containerHeight: geo.size.height
+            )
+
+            TerminalDrawingSurface(
+                state: drawableState,
+                fontScale: fontScale,
+                contentOffsetY: keyboardOffset
+            )
             .onAppear {
                 onResize?(max(1, UInt16(geo.size.width / cellWidth)), max(1, UInt16(geo.size.height / cellHeight)))
             }
@@ -364,10 +335,22 @@ struct RemoteTerminalView: View {
         }
         .background(.black)
     }
+
+    private func keyboardAvoidanceOffset(
+        for state: TerminalDrawableState,
+        containerHeight: CGFloat
+    ) -> CGFloat {
+        guard keyboardAvoidanceInset > 0, state.cursorVisible else { return 0 }
+        let cursorBottom = CGFloat(state.cursorY + 1) * cellHeight
+        let visibleBottom = max(cellHeight, containerHeight - keyboardAvoidanceInset - cellHeight * 0.5)
+        return max(0, cursorBottom - visibleBottom)
+    }
 }
 
 struct RemoteTerminalCanvasView: View {
     let state: DecodedWireScreenState?
+    var keyboardAvoidanceInset: CGFloat = 0
+    var scrollbackOffsetRows: Double = 0
     var onGestureAction: ((RemoteTerminalGestureAction) -> Void)? = nil
 
     private let baseFontSize: CGFloat = 14
@@ -381,66 +364,266 @@ struct RemoteTerminalCanvasView: View {
     private var cellHeight: CGFloat { baseCellHeight * fontScale }
 
     var body: some View {
-        Canvas { context, size in
-            guard let state else { return }
-            let cols = Int(state.cols)
-            let rows = Int(state.rows)
-            guard cols > 0, rows > 0, state.cells.count == cols * rows else { return }
-            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.black))
-            for row in 0..<rows {
-                for col in 0..<cols {
-                    let index = row * cols + col
-                    let cell = state.cells[index]
-                    let x = CGFloat(col) * cellWidth
-                    let y = CGFloat(row) * cellHeight
-                    if cell.hasBg {
-                        let rect = CGRect(x: x, y: y, width: cellWidth, height: cellHeight)
-                        context.fill(
-                            Path(rect),
-                            with: .color(Color(
-                                red: Double(cell.bg_r) / 255,
-                                green: Double(cell.bg_g) / 255,
-                                blue: Double(cell.bg_b) / 255
-                            ))
-                        )
+        GeometryReader { geo in
+            let drawableState = state.map(TerminalDrawableState.init(decoded:))
+            let keyboardOffset = keyboardAvoidanceOffset(
+                for: drawableState,
+                containerHeight: geo.size.height
+            )
+
+            TerminalDrawingSurface(
+                state: drawableState,
+                fontScale: fontScale,
+                contentOffsetY: keyboardOffset + scrollbackContentOffsetY()
+            )
+            .background(.black)
+            .contentShape(Rectangle())
+            .overlay {
+                TerminalTouchGestureOverlay(cellHeight: cellHeight, onAction: onGestureAction)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .simultaneousGesture(
+                MagnificationGesture()
+                    .onChanged { value in
+                        let start = pinchStartScale ?? fontScale
+                        pinchStartScale = start
+                        fontScale = min(max(start * value, 0.75), 2.25)
                     }
-                    guard cell.codepoint > 0x20, let scalar = Unicode.Scalar(cell.codepoint) else { continue }
-                    let color: Color = cell.hasFg
-                        ? Color(red: Double(cell.fg_r)/255, green: Double(cell.fg_g)/255, blue: Double(cell.fg_b)/255)
-                        : .white
-                    var text = Text(String(Character(scalar))).font(font).foregroundColor(color)
-                    if cell.isBold { text = text.bold() }
-                    if cell.isItalic { text = text.italic() }
-                    context.draw(context.resolve(text), at: CGPoint(x: x, y: y), anchor: .topLeading)
-                }
-            }
-            if state.cursorVisible {
-                let rect = CGRect(
-                    x: CGFloat(state.cursorX) * cellWidth,
-                    y: CGFloat(state.cursorY) * cellHeight,
-                    width: cellWidth,
-                    height: cellHeight
-                )
-                context.fill(Path(rect), with: .color(.white.opacity(0.45)))
-            }
+                    .onEnded { _ in
+                        pinchStartScale = nil
+                    }
+            )
         }
         .background(.black)
-        .contentShape(Rectangle())
-        .overlay {
-            TerminalTouchGestureOverlay(cellHeight: cellHeight, onAction: onGestureAction)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .simultaneousGesture(
-            MagnificationGesture()
-                .onChanged { value in
-                    let start = pinchStartScale ?? fontScale
-                    pinchStartScale = start
-                    fontScale = min(max(start * value, 0.75), 2.25)
-                }
-                .onEnded { _ in
-                    pinchStartScale = nil
-                }
+    }
+
+    private func keyboardAvoidanceOffset(
+        for state: TerminalDrawableState?,
+        containerHeight: CGFloat
+    ) -> CGFloat {
+        guard let state, keyboardAvoidanceInset > 0, state.cursorVisible else { return 0 }
+        let cursorBottom = CGFloat(state.cursorY + 1) * cellHeight
+        let visibleBottom = max(cellHeight, containerHeight - keyboardAvoidanceInset - cellHeight * 0.5)
+        return max(0, cursorBottom - visibleBottom)
+    }
+
+    private func scrollbackContentOffsetY() -> CGFloat {
+        guard scrollbackOffsetRows > 0 else { return 0 }
+        let fractional = scrollbackOffsetRows.rounded(.up) - scrollbackOffsetRows
+        guard fractional > 0 else { return 0 }
+        return CGFloat(fractional) * cellHeight
+    }
+}
+
+private struct TerminalDrawableCell: Equatable {
+    var codepoint: UInt32 = 0
+    var fg_r: UInt8 = 0
+    var fg_g: UInt8 = 0
+    var fg_b: UInt8 = 0
+    var bg_r: UInt8 = 0
+    var bg_g: UInt8 = 0
+    var bg_b: UInt8 = 0
+    var styleFlags: UInt8 = 0
+    var wide: UInt8 = 0
+
+    var hasFg: Bool { (styleFlags & 0x20) != 0 }
+    var hasBg: Bool { (styleFlags & 0x40) != 0 }
+    var isBold: Bool { (styleFlags & 0x01) != 0 }
+    var isItalic: Bool { (styleFlags & 0x02) != 0 }
+
+    init(_ cell: WireCell) {
+        codepoint = cell.codepoint
+        fg_r = cell.fg_r
+        fg_g = cell.fg_g
+        fg_b = cell.fg_b
+        bg_r = cell.bg_r
+        bg_g = cell.bg_g
+        bg_b = cell.bg_b
+        styleFlags = cell.styleFlags
+        wide = cell.wide
+    }
+
+    init(_ cell: DecodedWireCell) {
+        codepoint = cell.codepoint
+        fg_r = cell.fg_r
+        fg_g = cell.fg_g
+        fg_b = cell.fg_b
+        bg_r = cell.bg_r
+        bg_g = cell.bg_g
+        bg_b = cell.bg_b
+        styleFlags = cell.styleFlags
+        wide = cell.wide
+    }
+}
+
+private struct TerminalDrawableState: Equatable {
+    var rows: UInt16
+    var cols: UInt16
+    var cells: [TerminalDrawableCell]
+    var cursorX: UInt16
+    var cursorY: UInt16
+    var cursorVisible: Bool
+    var cursorBlinking: Bool
+    var cursorStyle: Int32
+
+    @MainActor init(screen: ScreenState) {
+        rows = screen.rows
+        cols = screen.cols
+        cells = screen.cells.map(TerminalDrawableCell.init)
+        cursorX = screen.cursorX
+        cursorY = screen.cursorY
+        cursorVisible = screen.cursorVisible
+        cursorBlinking = screen.cursorBlinking
+        cursorStyle = screen.cursorStyle
+    }
+
+    init(decoded: DecodedWireScreenState) {
+        rows = decoded.rows
+        cols = decoded.cols
+        cells = decoded.cells.map(TerminalDrawableCell.init)
+        cursorX = decoded.cursorX
+        cursorY = decoded.cursorY
+        cursorVisible = decoded.cursorVisible
+        cursorBlinking = decoded.cursorBlinking
+        cursorStyle = decoded.cursorStyle
+    }
+}
+
+private struct TerminalDrawingSurface: UIViewRepresentable {
+    let state: TerminalDrawableState?
+    let fontScale: CGFloat
+    let contentOffsetY: CGFloat
+
+    func makeUIView(context: Context) -> TerminalDrawingUIView {
+        let view = TerminalDrawingUIView()
+        view.isUserInteractionEnabled = false
+        view.contentMode = .redraw
+        return view
+    }
+
+    func updateUIView(_ uiView: TerminalDrawingUIView, context: Context) {
+        uiView.update(state: state, fontScale: fontScale, contentOffsetY: contentOffsetY)
+    }
+}
+
+private final class TerminalDrawingUIView: UIView {
+    private var terminalState: TerminalDrawableState?
+    private var terminalFontScale: CGFloat = 1
+    private var terminalContentOffsetY: CGFloat = 0
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .black
+        isOpaque = true
+        clearsContextBeforeDrawing = true
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        backgroundColor = .black
+        isOpaque = true
+        clearsContextBeforeDrawing = true
+    }
+
+    func update(state: TerminalDrawableState?, fontScale: CGFloat, contentOffsetY: CGFloat) {
+        let clampedScale = min(max(fontScale, 0.75), 2.25)
+        let clampedOffset = max(0, contentOffsetY)
+        guard terminalState != state ||
+            terminalFontScale != clampedScale ||
+            abs(terminalContentOffsetY - clampedOffset) > 0.5
+        else { return }
+        terminalState = state
+        terminalFontScale = clampedScale
+        terminalContentOffsetY = clampedOffset
+        setNeedsDisplay()
+    }
+
+    override func draw(_ rect: CGRect) {
+        guard let context = UIGraphicsGetCurrentContext() else { return }
+        UIColor.black.setFill()
+        context.fill(bounds)
+
+        guard let state = terminalState else { return }
+        let cols = Int(state.cols)
+        let rows = Int(state.rows)
+        guard cols > 0, rows > 0, state.cells.count == cols * rows else { return }
+
+        let cellWidth = 8.4 * terminalFontScale
+        let cellHeight = 17 * terminalFontScale
+        let regularFont = UIFont.monospacedSystemFont(ofSize: 14 * terminalFontScale, weight: .regular)
+        let boldFont = UIFont.monospacedSystemFont(ofSize: 14 * terminalFontScale, weight: .bold)
+        let italicFont = italicVariant(of: regularFont)
+        let contentOffsetY = min(
+            terminalContentOffsetY,
+            max(0, CGFloat(rows) * cellHeight - cellHeight)
         )
+
+        if state.cursorVisible {
+            let cursorRect = CGRect(
+                x: CGFloat(state.cursorX) * cellWidth,
+                y: CGFloat(state.cursorY) * cellHeight - contentOffsetY,
+                width: cellWidth,
+                height: cellHeight
+            )
+            UIColor.white.withAlphaComponent(0.45).setFill()
+            context.fill(cursorRect)
+        }
+
+        let firstVisibleRow = max(0, Int(floor(contentOffsetY / cellHeight)) - 1)
+        for row in firstVisibleRow..<rows {
+            let y = CGFloat(row) * cellHeight
+            let drawnY = y - contentOffsetY
+            if drawnY > bounds.maxY { break }
+            for col in 0..<cols {
+                let x = CGFloat(col) * cellWidth
+                if x > bounds.maxX { break }
+                let cell = state.cells[row * cols + col]
+                if cell.hasBg {
+                    UIColor(
+                        red: CGFloat(cell.bg_r) / 255,
+                        green: CGFloat(cell.bg_g) / 255,
+                        blue: CGFloat(cell.bg_b) / 255,
+                        alpha: 1
+                    ).setFill()
+                    context.fill(CGRect(x: x, y: drawnY, width: cellWidth, height: cellHeight))
+                }
+
+                guard cell.codepoint > 0x20,
+                      let scalar = UnicodeScalar(cell.codepoint)
+                else { continue }
+
+                let foreground = cell.hasFg
+                    ? UIColor(
+                        red: CGFloat(cell.fg_r) / 255,
+                        green: CGFloat(cell.fg_g) / 255,
+                        blue: CGFloat(cell.fg_b) / 255,
+                        alpha: 1
+                    )
+                    : UIColor.white
+                let font: UIFont
+                if cell.isBold {
+                    font = boldFont
+                } else if cell.isItalic {
+                    font = italicFont
+                } else {
+                    font = regularFont
+                }
+                NSString(string: String(Character(scalar))).draw(
+                    at: CGPoint(x: x, y: drawnY),
+                    withAttributes: [
+                        .font: font,
+                        .foregroundColor: foreground,
+                    ]
+                )
+            }
+        }
+    }
+
+    private func italicVariant(of font: UIFont) -> UIFont {
+        guard let descriptor = font.fontDescriptor.withSymbolicTraits(.traitItalic) else {
+            return font
+        }
+        return UIFont(descriptor: descriptor, size: font.pointSize)
     }
 }
 
@@ -458,6 +641,21 @@ private struct TerminalTouchGestureOverlay: UIViewRepresentable {
         view.backgroundColor = .clear
         view.isMultipleTouchEnabled = true
 
+        let scrollView = UIScrollView(frame: view.bounds)
+        scrollView.backgroundColor = .clear
+        scrollView.isOpaque = false
+        scrollView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.alwaysBounceVertical = true
+        scrollView.alwaysBounceHorizontal = false
+        scrollView.bounces = false
+        scrollView.delaysContentTouches = false
+        scrollView.canCancelContentTouches = true
+        scrollView.contentSize = CGSize(width: 1, height: Coordinator.scrollContentHeight)
+        view.addSubview(scrollView)
+        context.coordinator.configure(scrollView: scrollView)
+
         let oneFingerTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleOneFingerTap(_:)))
         oneFingerTap.numberOfTouchesRequired = 1
         oneFingerTap.numberOfTapsRequired = 1
@@ -468,11 +666,6 @@ private struct TerminalTouchGestureOverlay: UIViewRepresentable {
         twoFingerTap.numberOfTapsRequired = 1
         twoFingerTap.cancelsTouchesInView = false
 
-        let twoFingerPan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTwoFingerPan(_:)))
-        twoFingerPan.minimumNumberOfTouches = 2
-        twoFingerPan.maximumNumberOfTouches = 2
-        twoFingerPan.cancelsTouchesInView = false
-
         let longPress = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
         longPress.minimumPressDuration = 0.45
         longPress.numberOfTouchesRequired = 1
@@ -480,11 +673,9 @@ private struct TerminalTouchGestureOverlay: UIViewRepresentable {
 
         oneFingerTap.require(toFail: twoFingerTap)
         oneFingerTap.require(toFail: longPress)
-        longPress.require(toFail: twoFingerPan)
 
         view.addGestureRecognizer(oneFingerTap)
         view.addGestureRecognizer(twoFingerTap)
-        view.addGestureRecognizer(twoFingerPan)
         view.addGestureRecognizer(longPress)
         context.coordinator.installRecognizers(on: view)
         return view
@@ -496,13 +687,24 @@ private struct TerminalTouchGestureOverlay: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        static let scrollContentHeight: CGFloat = 1_000_000
+        private static let scrollAnchorY: CGFloat = scrollContentHeight / 2
+
         var cellHeight: CGFloat
         var onAction: ((RemoteTerminalGestureAction) -> Void)?
-        private var accumulatedPanY: CGFloat = 0
+        private weak var scrollView: UIScrollView?
+        private var lastContentOffsetY: CGFloat?
+        private var suppressScroll = false
 
         init(cellHeight: CGFloat, onAction: ((RemoteTerminalGestureAction) -> Void)?) {
             self.cellHeight = cellHeight
             self.onAction = onAction
+        }
+
+        func configure(scrollView: UIScrollView) {
+            self.scrollView = scrollView
+            scrollView.delegate = self
+            resetScrollAnchor(scrollView)
         }
 
         func installRecognizers(on view: UIView) {
@@ -524,28 +726,33 @@ private struct TerminalTouchGestureOverlay: UIViewRepresentable {
             onAction?(.longPress(recognizer.location(in: view)))
         }
 
-        @objc func handleTwoFingerPan(_ recognizer: UIPanGestureRecognizer) {
-            switch recognizer.state {
-            case .began:
-                accumulatedPanY = 0
-                recognizer.setTranslation(.zero, in: recognizer.view)
-            case .changed:
-                let translation = recognizer.translation(in: recognizer.view)
-                accumulatedPanY += translation.y
-                recognizer.setTranslation(.zero, in: recognizer.view)
-                let effectiveCellHeight = max(1, cellHeight)
-                let lines = Int(accumulatedPanY / effectiveCellHeight)
-                if lines != 0 {
-                    onAction?(.scrollLines(lines))
-                    accumulatedPanY -= CGFloat(lines) * effectiveCellHeight
-                }
-            default:
-                accumulatedPanY = 0
-            }
-        }
-
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
             true
+        }
+
+        private func resetScrollAnchor(_ scrollView: UIScrollView) {
+            suppressScroll = true
+            scrollView.contentOffset = CGPoint(x: 0, y: Self.scrollAnchorY)
+            lastContentOffsetY = Self.scrollAnchorY
+            suppressScroll = false
+        }
+    }
+}
+
+extension TerminalTouchGestureOverlay.Coordinator: UIScrollViewDelegate {
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard !suppressScroll else { return }
+        let currentY = scrollView.contentOffset.y
+        let previousY = lastContentOffsetY ?? currentY
+        lastContentOffsetY = currentY
+        let deltaY = previousY - currentY
+        let effectiveCellHeight = max(1, cellHeight)
+        let rows = Double(deltaY / effectiveCellHeight)
+        if rows != 0 {
+            onAction?(.scrollRows(rows))
+        }
+        if currentY < 100_000 || currentY > Self.scrollContentHeight - 100_000 {
+            resetScrollAnchor(scrollView)
         }
     }
 }
@@ -595,10 +802,12 @@ struct PaneTapGestureOverlay: UIViewRepresentable {
 }
 
 struct RuntimeTapGestureOverlay: UIViewRepresentable {
+    let cellHeight: CGFloat
     let onTap: (CGPoint) -> Void
+    let onScrollRows: (CGPoint, Double) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onTap: onTap)
+        Coordinator(cellHeight: cellHeight, onTap: onTap, onScrollRows: onScrollRows)
     }
 
     func makeUIView(context: Context) -> UIView {
@@ -613,23 +822,55 @@ struct RuntimeTapGestureOverlay: UIViewRepresentable {
         tap.cancelsTouchesInView = false
         tap.delegate = context.coordinator
         view.addGestureRecognizer(tap)
+
         return view
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.cellHeight = cellHeight
         context.coordinator.onTap = onTap
+        context.coordinator.onScrollRows = onScrollRows
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var cellHeight: CGFloat
         var onTap: (CGPoint) -> Void
+        var onScrollRows: (CGPoint, Double) -> Void
+        private var panStartLocation: CGPoint = .zero
 
-        init(onTap: @escaping (CGPoint) -> Void) {
+        init(
+            cellHeight: CGFloat,
+            onTap: @escaping (CGPoint) -> Void,
+            onScrollRows: @escaping (CGPoint, Double) -> Void
+        ) {
+            self.cellHeight = cellHeight
             self.onTap = onTap
+            self.onScrollRows = onScrollRows
         }
 
         @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
             guard recognizer.state == .ended, let view = recognizer.view else { return }
             onTap(recognizer.location(in: view))
+        }
+
+        @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
+            switch recognizer.state {
+            case .began:
+                if let view = recognizer.view {
+                    panStartLocation = recognizer.location(in: view)
+                }
+                recognizer.setTranslation(.zero, in: recognizer.view)
+            case .changed:
+                let translation = recognizer.translation(in: recognizer.view)
+                recognizer.setTranslation(.zero, in: recognizer.view)
+                let effectiveCellHeight = max(1, cellHeight)
+                let rows = Double(translation.y / effectiveCellHeight)
+                if rows != 0 {
+                    onScrollRows(panStartLocation, rows)
+                }
+            default:
+                break
+            }
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
@@ -872,10 +1113,7 @@ final class TerminalProxyTextView: UITextView {
             assistantItem(title: "-", identifier: "terminal-key-dash", repeatable: true, role: .regular),
             assistantItem(title: "|", identifier: "terminal-key-pipe", repeatable: true, role: .regular)
         ]
-        let functionItems = (1...12).map { index in
-            assistantItem(title: "F\(index)", identifier: "terminal-key-f\(index)", repeatable: true, role: .regular)
-        }
-        let rightItems = functionItems + [
+        let rightItems = [
             assistantItem(title: "[", identifier: "terminal-key-left-bracket", repeatable: true, role: .regular),
             assistantItem(title: "]", identifier: "terminal-key-right-bracket", repeatable: true, role: .regular),
             assistantItem(title: "<", identifier: "terminal-key-less-than", repeatable: true, role: .regular),
@@ -911,13 +1149,6 @@ final class TerminalProxyTextView: UITextView {
             modifierHandler: { state.onAltModifierEvent($0) },
             isActive: state.altActive
         )
-        for index in 1...12 {
-            assistantControls["terminal-key-f\(index)"]?.update(
-                action: { state.onFunctionKey(index) },
-                modifierHandler: nil,
-                isActive: false
-            )
-        }
         assistantControls["terminal-key-tab"]?.update(action: state.onTab, modifierHandler: nil, isActive: false)
         assistantControls["terminal-key-compose"]?.update(action: state.onCompose, modifierHandler: nil, isActive: false)
         assistantControls["terminal-key-tilde"]?.update(action: { state.onInsertText("~") }, modifierHandler: nil, isActive: false)

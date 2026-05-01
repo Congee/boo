@@ -474,6 +474,7 @@ struct BooApp {
     scrollbar_opacity: f32,
     cell_width: f64,
     cell_height: f64,
+    smooth_scroll_remainder_rows: f64,
     scrollbar: ffi::ghostty_action_scrollbar_s,
     scrollbar_layer: *mut c_void,
     search_active: bool,
@@ -523,6 +524,7 @@ struct BooApp {
         u64,
         (u64, std::sync::Arc<remote::RemoteFullState>),
     >,
+    pane_row_caches: std::collections::HashMap<u64, PaneRowCache>,
     surface_initialized_once: bool,
     app_focused: bool,
     dirty_remote_tabs: Vec<u32>,
@@ -534,6 +536,15 @@ struct BooApp {
     status_components: StatusComponentStore,
     #[cfg(target_os = "linux")]
     pending_font_bytes: Option<Vec<u8>>,
+}
+
+#[derive(Clone, Default)]
+struct PaneRowCache {
+    epoch: u64,
+    cols: u16,
+    retained_start: u64,
+    retained_end: u64,
+    rows: std::collections::BTreeMap<u64, Vec<remote::RemoteCell>>,
 }
 
 #[derive(Clone, Copy)]

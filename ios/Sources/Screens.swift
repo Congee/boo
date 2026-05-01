@@ -110,26 +110,25 @@ struct BooRootView: View {
                         .opacity(showingConnectedTerminal ? 0 : 1)
                         .allowsHitTesting(!showingConnectedTerminal)
                         .accessibilityHidden(showingConnectedTerminal)
-                        if showingConnectedTerminal {
-                            TerminalTabScreen(
-                                client: client,
-                                monitor: activeMonitor,
-                                store: store,
+                    if showingConnectedTerminal {
+                        TerminalTabScreen(
+                            client: client,
+                            monitor: activeMonitor,
+                            store: store,
                                 onBack: {
                                     showingConnectedTerminal = false
                                 }
                             )
-                            .zIndex(1)
-                        }
+                        .zIndex(1)
                     }
+                }
+                    .ignoresSafeArea(showingConnectedTerminal ? [.container, .keyboard] : [], edges: .all)
                 case .history:
                     HistoryScreen(store: store)
                 case .settings:
                     SettingsScreen(
-                        client: client,
                         store: store,
-                        tailscaleBrowser: tailscaleBrowser,
-                        monitor: activeMonitor
+                        tailscaleBrowser: tailscaleBrowser
                     )
                 }
             }
@@ -139,6 +138,7 @@ struct BooRootView: View {
             }
         }
         .background(KineticColor.surface)
+        .statusBarHidden(showingConnectedTerminal)
         .onAppear {
             if monitor == nil {
                 monitor = ConnectionMonitor(client: client, store: store)
@@ -819,6 +819,11 @@ private enum UITestTraceAutomationStep {
     }
 }
 
+private struct TerminalViewportSize: Equatable {
+    let cols: UInt16
+    let rows: UInt16
+}
+
 struct TerminalTabScreen: View {
     @ObservedObject var client: GSPClient
     @ObservedObject var monitor: ConnectionMonitor
@@ -842,6 +847,7 @@ struct TerminalTabScreen: View {
     @State private var didReturnToConnectionsForClosedTab = false
     @State private var openingTimeoutGeneration: UInt64 = 0
     @State private var openingTimeoutArmed = false
+    @State private var keyboardOverlapHeight: CGFloat = 0
 
     private var tabHealth: ActiveTabHealth {
         resolveActiveTabHealth(
@@ -884,6 +890,13 @@ struct TerminalTabScreen: View {
                 }
             }
             advanceUITestTraceAutomationIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
+            updateKeyboardOverlap(from: notification)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { notification in
+            keyboardFocused = false
+            updateKeyboardOverlap(from: notification, forceHidden: true)
         }
         .onReceive(client.$tabs) { _ in
             applyUITestForcedErrorIfNeeded()
@@ -932,27 +945,34 @@ struct TerminalTabScreen: View {
         .onDisappear {
             invalidateOpeningTimeout()
             keyboardFocused = false
+            keyboardOverlapHeight = 0
             client.detachView()
         }
     }
 
     private var terminalTabBody: some View {
-        VStack(spacing: 0) {
+        ZStack(alignment: .topLeading) {
             terminalView
                 .overlay(alignment: .topTrailing) {
                     terminalGestureHUD
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             if UITestLaunchConfiguration.current() != nil {
-                Color.clear
-                    .frame(width: 1, height: 1)
-                    .accessibilityIdentifier("terminal-debug-state")
-                    .accessibilityLabel(client.uiTestTabDebugSummary)
-                Color.clear
-                    .frame(width: 1, height: 1)
-                    .accessibilityIdentifier("terminal-trace-state")
-                    .accessibilityLabel(uiTestTraceAutomationDebugSummary)
+                VStack(spacing: 0) {
+                    Color.clear
+                        .frame(width: 1, height: 1)
+                        .accessibilityIdentifier("terminal-debug-state")
+                        .accessibilityLabel(client.uiTestTabDebugSummary)
+                    Color.clear
+                        .frame(width: 1, height: 1)
+                        .accessibilityIdentifier("terminal-trace-state")
+                        .accessibilityLabel(uiTestTraceAutomationDebugSummary)
+                }
+                .allowsHitTesting(false)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea([.container, .keyboard], edges: .all)
     }
 
     private var uiTestTraceAutomationDebugSummary: String {
@@ -1075,12 +1095,19 @@ struct TerminalTabScreen: View {
 
             if let runtimeState = client.runtimeState, !runtimeState.visiblePanes.isEmpty {
                 GeometryReader { geo in
+                    let layoutSize = terminalLayoutSize(from: geo)
+                    let terminalSize = terminalSize(for: layoutSize)
                     ZStack(alignment: .topLeading) {
                         ForEach(runtimeState.visiblePanes, id: \.paneId) { pane in
                             ZStack {
                                 Color.black.opacity(0.001)
                                 RemoteTerminalCanvasView(
-                                    state: client.paneScreens[pane.paneId],
+                                    state: client.displayedPaneScreen(paneId: pane.paneId),
+                                    keyboardAvoidanceInset: keyboardAvoidanceInset(
+                                        for: pane,
+                                        terminalHeight: layoutSize.height
+                                    ),
+                                    scrollbackOffsetRows: client.displayedPaneScrollOffsetRows(paneId: pane.paneId),
                                     onGestureAction: { action in
                                         handleTerminalGesture(
                                             action,
@@ -1090,7 +1117,6 @@ struct TerminalTabScreen: View {
                                         )
                                     }
                                 )
-                                .id("terminal-pane-canvas-\(pane.paneId)-\(client.paneRevisions[pane.paneId] ?? 0)")
                             }
                             .frame(
                                 width: max(1, pane.frame.width),
@@ -1102,13 +1128,6 @@ struct TerminalTabScreen: View {
                                         pane.paneId == runtimeState.focusedPane ? KineticColor.primary : KineticColor.onSurfaceVariant,
                                         lineWidth: pane.paneId == runtimeState.focusedPane ? 2 : 1
                                     )
-                            }
-                            .overlay {
-                                PaneTapGestureOverlay {
-                                    focusRuntimePane(pane.paneId, viewedTabId: runtimeState.viewedTabId)
-                                }
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .accessibilityHidden(true)
                             }
                             .position(
                                 x: pane.frame.x + pane.frame.width / 2,
@@ -1144,30 +1163,19 @@ struct TerminalTabScreen: View {
                                                 optimisticSecondPaneId: divider.secondPaneId
                                             )
                                         }
-                                )
+                            )
                         }
                     }
-                    .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+                    .frame(width: layoutSize.width, height: layoutSize.height, alignment: .topLeading)
                     .background(.black)
                     .contentShape(Rectangle())
                     .onAppear {
-                        client.sendResize(
-                            cols: max(1, UInt16(geo.size.width / 8.4)),
-                            rows: max(1, UInt16(geo.size.height / 17))
-                        )
+                        client.setPreferredNewTabSize(cols: terminalSize.cols, rows: terminalSize.rows)
+                        client.sendResize(cols: terminalSize.cols, rows: terminalSize.rows)
                     }
-                    .onChange(of: geo.size) { _, newSize in
-                        client.sendResize(
-                            cols: max(1, UInt16(newSize.width / 8.4)),
-                            rows: max(1, UInt16(newSize.height / 17))
-                        )
-                    }
-                    .overlay(alignment: .topLeading) {
-                        RuntimeTapGestureOverlay { location in
-                            focusRuntimePane(at: location, in: runtimeState)
-                        }
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .accessibilityHidden(true)
+                    .onChange(of: terminalSize) { _, newSize in
+                        client.setPreferredNewTabSize(cols: newSize.cols, rows: newSize.rows)
+                        client.sendResize(cols: newSize.cols, rows: newSize.rows)
                     }
                     .highPriorityGesture(
                         SpatialTapGesture()
@@ -1177,10 +1185,26 @@ struct TerminalTabScreen: View {
                     )
                 }
             } else {
-                RemoteTerminalView(screen: client.screen) { cols, rows in
-                    client.sendResize(cols: cols, rows: rows)
-                } onGestureAction: { action in
-                    handleTerminalGesture(action)
+                GeometryReader { geo in
+                    let layoutSize = terminalLayoutSize(from: geo)
+                    let terminalSize = terminalSize(for: layoutSize)
+                    RemoteTerminalView(
+                        screen: client.screen,
+                        keyboardAvoidanceInset: keyboardOverlapHeight
+                    ) { _, _ in
+                        client.setPreferredNewTabSize(cols: terminalSize.cols, rows: terminalSize.rows)
+                    } onGestureAction: { action in
+                        handleTerminalGesture(action)
+                    }
+                    .frame(width: layoutSize.width, height: layoutSize.height, alignment: .topLeading)
+                    .onAppear {
+                        client.setPreferredNewTabSize(cols: terminalSize.cols, rows: terminalSize.rows)
+                        client.sendResize(cols: terminalSize.cols, rows: terminalSize.rows)
+                    }
+                    .onChange(of: terminalSize) { _, newSize in
+                        client.setPreferredNewTabSize(cols: newSize.cols, rows: newSize.rows)
+                        client.sendResize(cols: newSize.cols, rows: newSize.rows)
+                    }
                 }
                 .contentShape(Rectangle())
                 .onTapGesture {
@@ -1201,6 +1225,65 @@ struct TerminalTabScreen: View {
         .overlay {
             runtimeOpeningOverlay
         }
+    }
+
+    private func updateKeyboardOverlap(from notification: Notification, forceHidden: Bool = false) {
+        let nextOverlap: CGFloat
+        if forceHidden {
+            nextOverlap = 0
+        } else {
+            nextOverlap = keyboardOverlap(from: notification)
+        }
+
+        let duration = (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0.25
+        let animation = Animation.easeOut(duration: max(0.01, duration))
+        withAnimation(animation) {
+            keyboardOverlapHeight = nextOverlap
+        }
+    }
+
+    private func keyboardOverlap(from notification: Notification) -> CGFloat {
+        guard let screenFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
+              let windowScene = UIApplication.shared.connectedScenes
+                  .compactMap({ $0 as? UIWindowScene })
+                  .first(where: { $0.activationState == .foregroundActive }),
+              let window = windowScene.windows.first(where: \.isKeyWindow)
+        else {
+            return 0
+        }
+
+        let frameInWindow = window.convert(screenFrame, from: nil)
+        let intersection = window.bounds.intersection(frameInWindow)
+        guard !intersection.isNull else { return 0 }
+        return max(0, intersection.height - window.safeAreaInsets.bottom)
+    }
+
+    private func keyboardAvoidanceInset(
+        for pane: RemoteRuntimePaneSnapshot,
+        terminalHeight: CGFloat
+    ) -> CGFloat {
+        guard keyboardOverlapHeight > 0 else { return 0 }
+        let keyboardTop = max(0, terminalHeight - keyboardOverlapHeight)
+        let paneBottom = CGFloat(pane.frame.y + pane.frame.height)
+        return max(0, paneBottom - keyboardTop)
+    }
+
+    private func terminalLayoutSize(from geo: GeometryProxy) -> CGSize {
+        // The software keyboard is an overlay for Boo's mobile terminal, not a
+        // terminal resize event. SwiftUI may shrink GeometryReader while the
+        // keyboard is visible; add the measured keyboard overlap back so the
+        // server-owned terminal grid and pane frames stay at the full view size.
+        CGSize(
+            width: max(1, geo.size.width),
+            height: max(17, geo.size.height + keyboardOverlapHeight)
+        )
+    }
+
+    private func terminalSize(for layoutSize: CGSize) -> TerminalViewportSize {
+        return TerminalViewportSize(
+            cols: max(1, UInt16(layoutSize.width / 8.4)),
+            rows: max(1, UInt16(layoutSize.height / 17))
+        )
     }
 
     private var terminalAccessibilityOverlay: some View {
@@ -1302,6 +1385,9 @@ struct TerminalTabScreen: View {
 
     private func requestKeyboardFocus() {
         guard !isDisconnected, client.activeTabId != nil else { return }
+        if keyboardFocused, keyboardOverlapHeight > 0 {
+            return
+        }
         if keyboardFocused {
             keyboardFocused = false
             DispatchQueue.main.async {
@@ -1717,10 +1803,11 @@ struct TerminalTabScreen: View {
             sendSpecialKey([0x1b, 0x5b, 0x44])
         case .arrowRight:
             sendSpecialKey([0x1b, 0x5b, 0x43])
-        case .scrollLines(let lines):
+        case .scrollRows(let rows):
             if isFocused {
-                showTerminalGestureStatus("Two-finger scroll \(lines)")
-                client.sendMouseWheelLines(y: Double(lines))
+                if let paneId {
+                    client.scrollTouchHistory(paneId: paneId, rows: rows)
+                }
             } else {
                 showTerminalGestureStatus("Focus before scroll")
                 focusPaneForGesture(showKeyboard: false)
@@ -2040,10 +2127,8 @@ struct HistoryScreen: View {
 }
 
 struct SettingsScreen: View {
-    @ObservedObject var client: GSPClient
     @ObservedObject var store: ConnectionStore
     @ObservedObject var tailscaleBrowser: TailscalePeerBrowser
-    @ObservedObject var monitor: ConnectionMonitor
 
     @State private var nodeName = ""
     @State private var nodeHost = ""
@@ -2139,10 +2224,6 @@ struct SettingsScreen: View {
                             }
                         }
                     }
-
-                    Button("Disconnect") { monitor.disconnect() }
-                        .buttonStyle(KineticSecondaryButtonStyle())
-                        .accessibilityIdentifier("settings-disconnect-button")
 
                     Button("Clear History") { store.clearHistory() }
                         .buttonStyle(KineticSecondaryButtonStyle())

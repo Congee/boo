@@ -579,7 +579,8 @@ impl BooApp {
                     Some(Self::theme_color(self.url_color, 1.0)),
                     (!self.preedit_text.is_empty()).then(|| self.preedit_text.clone()),
                 )
-                .without_base_fill();
+                .without_base_fill()
+                .with_content_offset_y(self.smooth_scroll_content_offset_y());
                 main_col = main_col.push(
                     container(
                         iced::widget::canvas(terminal_canvas)

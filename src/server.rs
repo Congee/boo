@@ -154,6 +154,10 @@ pub enum Command {
         pane_revision: u64,
         runtime_revision: u64,
     },
+    RemoteRowRangeRequest {
+        client_id: u64,
+        request: remote::RemoteRowRangeRequest,
+    },
 }
 
 pub struct State {
@@ -363,6 +367,9 @@ impl From<remote::RemoteCmd> for Command {
                 pane_revision,
                 runtime_revision,
             },
+            remote::RemoteCmd::RowRangeRequest { client_id, request } => {
+                Self::RemoteRowRangeRequest { client_id, request }
+            }
         }
     }
 }

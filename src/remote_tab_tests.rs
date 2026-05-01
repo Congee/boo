@@ -151,6 +151,9 @@ mod tests {
     fn heartbeat_timeout_preserves_runtime_view_cache_for_remote_client() {
         let (outbound_tx, outbound_rx) = mpsc::channel();
         let cached_state = Arc::new(RemoteFullState {
+            epoch: 0,
+            viewport_top: 0,
+            scrollback_total: 0,
             rows: 1,
             cols: 1,
             cursor_x: 0,
